@@ -998,7 +998,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             **self.request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id})
+        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id, "v2_role": None})
         self.assertEqual(json.loads(response.content.decode()), [binding_attrs])
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
