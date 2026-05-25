@@ -170,19 +170,47 @@ def reset_imported_tenants(query: str, limit: int, excluded: list[str]):
         logger.info("Limit is 0, nothing to do.")
         return
 
-    with connection.cursor() as cursor:
-        if limit > 0:
-            subquery = f"SELECT id {query}"
-            cursor.execute(
-                "WITH delete_batch AS (" + subquery + ") "
-                "DELETE FROM api_tenant as t USING delete_batch as del where t.id = del.id",
-                (tuple(excluded),),
-            )
-        else:
-            cursor.execute(
-                "DELETE " + query,
-                (tuple(excluded),),
-            )
-        result = cursor.rowcount
+    try:
+        with connection.cursor() as cursor:
+            if limit > 0:
+                subquery = f"SELECT id {query}"
+                cursor.execute(
+                    "WITH delete_batch AS (" + subquery + ") "
+                    "DELETE FROM api_tenant as t USING delete_batch as del where t.id = del.id",
+                    (tuple(excluded),),
+                )
+            else:
+                cursor.execute(
+                    "DELETE " + query,
+                    (tuple(excluded),),
+                )
+            result = cursor.rowcount
 
-    logger.info(f"Deleted {result} tenants.")
+        logger.info(f"Deleted {result} tenants.")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Bulk tenant deletion completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "resource_id": f"bulk_deletion_{result}_tenants",
+                "outcome": "success",
+                "principal": "system:celery:reset_imported_tenants",
+                "deleted_count": result,
+                "limit": limit,
+            },
+        )
+    except Exception:
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.error(
+            "Bulk tenant deletion failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "outcome": "failure",
+                "principal": "system:celery:reset_imported_tenants",
+                "reason": "deletion_error",
+                "limit": limit,
+            },
+        )
+        raise
