@@ -373,6 +373,21 @@ def scope_for_resource(resource_type: str, resource_id: str, tenant: Tenant) -> 
     return None
 
 
+def resolve_workspace_scope(resource_id: str, tenant: Tenant) -> tuple[Scope, bool] | None:
+    """Resolve workspace scope and standard-workspace flag in a single query.
+
+    Returns ``(scope, is_standard_workspace)`` or ``None`` if the workspace
+    does not exist for the given tenant.
+    """
+    try:
+        ws_type = Workspace.objects.values_list("type", flat=True).get(id=resource_id, tenant=tenant)
+    except Workspace.DoesNotExist:
+        return None
+    if ws_type == Workspace.Types.ROOT:
+        return Scope.ROOT, False
+    return Scope.DEFAULT, ws_type == Workspace.Types.STANDARD
+
+
 """
 A global ImplicitResourceService configured using Django Settings.
 
