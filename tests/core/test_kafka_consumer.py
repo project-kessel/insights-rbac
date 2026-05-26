@@ -596,7 +596,7 @@ class RBACKafkaConsumerTests(TestCase):
         }
 
         with patch.object(consumer, "_process_relations_message", return_value=True) as mock_process:
-            result = consumer._process_debezium_message(message_value)
+            result = consumer._process_debezium_message(message_value, 0, 0)
 
             self.assertTrue(result)
             mock_process.assert_called_once()
@@ -619,7 +619,7 @@ class RBACKafkaConsumerTests(TestCase):
 
         # Should raise ValidationError because payload doesn't have relations_to_add or relations_to_remove
         with self.assertRaises(ValidationError):
-            consumer._process_debezium_message(message_value)
+            consumer._process_debezium_message(message_value, 0, 0)
 
     def test_process_debezium_message_invalid(self):
         """Test processing invalid message."""
@@ -634,7 +634,7 @@ class RBACKafkaConsumerTests(TestCase):
 
         # Should raise ValidationError for invalid message
         with self.assertRaises(ValidationError):
-            consumer._process_debezium_message(message_value)
+            consumer._process_debezium_message(message_value, 0, 0)
 
     @patch("core.kafka_consumer.json_format.ParseDict")
     @patch("core.kafka_consumer.relations_api_replication.write_relationships")
@@ -688,7 +688,7 @@ class RBACKafkaConsumerTests(TestCase):
             },
         )
 
-        result = consumer._process_relations_message(debezium_msg)
+        result = consumer._process_relations_message(debezium_msg, 0, 0)
 
         self.assertTrue(result)
         mock_tenant_get.assert_called_once_with(org_id="12345")
@@ -709,6 +709,60 @@ class RBACKafkaConsumerTests(TestCase):
         self.assertIsNotNone(delete_fencing_check)
         self.assertEqual(delete_fencing_check.lock_id, "test-group/0")
         self.assertEqual(delete_fencing_check.lock_token, "test-lock-token")
+
+    @patch("core.kafka_consumer.REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL", "test_legacy_ch")
+    @patch("core.kafka_consumer.connection.cursor")
+    @patch("core.kafka_consumer.json_format.ParseDict")
+    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
+    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.Tenant.objects.get")
+    def test_process_relations_message_remove_legacy_root_parent_sends_notify(
+        self, mock_tenant_get, mock_delete, mock_write, mock_parse_dict, mock_conn_cursor
+    ):
+        """Consumer NOTIFYs after remove_root_parent_tenant_relationships batch replication."""
+        from management.relation_replicator.relation_replicator import ReplicationEventType
+
+        mock_tenant_get.return_value = Mock(org_id="12345")
+        mock_parse_dict.return_value = Mock()
+        mock_write.return_value = Mock(consistency_token=Mock(token="tok"))
+        mock_delete.return_value = Mock(consistency_token=Mock(token=None))
+
+        mock_cursor = Mock()
+        mock_cm = Mock()
+        mock_cm.__enter__ = Mock(return_value=mock_cursor)
+        mock_cm.__exit__ = Mock(return_value=False)
+        mock_conn_cursor.return_value = mock_cm
+
+        consumer = RBACKafkaConsumer()
+        consumer.lock_id = "test-group/0"
+        consumer.lock_token = "test-lock-token"
+
+        debezium_msg = DebeziumMessage(
+            aggregatetype="relations",
+            aggregateid="test-id",
+            event_type=ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS.value,
+            payload={
+                "relations_to_add": [],
+                "relations_to_remove": [
+                    {
+                        "resource": {"type": "rbac", "id": "ws1"},
+                        "subject": {"type": "rbac", "id": "t1"},
+                        "relation": "parent",
+                    }
+                ],
+                "resource_context": {
+                    "org_id": "",
+                    "event_type": ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS.value,
+                    "notify_token": "batch-ack-token",
+                },
+            },
+        )
+
+        self.assertTrue(consumer._process_relations_message(debezium_msg, 0, 0))
+
+        notify_sql_calls = [c for c in mock_cursor.execute.call_args_list if "PG_NOTIFY" in str(c[0][0]).upper()]
+        self.assertEqual(len(notify_sql_calls), 1)
+        self.assertEqual(notify_sql_calls[0][0][1], ["test_legacy_ch", "batch-ack-token"])
 
     def test_process_relations_message_invalid_payload(self):
         """Test relations message processing with invalid payload raises ValidationError."""
@@ -732,7 +786,7 @@ class RBACKafkaConsumerTests(TestCase):
 
         # Should raise ValidationError for empty relations
         with self.assertRaises(ValidationError):
-            consumer._process_relations_message(debezium_msg)
+            consumer._process_relations_message(debezium_msg, 0, 0)
 
     @override_settings(
         KAFKA_ENABLED=True,
@@ -1607,7 +1661,7 @@ class FencingTokenProcessingTests(TestCase):
             payload=self.payload,
         )
 
-        result = self.consumer._process_relations_message(debezium_msg)
+        result = self.consumer._process_relations_message(debezium_msg, 0, 0)
 
         self.assertTrue(result)
 
@@ -1639,7 +1693,7 @@ class FencingTokenProcessingTests(TestCase):
 
         # Verify that processing raises RuntimeError when no lock token is available
         with self.assertRaises(RuntimeError) as ctx:
-            self.consumer._process_relations_message(debezium_msg)
+            self.consumer._process_relations_message(debezium_msg, 0, 0)
 
         # Verify error message
         self.assertIn("Lock token not available", str(ctx.exception))
@@ -1857,7 +1911,7 @@ class FencingTokenErrorHandlingTests(TestCase):
         )
 
         with self.assertRaises(RuntimeError) as ctx:
-            self.consumer._process_relations_message(debezium_msg)
+            self.consumer._process_relations_message(debezium_msg, 0, 0)
 
         self.assertIn("Fencing token validation failed", str(ctx.exception))
 
@@ -1885,4 +1939,4 @@ class FencingTokenErrorHandlingTests(TestCase):
 
         # Should re-raise the gRPC error (not RuntimeError)
         with self.assertRaises(grpc.RpcError):
-            self.consumer._process_relations_message(debezium_msg)
+            self.consumer._process_relations_message(debezium_msg, 0, 0)

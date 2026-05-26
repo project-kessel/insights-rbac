@@ -18,18 +18,16 @@
 
 import itertools
 import logging
-import select
-import time
 import uuid
-from collections import deque
 from itertools import groupby
 from typing import Optional
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import transaction
 from django.db.models import Q
 from feature_flags import FEATURE_FLAGS
+from internal.pg_notify_wait import wait_for_pg_notify
 from internal.utils import get_workspace_ids_from_resource_definition
 from management.atomic_transactions import atomic
 from management.models import ResourceDefinition, Role, Workspace
@@ -44,10 +42,10 @@ from management.role.model import BindingMapping
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
+from management.v2_filters import v2_name_filter
 from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
 from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
-from psycopg2 import sql
 from rest_framework import serializers
 
 from api.models import Tenant
@@ -89,10 +87,6 @@ def _record_ryw_metrics(duration: float, result: str) -> None:
     """
     ryw_wait_duration_seconds.labels(result=result).observe(duration)
     ryw_wait_total.labels(result=result).inc()
-
-
-LISTEN_SQL = sql.SQL("LISTEN {};").format(sql.Identifier(READ_YOUR_WRITES_CHANNEL))
-UNLISTEN_SQL = sql.SQL("UNLISTEN {};").format(sql.Identifier(READ_YOUR_WRITES_CHANNEL))
 
 
 def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicator: RelationReplicator) -> int:
@@ -360,6 +354,23 @@ class WorkspaceService:
 
         self._replicator = replicator
 
+    def list(self, queryset, params: dict):
+        """Apply parameter-based filters to a pre-filtered workspace queryset."""
+        ids = params.get("ids")
+        type_filter = params.get("type")
+        name = params.get("name")
+        parent_id = params.get("parent_id")
+
+        if ids:
+            queryset = queryset.filter(id__in=ids)
+        if type_filter:
+            queryset = queryset.filter(type__in=type_filter)
+        if name:
+            queryset = v2_name_filter(queryset, name)
+        if parent_id:
+            queryset = queryset.filter(parent_id=parent_id)
+        return queryset
+
     def _dual_write_handler(
         self, workspace: Workspace, event_type: ReplicationEventType
     ) -> RelationApiDualWriteWorkspaceHandler:
@@ -542,91 +553,31 @@ class WorkspaceService:
 
         Intended for use as a transaction.on_commit callback.
         """
+        timeout_seconds = settings.READ_YOUR_WRITES_TIMEOUT_SECONDS
+
+        if timeout_seconds is None or timeout_seconds <= 0:
+            logger.debug(
+                "[Service] RYW skipped waiting due to non-positive timeout for channel='%s' workspace_id='%s'",
+                READ_YOUR_WRITES_CHANNEL,
+                str(workspace_id),
+            )
+            return
+
         try:
-            connection.ensure_connection()
-            conn = connection.connection
-            timeout_seconds = settings.READ_YOUR_WRITES_TIMEOUT_SECONDS
-
-            # Early exit if misconfigured
-            if timeout_seconds is None or timeout_seconds <= 0:
-                logger.debug(
-                    "[Service] RYW skipped waiting due to non-positive timeout for channel='%s' workspace_id='%s'",
-                    READ_YOUR_WRITES_CHANNEL,
-                    str(workspace_id),
-                )
-                return
-
-            with connection.cursor() as cursor:
-                cursor.execute(LISTEN_SQL)
-
-            logger.info(
-                "[Service] RYW waiting for NOTIFY channel='%s' workspace_id='%s' timeout=%ss",
-                READ_YOUR_WRITES_CHANNEL,
-                str(workspace_id),
-                timeout_seconds,
+            wait_for_pg_notify(
+                channel=READ_YOUR_WRITES_CHANNEL,
+                expected_payload=str(workspace_id),
+                timeout_seconds=float(timeout_seconds),
+                log_label="[Service] RYW",
+                on_success=lambda d: _record_ryw_metrics(d, "success"),
+                on_timeout=lambda d: _record_ryw_metrics(d, "timeout"),
+                timeout_error_message=(
+                    f"Read-your-writes consistency check timed out after {timeout_seconds}s "
+                    f"for workspace {workspace_id}"
+                ),
             )
-
-            # Use monotonic clock and a strict deadline to avoid overshooting
-            started = time.monotonic()
-            deadline = started + float(timeout_seconds)
-            workspace_id_str = str(workspace_id)
-
-            # Clear any stale notifications from before LISTEN was issued
-            try:
-                conn.poll()  # bring any pending into conn.notifies
-                if getattr(conn, "notifies", None):
-                    conn.notifies.clear()
-            except Exception:
-                logger.debug("Failed to clear stale notifications before LISTEN, continuing anyway")
-
-            fd = conn.fileno() if hasattr(conn, "fileno") else conn
-
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-
-                readable, _, _ = select.select([fd], [], [], min(1.0, remaining))
-                if not readable:
-                    continue
-
-                conn.poll()
-                notifies = getattr(conn, "notifies", None)
-                if notifies:
-                    q = deque(notifies)
-                    notifies.clear()
-                    while q:
-                        n = q.popleft()
-                        payload = (getattr(n, "payload", "") or "").strip()
-                        if n.channel == READ_YOUR_WRITES_CHANNEL and payload == workspace_id_str:
-                            duration = time.monotonic() - started
-                            logger.info(
-                                "[Service] RYW received NOTIFY channel='%s' workspace_id='%s' after %.3fs",
-                                n.channel,
-                                payload,
-                                duration,
-                            )
-                            _record_ryw_metrics(duration, "success")
-                            return
-
-            duration = time.monotonic() - started
-            logger.error(
-                "[Service] RYW timed out waiting for NOTIFY channel='%s' workspace_id='%s' after %ss",
-                READ_YOUR_WRITES_CHANNEL,
-                str(workspace_id),
-                timeout_seconds,
-            )
-            _record_ryw_metrics(duration, "timeout")
-            raise TimeoutError(
-                f"Read-your-writes consistency check timed out after {timeout_seconds}s for workspace {workspace_id}"
-            )
+        except TimeoutError:
+            raise
         except Exception:
             logger.exception("Error while waiting for NOTIFY after workspace create")
             raise
-        finally:
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute(UNLISTEN_SQL)
-            except Exception:
-                # Best-effort cleanup
-                pass

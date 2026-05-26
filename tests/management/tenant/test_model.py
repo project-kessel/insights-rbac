@@ -89,7 +89,7 @@ class V2TenantBootstrapServiceTest(TestCase):
             ),
         )
         self.assertEqual(
-            1,
+            0,
             self.tuples.count_tuples(
                 all_of(
                     resource("rbac", "workspace", root.id),
@@ -649,11 +649,11 @@ class V2TenantBootstrapServiceTest(TestCase):
             self.tuples.count_tuples(
                 all_of(
                     resource("rbac", "workspace", root.id),
-                    relation("parent"),
+                    relation("tenant"),
                     subject("rbac", "tenant", f"localhost/{org_id}"),
                 )
             ),
-            f"Expected root workspace to be child of tenant for tenant {org_id}",
+            f"Expected root workspace to have workspace#tenant@tenant for tenant {org_id}",
         )
         self.assertEqual(
             1,

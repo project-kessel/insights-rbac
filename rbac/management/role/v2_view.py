@@ -134,7 +134,15 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             audit_log = AuditLog()
             audit_log.log_create(request=request, resource=AuditLog.ROLE_V2)
 
-        custom_v2_role_obj_change_notification_handler(role, "created", request.user)
+        try:
+            custom_v2_role_obj_change_notification_handler(role, "created", request.user)
+        except ValueError:
+            raise
+        except Exception:
+            logging.error(
+                f"Failed to send notification for created role: role pk={role.pk!r}, name={role.name!r}",
+                exc_info=True,
+            )
 
         # Build response with field selection (from context) and permission ordering
         input_permissions = request.data.get("permissions", [])
@@ -155,7 +163,15 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             serializer.is_valid(raise_exception=True)
             role = serializer.save()
 
-        custom_v2_role_obj_change_notification_handler(role, "updated", request.user)
+        try:
+            custom_v2_role_obj_change_notification_handler(role, "updated", request.user)
+        except ValueError:
+            raise
+        except Exception:
+            logging.error(
+                f"Failed to send notification for updated role: role pk={role.pk!r}, name={role.name!r}",
+                exc_info=True,
+            )
 
         # Build response with field selection (from context) and permission ordering
         input_permissions = request.data.get("permissions", [])

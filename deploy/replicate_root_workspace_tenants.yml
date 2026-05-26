@@ -1,0 +1,19 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: replicate-root-workspace-tenants
+objects:
+  - apiVersion: cloud.redhat.com/v1alpha1
+    kind: ClowdJobInvocation
+    metadata:
+      labels:
+        app: rbac
+      name: replicate-root-workspace-tenants-${RUN_NUMBER}
+    spec:
+      appName: rbac
+      jobs:
+        - replicate-root-workspace-tenants
+parameters:
+  - name: RUN_NUMBER
+    description: Used to track and re-run the job
+    value: '1'

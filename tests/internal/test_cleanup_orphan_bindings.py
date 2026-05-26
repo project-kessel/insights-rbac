@@ -1008,12 +1008,12 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         # Verify result
         self.assertEqual(result["org_id"], self.tenant.org_id)
         self.assertFalse(result["dry_run"])
-        self.assertEqual(result["workspaces_checked"], 2)  # root + default
-        self.assertEqual(result["workspaces_missing_parent"], 2)
-        self.assertEqual(result["relations_to_add"], 2)
-        self.assertEqual(result["relations_added"], 2)
+        self.assertEqual(result["workspaces_checked"], 1)
+        self.assertEqual(result["workspaces_missing_parent"], 1)
+        self.assertEqual(result["relations_to_add"], 1)
+        self.assertEqual(result["relations_added"], 1)
 
-        # Verify root workspace now has parent tuple -> tenant
+        # Root workspaces are not linked to the tenant in Kessel.
         root_parent_after = self.tuples.find_tuples(
             all_of(
                 resource("rbac", "workspace", root_ws_id),
@@ -1021,7 +1021,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
                 subject("rbac", "tenant", tenant_resource_id),
             )
         )
-        self.assertEqual(len(root_parent_after), 1, "Root workspace should have parent tuple to tenant")
+        self.assertEqual(len(root_parent_after), 0, "Root workspace should not get a parent tuple to tenant")
 
         # Verify default workspace now has parent tuple -> root workspace
         default_parent_after = self.tuples.find_tuples(
@@ -1096,7 +1096,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         # Verify workspace with missing parent was detected
         self.assertGreater(result["workspaces_missing_parent"], 0, "Should detect workspaces with missing parent")
 
-        # Verify parent relation was created
+        # Verify parent relation was created (default -> root chain only)
         parent_after = self.tuples.find_tuples(
             all_of(
                 resource("rbac", "workspace", default_ws_id),
@@ -1143,7 +1143,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
 
         # Verify dry_run flag in result
         self.assertTrue(result["dry_run"])
-        self.assertGreater(result["relations_to_add"], 0, "Should have relations to add")
+        self.assertEqual(result["relations_to_add"], 1, "Should only plan default workspace parent relation")
         self.assertEqual(result["relations_added"], 0, "Should not have added relations in dry run")
 
         # Verify tuple count unchanged
@@ -1206,7 +1206,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         )
         self.assertEqual(len(default_parent_before), 0, "Default workspace should have no parent tuple")
 
-        # Run rebuild
+        # Run rebuild (legacy root->tenant tuple is ignored for rebuild purposes)
         result = rebuild_tenant_workspace_relations(
             tenant=self.tenant,
             read_tuples_fn=self._create_kessel_read_tuples_mock(),
@@ -1214,20 +1214,20 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
             dry_run=False,
         )
 
-        # Verify only 1 workspace was missing parent (default)
-        self.assertEqual(result["workspaces_checked"], 2)
+        # Verify only the default workspace was checked (root is not replicated to tenant)
+        self.assertEqual(result["workspaces_checked"], 1)
         self.assertEqual(result["workspaces_missing_parent"], 1)
         self.assertEqual(result["relations_to_add"], 1)
         self.assertEqual(result["relations_added"], 1)
 
-        # Verify root still has exactly 1 parent tuple (not duplicated)
+        # Legacy root parent tuple remains until removed by cleanup/cron
         root_parent_after = self.tuples.find_tuples(
             all_of(
                 resource("rbac", "workspace", root_ws_id),
                 relation("parent"),
             )
         )
-        self.assertEqual(len(root_parent_after), 1, "Root workspace should still have exactly 1 parent tuple")
+        self.assertEqual(len(root_parent_after), 1, "Legacy root parent tuple should be unchanged")
 
         # Verify default now has parent tuple
         default_parent_after = self.tuples.find_tuples(
@@ -1248,16 +1248,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         """
         Integration test: rebuild workspace relations, then cleanup can discover all workspaces.
 
-        This tests the recommended flow with 4 layers of workspaces:
-        - Layer 1: Root workspace (parent = tenant)
-        - Layer 2: Default workspace (parent = root)
-        - Layer 3: Child workspace (parent = default)
-        - Layer 4: Grandchild workspace (parent = child)
-
-        Steps:
-        1. Run rebuild to fix missing parent relations
-        2. Run cleanup which uses DFS to discover workspaces
-        3. DFS should now find all workspaces because parent relations exist
+        Uses DB-backed workspace seeds for Kessel reads; root workspaces are not parent-linked to the tenant.
         """
         # Redirect replicator to in-memory tuples
         mock_replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
@@ -1327,14 +1318,10 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
             dry_run=False,
         )
 
-        # Verify all 4 workspaces have parent relations now
-        # Layer 1: root -> parent -> tenant
-        # Layer 2: default -> parent -> root
-        # Layer 3: child -> parent -> default
-        # Layer 4: grandchild -> parent -> child
-        self.assertEqual(rebuild_result["workspaces_checked"], 4)  # root + default + child + grandchild
-        self.assertEqual(rebuild_result["relations_to_add"], 4)
-        self.assertEqual(rebuild_result["relations_added"], 4)
+        # Verify default + nested workspaces get parent relations (root has no parent tuple)
+        self.assertEqual(rebuild_result["workspaces_checked"], 3)
+        self.assertEqual(rebuild_result["relations_to_add"], 3)
+        self.assertEqual(rebuild_result["relations_added"], 3)
 
         # Verify parent tuples were created
         all_parent_after = self.tuples.find_tuples(
@@ -1343,20 +1330,18 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
                 relation("parent"),
             )
         )
-        self.assertEqual(len(all_parent_after), 4, "Should have 4 parent tuples after rebuild")
+        self.assertEqual(len(all_parent_after), 3, "Should have 3 parent tuples after rebuild")
 
-        # Verify each layer's parent relation
-        # Layer 1: root -> parent -> tenant
+        # Root should remain without a parent tuple
         root_parent = self.tuples.find_tuples(
             all_of(
                 resource("rbac", "workspace", root_ws_id),
                 relation("parent"),
-                subject("rbac", "tenant", self.tenant.tenant_resource_id()),
             )
         )
-        self.assertEqual(len(root_parent), 1, "Root should have parent = tenant")
+        self.assertEqual(len(root_parent), 0, "Root should have no parent tuples")
 
-        # Layer 2: default -> parent -> root
+        # Default -> root
         default_parent = self.tuples.find_tuples(
             all_of(
                 resource("rbac", "workspace", default_ws_id),
@@ -1393,7 +1378,9 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
             dry_run=True,
         )
 
-        # Verify DFS discovered all 4 workspaces (traverses all 4 layers)
+        # Verification traverses parent edges only; root has no parent tuple so it is not counted.
         self.assertEqual(
-            cleanup_result["workspaces_discovered_count"], 4, "DFS should discover all 4 workspaces after rebuild"
+            cleanup_result["workspaces_discovered_count"],
+            3,
+            "DFS records workspaces reached via workspace#parent@workspace (not the root)",
         )

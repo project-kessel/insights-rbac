@@ -84,6 +84,8 @@ class ReplicationEventType(str, Enum):
     BATCH_CREATE_ROLE_BINDING = "batch_create_role_binding"
     UPDATE_ROLE_BINDINGS_FOR_SUBJECT = "update_role_bindings_for_subject"
     REMOVE_DELETED_WORKSPACE_BINDINGS = "remove_deleted_workspace_bindings"
+    UPDATE_ROOT_WORKSPACE_TENANTS = "update_root_workspace_tenants"
+    REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS = "remove_root_parent_tenant_relationships"
 
 
 class ReplicationEvent:
@@ -112,6 +114,22 @@ class ReplicationEvent:
 
     def resource_context(self) -> Dict[str, object] | None:
         """Build context for all replication events that have identifiable resources."""
+        if self.event_type == ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS:
+            token = self.event_info.get("notify_token")
+            if not token:
+                logger.warning(
+                    "remove_root_parent_tenant_relationships batch missing notify_token in event_info=%s",
+                    self.event_info,
+                )
+                return None
+            context = ReplicationEventResourceContext(
+                org_id="",
+                event_type=self.event_type.value,
+            )
+            result = context.to_json()
+            result["notify_token"] = str(token)
+            return result
+
         # Validate org_id exists for all events
         org_id = str(self.event_info.get("org_id", ""))
         if not org_id:

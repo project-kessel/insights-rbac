@@ -30,13 +30,14 @@ from management.role_binding.serializer import (
     RoleBindingByGroupSerializer,
     RoleBindingBySubjectFieldSelection,
     RoleBindingFieldSelection,
+    RoleBindingInputSerializer,
     RoleBindingListInputSerializer,
     RoleBindingListOutputSerializer,
     RoleBindingOutputSerializer,
     UpdateRoleBindingRequestSerializer,
     UpdateRoleBindingResponseSerializer,
 )
-from management.role_binding.service import UpdateRoleBindingResult
+from management.role_binding.service import ExcludeSources, UpdateRoleBindingResult
 from management.subject.model import SubjectType
 from management.utils import FieldSelection
 from tests.identity_request import IdentityRequest
@@ -777,14 +778,20 @@ class RoleBindingListInputSerializerTest(TestCase):
         invalid_values = [
             ("not-a-uuid", "not-a-uuid"),
             ("integer", "12345"),
-            ("empty", ""),
-            ("spaces", "   "),
         ]
         for label, value in invalid_values:
             with self.subTest(label=label):
                 s = RoleBindingListInputSerializer(data={"role_id": value})
                 self.assertFalse(s.is_valid())
                 self.assertIn("role_id", s.errors)
+
+    def test_role_id_empty_returns_none(self):
+        """Test that empty string for role_id is treated as unset."""
+        for label, value in [("empty", ""), ("spaces", "   ")]:
+            with self.subTest(label=label):
+                s = RoleBindingListInputSerializer(data={"role_id": value})
+                self.assertTrue(s.is_valid(), s.errors)
+                self.assertIsNone(s.validated_data["role_id"])
 
     def test_role_id_omitted_is_valid(self):
         """Test that omitting role_id is valid (required=False)."""
@@ -867,11 +874,11 @@ class RoleBindingListInputSerializerTest(TestCase):
                 self.assertTrue(s.is_valid(), s.errors)
                 self.assertEqual(s.validated_data["resource_id"], value)
 
-    def test_resource_id_rejects_empty(self):
-        """Test that empty string is rejected for resource_id."""
+    def test_resource_id_empty_returns_none(self):
+        """Test that empty string for resource_id is treated as unset."""
         s = RoleBindingListInputSerializer(data={"resource_id": ""})
-        self.assertFalse(s.is_valid())
-        self.assertIn("resource_id", s.errors)
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["resource_id"])
 
     def test_resource_id_omitted_is_valid(self):
         """Test that omitting resource_id is valid (required=False)."""
@@ -955,14 +962,20 @@ class RoleBindingListInputSerializerTest(TestCase):
         invalid_values = [
             ("not-a-uuid", "not-a-uuid"),
             ("integer", "12345"),
-            ("empty", ""),
-            ("spaces", "   "),
         ]
         for label, value in invalid_values:
             with self.subTest(label=label):
                 s = RoleBindingListInputSerializer(data={"subject_id": value})
                 self.assertFalse(s.is_valid())
                 self.assertIn("subject_id", s.errors)
+
+    def test_subject_id_empty_returns_none(self):
+        """Test that empty string for subject_id is treated as unset."""
+        for label, value in [("empty", ""), ("spaces", "   ")]:
+            with self.subTest(label=label):
+                s = RoleBindingListInputSerializer(data={"subject_id": value})
+                self.assertTrue(s.is_valid(), s.errors)
+                self.assertIsNone(s.validated_data["subject_id"])
 
     def test_subject_id_omitted_is_valid(self):
         """Test that omitting subject_id is valid (required=False)."""
@@ -1004,6 +1017,65 @@ class RoleBindingListInputSerializerTest(TestCase):
         valid_uuid = "550e8400-e29b-41d4-a716-446655440000"
         s = RoleBindingListInputSerializer(data={"subject_id": f"\x00{valid_uuid}\x00"})
         self.assertTrue(s.is_valid(), s.errors)
+
+    # --- empty string normalization (all optional filter params) ---
+
+    def test_all_empty_filter_params_valid(self):
+        """Test that all filter params as empty strings produce valid result with None values."""
+        s = RoleBindingListInputSerializer(
+            data={
+                "role_id": "",
+                "resource_id": "",
+                "resource_type": "",
+                "subject_type": "",
+                "subject_id": "",
+                "granted_subject_type": "",
+                "granted_subject_id": "",
+                "fields": "",
+                "order_by": "",
+                "exclude_sources": "",
+            }
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        for field in [
+            "role_id",
+            "resource_id",
+            "resource_type",
+            "subject_type",
+            "subject_id",
+            "granted_subject_type",
+            "granted_subject_id",
+            "fields",
+            "order_by",
+        ]:
+            self.assertIsNone(s.validated_data[field], f"{field} should be None for empty string")
+        self.assertEqual(
+            s.validated_data["exclude_sources"], ExcludeSources.NONE, "exclude_sources should default to 'none'"
+        )
+
+    def test_resource_type_empty_returns_none(self):
+        """Test that empty string for resource_type is treated as unset."""
+        s = RoleBindingListInputSerializer(data={"resource_type": ""})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["resource_type"])
+
+    def test_subject_type_empty_returns_none(self):
+        """Test that empty string for subject_type is treated as unset."""
+        s = RoleBindingListInputSerializer(data={"subject_type": ""})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["subject_type"])
+
+    def test_granted_subject_type_empty_returns_none(self):
+        """Test that empty string for granted_subject_type is treated as unset."""
+        s = RoleBindingListInputSerializer(data={"granted_subject_type": ""})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["granted_subject_type"])
+
+    def test_granted_subject_id_empty_returns_none(self):
+        """Test that empty string for granted_subject_id is treated as unset."""
+        s = RoleBindingListInputSerializer(data={"granted_subject_id": ""})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data["granted_subject_id"])
 
     # --- granted_subject_type ---
 
@@ -1239,6 +1311,49 @@ class RoleBindingListInputSerializerTest(TestCase):
         self.assertIn("granted_subject_type", s.validated_data)
         self.assertIn("granted_subject_id", s.validated_data)
         self.assertIn("role_id", s.validated_data)
+
+
+class RoleBindingInputSerializerTest(TestCase):
+    """Test the RoleBindingInputSerializer (by-subject endpoint).
+
+    Validates empty-as-unset normalization for query parameters
+    on GET /role-bindings/by-subject/.
+    """
+
+    def test_resource_id_empty_triggers_cross_field_error(self):
+        """Test that empty resource_id is normalized to None, triggering cross-field validation."""
+        s = RoleBindingInputSerializer(data={"resource_id": "", "resource_type": "workspace"})
+        self.assertFalse(s.is_valid())
+        self.assertIn("resource_id", s.errors)
+
+    def test_resource_type_empty_triggers_cross_field_error(self):
+        """Test that empty resource_type is normalized to None, triggering cross-field validation."""
+        s = RoleBindingInputSerializer(data={"resource_id": "test-id", "resource_type": ""})
+        self.assertFalse(s.is_valid())
+        self.assertIn("resource_type", s.errors)
+
+    def test_resource_tenant_org_id_empty_returns_none(self):
+        """Test that empty resource.tenant.org_id is normalized to None (falls through to resource_id check)."""
+        s = RoleBindingInputSerializer(
+            data={"resource.tenant.org_id": "", "resource_id": "test-id", "resource_type": "workspace"}
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data.get("resource_tenant_org_id"))
+
+    def test_subject_type_empty_returns_none(self):
+        """Test that empty subject_type is normalized to None."""
+        s = RoleBindingInputSerializer(
+            data={"resource_id": "test-id", "resource_type": "workspace", "subject_type": ""}
+        )
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data.get("subject_type"))
+
+    def test_valid_resource_params_pass_through(self):
+        """Test that valid resource params are not modified."""
+        s = RoleBindingInputSerializer(data={"resource_id": "test-id", "resource_type": "workspace"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(s.validated_data["resource_id"], "test-id")
+        self.assertEqual(s.validated_data["resource_type"], "workspace")
 
 
 class RoleBindingListOutputSerializerTest(IdentityRequest):
@@ -1937,6 +2052,30 @@ class UpdateRoleBindingRequestSerializerTests(IdentityRequest):
         s = UpdateRoleBindingRequestSerializer(data=data)
         self.assertFalse(s.is_valid())
         self.assertIn("resource_type must be 'tenant'", str(s.errors))
+
+    # ── Empty resource_* normalization ────────────────────────────────
+
+    def test_resource_id_empty_triggers_cross_field_error(self):
+        """Test that empty resource_id is normalized to None, triggering cross-field validation."""
+        data = self._make_valid_data(resource_id="")
+        s = UpdateRoleBindingRequestSerializer(data=data)
+        self.assertFalse(s.is_valid())
+        self.assertIn("resource_id", s.errors)
+
+    def test_resource_type_empty_triggers_cross_field_error(self):
+        """Test that empty resource_type is normalized to None, triggering cross-field validation."""
+        data = self._make_valid_data(resource_type="")
+        s = UpdateRoleBindingRequestSerializer(data=data)
+        self.assertFalse(s.is_valid())
+        self.assertIn("resource_type", s.errors)
+
+    def test_resource_tenant_org_id_empty_returns_none(self):
+        """Test that empty resource.tenant.org_id is normalized to None."""
+        data = self._make_valid_data()
+        data["resource.tenant.org_id"] = ""
+        s = UpdateRoleBindingRequestSerializer(data=data)
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertIsNone(s.validated_data.get("resource_tenant_org_id"))
 
     # ── Missing required fields (parameterized) ──────────────────────
 

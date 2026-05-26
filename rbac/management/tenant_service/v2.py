@@ -172,7 +172,6 @@ class V2TenantBootstrapService:
     """Service for bootstrapping tenants with built-in relationships."""
 
     _replicator: RelationReplicator
-    _user_domain = settings.PRINCIPAL_USER_DOMAIN
     _public_tenant: Optional[Tenant]
     _policy_service: GlobalPolicyIdService
 
@@ -820,8 +819,8 @@ class V2TenantBootstrapService:
         return tuples_to_add, tuples_to_remove
 
     def _built_in_hierarchy_tuples(self, default_workspace_id, root_workspace_id, org_id) -> List[RelationTuple]:
-        """Create the tuples used to bootstrap the hierarchy of default->root->tenant->platform."""
-        tenant_id = f"{self._user_domain}/{org_id}"
+        """Create tuples for default->root workspace parents and tenant->platform."""
+        tenant_id = Tenant.org_id_to_tenant_resource_id(org_id=org_id)
 
         return [
             create_relationship(
@@ -832,10 +831,19 @@ class V2TenantBootstrapService:
                 "parent",
             ),
             create_relationship(
-                ("rbac", "workspace"), str(root_workspace_id), ("rbac", "tenant"), tenant_id, "parent"
+                ("rbac", "workspace"),
+                str(root_workspace_id),
+                ("rbac", "tenant"),
+                tenant_id,
+                "tenant",
             ),
-            # Include platform for tenant
-            create_relationship(("rbac", "tenant"), tenant_id, ("rbac", "platform"), settings.ENV_NAME, "platform"),
+            create_relationship(
+                ("rbac", "tenant"),
+                tenant_id,
+                ("rbac", "platform"),
+                settings.ENV_NAME,
+                "platform",
+            ),
         ]
 
     def _bootstrap_default_access(

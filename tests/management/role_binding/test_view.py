@@ -3552,6 +3552,8 @@ class BatchCreateViewTests(IdentityRequest):
 
         self.assertIn("id", item["resource"])
         self.assertEqual(item["resource"]["id"], str(self.workspace.id))
+        self.assertIn("type", item["resource"])
+        self.assertEqual(item["resource"]["type"], "workspace")
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",

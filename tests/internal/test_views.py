@@ -4672,18 +4672,24 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
     @patch("management.utils.create_client_channel")
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants"
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
     )
-    def test_inventory_bootstrapped_tenants(
-        self, mock_check_bootstrapped_tenants, mock_create_channel, mock_get_token
-    ):
+    def test_inventory_bootstrapped_tenants(self, mock_check_bootstrapped_tenant, mock_create_channel, mock_get_token):
         """Test a request to check bootstrapped tenants on inventory returns correct response."""
-        # Mock returns tuple of (bool, list of check strings)
+        # Mock returns tuple of (bool, list of check dicts)
         mock_relations_checked = [
-            "rbac/workspace:ws-123/parent#rbac/workspace:ws-456",
-            "rbac/workspace:ws-456/binding#rbac/role_binding:rb-789",
+            {
+                "name": "default_workspace_parent",
+                "check": "rbac/workspace:ws-123#parent@rbac/workspace:ws-456",
+                "exists": True,
+            },
+            {
+                "name": "root_workspace_parent",
+                "check": "rbac/workspace:ws-456#parent@rbac/tenant:localhost/org",
+                "exists": True,
+            },
         ]
-        mock_check_bootstrapped_tenants.return_value = (True, mock_relations_checked)
+        mock_check_bootstrapped_tenant.return_value = (True, mock_relations_checked)
 
         response = self.client.get(
             f"/_private/api/inventory/bootstrap_tenants/{self.tenant.org_id}/",
@@ -4700,7 +4706,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["relations_checked"], mock_relations_checked)
 
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants",
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant",
         side_effect=RpcError("Simulated GRPC error"),
     )
     def test_inventory_bootstrapped_tenants_grpc_error(self, mock_check_relationships):
@@ -4721,7 +4727,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["error"], "Simulated GRPC error")
 
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants",
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant",
         side_effect=Exception("Simulated internal error"),
     )
     def test_inventory_bootstrapped_tenants_error(self, mock_check_relationships):

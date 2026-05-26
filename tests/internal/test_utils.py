@@ -59,6 +59,7 @@ from internal.utils import (
     expire_orphaned_cross_account_requests,
 )
 from migration_tool.models import V2role, V2rolebinding, V2boundresource
+from migration_tool.utils import create_relationship
 from rbac.settings import ROOT_SCOPE_PERMISSIONS, TENANT_SCOPE_PERMISSIONS
 from tests.management.role.test_dual_write import DualWriteTestCase
 from tests.util import assert_v2_tuples_consistent, assert_v1_v2_tuples_fully_consistent
@@ -1097,3 +1098,54 @@ class ExpireOrphanCrossAccountRequests(DualWriteTestCase):
         self.assertEqual(car.status, "approved")
 
         expect_exists()
+
+
+@override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
+    """Tests for remove_legacy_root_workspace_tenant_parent_relations."""
+
+    def setUp(self):
+        timeout_patcher = patch("internal.utils.REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_TIMEOUT_SECONDS", 0)
+        timeout_patcher.start()
+        self.addCleanup(timeout_patcher.stop)
+        self.tenant = Tenant.objects.create(tenant_name="legacy_root_cleanup", org_id="9918877")
+        self.tuples = InMemoryTuples()
+        bootstrap_tenant_for_v2_test(self.tenant, tuples=self.tuples)
+
+    def test_skipped_when_replication_disabled(self):
+        from internal.utils import remove_legacy_root_workspace_tenant_parent_relations
+
+        with override_settings(REPLICATION_TO_RELATION_ENABLED=False):
+            result = remove_legacy_root_workspace_tenant_parent_relations()
+        self.assertTrue(result["skipped"])
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_enqueues_delete_for_legacy_tuple(self, mock_replicate):
+        from internal.utils import remove_legacy_root_workspace_tenant_parent_relations
+
+        root = Workspace.objects.root(tenant=self.tenant)
+        mock_replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
+
+        tenant_rid = self.tenant.tenant_resource_id()
+        self.tuples.add(
+            create_relationship(
+                ("rbac", "workspace"),
+                str(root.id),
+                ("rbac", "tenant"),
+                tenant_rid,
+                "parent",
+            )
+        )
+
+        result = remove_legacy_root_workspace_tenant_parent_relations()
+        self.assertFalse(result["skipped"])
+        self.assertGreaterEqual(result["tenants_processed"], 1)
+
+        remaining = self.tuples.find_tuples(
+            all_of(
+                resource("rbac", "workspace", str(root.id)),
+                relation("parent"),
+                subject("rbac", "tenant", tenant_rid),
+            )
+        )
+        self.assertEqual(len(remaining), 0)

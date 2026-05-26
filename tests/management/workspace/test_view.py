@@ -2975,8 +2975,8 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(payload.get("data")[0]["id"], str(self.root_workspace.id))
         self.assertType(payload, "root")
 
-    def test_workspace_list_filter_by_name(self):
-        """List workspaces filtered by name using case-insensitive substring matching."""
+    def test_workspace_list_filter_by_name_exact(self):
+        """Test that name filter without wildcards does case-insensitive exact match."""
         ws_name_1 = "Sales Team Alpha"
         ws_name_2 = "Sales Team Beta"
         ws_name_3 = "Engineering Squad"
@@ -3006,34 +3006,111 @@ class WorkspaceTestsList(WorkspaceViewTests):
         url = reverse("v2_management:workspace-list")
         client = APIClient()
 
-        # Substring "Sales" matches Sales Team Alpha and Sales Team Beta
-        response = client.get(f"{url}?name=Sales", None, format="json", **self.headers)
-        payload = response.data
-        self.assertSuccessfulList(response, payload)
-        self.assertEqual(payload.get("meta").get("count"), 2)
-
-        # Substring "Alpha" matches only Sales Team Alpha
-        response = client.get(f"{url}?name=Alpha", None, format="json", **self.headers)
+        # Exact match "Sales Team Alpha" returns only that workspace
+        response = client.get(f"{url}?name=Sales Team Alpha", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
         self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
 
-        # Substring "Squad" matches only Engineering Squad
-        response = client.get(f"{url}?name=Squad", None, format="json", **self.headers)
+        # Partial string "Sales" without wildcard does NOT match (exact match semantics)
+        response = client.get(f"{url}?name=Sales", None, format="json", **self.headers)
+        payload = response.data
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload.get("meta").get("count"), 0)
+
+        # Exact match for "Engineering Squad"
+        response = client.get(f"{url}?name=Engineering Squad", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
         self.assertEqual(payload.get("data")[0]["name"], ws_name_3)
 
-        # Middle substring "Team" matches both Sales Team workspaces
-        response = client.get(f"{url}?name=Team", None, format="json", **self.headers)
+    def test_workspace_list_filter_by_name_wildcard(self):
+        """Test that name filter with * wildcards does glob pattern matching."""
+        ws_name_1 = "Sales Team Alpha"
+        ws_name_2 = "Sales Team Beta"
+        ws_name_3 = "Engineering Squad"
+        Workspace.objects.bulk_create(
+            [
+                Workspace(
+                    name=ws_name_1,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+                Workspace(
+                    name=ws_name_2,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+                Workspace(
+                    name=ws_name_3,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+            ]
+        )
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+
+        # Substring wildcard *Sales* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=*Sales*", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 2)
 
+        # Prefix wildcard Sales* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=Sales*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Suffix wildcard *Alpha matches only Sales Team Alpha
+        response = client.get(f"{url}?name=*Alpha", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
+
+        # Substring wildcard *Team* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=*Team*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Complex pattern Sales*Alpha matches only Sales Team Alpha
+        response = client.get(f"{url}?name=Sales*Alpha", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
+
+    def test_workspace_list_filter_by_name_wildcard_no_match(self):
+        """Test that a wildcard pattern matching nothing returns empty list."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?name=zzz*", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"], [])
+
+    def test_workspace_list_filter_by_name_wildcard_star_returns_all(self):
+        """Test that name=* returns all workspaces (no filter applied)."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        total_count = Workspace.objects.count()
+
+        response = client.get(f"{url}?name=*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), total_count)
+
     def test_workspace_list_filter_by_name_is_case_insensitive(self):
-        """Test that name filter is case-insensitive substring matching."""
+        """Test that name filter is case-insensitive for both exact and wildcard matching."""
         Workspace.objects.create(
             name="Sales Team Alpha",
             tenant=self.tenant,
@@ -3044,15 +3121,22 @@ class WorkspaceTestsList(WorkspaceViewTests):
         url = reverse("v2_management:workspace-list")
         client = APIClient()
 
-        # Lowercase substring should match "Sales Team Alpha"
-        response = client.get(f"{url}?name=sales", None, format="json", **self.headers)
+        # Lowercase exact match
+        response = client.get(f"{url}?name=sales team alpha", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
         self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
 
-        # Uppercase substring should also match
-        response = client.get(f"{url}?name=SALES", None, format="json", **self.headers)
+        # Uppercase exact match
+        response = client.get(f"{url}?name=SALES TEAM ALPHA", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
+
+        # Case-insensitive wildcard
+        response = client.get(f"{url}?name=*sales*", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)

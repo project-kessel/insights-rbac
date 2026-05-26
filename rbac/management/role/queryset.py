@@ -16,17 +16,10 @@
 #
 """QuerySet for RoleV2 lookups."""
 
-import re
-
 from django.db import models
 from django.db.models import Count, Exists, IntegerField, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
-
-
-def _glob_to_regex(pattern: str) -> str:
-    """Convert a glob pattern with '*' wildcards to a regex."""
-    parts = pattern.split("*", maxsplit=10)
-    return "^" + ".*".join(re.escape(p) for p in parts) + "$"
+from management.v2_filters import v2_name_filter
 
 
 class RoleV2QuerySet(models.QuerySet):
@@ -80,13 +73,9 @@ class RoleV2QuerySet(models.QuerySet):
             qs = qs.prefetch_related("permissions")
         return qs
 
-    def named(self, name):
+    def named(self, name: str) -> "RoleV2QuerySet":
         """Filter to roles matching a name, with '*' glob support."""
-        if name == "*":
-            return self  # match all — no filter needed
-        if "*" in name:
-            return self.filter(name__iregex=_glob_to_regex(name))
-        return self.filter(name__iexact=name)
+        return v2_name_filter(self, name)
 
     def excluding_out_of_scope_v2_roles(self):
         """Exclude roles that include any permission from a migration-excluded application.

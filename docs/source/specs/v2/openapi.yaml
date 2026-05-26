@@ -693,7 +693,7 @@ paths:
           schema:
             allOf:
               - $ref: '#/components/schemas/FieldMask'
-            default: resource(id),role(id),subject(id,type)
+            default: resource(id,type),role(id),subject(id,type)
           explode: false
       responses:
         '201':
@@ -1390,7 +1390,7 @@ paths:
         - name: name
           in: query
           required: false
-          description: Case sensitive exact match of workspace by name.
+          description: Filter by workspace name. Case-insensitive exact match by default; use * as a wildcard for partial matching (e.g. foo*).
           schema:
             type: string
           explode: false
@@ -1603,6 +1603,27 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Workspaces.ReadWorkspaceResponse'
                   - $ref: '#/components/schemas/Workspaces.ReadWorkspaceWithAncestryResponse'
+              examples:
+                example0:
+                  value:
+                    _: 200
+                    id: e4277742-b91c-43f1-a185-b827e8574345
+                    parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
+                    type: standard
+                    name: Alpha Workspace
+                    description: Create a standard workspace.
+                    created: '2024-08-04T12:00:00Z'
+                    modified: '2024-08-04T12:00:00Z'
+                example1:
+                  value:
+                    _: 200
+                    id: e4277742-b91c-43f1-a185-b827e8574345
+                    parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
+                    type: standard
+                    name: Alpha Workspace
+                    description: Create a standard workspace.
+                    created: '2024-08-04T12:00:00Z'
+                    modified: '2024-08-04T12:00:00Z'
         '401':
           description: Access is unauthorized.
           content:
@@ -2402,6 +2423,7 @@ components:
         propertyName: type
         mapping:
           group: '#/components/schemas/RoleBindings.GroupSubject'
+          user: '#/components/schemas/RoleBindings.UserSubject'
     RoleBindings.BatchCreateRoleBindingsRequest:
       type: object
       required:

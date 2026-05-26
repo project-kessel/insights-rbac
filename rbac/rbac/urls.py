@@ -38,10 +38,13 @@ if API_PATH_PREFIX != "":
 urlpatterns = [
     re_path(r"^{}v1/".format(API_PATH_PREFIX), include(("api.urls", "v1_api"))),
     re_path(r"^{}v1/".format(API_PATH_PREFIX), include(("management.urls", "v1_management"))),
-    path(settings.A2S_PATH_PREFIX.lstrip("/"), include(("management.mcp_urls", "mcp"))),
     path("_private/", include(("internal.urls", "internal"))),
     path("", include("django_prometheus.urls")),
 ]
+
+if settings.MCP_ENABLED:
+    urlpatterns.insert(2, path(settings.A2S_PATH_PREFIX.lstrip("/"), include(("management.mcp_urls", "mcp"))))
+
 
 if settings.V2_APIS_ENABLED:
     urlpatterns.extend(

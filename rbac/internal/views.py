@@ -1934,38 +1934,37 @@ def check_inventory(request):
 def check_bootstrapped_tenants(request, org_id):
     """POST to check if bootstrapped tenant is correct on inventory api."""
     tenant = get_object_or_404(Tenant, org_id=org_id)
-    if tenant and tenant.tenant_mapping:
-        default_workspace = Workspace.objects.default(tenant=tenant)
-        root_workspace = Workspace.objects.root(tenant=tenant)
-        mapping = {
-            "org_id": tenant.org_id,
-            "root_workspace": str(root_workspace.id),
-            "default_workspace": str(default_workspace.id),
-            "tenant_mapping": {
-                "default_group_uuid": str(tenant.tenant_mapping.default_group_uuid),
-                "default_admin_group_uuid": str(tenant.tenant_mapping.default_admin_group_uuid),
-                "default_role_binding_uuid": str(tenant.tenant_mapping.default_role_binding_uuid),
-                "default_admin_role_binding_uuid": str(tenant.tenant_mapping.default_admin_role_binding_uuid),
-            },
-        }
-        try:
-            bootstrap_tenants_correct, checks = BootstrappedTenantChecker.check_bootstrapped_tenants(mapping)
-            bootstrapped_tenant_response = {
+    if not hasattr(tenant, "tenant_mapping"):
+        return JsonResponse({"detail": f"No tenant mapping for org_id: {org_id}"}, status=404)
+
+    default_workspace = Workspace.objects.default(tenant=tenant)
+    root_workspace = Workspace.objects.root(tenant=tenant)
+    ungrouped = Workspace.objects.filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).first()
+    try:
+        bootstrap_tenants_correct, checks = BootstrappedTenantChecker.check_bootstrapped_tenant(
+            org_id=tenant.org_id,
+            tenant_mapping=tenant.tenant_mapping,
+            root_workspace_id=str(root_workspace.id),
+            default_workspace_id=str(default_workspace.id),
+            ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+        )
+        return JsonResponse(
+            {
                 "org_id": tenant.org_id,
                 "bootstrapped_correct": bootstrap_tenants_correct,
                 "relations_checked": checks,
-            }
-        except RpcError as e:
-            return JsonResponse(
-                {"detail": "gRPC error occurred during inventory bootstrapped tenant check", "error": str(e)},
-                status=400,
-            )
-        except Exception as e:
-            return JsonResponse(
-                {"detail": "Unexpected error during inventory bootstrapped tenant check", "error": str(e)},
-                status=500,
-            )
-    return JsonResponse(bootstrapped_tenant_response, safe=False)
+            },
+        )
+    except RpcError as e:
+        return JsonResponse(
+            {"detail": "gRPC error occurred during inventory bootstrapped tenant check", "error": str(e)},
+            status=400,
+        )
+    except Exception as e:
+        return JsonResponse(
+            {"detail": "Unexpected error during inventory bootstrapped tenant check", "error": str(e)},
+            status=500,
+        )
 
 
 def check_workspace_relation(request, workspace_uuid):

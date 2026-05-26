@@ -27,5 +27,8 @@ def is_a2s_path(request) -> bool:
     auth instead of the internal PSK/token auth used by other /_private/ paths.
     When no valid identity is found, A2S requests are passed through without a
     user so that unauthenticated MCP tools (e.g. hello) still work.
+
+    Returns False when MCP_ENABLED is False so that /_private/_a2s/ paths
+    fall through to the standard internal auth and return 404.
     """
-    return request.path.startswith(settings.A2S_PATH_PREFIX)
+    return settings.MCP_ENABLED and request.path.startswith(settings.A2S_PATH_PREFIX)
