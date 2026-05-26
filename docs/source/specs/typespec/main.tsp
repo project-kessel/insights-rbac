@@ -519,7 +519,7 @@ namespace Workspaces {
 
         @doc("Filter by workspace type. Supports comma-separated values (e.g. type=standard,ungrouped-hosts). Defaults to all when not supplied. Case-insensitive.")
         @query type?: string = "all";
-        @doc("Filter by workspace name. Case-insensitive exact match by default; use * as a wildcard for partial matching (e.g. foo*).")
+        @doc("Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).")
         @query name?: string;
         @doc("Filter workspaces by parent workspace UUID. Returns only direct children of the specified workspace. Useful for lazy-loading a nested tree structure.")
         @query parent_id?: UUID;
@@ -1381,7 +1381,7 @@ namespace Roles {
         @doc("Cursor for cursor-based pagination.")
         @query cursor?: Cursor;
 
-        @doc("Filter by role name. Exact match by default; use * as a wildcard for partial matching (e.g. foo*).")
+        @doc("Filter by role name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).")
         @query name?: string;
 
         @doc("Filter roles by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns roles from all scopes.")

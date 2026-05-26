@@ -684,7 +684,7 @@ paths:
         - name: name
           in: query
           required: false
-          description: Filter by role name. Exact match by default; use * as a wildcard for partial matching (e.g. foo*).
+          description: Filter by role name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).
           schema:
             type: string
           explode: false
@@ -1252,7 +1252,7 @@ paths:
         - name: name
           in: query
           required: false
-          description: Filter by workspace name. Case-insensitive exact match by default; use * as a wildcard for partial matching (e.g. foo*).
+          description: Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).
           schema:
             type: string
           explode: false

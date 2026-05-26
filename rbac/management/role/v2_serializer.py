@@ -158,7 +158,9 @@ class RoleV2ListSerializer(serializers.Serializer):
     name = serializers.CharField(
         required=False,
         allow_blank=True,
-        help_text="Filter by role name. Use * as wildcard for partial matching.",
+        help_text=(
+            "Filter by role name. Case-insensitive substring match by default;" " use * for glob patterns (e.g. foo*)."
+        ),
     )
     permission = serializers.CharField(
         required=False,
