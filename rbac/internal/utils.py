@@ -51,6 +51,10 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
 from management.relation_replicator.types import RelationTuple
+from management.role.resource_definitions import (
+    get_workspace_ids_from_resource_definition_with_malformed,
+    is_resource_a_workspace,
+)
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
@@ -963,59 +967,6 @@ def load_request_body(request) -> dict:
     request_decoded = request.body.decode("utf-8")
     req_data = json.loads(request_decoded)
     return req_data
-
-
-def is_resource_a_workspace(application: str, resource_type: str, attributeFilter: dict) -> bool:
-    """Check if a given ResourceDefinition is a Workspace."""
-    is_workspace_application = application == settings.WORKSPACE_APPLICATION_NAME
-    is_workspace_resource_type = resource_type in settings.WORKSPACE_RESOURCE_TYPE
-    is_workspace_group_filter = attributeFilter.get("key") == settings.WORKSPACE_ATTRIBUTE_FILTER
-    return is_workspace_application and is_workspace_resource_type and is_workspace_group_filter
-
-
-def get_workspace_ids_from_resource_definition_with_malformed(attributeFilter: dict) -> tuple[list[uuid.UUID], list]:
-    """Get workspace id from a resource definition. Returns a tuple of the valid entries and the invalid entries."""
-    operation = attributeFilter.get("operation")
-
-    valid = []
-    invalid = []
-
-    if operation == "in":
-        value = attributeFilter.get("value", [])
-
-        for val in value:
-            if is_str_valid_uuid(val):
-                valid.append(uuid.UUID(val))
-            else:
-                invalid.append(val)
-
-    elif operation == "equal":
-        value = attributeFilter.get("value", "")
-
-        if is_str_valid_uuid(value):
-            valid.append(uuid.UUID(value))
-        else:
-            invalid.append(value)
-
-    return valid, invalid
-
-
-def get_workspace_ids_from_resource_definition(attributeFilter: dict) -> list[uuid.UUID]:
-    """Get workspace id from a resource definition."""
-    return get_workspace_ids_from_resource_definition_with_malformed(attributeFilter)[0]
-
-
-def is_str_valid_uuid(uuid_str: str) -> bool:
-    """Check if a string can be converted to a valid UUID."""
-    if not isinstance(uuid_str, str):
-        return False
-    if uuid_str is None or not uuid_str:
-        return False
-    try:
-        uuid.UUID(uuid_str)
-        return True
-    except ValueError:
-        return False
 
 
 def fix_admin_default_bindings(org_id: str) -> dict:

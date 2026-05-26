@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import dataclasses
 import logging
 from collections.abc import Callable
-from typing import Any, Iterable, Optional, Tuple, Union
+from typing import Iterable, Optional
 
 import uuid_utils.compat as uuid
 from django.db.models import F
@@ -27,6 +27,11 @@ from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
 from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
+from management.role.resource_definitions import (
+    attribute_key_to_v2_related_resource_type,
+    get_workspace_ids_from_resource_definition,
+    values_from_attribute_filter,
+)
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
 from migration_tool.ingest import add_element
@@ -152,10 +157,7 @@ def v1_role_to_v2_bindings(
     service) to the V2boundresource for permissions without explicit resource
     definitions.
     """
-    from internal.utils import (
-        get_or_create_ungrouped_workspace,
-        get_workspace_ids_from_resource_definition,
-    )
+    from internal.utils import get_or_create_ungrouped_workspace
 
     _scope_service = ImplicitResourceService.from_settings()
 
@@ -421,28 +423,7 @@ def permission_groupings_to_v2_role_bindings(
     )
 
 
-def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
-    """Split a resource definition into a list of resource IDs."""
-    op: str = attribute_filter["operation"]
-    resource_id: Union[list[str], str] = attribute_filter["value"]
-
-    if isinstance(resource_id, list):
-        return resource_id
-
-    return resource_id.split(",") if op == "in" else [resource_id]
-
-
 # Maintained for compatibility.
 def v1_perm_to_v2_perm(v1_permission: Permission):
     """Convert a V1 permission to a V2 permission."""
     return v1_permission.v2_string()
-
-
-V2_RESOURCE_BY_ATTRIBUTE = {"group.id": ("rbac", "workspace")}
-
-
-def attribute_key_to_v2_related_resource_type(resourceType: str) -> Optional[Tuple[str, str]]:
-    """Convert a V1 resource type to a V2 resource type."""
-    if resourceType in V2_RESOURCE_BY_ATTRIBUTE:
-        return V2_RESOURCE_BY_ATTRIBUTE[resourceType]
-    return None

@@ -31,7 +31,6 @@ from django.db.models.aggregates import Count
 from django.http import Http404
 from django.utils.translation import gettext as _
 from django_filters import rest_framework as filters
-from internal.utils import get_workspace_ids_from_resource_definition
 from management.filters import CommonFilters
 from management.models import AuditLog, Permission
 from management.notifications.notification_handlers import role_obj_change_notification_handler
@@ -42,6 +41,7 @@ from management.relation_replicator.relation_replicator import DualWriteExceptio
 from management.role.relation_api_dual_write_handler import (
     RelationApiDualWriteHandler,
 )
+from management.role.resource_definitions import get_workspace_ids_from_resource_definition
 from management.role.serializer import AccessSerializer, RoleDynamicSerializer, RolePatchSerializer
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
 from management.utils import validate_uuid

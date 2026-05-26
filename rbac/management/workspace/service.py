@@ -28,7 +28,6 @@ from django.db import transaction
 from django.db.models import Q
 from feature_flags import FEATURE_FLAGS
 from internal.pg_notify_wait import wait_for_pg_notify
-from internal.utils import get_workspace_ids_from_resource_definition
 from management.atomic_transactions import atomic
 from management.models import ResourceDefinition, Role, Workspace
 from management.relation_replicator.outbox_replicator import OutboxReplicator
@@ -40,6 +39,7 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.role.model import BindingMapping
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.role.resource_definitions import get_workspace_ids_from_resource_definition
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from management.v2_filters import v2_name_filter
