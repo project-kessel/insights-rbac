@@ -745,11 +745,13 @@ class RoleV2ServiceListTests(IdentityRequest):
         self.assertEqual(queryset.count(), 1)
         self.assertEqual(queryset.first().name, "role_one")
 
-    def test_list_name_exact_match_unchanged(self):
-        """Test that name without wildcard still requires exact match."""
+    def test_list_name_substring_match(self):
+        """Test that name without wildcard does substring match."""
         queryset = self.service.list({"name": "role"})
 
-        self.assertEqual(queryset.count(), 0)
+        self.assertEqual(queryset.count(), 2)
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"role_one", "role_two"})
 
     def test_list_filters_by_name_wildcard_no_match(self):
         """Test that a wildcard pattern matching nothing returns empty."""

@@ -30,7 +30,7 @@ def _glob_to_regex(pattern: str) -> str:
 def v2_name_filter(queryset: QuerySet, name: str, field: str = "name") -> QuerySet:
     """Filter a queryset by name with '*' glob support.
 
-    Without wildcards, performs case-insensitive exact match.
+    Without wildcards, performs case-insensitive substring match.
     With '*' wildcards, converts to regex for pattern matching.
     A bare '*' matches everything (no filter applied).
     """
@@ -38,4 +38,4 @@ def v2_name_filter(queryset: QuerySet, name: str, field: str = "name") -> QueryS
         return queryset
     if "*" in name:
         return queryset.filter(**{f"{field}__iregex": _glob_to_regex(name)})
-    return queryset.filter(**{f"{field}__iexact": name})
+    return queryset.filter(**{f"{field}__icontains": name})
