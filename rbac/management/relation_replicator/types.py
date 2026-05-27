@@ -64,6 +64,10 @@ class ObjectType:
         _validate_required_str("name", self.name)
         _validate_pattern("name", self.name, self._type_regex, "alphanumeric characters and underscores")
 
+    def as_tuple(self) -> tuple[str, str]:
+        """Convert the type to a 2-element (namespace, name) tuple."""
+        return self.namespace, self.name
+
 
 @dataclasses.dataclass(frozen=True)
 class ObjectReference:

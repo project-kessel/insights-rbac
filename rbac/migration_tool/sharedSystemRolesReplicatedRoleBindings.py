@@ -27,11 +27,7 @@ from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
 from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
-from management.role.resource_definitions import (
-    attribute_key_to_v2_related_resource_type,
-    get_workspace_ids_from_resource_definition,
-    values_from_attribute_filter,
-)
+from management.role.resource_definitions import parse_attribute_filter
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
 from migration_tool.ingest import add_element
@@ -174,23 +170,17 @@ def v1_role_to_v2_bindings(
         default = True
         for resource_def in access.resourceDefinitions.all():
             default = False
-            attri_filter = resource_def.attributeFilter
 
-            # Deal with some malformed data in db
-            if attri_filter["operation"] == "in":
-                if attri_filter["value"] == []:
-                    # Skip empty values
-                    continue
+            parsed_filter = parse_attribute_filter(resource_def.attributeFilter)
 
-            resource_type = attribute_key_to_v2_related_resource_type(attri_filter["key"])
-
-            if resource_type is None:
-                # Resource type not mapped to v2
+            if parsed_filter is None:
                 continue
 
             # validate permission was not added to workspace out of users org for v1 (RHCLOUD-35481)
-            if resource_type == ("rbac", "workspace"):
-                requested_workspace_ids = set(get_workspace_ids_from_resource_definition(attri_filter))
+            if parsed_filter.is_for_workspaces():
+                # We do not need to handle a null ID here; the ungrouped hosts workspace will be created later if
+                # necessary.
+                requested_workspace_ids = set(uuid.UUID(u) for u in parsed_filter.named_ids)
 
                 if len(requested_workspace_ids) > 0:
                     actual_workspace_ids = set(
@@ -206,18 +196,22 @@ def v1_role_to_v2_bindings(
 
                         continue
 
-            for resource_id in values_from_attribute_filter(attri_filter):
-                if resource_id is None:
-                    if resource_type != ("rbac", "workspace"):
-                        raise ValueError(f"Resource ID is None for {resource_def}")
-                    if FEATURE_FLAGS.is_remove_null_value_enabled():
-                        ungrouped_ws = get_or_create_ungrouped_workspace(v1_role.tenant)
-                        resource_id = str(ungrouped_ws.id)
-                    else:
-                        continue
-                elif resource_id == "":
-                    continue
-                add_element(perm_groupings, V2boundresource(resource_type, resource_id), permission, collection=set)
+            all_ids = set(parsed_filter.named_ids)
+
+            if parsed_filter.has_null:
+                if not parsed_filter.is_for_workspaces():
+                    raise ValueError(f"Resource ID is None for {parsed_filter.resource_type}")
+
+                # A null ID means the ungrouped hosts workspace (if the flag is enabled).
+                if FEATURE_FLAGS.is_remove_null_value_enabled():
+                    ungrouped_ws = get_or_create_ungrouped_workspace(v1_role.tenant)
+                    all_ids.add(str(ungrouped_ws.id))
+
+            raw_type = parsed_filter.resource_type.as_tuple()
+
+            for resource_id in all_ids:
+                add_element(perm_groupings, V2boundresource(raw_type, resource_id), permission, collection=set)
+
         if default:
             add_element(
                 perm_groupings,
