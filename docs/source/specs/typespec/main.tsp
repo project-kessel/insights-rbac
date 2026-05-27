@@ -770,7 +770,7 @@ namespace RoleBindings {
 
     model Resource {
         @doc("Resource identifier")
-        id?: UUID;
+        id?: string;
         @doc("Resource name")
         name?: string;
         @doc("Resource type")
@@ -784,11 +784,16 @@ namespace RoleBindings {
         subject: #{ id: "3fa85f64-5717-4562-b3fc-2c963f66afa6", type: BindingSubjectType.group },
         role: #{ id: "550e8400-e29b-41d4-a716-446655440002" }
     })
+    @example(#{
+        resource: #{ id: "redhat/12345", type: "tenant" },
+        subject: #{ id: "3fa85f64-5717-4562-b3fc-2c963f66afa6", type: BindingSubjectType.group },
+        role: #{ id: "550e8400-e29b-41d4-a716-446655440002" }
+    })
     model CreateRoleBindingsRequest {
         @doc("Resource to bind the role to")
         resource: {
-            @doc("UUID that uniquely identifies the resource")
-            id: UUID;
+            @doc("Identifier of the resource")
+            id: string;
             @doc("Type of resource")
             @example("workspace")
             type: string;
