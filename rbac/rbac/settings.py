@@ -262,7 +262,7 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "filters": {
-        "env_name": {"()": "rbac.logging_filters.EnvironmentFilter"},
+        "env_name": {"()": "rbac.logging_filters.EnvironmentFilter", "env_name": ENV_NAME},
     },
     "formatters": {
         "verbose": {"format": VERBOSE_FORMATTING},
