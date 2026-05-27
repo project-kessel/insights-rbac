@@ -65,13 +65,12 @@ def get_workspace_ids_from_resource_definition(attributeFilter: dict) -> list[uu
 
 def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
     """Split a resource definition into a list of resource IDs."""
-    op: str = attribute_filter["operation"]
     resource_id: Union[list[str], str] = attribute_filter["value"]
 
     if isinstance(resource_id, list):
         return resource_id
 
-    return resource_id.split(",") if op == "in" else [resource_id]
+    return [resource_id]
 
 
 V2_RESOURCE_BY_ATTRIBUTE = {"group.id": ("rbac", "workspace")}
