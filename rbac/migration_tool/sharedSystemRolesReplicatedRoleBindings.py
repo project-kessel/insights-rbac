@@ -178,10 +178,7 @@ def v1_role_to_v2_bindings(
 
             # Deal with some malformed data in db
             if attri_filter["operation"] == "in":
-                if not isinstance(attri_filter["value"], list):
-                    # Override operation as "equal" if value is not a list
-                    attri_filter["operation"] = "equal"
-                elif attri_filter["value"] == []:
+                if attri_filter["value"] == []:
                     # Skip empty values
                     continue
 

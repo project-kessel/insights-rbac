@@ -33,23 +33,10 @@ def is_resource_a_workspace(application: str, resource_type: str, attributeFilte
 
 def get_workspace_ids_from_resource_definition_with_malformed(attributeFilter: dict) -> tuple[list[uuid.UUID], list]:
     """Get workspace id from a resource definition. Returns a tuple of the valid entries and the invalid entries."""
-    operation = attributeFilter.get("operation")
-
     valid = []
     invalid = []
 
-    if operation == "in":
-        value = attributeFilter.get("value", [])
-
-        for val in value:
-            if is_str_valid_uuid(val):
-                valid.append(uuid.UUID(val))
-            else:
-                invalid.append(val)
-
-    elif operation == "equal":
-        value = attributeFilter.get("value", "")
-
+    for value in values_from_attribute_filter(attributeFilter):
         if is_str_valid_uuid(value):
             valid.append(uuid.UUID(value))
         else:
@@ -65,7 +52,7 @@ def get_workspace_ids_from_resource_definition(attributeFilter: dict) -> list[uu
 
 def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
     """Split a resource definition into a list of resource IDs."""
-    resource_id: Union[list[str], str] = attribute_filter["value"]
+    resource_id: Union[list[str], str] = attribute_filter.get("value", [])
 
     if isinstance(resource_id, list):
         return resource_id
