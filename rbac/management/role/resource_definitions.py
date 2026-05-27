@@ -18,7 +18,7 @@
 
 import dataclasses
 import uuid
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from django.conf import settings
 from management.relation_replicator.types import ObjectType
@@ -156,10 +156,3 @@ def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
         return resource_id
 
     return [resource_id]
-
-
-def attribute_key_to_v2_related_resource_type(resourceType: str) -> Optional[Tuple[str, str]]:
-    """Convert a V1 resource type to a V2 resource type."""
-    if resourceType in _resource_type_by_attribute:
-        return _resource_type_by_attribute[resourceType].as_tuple()
-    return None

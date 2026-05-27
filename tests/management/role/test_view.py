@@ -3391,41 +3391,6 @@ class RoleWorkspaceValidationTests(IdentityRequest):
         self.assertIn("attributeFilter", error_dict["resourceDefinitions"][0])
         self.assertIn("This field is required.", error_dict["resourceDefinitions"][0]["attributeFilter"][0])
 
-    @patch("management.role.view.get_workspace_ids_from_resource_definition")
-    def test_workspace_validation_get_workspace_id_called(self, mock_get_workspace_ids):
-        """Test that get_workspace_ids_from_resource_definition is called with correct parameters."""
-        mock_get_workspace_ids.return_value = [self.tenant1_workspace.id]
-
-        request_data = {
-            "name": "test_role",
-            "access": [
-                {
-                    "permission": "inventory:groups:read",
-                    "resourceDefinitions": [
-                        {
-                            "attributeFilter": {
-                                "key": "group.id",
-                                "operation": "equal",
-                                "value": str(self.tenant1_workspace.id),
-                            }
-                        }
-                    ],
-                }
-            ],
-        }
-
-        self.request_mock.data = request_data
-
-        from management.role.view import RoleViewSet
-
-        viewset = RoleViewSet()
-        viewset.validate_role(self.request_mock)
-
-        # Verify get_workspace_ids_from_resource_definition was called
-        mock_get_workspace_ids.assert_called_once_with(
-            {"key": "group.id", "operation": "equal", "value": str(self.tenant1_workspace.id)}
-        )
-
     def test_workspace_validation_nonexistent_workspace_id(self):
         """Test validation when workspace ID doesn't exist in any tenant."""
         fake_workspace_id = str(uuid4())

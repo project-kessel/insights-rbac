@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import traceback
+import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -41,12 +42,11 @@ from management.relation_replicator.relation_replicator import DualWriteExceptio
 from management.role.relation_api_dual_write_handler import (
     RelationApiDualWriteHandler,
 )
-from management.role.resource_definitions import get_workspace_ids_from_resource_definition
+from management.role.resource_definitions import parse_attribute_filter
 from management.role.serializer import AccessSerializer, RoleDynamicSerializer, RolePatchSerializer
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
 from management.utils import validate_uuid
 from management.workspace.model import Workspace
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
@@ -677,21 +677,21 @@ class RoleViewSet(
                     attributeFilter = resourceDefinition.get("attributeFilter")
                     filter_key = attributeFilter.get("key")
 
-                    if filter_key is not None and attribute_key_to_v2_related_resource_type(filter_key) == (
-                        "rbac",
-                        "workspace",
-                    ):
-                        workspace_ids = get_workspace_ids_from_resource_definition(attributeFilter)
-                        if len(workspace_ids) >= 1:
-                            unique_workspace_ids = set(workspace_ids)
-                            valid_workspaces = (
+                    parsed_filter = parse_attribute_filter(attributeFilter)
+
+                    if filter_key is not None and parsed_filter is not None and parsed_filter.is_for_workspaces():
+                        # Note that we don't care about a null ID, since the ungrouped hosts workspace is guaranteed
+                        # to be valid.
+                        requested_workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
+
+                        if len(requested_workspace_ids) >= 1:
+                            valid_workspace_ids: set[uuid.UUID] = set(
                                 Workspace.objects.select_for_update()
-                                .filter(id__in=unique_workspace_ids, tenant=request.tenant)
+                                .filter(id__in=requested_workspace_ids, tenant=request.tenant)
                                 .values_list("id", flat=True)
                             )
 
-                            valid_workspace_ids = set(valid_workspaces)
-                            invalid_workspace_ids = unique_workspace_ids - valid_workspace_ids
+                            invalid_workspace_ids = requested_workspace_ids - valid_workspace_ids
 
                             if invalid_workspace_ids:
                                 invalid_ids_str = ", ".join(sorted([str(uid) for uid in invalid_workspace_ids]))

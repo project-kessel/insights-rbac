@@ -39,12 +39,11 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.role.model import BindingMapping
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
-from management.role.resource_definitions import get_workspace_ids_from_resource_definition
+from management.role.resource_definitions import parse_attribute_filter
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from management.v2_filters import v2_name_filter
 from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
 from rest_framework import serializers
 
@@ -180,12 +179,17 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
             rds_to_update = []
 
             for rd in locked_rds:
-                # Double-check that this resource definition is for workspaces.
-                if attribute_key_to_v2_related_resource_type(rd.attributeFilter["key"]) != ("rbac", "workspace"):
+                parsed_filter = parse_attribute_filter(rd.attributeFilter)
+
+                if parsed_filter is None:
                     continue
 
-                # Get workspace IDs from resource definition
-                workspace_ids = get_workspace_ids_from_resource_definition(rd.attributeFilter)
+                if not parsed_filter.is_for_workspaces():
+                    continue
+
+                # Get workspace IDs from resource definition. (We will never remove an ungrouped hosts workspace,
+                # so we don't need to worry about a null ID.)
+                workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
 
                 # Check if this resource definition references the removed workspace
                 if workspace_id not in workspace_ids:
