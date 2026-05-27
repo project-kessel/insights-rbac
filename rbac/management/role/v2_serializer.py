@@ -315,4 +315,4 @@ class RoleV2RequestSerializer(serializers.ModelSerializer):
 class RoleV2BulkDeleteRequestSerializer(serializers.Serializer):
     """Serializer for requests to delete multiple roles."""
 
-    ids = serializers.ListField(child=UUIDStringField())
+    ids = serializers.ListField(child=UUIDStringField(), min_length=1)
