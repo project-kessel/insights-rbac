@@ -5824,7 +5824,6 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
                 },
             )
 
-        content = [{"type": "text", "text": _normalize_tool_result(result)}]
         return _success_response(request_id, {"content": content, "isError": False})
     except ToolTimeoutError:
         duration = time.monotonic() - start if track else timeout
