@@ -51,10 +51,7 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
 from management.relation_replicator.types import RelationTuple
-from management.role.resource_definitions import (
-    get_workspace_ids_from_resource_definition_with_malformed,
-    is_resource_a_workspace,
-)
+from management.role.resource_definitions import parse_attribute_filter
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
@@ -779,28 +776,18 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
 
                 # Only check workspace-related resource definitions
                 for rd in access.resourceDefinitions.all():
-                    if not is_resource_a_workspace(
-                        permission.application, permission.resource_type, rd.attributeFilter
-                    ):
+                    parsed_filter = parse_attribute_filter(rd.attributeFilter)
+
+                    if parsed_filter is None:
+                        continue
+
+                    if not parsed_filter.is_for_workspaces():
                         continue
 
                     # Get workspace IDs from resource definition
-                    workspace_ids, malformed_workspace_ids = get_workspace_ids_from_resource_definition_with_malformed(
-                        rd.attributeFilter
-                    )
-
-                    # null is acceptable for us.
-                    malformed_workspace_ids = [x for x in malformed_workspace_ids if x is not None]
-
-                    # Check if the resource definition has None (for ungrouped workspace)
-                    operation = rd.attributeFilter.get("operation")
-                    original_value = rd.attributeFilter.get("value")
-                    has_none_value = False
-
-                    if operation == "in" and isinstance(original_value, list):
-                        has_none_value = None in original_value
-                    elif operation == "equal":
-                        has_none_value = original_value is None
+                    requested_workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
+                    malformed_workspace_ids = parsed_filter.invalid_ids
+                    has_none_value = parsed_filter.has_null
 
                     # Previously, we would attempt to exit early if workspace_ids is empty (believing there would be
                     # nothing to process). However, this isn't always valid. If the resource definition contains only
@@ -808,35 +795,36 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
                     # remove all of those values, but workspace_ids will be empty.
 
                     # Check which workspaces exist in the role's tenant
-                    valid_workspace_ids = set(
-                        str(ws_id)
-                        for ws_id in Workspace.objects.filter(id__in=workspace_ids, tenant=role.tenant).values_list(
+                    valid_workspace_ids: set[uuid.UUID] = set(
+                        Workspace.objects.filter(id__in=requested_workspace_ids, tenant=role.tenant).values_list(
                             "id", flat=True
                         )
                     )
 
-                    invalid_workspace_ids = set(str(ws_id) for ws_id in workspace_ids) - valid_workspace_ids
+                    invalid_workspace_ids = requested_workspace_ids - valid_workspace_ids
 
                     if invalid_workspace_ids or malformed_workspace_ids:
                         role_had_invalid_rds = True
 
                         # Calculate what the new value would be
                         operation_type = rd.attributeFilter.get("operation")
-                        new_value: str | list | None
+                        new_value: str | list[str | None] | None
                         if operation_type == "equal":
                             # For "equal" operation, value should be a single string, None, or empty string
                             # Preserve None if it existed (for ungrouped workspace reference)
                             if has_none_value and not valid_workspace_ids:
                                 new_value = None
                             else:
-                                new_value = list(valid_workspace_ids)[0] if valid_workspace_ids else ""
+                                new_value = str(list(valid_workspace_ids)[0]) if valid_workspace_ids else ""
                         else:
                             # For "in" operation, value should be a list
                             # Preserve None value if it existed (for ungrouped workspace reference)
-                            new_value_list: list[str | None] = list(valid_workspace_ids) if valid_workspace_ids else []
+                            new_value_list: list[str | None] = [str(u) for u in valid_workspace_ids]
                             if has_none_value:
                                 new_value_list.append(None)
                             new_value = new_value_list
+
+                        original_value = rd.attributeFilter["value"]
 
                         change_info = {
                             "role_uuid": str(role.uuid),

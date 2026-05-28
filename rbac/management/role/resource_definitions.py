@@ -129,25 +129,6 @@ def is_resource_a_workspace(application: str, resource_type: str, attributeFilte
     return is_workspace_application and is_workspace_resource_type and is_workspace_group_filter
 
 
-def get_workspace_ids_from_resource_definition_with_malformed(attributeFilter: dict) -> tuple[list[uuid.UUID], list]:
-    """Get workspace id from a resource definition. Returns a tuple of the valid entries and the invalid entries."""
-    valid = []
-    invalid = []
-
-    for value in _values_from_attribute_filter(attributeFilter):
-        if is_str_valid_uuid(value):
-            valid.append(uuid.UUID(value))
-        else:
-            invalid.append(value)
-
-    return valid, invalid
-
-
-def get_workspace_ids_from_resource_definition(attributeFilter: dict) -> list[uuid.UUID]:
-    """Get workspace id from a resource definition."""
-    return get_workspace_ids_from_resource_definition_with_malformed(attributeFilter)[0]
-
-
 # We have established that only "in" and "equal" are used as operators in all environments, so it's safe to check for
 # those here. We've also established that all "equal" operator values are strings.
 #

@@ -20,7 +20,7 @@
 from django.conf import settings
 from django.utils.translation import gettext as _
 from feature_flags import FEATURE_FLAGS
-from internal.utils import get_or_create_ungrouped_workspace, is_resource_a_workspace
+from internal.utils import get_or_create_ungrouped_workspace
 from management.models import Group, Workspace
 from management.serializer_override_mixin import SerializerCreateOverrideMixin
 from management.utils import (
@@ -35,6 +35,7 @@ from rest_framework import serializers
 
 from api.models import Tenant
 from .model import Access, BindingMapping, Permission, ResourceDefinition, Role
+from .resource_definitions import is_resource_a_workspace
 from ..querysets import ORG_ID_SCOPE, PRINCIPAL_SCOPE, SCOPE_KEY, VALID_SCOPES
 
 ALLOWED_OPERATIONS = ["in", "equal"]
