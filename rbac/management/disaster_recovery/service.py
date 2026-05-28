@@ -18,6 +18,7 @@ def reconcile(
     restore_timestamp_ms: int,
     buffer_seconds: int = 300,
     replicator: OutboxReplicator | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Run disaster recovery reconciliation.
 
@@ -29,6 +30,9 @@ def reconcile(
     6. Write corrective events to outbox
     7. Return summary
     """
+    if buffer_seconds < 0:
+        raise ValueError(f"buffer_seconds must be non-negative, got {buffer_seconds}")
+
     start = time.monotonic()
 
     buffer_ms = buffer_seconds * 1000
@@ -67,6 +71,56 @@ def reconcile(
 
     existence_map = check_resources_exist(all_tuples)
     actions = generate_corrective_actions(events, existence_map)
+
+    adds = [a for a in actions if a.action == "add"]
+    removes = [a for a in actions if a.action == "remove"]
+    skips = [a for a in actions if a.action == "skip"]
+
+    if dry_run:
+        elapsed = round(time.monotonic() - start, 3)
+        action_details = [
+            {
+                "action": a.action,
+                "tuple": a.tuple.stringify(),
+                "reason": a.reason,
+                "source_partition": a.source_event_partition,
+                "source_offset": a.source_event_offset,
+            }
+            for a in actions
+            if a.action != "skip"
+        ]
+        for detail in action_details:
+            logger.info(
+                "DRY RUN: would %s %s (reason: %s, partition=%d, offset=%d)",
+                detail["action"],
+                detail["tuple"],
+                detail["reason"],
+                detail["source_partition"],
+                detail["source_offset"],
+            )
+
+        result = {
+            "status": "dry_run",
+            "time_window": {"start_ms": start_timestamp_ms, "end_ms": end_timestamp_ms},
+            "events_read": len(events),
+            "tuples_processed": len(all_tuples),
+            "corrective_adds": len(adds),
+            "corrective_removes": len(removes),
+            "skipped": len(skips),
+            "errors": 0,
+            "actions": action_details,
+            "duration_seconds": elapsed,
+        }
+        logger.info(
+            "DR reconciliation DRY RUN: events=%d tuples=%d would_add=%d would_remove=%d skipped=%d (%.3fs)",
+            len(events),
+            len(all_tuples),
+            len(adds),
+            len(removes),
+            len(skips),
+            elapsed,
+        )
+        return result
 
     if replicator is None:
         replicator = OutboxReplicator()

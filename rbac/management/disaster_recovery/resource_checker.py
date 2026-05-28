@@ -4,13 +4,15 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from api.models import Tenant
+from django.db.models import Model
 from management.group.model import Group
 from management.principal.model import Principal
 from management.relation_replicator.types import RelationTuple
 from management.role.model import Role
 from management.role_binding.model import RoleBinding
 from management.workspace.model import Workspace
+
+from api.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,9 @@ def _strip_domain_prefix(resource_id: str) -> str:
 
 @dataclass(frozen=True)
 class ResourceTypeConfig:
-    model: type
+    """Maps a resource type name to its Django model and ID field."""
+
+    model: type[Model]
     id_field: str
     id_transform: Callable[[str], str] | None = None
 

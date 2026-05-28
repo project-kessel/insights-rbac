@@ -2634,6 +2634,9 @@ def disaster_recovery_reconcile(request):
 
     Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300}
     """
+    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+        return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
+
     from datetime import datetime
 
     from management.tasks import run_disaster_recovery_reconcile
@@ -2651,12 +2654,17 @@ def disaster_recovery_reconcile(request):
         return JsonResponse({"error": f"Invalid restore_timestamp format: {e}"}, status=400)
 
     buffer_seconds = body.get("buffer_seconds", 300)
-    if not isinstance(buffer_seconds, int) or buffer_seconds < 0:
+    if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
         return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
 
     task = run_disaster_recovery_reconcile.delay(
         restore_timestamp_ms=restore_timestamp_ms,
         buffer_seconds=buffer_seconds,
+        dry_run=dry_run,
     )
 
     return JsonResponse(
@@ -2665,6 +2673,7 @@ def disaster_recovery_reconcile(request):
             "task_id": str(task.id),
             "restore_timestamp_ms": restore_timestamp_ms,
             "buffer_seconds": buffer_seconds,
+            "dry_run": dry_run,
         },
         status=202,
     )

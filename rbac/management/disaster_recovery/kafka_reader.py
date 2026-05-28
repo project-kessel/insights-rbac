@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class DisasterRecoveryError(Exception):
-    pass
+    """Raised when disaster recovery operations cannot proceed."""
 
 
 @dataclass
@@ -23,6 +23,7 @@ class ParsedReplicationEvent:
     partition: int
     timestamp_ms: int
     event_type: str
+    org_id: str = ""
     relations_to_add: list[RelationTuple] = field(default_factory=list)
     relations_to_remove: list[RelationTuple] = field(default_factory=list)
 
@@ -46,8 +47,8 @@ def _parse_debezium_payload(raw_value: bytes) -> dict | None:
         except json.JSONDecodeError as e:
             logger.warning("Failed to parse Debezium payload string: %s", e)
             return None
-    elif isinstance(payload_data := payload_field, dict):
-        pass
+    elif isinstance(payload_field, dict):
+        payload_data = payload_field
     else:
         logger.warning("Unexpected payload type: %s", type(payload_field))
         return None
@@ -75,12 +76,14 @@ def _parse_event(payload: dict, offset: int, partition: int, timestamp_ms: int) 
 
     resource_context = inner_payload.get("resource_context", {})
     event_type = payload.get("type", resource_context.get("event_type", "unknown"))
+    org_id = str(resource_context.get("org_id", ""))
 
     return ParsedReplicationEvent(
         offset=offset,
         partition=partition,
         timestamp_ms=timestamp_ms,
         event_type=event_type,
+        org_id=org_id,
         relations_to_add=relations_to_add,
         relations_to_remove=relations_to_remove,
     )
@@ -191,6 +194,18 @@ def read_events_in_window(
 
             if past_window:
                 break
+
+        partition_stats: dict[int, list[int]] = {}
+        for ev in events:
+            partition_stats.setdefault(ev.partition, []).append(ev.offset)
+        for part, offsets in sorted(partition_stats.items()):
+            logger.info(
+                "DR Kafka reader: partition %d: %d events, offsets [%d, %d]",
+                part,
+                len(offsets),
+                min(offsets),
+                max(offsets),
+            )
 
         logger.info(
             "DR Kafka reader: read %d events from topic '%s' in window [%d, %d]",

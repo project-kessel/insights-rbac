@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
+from django.db import transaction
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import (
@@ -18,11 +19,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CorrectiveAction:
+    """A single corrective action derived from the truth table."""
+
     action: Literal["add", "remove", "skip"]
     tuple: RelationTuple
     reason: str
     source_event_offset: int
     source_event_partition: int
+    org_id: str = ""
 
 
 def generate_corrective_actions(
@@ -51,6 +55,7 @@ def generate_corrective_actions(
                         reason="Resource exists, add is correct",
                         source_event_offset=event.offset,
                         source_event_partition=event.partition,
+                        org_id=event.org_id,
                     )
                 )
             else:
@@ -61,6 +66,7 @@ def generate_corrective_actions(
                         reason="Resource does not exist, orphaned tuple needs removal",
                         source_event_offset=event.offset,
                         source_event_partition=event.partition,
+                        org_id=event.org_id,
                     )
                 )
 
@@ -76,6 +82,7 @@ def generate_corrective_actions(
                         reason="Resource exists, deleted tuple needs restoration",
                         source_event_offset=event.offset,
                         source_event_partition=event.partition,
+                        org_id=event.org_id,
                     )
                 )
             else:
@@ -86,6 +93,7 @@ def generate_corrective_actions(
                         reason="Resource does not exist, deletion is correct",
                         source_event_offset=event.offset,
                         source_event_partition=event.partition,
+                        org_id=event.org_id,
                     )
                 )
 
@@ -97,6 +105,10 @@ def write_corrective_events(
     replicator: OutboxReplicator,
 ) -> dict:
     """Write corrective events to the outbox table.
+
+    Each event is written independently. If the process crashes mid-write,
+    re-running reconciliation for the same window is safe because SpiceDB
+    relation writes are idempotent.
 
     Returns counts of adds, removes, skips, and errors.
     """
@@ -113,9 +125,14 @@ def write_corrective_events(
                 event_type=ReplicationEventType.DR_CORRECTIVE_ADD,
                 partition_key=partition_key,
                 add=[action.tuple],
-                info={"source_offset": action.source_event_offset, "reason": action.reason},
+                info={
+                    "org_id": action.org_id,
+                    "source_offset": action.source_event_offset,
+                    "reason": action.reason,
+                },
             )
-            replicator.replicate(event)
+            with transaction.atomic():
+                replicator.replicate(event)
         except Exception as e:
             logger.exception("Failed to write corrective ADD for %s: %s", action.tuple.stringify(), e)
             errors += 1
@@ -126,9 +143,14 @@ def write_corrective_events(
                 event_type=ReplicationEventType.DR_CORRECTIVE_REMOVE,
                 partition_key=partition_key,
                 remove=[action.tuple],
-                info={"source_offset": action.source_event_offset, "reason": action.reason},
+                info={
+                    "org_id": action.org_id,
+                    "source_offset": action.source_event_offset,
+                    "reason": action.reason,
+                },
             )
-            replicator.replicate(event)
+            with transaction.atomic():
+                replicator.replicate(event)
         except Exception as e:
             logger.exception("Failed to write corrective REMOVE for %s: %s", action.tuple.stringify(), e)
             errors += 1
