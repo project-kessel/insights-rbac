@@ -2624,3 +2624,47 @@ def recompute_tenant_role_bindings(request, org_id):
             {"detail": f"Error recomputing role bindings for tenant: {str(e)}"},
             status=500,
         )
+
+
+@require_http_methods(["POST"])
+def disaster_recovery_reconcile(request):
+    """Trigger disaster recovery reconciliation for Kessel Relations.
+
+    POST /_private/api/disaster_recovery/reconcile/
+
+    Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300}
+    """
+    from datetime import datetime
+
+    from management.tasks import run_disaster_recovery_reconcile
+
+    body = load_request_body(request)
+
+    restore_timestamp_str = body.get("restore_timestamp")
+    if not restore_timestamp_str:
+        return JsonResponse({"error": "restore_timestamp is required"}, status=400)
+
+    try:
+        dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
+        restore_timestamp_ms = int(dt.timestamp() * 1000)
+    except (ValueError, TypeError) as e:
+        return JsonResponse({"error": f"Invalid restore_timestamp format: {e}"}, status=400)
+
+    buffer_seconds = body.get("buffer_seconds", 300)
+    if not isinstance(buffer_seconds, int) or buffer_seconds < 0:
+        return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+
+    task = run_disaster_recovery_reconcile.delay(
+        restore_timestamp_ms=restore_timestamp_ms,
+        buffer_seconds=buffer_seconds,
+    )
+
+    return JsonResponse(
+        {
+            "message": "Disaster recovery reconciliation enqueued.",
+            "task_id": str(task.id),
+            "restore_timestamp_ms": restore_timestamp_ms,
+            "buffer_seconds": buffer_seconds,
+        },
+        status=202,
+    )

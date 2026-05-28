@@ -553,3 +553,35 @@ def run_kessel_parity_checks_in_worker():
 
     stats["timing"] = timing_stats
     return stats
+
+
+@shared_task
+def run_disaster_recovery_reconcile(restore_timestamp_ms: int, buffer_seconds: int = 300) -> dict:
+    """Celery task for disaster recovery reconciliation of Kessel Relations.
+
+    Reads Kafka events from the data loss window, validates against current
+    RBAC database state, and writes corrective events through the outbox table.
+
+    Args:
+        restore_timestamp_ms: Unix timestamp in milliseconds of the DB restore point.
+        buffer_seconds: Extra time before restore_timestamp to include (default 300).
+
+    Returns:
+        dict: Summary with counts of corrective actions taken.
+    """
+    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+        return {"message": "Disaster recovery reconciliation is disabled"}
+
+    try:
+        from management.disaster_recovery.service import reconcile
+
+        return reconcile(
+            restore_timestamp_ms=restore_timestamp_ms,
+            buffer_seconds=buffer_seconds,
+        )
+    except Exception as e:
+        logger.exception("Disaster recovery reconciliation failed")
+        return {
+            "status": "failed",
+            "error": str(e),
+        }
