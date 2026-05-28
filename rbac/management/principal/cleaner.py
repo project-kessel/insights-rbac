@@ -150,7 +150,12 @@ def retrieve_user_info(message) -> User:
 
     # Find the user ID from identifiers
     for identifier in identifier_list:
-        if identifier.get("system") == "WEB" and identifier.get("entity-name") == "User" and identifier.get("qualifier") == "id":
+        is_web_user_id = (
+            identifier.get("system") == "WEB"
+            and identifier.get("entity-name") == "User"
+            and identifier.get("qualifier") == "id"
+        )
+        if is_web_user_id:
             user_id = identifier.get("text") or identifier.get("value")
             break
 
@@ -173,9 +178,15 @@ def retrieve_user_info(message) -> User:
             references = [references]
 
         for ref in references:
-            if ref.get("system") == "WEB" and ref.get("entity-name") == "Customer" and ref.get("qualifier") == "id":
+            is_web_customer = (
+                ref.get("system") == "WEB" and ref.get("entity-name") == "Customer" and ref.get("qualifier") == "id"
+            )
+            is_ebs_account = (
+                ref.get("system") == "EBS" and ref.get("entity-name") == "Account" and ref.get("qualifier") == "number"
+            )
+            if is_web_customer:
                 user.org_id = ref.get("text") or ref.get("value")
-            elif ref.get("system") == "EBS" and ref.get("entity-name") == "Account" and ref.get("qualifier") == "number":
+            elif is_ebs_account:
                 user.account = ref.get("text") or ref.get("value")
 
         return user
@@ -246,7 +257,7 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
         kafka_config.update(kafka_auth)
 
     # Get topic name from settings
-    topic = f"VirtualTopic.canonical.user"
+    topic = "VirtualTopic.canonical.user"
 
     try:
         consumer = KafkaConsumer(topic, **kafka_config)

@@ -181,121 +181,130 @@ class PrincipalCleanerTests(IdentityRequest):
 
 
 # Kafka JSON message format (converted from XML)
-KAFKA_MESSAGE_BODY = json.dumps({
-    "CanonicalMessage": {
-        "Header": {
-            "System": "WEB",
-            "Operation": "update",
-            "Type": "User",
-            "InstanceId": "660a018a6d336076b5b57fff",
-            "Timestamp": "2024-03-31T20:36:27.820"
-        },
-        "Payload": {
-            "Sync": {
-                "User": {
-                    "CreatedDate": "2024-02-16T02:57:51.738",
-                    "LastUpdatedDate": "2024-02-21T06:47:24.672",
-                    "Identifiers": {
-                        "Identifier": [
-                            {"system": "WEB", "entity-name": "User", "qualifier": "id", "text": "56780000"},
-                            {"system": "FOO", "entity-name": "User", "qualifier": "id", "text": "56780001"}
-                        ],
-                        "Reference": [
-                            {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "17685860"},
-                            {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "11111111"}
-                        ]
-                    },
-                    "Status": {
-                        "State": "Inactive"
-                    },
-                    "Person": {
-                        "FirstName": "Test",
-                        "LastName": "Principal",
-                        "Salutation": "Mr.",
-                        "Title": "QE",
-                        "Credentials": {
-                            "Login": "principal-test"
-                        }
+KAFKA_MESSAGE_BODY = json.dumps(
+    {
+        "CanonicalMessage": {
+            "Header": {
+                "System": "WEB",
+                "Operation": "update",
+                "Type": "User",
+                "InstanceId": "660a018a6d336076b5b57fff",
+                "Timestamp": "2024-03-31T20:36:27.820",
+            },
+            "Payload": {
+                "Sync": {
+                    "User": {
+                        "CreatedDate": "2024-02-16T02:57:51.738",
+                        "LastUpdatedDate": "2024-02-21T06:47:24.672",
+                        "Identifiers": {
+                            "Identifier": [
+                                {"system": "WEB", "entity-name": "User", "qualifier": "id", "text": "56780000"},
+                                {"system": "FOO", "entity-name": "User", "qualifier": "id", "text": "56780001"},
+                            ],
+                            "Reference": [
+                                {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "17685860"},
+                                {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "11111111"},
+                            ],
+                        },
+                        "Status": {"State": "Inactive"},
+                        "Person": {
+                            "FirstName": "Test",
+                            "LastName": "Principal",
+                            "Salutation": "Mr.",
+                            "Title": "QE",
+                            "Credentials": {"Login": "principal-test"},
+                        },
                     }
                 }
-            }
+            },
         }
     }
-})
+)
 
-KAFKA_MESSAGE_CREATION = json.dumps({
-    "CanonicalMessage": {
-        "Header": {
-            "System": "WEB",
-            "Operation": "insert",
-            "Type": "User",
-            "InstanceId": "660a018a6d336076b5b57fff",
-            "Timestamp": "2024-03-31T20:36:27.820"
-        },
-        "Payload": {
-            "Sync": {
-                "User": {
-                    "CreatedDate": "2024-02-16T02:57:51.738",
-                    "LastUpdatedDate": "2024-02-21T06:47:24.672",
-                    "Identifiers": {
-                        "Identifier": {"system": "WEB", "entity-name": "User", "qualifier": "id", "text": "56780000"},
-                        "Reference": [
-                            {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "17685860"},
-                            {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "11111111"}
-                        ]
-                    },
-                    "Status": {
-                        "State": "Active"
-                    },
-                    "Person": {
-                        "FirstName": "Test",
-                        "LastName": "Principal",
-                        "Salutation": "Mr.",
-                        "Title": "QE",
-                        "Credentials": {
-                            "Login": "principal-test"
-                        }
+KAFKA_MESSAGE_CREATION = json.dumps(
+    {
+        "CanonicalMessage": {
+            "Header": {
+                "System": "WEB",
+                "Operation": "insert",
+                "Type": "User",
+                "InstanceId": "660a018a6d336076b5b57fff",
+                "Timestamp": "2024-03-31T20:36:27.820",
+            },
+            "Payload": {
+                "Sync": {
+                    "User": {
+                        "CreatedDate": "2024-02-16T02:57:51.738",
+                        "LastUpdatedDate": "2024-02-21T06:47:24.672",
+                        "Identifiers": {
+                            "Identifier": {
+                                "system": "WEB",
+                                "entity-name": "User",
+                                "qualifier": "id",
+                                "text": "56780000",
+                            },
+                            "Reference": [
+                                {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "17685860"},
+                                {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "11111111"},
+                            ],
+                        },
+                        "Status": {"State": "Active"},
+                        "Person": {
+                            "FirstName": "Test",
+                            "LastName": "Principal",
+                            "Salutation": "Mr.",
+                            "Title": "QE",
+                            "Credentials": {"Login": "principal-test"},
+                        },
                     }
                 }
-            }
+            },
         }
     }
-})
+)
 
-KAFKA_MESSAGE_SPECIAL = json.dumps({
-    "CanonicalMessage": {
-        "Header": {
-            "System": "WEB",
-            "Operation": "insert",
-            "Type": "User",
-            "InstanceId": "666a018a6d336076b5b57fff",
-            "Timestamp": "2024-11-12T09:48:18.260"
-        },
-        "Payload": {
-            "Sync": {
-                "User": {
-                    "CreatedDate": "2024-11-12T09:48:12.978",
-                    "LastUpdatedDate": "2024-11-12T09:48:14.336",
-                    "Identifiers": {
-                        "Identifier": {"system": "WEB", "entity-name": "User", "qualifier": "id", "text": "56780000"},
-                        "Reference": {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "17685860"}
-                    },
-                    "Status": {
-                        "State": "Inactive"
-                    },
-                    "Person": {
-                        "FirstName": "Teamnado",
-                        "LastName": "Test Automation",
-                        "Title": "Test User",
-                        "Credentials": {
-                            "Login": "principal-test"
-                        }
+KAFKA_MESSAGE_SPECIAL = json.dumps(
+    {
+        "CanonicalMessage": {
+            "Header": {
+                "System": "WEB",
+                "Operation": "insert",
+                "Type": "User",
+                "InstanceId": "666a018a6d336076b5b57fff",
+                "Timestamp": "2024-11-12T09:48:18.260",
+            },
+            "Payload": {
+                "Sync": {
+                    "User": {
+                        "CreatedDate": "2024-11-12T09:48:12.978",
+                        "LastUpdatedDate": "2024-11-12T09:48:14.336",
+                        "Identifiers": {
+                            "Identifier": {
+                                "system": "WEB",
+                                "entity-name": "User",
+                                "qualifier": "id",
+                                "text": "56780000",
+                            },
+                            "Reference": {
+                                "system": "WEB",
+                                "entity-name": "Customer",
+                                "qualifier": "id",
+                                "text": "17685860",
+                            },
+                        },
+                        "Status": {"State": "Inactive"},
+                        "Person": {
+                            "FirstName": "Teamnado",
+                            "LastName": "Test Automation",
+                            "Title": "Test User",
+                            "Credentials": {"Login": "principal-test"},
+                        },
                     }
                 }
-            }
+            },
         }
     }
-})
+)
 
 
 def create_mock_kafka_message(message_body, partition=0, offset=0):
@@ -484,7 +493,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         seed_group()
         self._tuples = InMemoryTuples()
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_cleanup_same_principal_name_in_multiple_tenants(self, consumer_mock, proxy_mock):
         """Test that can run a principal clean up with a principal that have multiple tenants."""
@@ -506,7 +518,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertFalse(Principal.objects.filter(username=self.principal_name, tenant=self.tenant).exists())
         self.assertTrue(Principal.objects.filter(username=self.principal_name, tenant=another_tenant).exists())
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_cleanup_principal_does_not_exist_no_tenant(self, consumer_mock, proxy_mock):
         """Test cleanup when principal exists but tenant doesn't match."""
@@ -636,7 +651,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         tenant.refresh_from_db()
         self.assertTrue(tenant.ready)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_principal_creation_event_does_not_create_principal(self, consumer_mock, proxy_mock):
         """Test that principal creation doesn't create principal when proxy returns empty."""
@@ -709,7 +727,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         principal = Principal.objects.get(username=self.principal_name, tenant=tenant)
         self.assertFalse(principal.is_active)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_disable_principal_which_is_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
@@ -734,7 +755,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         cache_mock.delete_policy.assert_called_once_with(self.principal.uuid)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_disable_principal_without_user_id_in_group(self, consumer_mock, cache_class, proxy_mock):
@@ -761,7 +785,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         cache_mock.delete_policy.assert_called_once_with(principal_uuid)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_same_tenant_keeps_ready(self, consumer_mock, proxy_mock):
         """Test that ready tenant stays ready after principal event."""
@@ -779,7 +806,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         tenant.refresh_from_db()
         self.assertTrue(tenant.ready)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_same_tenant_keeps_unready(self, consumer_mock, proxy_mock):
         """Test that unready tenant stays unready after update event."""
@@ -798,7 +828,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         tenant.refresh_from_db()
         self.assertFalse(tenant.ready)
 
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     @override_settings(V2_BOOTSTRAP_TENANT=False)
     def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
