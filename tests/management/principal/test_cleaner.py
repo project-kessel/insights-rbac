@@ -484,5 +484,342 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         seed_group()
         self._tuples = InMemoryTuples()
 
-    # Add more V2-specific tests here following the same pattern as the UMB tests
-    # Convert them to use KafkaConsumer mocks instead of UMB_CLIENT mocks
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_cleanup_same_principal_name_in_multiple_tenants(self, consumer_mock, proxy_mock):
+        """Test that can run a principal clean up with a principal that have multiple tenants."""
+        another_tenant = Tenant.objects.create(
+            tenant_name="another", account_id="11111112", org_id="17685861", ready=True
+        )
+        self.principal = Principal.objects.create(username=self.principal_name, user_id="56780000", tenant=self.tenant)
+        Principal.objects.create(username=self.principal_name, user_id="12340000", tenant=another_tenant)
+        self.assertEqual(Principal.objects.filter(username=self.principal_name).count(), 2)
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        self.assertFalse(Principal.objects.filter(username=self.principal_name, tenant=self.tenant).exists())
+        self.assertTrue(Principal.objects.filter(username=self.principal_name, tenant=another_tenant).exists())
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_cleanup_principal_does_not_exist_no_tenant(self, consumer_mock, proxy_mock):
+        """Test cleanup when principal exists but tenant doesn't match."""
+        principal_name = "principal-keep"
+        # Create principal for a different tenant than what's in the message
+        other_tenant = Tenant.objects.create(tenant_name="other", account_id="99999", org_id="99999999", ready=True)
+        self.principal = Principal(username=principal_name, tenant=other_tenant)
+        self.principal.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        # Principal in other tenant should remain
+        self.assertTrue(Principal.objects.filter(username=principal_name, tenant=other_tenant).exists())
+        consumer_instance.close.assert_called_once()
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "email": "test_user@email.com",
+                    "first_name": "user",
+                    "last_name": "test",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_bootstraps_new_tenant(self, consumer_mock, proxy_mock):
+        """Test that principal creation event creates a new tenant."""
+        # Ensure tenant doesn't exist initially
+        Tenant.objects.filter(org_id="17685860").delete()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
+        tenant = Tenant.objects.get(org_id="17685860")
+        self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id, tenant=tenant).exists())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "email": "test_user@email.com",
+                    "first_name": "user",
+                    "last_name": "test",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_bootstraps_existing_tenants(self, consumer_mock, proxy_mock):
+        """Test that principal creation event bootstraps existing unready tenant."""
+        tenant = Tenant.objects.get(org_id="17685860")
+        tenant.ready = False
+        tenant.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        tenant.refresh_from_db()
+        self.assertTrue(tenant.ready)
+        self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id, tenant=tenant).exists())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "email": "test_user@email.com",
+                    "first_name": "user",
+                    "last_name": "test",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_does_not_bootstrap_already_bootstraped_tenant(self, consumer_mock, proxy_mock):
+        """Test that already bootstrapped tenant stays ready."""
+        tenant = Tenant.objects.get(org_id="17685860")
+        tenant.ready = True
+        tenant.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        tenant.refresh_from_db()
+        self.assertTrue(tenant.ready)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_does_not_create_principal(self, consumer_mock, proxy_mock):
+        """Test that principal creation doesn't create principal when proxy returns empty."""
+        Tenant.objects.filter(org_id="17685860").delete()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        # Tenant should still be created even if principal fetch fails
+        self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
+        # But principal shouldn't exist
+        self.assertFalse(Principal.objects.filter(username=self.principal_name).exists())
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 500})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_does_not_create_principal_nor_tenant(self, consumer_mock, proxy_mock):
+        """Test that nothing is created when proxy returns error."""
+        Tenant.objects.filter(org_id="17685860").delete()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        # Nothing should be created on proxy error
+        self.assertFalse(Tenant.objects.filter(org_id="17685860").exists())
+        self.assertFalse(Principal.objects.filter(username=self.principal_name).exists())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "email": "test_user@email.com",
+                    "first_name": "user",
+                    "last_name": "test",
+                    "is_org_admin": False,
+                    "is_active": False,  # Disabled user
+                }
+            ],
+        },
+    )
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_principal_creation_event_disabled(self, consumer_mock, proxy_mock):
+        """Test that disabled user in creation event doesn't create active principal."""
+        Tenant.objects.filter(org_id="17685860").delete()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        consumer_instance.close.assert_called_once()
+        tenant = Tenant.objects.get(org_id="17685860")
+        # Principal should exist but not be active
+        principal = Principal.objects.get(username=self.principal_name, tenant=tenant)
+        self.assertFalse(principal.is_active)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.group.model.AccessCache")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_disable_principal_which_is_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
+        """Test disabling a principal that is in a group."""
+        principal_name = "principal-test"
+        self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
+        self.principal.save()
+        self.group.principals.add(self.principal)
+        self.group.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)  # Inactive state
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        cache_mock = MagicMock()
+        cache_class.return_value = cache_mock
+
+        process_principal_events_from_kafka()
+
+        # Principal should be disabled, not deleted
+        self.assertTrue(Principal.objects.filter(username=principal_name).exists())
+        principal = Principal.objects.get(username=principal_name)
+        self.assertFalse(principal.is_active)
+        cache_mock.delete_policy.assert_called_once_with(self.principal.uuid)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.group.model.AccessCache")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_disable_principal_without_user_id_in_group(self, consumer_mock, cache_class, proxy_mock):
+        """Test disabling a principal without user_id that is in a group."""
+        principal_name = "principal-test"
+        # Principal without user_id
+        self.principal = Principal(username=principal_name, tenant=self.tenant)
+        self.principal.save()
+        self.group.principals.add(self.principal)
+        self.group.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        cache_mock = MagicMock()
+        cache_class.return_value = cache_mock
+
+        process_principal_events_from_kafka()
+
+        # Principal should get user_id assigned and be disabled
+        principal = Principal.objects.get(username=principal_name)
+        self.assertEqual(principal.user_id, "56780000")
+        self.assertFalse(principal.is_active)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_same_tenant_keeps_ready(self, consumer_mock, proxy_mock):
+        """Test that ready tenant stays ready after principal event."""
+        tenant = Tenant.objects.get(org_id="17685860")
+        tenant.ready = True
+        tenant.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        tenant.refresh_from_db()
+        self.assertTrue(tenant.ready)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    def test_same_tenant_keeps_unready(self, consumer_mock, proxy_mock):
+        """Test that unready tenant stays unready after update event."""
+        tenant = Tenant.objects.get(org_id="17685860")
+        tenant.ready = False
+        tenant.save()
+
+        # Update event (not insert) shouldn't bootstrap tenant
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        tenant.refresh_from_db()
+        self.assertFalse(tenant.ready)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @override_settings(V2_BOOTSTRAP_TENANT=False)
+    def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
+        self, consumer_mock, proxy_mock
+    ):
+        """Test that non-V2 tenant with disabled user doesn't produce replication events."""
+        principal_name = "principal-test"
+        self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
+        self.principal.save()
+
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)  # Inactive
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        # Principal should be disabled
+        principal = Principal.objects.get(username=principal_name)
+        self.assertFalse(principal.is_active)
+        # No replication events should be produced for non-V2 tenants
+        consumer_instance.close.assert_called_once()
