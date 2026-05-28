@@ -256,7 +256,8 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             is_org_admin = getattr(request.user, "admin", False)
             if not is_org_admin:
                 logger.debug("Denied access for tenant resource: only org admins allowed")
-                # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
+                # Authorization failure - SEC-MON-REQ-1 compliance
+                # (EOI-8 authorization_failure, EOI-4 access_manipulation)
                 logger.warning(
                     "Authorization denied",
                     extra={

@@ -89,7 +89,8 @@ def _run_seeds(seed_type, skip_notifications: bool = False, **kwargs):
         )
     except Exception as exc:
         logger.error(f"Error encountered during {seed_type} seeding {exc}.")
-        # System object manipulation - SEC-MON-REQ-1 compliance (EOI-2 system_object_manipulation, EOI-3 admin_action, EOI-11 warnings_or_errors)
+        # System object manipulation - SEC-MON-REQ-1 compliance
+        # (EOI-2 system_object_manipulation, EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             f"{seed_type.capitalize()} seeding failed",
             extra={

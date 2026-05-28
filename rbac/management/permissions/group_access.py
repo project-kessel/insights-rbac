@@ -59,7 +59,8 @@ class GroupAccessPermission(permissions.BasePermission):
                 if group_write and principal_write:
                     return True
                 else:
-                    # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
+                    # Authorization failure - SEC-MON-REQ-1 compliance
+                    # (EOI-8 authorization_failure, EOI-4 access_manipulation)
                     logger.warning(
                         "Authorization denied",
                         extra={

@@ -87,7 +87,7 @@ def principal_cleanup():
                 "principal": "system:celery:principal_cleanup",
             },
         )
-    except Exception as e:
+    except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             "Principal cleanup task failed",
@@ -139,7 +139,7 @@ def run_seeds_in_worker(kwargs):
                 "principal": "system:celery:run_seeds_in_worker",
             },
         )
-    except Exception as e:
+    except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             "Seeding task failed",
@@ -197,7 +197,7 @@ def migrate_data_in_worker(kwargs):
                 "principal": "system:celery:migrate_data_in_worker",
             },
         )
-    except Exception as e:
+    except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             "Data migration task failed",
@@ -284,7 +284,7 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
             },
         )
         return result
-    except Exception as e:
+    except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             "Orphan binding cleanup task failed",
@@ -333,7 +333,7 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
             },
         )
         return result
-    except Exception as e:
+    except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
         logger.error(
             "Bulk orphan binding cleanup task failed",

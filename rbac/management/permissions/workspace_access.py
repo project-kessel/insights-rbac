@@ -290,7 +290,8 @@ class WorkspaceAccessPermission(permissions.BasePermission):
         # V2: Check 'create' permission on target workspace via Inventory API
         if not is_user_allowed_v2(request, "create", target_workspace_id):
             self.message = TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
-            # Authorization failure on move - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+            # Authorization failure on move - SEC-MON-REQ-1 compliance
+            # (EOI-8 authorization_failure, EOI-1 pii_manipulation)
             logger.warning(
                 "Authorization denied",
                 extra={
@@ -328,7 +329,8 @@ class WorkspaceAccessPermission(permissions.BasePermission):
         # V1: Check 'write' operation on target workspace
         if not is_user_allowed_v1(request, "write", target_workspace_id):
             self.message = TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
-            # Authorization failure on move - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+            # Authorization failure on move - SEC-MON-REQ-1 compliance
+            # (EOI-8 authorization_failure, EOI-1 pii_manipulation)
             logger.warning(
                 "Authorization denied",
                 extra={
