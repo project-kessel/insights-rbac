@@ -290,6 +290,37 @@ class ImplicitResourceService:
 
         return Scope.DEFAULT
 
+    def all_scopes_for_permission(self, permission: str) -> set["Scope"]:
+        """Return every scope that a permission covers, including scopes of narrower patterns it subsumes.
+
+        For a concrete permission like ``subscriptions:organization:read``, this returns the
+        same single scope as ``scope_for_permission``.
+
+        For a wildcard like ``subscriptions:*:*``, this additionally checks whether any
+        more-specific patterns in the scope map (e.g. ``subscriptions:reports:*``) belong to
+        a different scope. If so, the wildcard effectively spans both scopes.
+        """
+        parsed = PermissionValue.parse_v1(permission)
+        primary_scope = self.scope_for_permission(permission)
+        scopes = {primary_scope}
+
+        is_wildcard = parsed.resource_type == "*" or parsed.verb == "*"
+        if not is_wildcard:
+            return scopes
+
+        for configured_perm, configured_scope in self._permissions_map.items():
+            if configured_perm.application != parsed.application:
+                continue
+            if configured_scope == primary_scope:
+                continue
+            # Check if the configured pattern is narrower than (subsumed by) our wildcard.
+            resource_match = parsed.resource_type == "*" or parsed.resource_type == configured_perm.resource_type
+            verb_match = parsed.verb == "*" or parsed.verb == configured_perm.verb
+            if resource_match and verb_match:
+                scopes.add(configured_scope)
+
+        return scopes
+
     def highest_scope_for_permissions(self, permissions: Iterable[str]) -> Scope:
         """
         Return the highest scope to which any permission in permissions is assigned.
@@ -305,6 +336,24 @@ class ImplicitResourceService:
         """Return the implicit scope for a role based on its permissions."""
         # TODO: this may need to eventually take into account resource definitions for custom roles.
         return self.highest_scope_for_permissions(a.permission.permission for a in role.access.all())
+
+    def permissions_by_scope_for_role(self, role: Role) -> dict["Scope", list[str]]:
+        """Group a role's permissions by their individual scope."""
+        result: dict[Scope, list[str]] = {}
+        for access in role.access.all():
+            perm = access.permission.permission
+            scope = self.scope_for_permission(perm)
+            result.setdefault(scope, []).append(perm)
+        return result
+
+    def binding_scopes_for_role(self, role: Role) -> list["Scope"]:
+        """Return the scopes at which bindings should be created for this role.
+
+        If the role has mixed scopes including TENANT, TENANT is split out and the
+        remaining workspace scopes are merged to the highest among them.
+        ROOT+DEFAULT without TENANT collapses to ROOT (workspace parent inheritance).
+        """
+        return binding_scopes_for_permissions((a.permission.permission for a in role.access.all()), self)
 
     def v2_bound_resource_for_permission(
         self,
@@ -454,3 +503,82 @@ class PermissionScopeCache:
 
 
 permission_scope_cache = PermissionScopeCache(default_implicit_resource_service)
+
+
+def binding_scopes_for_permissions(
+    permissions: Iterable[str],
+    resource_service: ImplicitResourceService | None = None,
+) -> list[Scope]:
+    """Return the distinct binding scopes needed for a set of permissions.
+
+    If the permissions span multiple scopes and one of them is TENANT,
+    TENANT is kept separate and the remaining workspace-level scopes are
+    merged to the highest among them (ROOT > DEFAULT).
+
+    If only ROOT and DEFAULT are mixed, a single ROOT scope is returned
+    because workspace parent inheritance covers DEFAULT.
+
+    Wildcard permissions (e.g. ``subscriptions:*:*``) that subsume patterns
+    configured in other scopes are treated as spanning those scopes too.
+    """
+    if resource_service is None:
+        resource_service = default_implicit_resource_service
+
+    scopes: set[Scope] = set()
+    for p in permissions:
+        scopes |= resource_service.all_scopes_for_permission(p)
+
+    if not scopes:
+        return [Scope.DEFAULT]
+
+    if Scope.TENANT in scopes and len(scopes) > 1:
+        workspace_scopes = scopes - {Scope.TENANT}
+        workspace_max = max(workspace_scopes)
+        return sorted({Scope.TENANT, workspace_max}, key=lambda s: s.value)
+
+    return [max(scopes)]
+
+
+def split_permissions_by_binding_scope(
+    permissions: Iterable[str],
+    resource_service: ImplicitResourceService | None = None,
+) -> dict[Scope, list[str]]:
+    """Group permissions by their binding scope.
+
+    If all permissions share one scope, returns ``{scope: [all_perms]}``.
+    If mixed with TENANT, returns ``{TENANT: [...], max(others): [...]}``.
+    If only ROOT+DEFAULT mixed, returns ``{ROOT: [all_perms]}`` because ROOT
+    inherits to DEFAULT via workspace parent chain.
+
+    Wildcard permissions that span both TENANT and workspace scopes are placed
+    in **both** groups so that the permission is effective at every level.
+    """
+    if resource_service is None:
+        resource_service = default_implicit_resource_service
+
+    permissions = list(permissions)
+    if not permissions:
+        return {}
+
+    scopes_needed = binding_scopes_for_permissions(permissions, resource_service)
+
+    if len(scopes_needed) == 1:
+        return {scopes_needed[0]: permissions}
+
+    # Multiple scopes: split TENANT permissions out, rest go to workspace scope.
+    # Wildcards that span both are duplicated into each group.
+    workspace_scope = max(s for s in scopes_needed if s != Scope.TENANT)
+    result: dict[Scope, list[str]] = {}
+    for perm in permissions:
+        perm_scopes = resource_service.all_scopes_for_permission(perm)
+        placed = False
+        if Scope.TENANT in perm_scopes:
+            result.setdefault(Scope.TENANT, []).append(perm)
+            placed = True
+        if perm_scopes & {Scope.ROOT, Scope.DEFAULT}:
+            result.setdefault(workspace_scope, []).append(perm)
+            placed = True
+        if not placed:
+            result.setdefault(workspace_scope, []).append(perm)
+
+    return result

@@ -794,6 +794,8 @@ class RoleDefinerTests(IdentityRequest):
             "Expected overall number of tuples not to change.",
         )
 
+        count_after_first_update = len(tuples)
+
         # Check that we can also move roles between non-default scopes.
         # This puts both approval_role and inventory_role permissions in tenant scope.
         with self.settings(
@@ -844,9 +846,10 @@ class RoleDefinerTests(IdentityRequest):
         )
 
         self.assertEqual(
-            initial_count,
+            count_after_first_update + 2,
             len(tuples),
-            "Expected overall number of tuples not to change.",
+            "Approval platform-default roles with mixed TENANT and workspace permissions "
+            "gain an additional platform parent binding per role.",
         )
 
     def test_admin_default_seeded_roles_force_root_scope(self):
@@ -1144,7 +1147,7 @@ class V2RoleSeedingTests(IdentityRequest):
         )
 
     def test_v2_role_parents_cleared_when_scope_changes_to_tenant(self):
-        """Test that v2_role.parents is cleared when scope changes from DEFAULT to TENANT."""
+        """Test that v2_role.parents reflect binding scopes when tenant scope is introduced."""
         seed_group()
 
         # First seeding with role in DEFAULT scope
@@ -1163,7 +1166,7 @@ class V2RoleSeedingTests(IdentityRequest):
 
         self.assertIn(default_platform_role, list(v2_role.parents.all()))
 
-        # Change to TENANT scope
+        # notifications:notifications:read becomes TENANT-scoped; integrations:endpoints:read stays DEFAULT.
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="notifications:*:*"):
             seed_roles()
 
@@ -1174,15 +1177,15 @@ class V2RoleSeedingTests(IdentityRequest):
         tenant_platform_role = PlatformRoleV2.objects.get(uuid=tenant_platform_role_uuid)
 
         parents = list(v2_role.parents.all())
-        self.assertNotIn(
+        self.assertIn(
             default_platform_role,
             parents,
-            "DEFAULT platform role should be removed after scope change to TENANT",
+            "DEFAULT platform role remains for workspace-scoped permissions after TENANT scope is introduced",
         )
         self.assertIn(
             tenant_platform_role,
             parents,
-            "TENANT platform role should be added after scope change",
+            "TENANT platform role should be added for tenant-scoped permissions",
         )
 
     def test_v2_role_seeded_for_unchanged_v1_role(self):
@@ -1262,3 +1265,157 @@ class V2RoleSeedingTests(IdentityRequest):
         # V2 should now match V1's permissions (which were reset during seeding)
         v1_permissions = set(access.permission for access in v1_role.access.all())
         self.assertEqual(v2_permissions, v1_permissions)
+
+
+@override_settings(
+    REPLICATION_TO_RELATION_ENABLED=True,
+    ROOT_SCOPE_PERMISSIONS="advisor:*:*",
+    TENANT_SCOPE_PERMISSIONS="subscriptions:*:*",
+    SYSTEM_DEFAULT_TENANT_ROLE_UUID="3c9e6f1a-8b2d-4e5c-9a7f-1d3b5c8e2a4f",
+    SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID="5e8a2c4f-9d1b-4c7e-8f3a-6d2b9c1e5a7f",
+    SYSTEM_ADMIN_TENANT_ROLE_UUID="a7f3c8b2-1d4e-4f9a-8c6d-2b5e7a9f1c3d",
+    SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID="9b4c7e1f-3a5d-4f8c-9e2a-7c1d5b8f3a6e",
+)
+@patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+class SeedMixedScopeTest(IdentityRequest):
+    """Test that seeding a mixed-scope system role attaches to multiple platform parents."""
+
+    def setUp(self):
+        super().setUp()
+        self.public_tenant = Tenant.objects.get(tenant_name="public")
+
+    def test_seed_mixed_scope_system_role_multiple_platform_parents(self, replicate):
+        """A mixed-scope system role generates platform parent relations at each binding scope."""
+        tuples = InMemoryTuples()
+        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        # Create a system role with mixed permissions directly (bypasses full seeding).
+        from management.permission.scope_service import ImplicitResourceService
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        role = Role.objects.create(
+            name="Mixed Scope Test Role",
+            system=True,
+            platform_default=True,
+            tenant=self.public_tenant,
+        )
+        # subscriptions → TENANT, advisor → ROOT
+        sub_perm, _ = Permission.objects.get_or_create(
+            permission="subscriptions:organization:read", tenant=self.public_tenant
+        )
+        adv_perm, _ = Permission.objects.get_or_create(
+            permission="advisor:recommendation:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=sub_perm, tenant=self.public_tenant)
+        Access.objects.create(role=role, permission=adv_perm, tenant=self.public_tenant)
+
+        # Verify the role is mixed TENANT + ROOT
+        binding_scopes = resource_service.binding_scopes_for_role(role)
+        self.assertEqual(sorted(binding_scopes), sorted([Scope.TENANT, Scope.ROOT]))
+
+        # Replicate as new system role via the SeedingHandler
+        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler.replicate_new_system_role()
+
+        # The handler should generate platform parent relations for BOTH scopes.
+        # It generates child relations: platform_role#child@this_role
+        platform_tenant_uuid = settings.SYSTEM_DEFAULT_TENANT_ROLE_UUID
+        platform_root_uuid = settings.SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
+
+        tenant_parent_tuples = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(
+            len(tenant_parent_tuples),
+            1,
+            "Mixed-scope role should have TENANT platform parent relation",
+        )
+
+        root_parent_tuples = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(
+            len(root_parent_tuples),
+            1,
+            "Mixed-scope role should have ROOT platform parent relation",
+        )
+
+    def test_existing_tenant_only_role_splits_on_re_seed(self, replicate):
+        """A role initially seeded at TENANT-only scope gains a ROOT parent when re-seeded with mixed permissions."""
+        tuples = InMemoryTuples()
+        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        platform_tenant_uuid = settings.SYSTEM_DEFAULT_TENANT_ROLE_UUID
+        platform_root_uuid = settings.SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
+
+        # Phase 1: create a role with only TENANT-scoped permissions.
+        role = Role.objects.create(
+            name="Re-seed Split Role",
+            system=True,
+            platform_default=True,
+            tenant=self.public_tenant,
+        )
+        sub_perm, _ = Permission.objects.get_or_create(
+            permission="subscriptions:organization:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=sub_perm, tenant=self.public_tenant)
+
+        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler.replicate_new_system_role()
+
+        # Only TENANT parent should exist.
+        tenant_tuples_before = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(tenant_tuples_before), 1, "Should start with TENANT parent")
+
+        root_tuples_before = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(root_tuples_before), 0, "Should NOT have ROOT parent initially")
+
+        # Phase 2: add a ROOT-scoped permission (advisor) and re-seed.
+        adv_perm, _ = Permission.objects.get_or_create(
+            permission="advisor:recommendation:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=adv_perm, tenant=self.public_tenant)
+
+        handler2 = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler2.prepare_for_update()
+        handler2.replicate_update_system_role()
+
+        # Now BOTH parents should exist.
+        tenant_tuples_after = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(tenant_tuples_after), 1, "Should still have TENANT parent after split")
+
+        root_tuples_after = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(root_tuples_after), 1, "Should now also have ROOT parent after split")

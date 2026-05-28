@@ -44,6 +44,8 @@ from migration_tool.in_memory_tuples import (
     resource,
     relation,
     subject,
+    subject_id,
+    subject_type,
 )
 from migration_tool.migrate_binding_scope import (
     migrate_custom_role_bindings,
@@ -1237,6 +1239,7 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
         # Use a mock resource service that returns wrong scopes to simulate historical incorrect bindings
         mock_wrong_scope_service = Mock(spec=ImplicitResourceService)
         mock_wrong_scope_service.scope_for_role = Mock(side_effect=wrong_scope_for_role)
+        mock_wrong_scope_service.binding_scopes_for_role = Mock(side_effect=lambda role: [wrong_scope_for_role(role)])
 
         # Temporarily patch ImplicitResourceService.from_settings to return wrong scopes when creating bindings
         with patch(
@@ -1354,3 +1357,179 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
                 v2_role_id=platform_default_v2_role_id,
                 group_id=str(custom_default_group.uuid),
             )
+
+
+@override_settings(
+    ROOT_SCOPE_PERMISSIONS="advisor:*:*",
+    TENANT_SCOPE_PERMISSIONS="subscriptions:*:*",
+    REPLICATION_TO_RELATION_ENABLED=True,
+)
+class MixedScopeBindingMigrationTest(TestCase):
+    """Tests that migrate_binding_scope correctly splits mixed TENANT+workspace bindings."""
+
+    def setUp(self):
+        self.tuples = InMemoryTuples()
+        self.replicator = InMemoryRelationReplicator(self.tuples)
+        self.public_tenant = Tenant.objects.get_or_create(tenant_name="public")[0]
+        self.tenant = Tenant.objects.create(tenant_name="test_tenant", account_id="12345", org_id="67890")
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant, tuples=self.tuples)
+        self.root_workspace = bootstrap_result.root_workspace
+        self.default_workspace = bootstrap_result.default_workspace
+
+    def tearDown(self):
+        with self.subTest(msg="V2 consistency"):
+            assert_v2_tuples_consistent(test=self, tuples=self.tuples)
+        super().tearDown()
+
+    def test_custom_role_migrates_from_tenant_only_to_split(self):
+        """A custom role with mixed permissions migrated from tenant-only binding to tenant + workspace bindings."""
+        sub_perm = Permission.objects.create(
+            tenant=self.tenant,
+            application="subscriptions",
+            resource_type="organization",
+            verb="read",
+            permission="subscriptions:organization:read",
+        )
+        inv_perm = Permission.objects.create(
+            tenant=self.tenant,
+            application="inventory",
+            resource_type="hosts",
+            verb="read",
+            permission="inventory:hosts:read",
+        )
+
+        role = Role.objects.create(tenant=self.tenant, name="Mixed Custom Role", system=False)
+        Access.objects.create(role=role, permission=sub_perm, tenant=self.tenant)
+        Access.objects.create(role=role, permission=inv_perm, tenant=self.tenant)
+
+        # Simulate old state: a single binding at tenant (highest scope under old logic)
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        bm_uuid = uuid.uuid4()
+        BindingMapping.objects.create(
+            role=role,
+            mappings={
+                "id": str(bm_uuid),
+                "groups": [],
+                "users": {},
+                "role": {"id": str(role.uuid), "is_system": False, "permissions": []},
+            },
+            resource_type_namespace="rbac",
+            resource_type_name="tenant",
+            resource_id=tenant_resource_id,
+        )
+
+        # Verify starting tuples: only binding at tenant, nothing at workspace
+        tenant_binding_tuples_before = self.tuples.find_tuples(
+            all_of(resource("rbac", "tenant", tenant_resource_id), relation("binding"))
+        )
+        default_ws_binding_tuples_before = self.tuples.find_tuples(
+            all_of(resource("rbac", "workspace", str(self.default_workspace.id)), relation("binding"))
+        )
+        # Bootstrap creates default-access bindings on the workspace; filter to non-bootstrap ones
+        self.assertEqual(len(tenant_binding_tuples_before), 0, "No tenant binding tuples before migration")
+
+        # Run migration
+        result = migrate_custom_role_bindings(role, self.replicator)
+        self.assertEqual(result, 1)
+
+        # Verify tuples: binding tuple on tenant resource for TENANT-scoped permission
+        tenant_binding_tuples_after = self.tuples.find_tuples(
+            all_of(resource("rbac", "tenant", tenant_resource_id), relation("binding"))
+        )
+        self.assertEqual(len(tenant_binding_tuples_after), 1, "Should have one binding tuple on tenant")
+
+        # Verify tuples: binding tuple on default workspace for DEFAULT-scoped permission
+        default_ws_id = str(self.default_workspace.id)
+        ws_binding_tuples_after = self.tuples.find_tuples(
+            all_of(resource("rbac", "workspace", default_ws_id), relation("binding"))
+        )
+        # Filter to bindings from this role (exclude bootstrap default-access bindings)
+        role_binding_uuids = set(str(rb.uuid) for rb in RoleBinding.objects.filter(role__v1_source=role))
+        role_ws_tuples = [t for t in ws_binding_tuples_after if t.subject.subject.id in role_binding_uuids]
+        self.assertEqual(len(role_ws_tuples), 1, "Should have one binding tuple on default workspace")
+
+        # Verify permission tuples on each V2 role
+        for rb in RoleBinding.objects.filter(role__v1_source=role):
+            rb_tuples = self.tuples.find_tuples(
+                all_of(resource("rbac", "role_binding", str(rb.uuid)), relation("role"))
+            )
+            self.assertEqual(len(rb_tuples), 1, f"RoleBinding {rb.uuid} should have exactly one role tuple")
+
+        assert_v1_v2_tuples_fully_consistent(test=self, tuples=self.tuples)
+
+    def test_system_role_migrates_from_tenant_only_to_split(self):
+        """A system role binding for a group migrates from tenant-only to tenant + workspace scoped bindings."""
+        sub_perm = Permission.objects.create(
+            tenant=self.public_tenant,
+            application="subscriptions",
+            resource_type="organization",
+            verb="read",
+            permission="subscriptions:organization:read",
+        )
+        inv_perm = Permission.objects.create(
+            tenant=self.public_tenant,
+            application="inventory",
+            resource_type="hosts",
+            verb="read",
+            permission="inventory:hosts:read",
+        )
+
+        system_role = Role.objects.create(
+            tenant=self.public_tenant,
+            name="Mixed System Role",
+            system=True,
+        )
+        Access.objects.create(role=system_role, permission=sub_perm, tenant=self.public_tenant)
+        Access.objects.create(role=system_role, permission=inv_perm, tenant=self.public_tenant)
+
+        seed_v2_role_from_v1(system_role)
+
+        group = Group.objects.create(name="Test Group", tenant=self.tenant, system=False)
+        add_roles(group, [system_role.uuid], self.tenant)
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        default_ws_id = str(self.default_workspace.id)
+        group_uuid = str(group.uuid)
+
+        # Run migration
+        result = migrate_system_role_bindings_for_group(group, self.replicator)
+
+        # Verify tuples: binding on tenant resource
+        tenant_binding_tuples = self.tuples.find_tuples(
+            all_of(resource("rbac", "tenant", tenant_resource_id), relation("binding"))
+        )
+        self.assertGreaterEqual(len(tenant_binding_tuples), 1, "Should have binding tuple on tenant")
+
+        # Verify tuples: binding on workspace resource (default or root)
+        ws_binding_tuples = self.tuples.find_tuples(
+            all_of(resource("rbac", "workspace", default_ws_id), relation("binding"))
+        )
+        self.assertGreaterEqual(len(ws_binding_tuples), 1, "Should have binding tuple on workspace")
+
+        # Verify the group is a subject of bindings at both levels.
+        # System role bindings use rbac/role_binding#subject@rbac/group:uuid#member.
+        all_subject_tuples = self.tuples.find_tuples(
+            all_of(
+                relation("subject"),
+                subject_type("rbac", "group", any_relation=True),
+                subject_id(group_uuid),
+            )
+        )
+
+        # Each subject tuple's resource is a role_binding; collect which resource it's bound to.
+        bound_resource_types = set()
+        for st in all_subject_tuples:
+            rb_uuid = st.resource.id
+            # Check where this role_binding is attached (tenant or workspace)
+            for rt in ["tenant", "workspace"]:
+                binding_tuples = self.tuples.find_tuples(
+                    all_of(
+                        relation("binding"),
+                        subject("rbac", "role_binding", rb_uuid),
+                    )
+                )
+                for bt in binding_tuples:
+                    bound_resource_types.add(bt.resource.type.name)
+
+        self.assertIn("tenant", bound_resource_types, "Group should be bound at tenant scope")
+        self.assertIn("workspace", bound_resource_types, "Group should be bound at workspace scope")

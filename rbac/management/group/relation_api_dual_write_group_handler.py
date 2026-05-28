@@ -189,21 +189,23 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
         # Add back subject
         # Replicate this addition
         for role in roles:
-            # Note that we do not attempt to handle the case where the scope has changed. At time of writing
-            # (2025-10-08), this case is expected to be handled during seeding for system roles. It is unclear how
-            # custom roles should be handled.
-            scope = self._resource_service.scope_for_role(role)
+            # When a role has mixed scopes including TENANT, create bindings at each scope
+            # so that workspace-scoped permissions are not lost.
+            binding_scopes = self._resource_service.binding_scopes_for_role(role)
 
-            self._update_mapping_for_role(
-                role,
-                scope=scope,
-                update_mapping=reset_mapping,
-                create_default_mapping_for_system_role=lambda resource: self._create_default_mapping_for_system_role(
-                    system_role=role,
-                    resource=resource,
-                    groups=frozenset([str(self.group.uuid)]),
-                ),
-            )
+            for scope in binding_scopes:
+                self._update_mapping_for_role(
+                    role,
+                    scope=scope,
+                    update_mapping=reset_mapping,
+                    create_default_mapping_for_system_role=(
+                        lambda resource, system_role=role: self._create_default_mapping_for_system_role(
+                            system_role=system_role,
+                            resource=resource,
+                            groups=frozenset([str(self.group.uuid)]),
+                        )
+                    ),
+                )
 
         if remove_default_access_from is not None:
             self.relations_to_remove.extend(

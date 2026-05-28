@@ -1004,30 +1004,38 @@ class DualWriteGroupTestCase(DualWriteTestCase):
                 self.expect_binding_absent(tenant, v2_role_id=role_id, group_id=group_id)
 
     def test_custom_role_scope(self):
-        """Test that custom roles are bound in the correct scope."""
+        """Test that custom roles with mixed TENANT+ROOT scope create per-scope bindings."""
         role = self.given_v1_role("a role", default=["root:resource:verb", "tenant:resource:verb"])
 
         group, _ = self.given_group(name="a group")
         self.given_roles_assigned_to_group(group, [role])
 
-        v2_role_id: str = BindingMapping.objects.get(role=role).mappings["role"]["id"]
+        # With mixed scopes, we now get two bindings: one at tenant, one at root workspace.
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 2)
+
+        tenant_bm = mappings.get(resource_type_name="tenant")
+        ws_bm = mappings.get(resource_type_name="workspace")
         group_id = str(group.uuid)
 
-        self.expect_binding_absent(
-            self.default_workspace_resource(),
-            v2_role_id=v2_role_id,
-            group_id=group_id,
-        )
+        tenant_v2_role_id = tenant_bm.mappings["role"]["id"]
+        ws_v2_role_id = ws_bm.mappings["role"]["id"]
 
-        self.expect_binding_absent(
-            self.root_workspace_resource(),
-            v2_role_id=v2_role_id,
+        self.expect_binding_present(
+            self.tenant_resource(),
+            v2_role_id=tenant_v2_role_id,
             group_id=group_id,
         )
 
         self.expect_binding_present(
-            self.tenant_resource(),
-            v2_role_id=v2_role_id,
+            self.root_workspace_resource(),
+            v2_role_id=ws_v2_role_id,
+            group_id=group_id,
+        )
+
+        self.expect_binding_absent(
+            self.default_workspace_resource(),
+            v2_role_id=tenant_v2_role_id,
             group_id=group_id,
         )
 
@@ -2551,14 +2559,23 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         self.expect_binding_absent(tenant, v2_role_id=v2_role_id, group_id=group_id)
         self._expect_v2_consistent()
 
-        # Adding a new permission in tenant scope should bind the role to the tenant.
+        # Adding a new permission in tenant scope should split the role: tenant + root bindings.
         with self.settings(ROOT_SCOPE_PERMISSIONS="app:*:*", TENANT_SCOPE_PERMISSIONS="other_app:*:*"):
             self.given_update_to_v1_role(role, default=["app:resource:verb", "other_app:resource:verb"])
-            v2_role_id = get_v2_role_id()
 
-        self.expect_binding_absent(default_workspace, v2_role_id=v2_role_id, group_id=group_id)
-        self.expect_binding_absent(root_workspace, v2_role_id=v2_role_id, group_id=group_id)
-        self.expect_binding_present(tenant, v2_role_id=v2_role_id, group_id=group_id)
+        # With the split, we now have two V2 roles (one per scope group).
+        mappings = BindingMapping.objects.filter(role=role)
+        tenant_bm = mappings.filter(resource_type_name="tenant")
+        ws_bm = mappings.filter(resource_type_name="workspace")
+        self.assertEqual(tenant_bm.count(), 1, "Should have tenant binding for other_app")
+        self.assertEqual(ws_bm.count(), 1, "Should have workspace binding for app")
+
+        tenant_v2_role_id = tenant_bm.first().mappings["role"]["id"]
+        ws_v2_role_id = ws_bm.first().mappings["role"]["id"]
+
+        self.expect_binding_present(tenant, v2_role_id=tenant_v2_role_id, group_id=group_id)
+        self.expect_binding_present(root_workspace, v2_role_id=ws_v2_role_id, group_id=group_id)
+        self.expect_binding_absent(default_workspace, v2_role_id=tenant_v2_role_id, group_id=group_id)
         self._expect_v2_consistent()
 
     def test_role_with_mixed_resource_definitions_creates_multiple_bindings(self):
@@ -2648,6 +2665,106 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         # There should be no binding in the other tenant's workspace because it should be ignored.
         self.assertFalse(BindingMapping.objects.filter(role=role).exists())
         self.assertFalse(RoleBinding.objects.filter(role__v1_source=role).exists())
+
+
+@override_settings(ROOT_SCOPE_PERMISSIONS="advisor:*:*", TENANT_SCOPE_PERMISSIONS="subscriptions:*:*")
+class DualWriteMixedScopeTestCase(DualWriteTestCase):
+    """Test that mixed TENANT + workspace scope roles create per-scope bindings."""
+
+    def tearDown(self):
+        with self.subTest(msg="V2 consistency"):
+            assert_v1_v2_tuples_fully_consistent(test=self, tuples=self.tuples)
+        super().tearDown()
+
+    def test_custom_role_mixed_tenant_default_creates_two_bindings(self):
+        """A custom role with TENANT + DEFAULT perms creates bindings at both levels."""
+        role = self.given_v1_role(
+            "mixed_td",
+            default=["subscriptions:organization:read", "inventory:hosts:read"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 2, "Should have 2 BindingMapping records (tenant + workspace)")
+
+        tenant_bm = mappings.filter(resource_type_name="tenant")
+        ws_bm = mappings.filter(resource_type_name="workspace")
+        self.assertEqual(tenant_bm.count(), 1)
+        self.assertEqual(ws_bm.count(), 1)
+
+        # Tenant binding should have the subscriptions permission
+        tenant_binding = tenant_bm.first().get_role_binding()
+        self.assertIn("subscriptions_organization_read", tenant_binding.role.permissions)
+
+        # Workspace binding should have the inventory permission
+        ws_binding = ws_bm.first().get_role_binding()
+        self.assertIn("inventory_hosts_read", ws_binding.role.permissions)
+
+    def test_custom_role_mixed_tenant_root_default_splits_to_tenant_and_root(self):
+        """TENANT + ROOT + DEFAULT: TENANT perms at tenant, rest at root workspace."""
+        role = self.given_v1_role(
+            "mixed_trd",
+            default=["subscriptions:organization:read", "advisor:recommendation:read", "inventory:hosts:read"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 2, "Should have 2 BindingMapping records (tenant + root ws)")
+
+        tenant_bm = mappings.filter(resource_type_name="tenant")
+        ws_bm = mappings.filter(resource_type_name="workspace")
+        self.assertEqual(tenant_bm.count(), 1)
+        self.assertEqual(ws_bm.count(), 1)
+
+        # Workspace binding should be at root workspace (ROOT > DEFAULT)
+        ws_mapping = ws_bm.first()
+        root_ws = Workspace.objects.root(tenant=self.tenant)
+        self.assertEqual(ws_mapping.resource_id, str(root_ws.id))
+
+        # Verify permissions are split correctly
+        tenant_binding = tenant_bm.first().get_role_binding()
+        self.assertIn("subscriptions_organization_read", tenant_binding.role.permissions)
+
+        ws_binding = ws_mapping.get_role_binding()
+        self.assertIn("advisor_recommendation_read", ws_binding.role.permissions)
+        self.assertIn("inventory_hosts_read", ws_binding.role.permissions)
+
+    def test_custom_role_single_tenant_scope_no_split(self):
+        """A role with only TENANT-scoped permissions gets a single tenant binding."""
+        role = self.given_v1_role(
+            "tenant_only",
+            default=["subscriptions:organization:read", "subscriptions:products:write"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 1)
+        self.assertEqual(mappings.first().resource_type_name, "tenant")
+
+    def test_system_role_mixed_scope_creates_per_scope_bindings(self):
+        """A system role with mixed TENANT + workspace perms creates bindings at each scope when assigned to a group."""
+        seed_group()
+        role = self.given_v1_system_role(
+            "mixed_system",
+            permissions=["subscriptions:organization:read", "inventory:hosts:read"],
+            platform_default=True,
+        )
+
+        group, _ = self.given_group("test_group")
+        self.given_roles_assigned_to_group(group, [role])
+
+        # Should have bindings at both tenant and workspace scopes
+        group_uuid = str(group.uuid)
+        mappings = BindingMapping.objects.filter(role=role)
+
+        tenant_mappings = [m for m in mappings if m.resource_type_name == "tenant"]
+        ws_mappings = [m for m in mappings if m.resource_type_name == "workspace"]
+
+        self.assertGreaterEqual(len(tenant_mappings), 1, "Should have tenant-scope binding")
+        self.assertGreaterEqual(len(ws_mappings), 1, "Should have workspace-scope binding")
+
+        # Verify group is assigned in both
+        for m in tenant_mappings:
+            self.assertIn(group_uuid, m.mappings.get("groups", []))
+        for m in ws_mappings:
+            self.assertIn(group_uuid, m.mappings.get("groups", []))
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

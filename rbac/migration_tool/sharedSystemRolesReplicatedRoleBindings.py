@@ -24,6 +24,7 @@ from django.db.models import F
 from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
+from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
@@ -110,15 +111,45 @@ class MigrateCustomRoleResult:
 
 def v1_role_to_v2_bindings(
     v1_role: Role,
-    default_resource: V2boundresource,
+    default_resource: "V2boundresource | dict[Scope, V2boundresource]",
     existing_role_bindings: Iterable[BindingMapping],
     existing_v2_roles: Iterable[CustomRoleV2],
 ) -> MigrateCustomRoleResult:
-    """Convert a V1 role to a set of V2 role bindings."""
+    """Convert a V1 role to a set of V2 role bindings.
+
+    ``default_resource`` may be a single V2boundresource (legacy behavior: all
+    permissions without explicit resource definitions go there) or a dict
+    mapping Scope → V2boundresource.  When a dict is provided, each permission
+    without a resource definition is routed to the resource for its individual
+    scope (determined by the global scope service).
+    """
     from internal.utils import (
         get_or_create_ungrouped_workspace,
         get_workspace_ids_from_resource_definition,
     )
+
+    # Normalise default_resource into a resolver function.
+    if isinstance(default_resource, dict):
+        _resource_map: dict[Scope, V2boundresource] = default_resource
+        _scope_service = ImplicitResourceService.from_settings()
+
+        def _resolve_default(permission: Permission) -> V2boundresource:
+            scope = _scope_service.scope_for_permission(permission.permission)
+            # Fall back to the highest-scope resource if scope not explicitly mapped.
+            if scope in _resource_map:
+                return _resource_map[scope]
+            # Merge ROOT/DEFAULT to highest available workspace scope.
+            for fallback in sorted(_resource_map.keys(), reverse=True):
+                if fallback != Scope.TENANT:
+                    return _resource_map[fallback]
+            # Final fallback: any available resource.
+            return next(iter(_resource_map.values()))
+
+    else:
+        _single_resource = default_resource
+
+        def _resolve_default(permission: Permission) -> V2boundresource:
+            return _single_resource
 
     perm_groupings: _PermissionGroupings = {}
 
@@ -179,7 +210,7 @@ def v1_role_to_v2_bindings(
         if default:
             add_element(
                 perm_groupings,
-                default_resource,
+                _resolve_default(permission),
                 permission,
                 collection=set,
             )

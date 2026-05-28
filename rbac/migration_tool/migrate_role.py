@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from typing import Iterable
 
+from management.permission.scope_service import Scope
 from management.relation_replicator.types import RelationTuple
 from management.role.model import BindingMapping, Role
 from management.role.v2_model import CustomRoleV2
@@ -42,7 +43,7 @@ def relation_tuples_for_bindings(bindings: Iterable[BindingMapping]) -> list[Rel
 
 def migrate_role(
     role: Role,
-    default_resource: V2boundresource,
+    default_resource: "V2boundresource | dict[Scope, V2boundresource]",
     current_bindings: Iterable[BindingMapping],
     current_v2_roles: Iterable[CustomRoleV2],
 ) -> tuple[list[RelationTuple], MigrateCustomRoleResult]:
