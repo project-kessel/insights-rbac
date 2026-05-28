@@ -34,6 +34,8 @@ from management.mcp_views import (
     _check_v1_access,
     _execute_with_timeout,
     _permission_matches,
+    _sanitize_validation_error,
+    _validate_tool_arguments,
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
 from management.workspace.model import Workspace
@@ -7536,3 +7538,146 @@ class MCPWritePreviewTests(MCPToolTestMixin, IdentityRequest):
         )
         self.assertIn("update group 'Dev Team'", msg)
         self.assertIn("Platform Team", msg)
+
+
+class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
+    """Test JSON schema pre-validation of MCP tool arguments."""
+
+    def setUp(self):
+        """Set up schema validation tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+
+    def tearDown(self):
+        """Tear down schema validation tests."""
+        Principal.objects.all().delete()
+        super().tearDown()
+
+    def _call_tool_raw(self, tool_name: str, arguments: dict) -> dict:
+        """Call tool and return the parsed JSON response."""
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 200,
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.json()
+
+    # --- Wrong type tests ---
+
+    def test_wrong_type_string_as_integer(self):
+        """Schema validation rejects string where integer is expected."""
+        data = self._call_tool_raw("hello", {"message": 123})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Expected", data["error"]["message"])
+        self.assertIn("string", data["error"]["message"])
+        self.assertNotIn("TypeError", data["error"]["message"])
+
+    def test_wrong_type_does_not_leak_internal_names(self):
+        """Schema validation error does not expose Python exception details."""
+        data = self._call_tool_raw("hello", {"message": ["not", "a", "string"]})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertNotIn("TypeError", data["error"]["message"])
+        self.assertNotIn("unexpected keyword", data["error"]["message"])
+        self.assertNotIn("traceback", data["error"]["message"].lower())
+
+    # --- Extra unknown arguments ---
+
+    def test_extra_unknown_argument_rejected(self):
+        """Schema validation rejects arguments not in the tool schema."""
+        data = self._call_tool_raw("hello", {"message": "hi", "unknown_param": "x"})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Unknown argument", data["error"]["message"])
+
+    def test_multiple_extra_arguments_rejected(self):
+        """Schema validation rejects even when valid args are mixed with extra ones."""
+        data = self._call_tool_raw("hello", {"message": "hi", "foo": 1, "bar": 2})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+
+    # --- Missing required arguments ---
+
+    def test_missing_required_argument_rejected(self):
+        """Schema validation rejects calls missing required arguments."""
+        data = self._call_tool_raw("get_role", {})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Missing required argument", data["error"]["message"])
+
+    # --- Valid arguments pass through ---
+
+    def test_valid_arguments_pass_validation(self):
+        """Schema validation allows valid arguments through to tool execution."""
+        data = self._call_tool_raw("hello", {"message": "Hi there!"})
+        self.assertIn("result", data)
+        self.assertNotIn("error", data)
+        output = json.loads(data["result"]["content"][0]["text"])
+        self.assertIn("Hi there!", output["response"])
+
+    def test_valid_arguments_with_defaults_omitted(self):
+        """Schema validation passes when optional arguments are omitted."""
+        data = self._call_tool_raw("hello", {})
+        self.assertIn("result", data)
+        self.assertNotIn("error", data)
+
+    # --- Unit tests for _sanitize_validation_error ---
+
+    def test_sanitize_type_error(self):
+        """_sanitize_validation_error formats type errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        try:
+            js.validate({"name": 42}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertIn("Expected", msg)
+            self.assertIn("string", msg)
+            self.assertIn("int", msg)
+
+    def test_sanitize_required_error(self):
+        """_sanitize_validation_error formats required errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        try:
+            js.validate({}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertIn("Missing required argument", msg)
+
+    def test_sanitize_additional_properties_error(self):
+        """_sanitize_validation_error formats additionalProperties errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}
+        try:
+            js.validate({"name": "ok", "extra": "bad"}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertIn("Unknown argument", msg)
+
+    # --- Unit test for _validate_tool_arguments ---
+
+    def test_validate_unknown_tool_returns_none(self):
+        """_validate_tool_arguments returns None for tools with no schema."""
+        result = _validate_tool_arguments("nonexistent_tool_xyz", {"anything": True})
+        self.assertIsNone(result)
+
+    def test_validate_valid_returns_none(self):
+        """_validate_tool_arguments returns None for valid arguments."""
+        result = _validate_tool_arguments("hello", {"message": "test"})
+        self.assertIsNone(result)
+
+    def test_validate_invalid_returns_message(self):
+        """_validate_tool_arguments returns error message for invalid arguments."""
+        result = _validate_tool_arguments("hello", {"message": 999})
+        self.assertIsNotNone(result)
+        self.assertIn("string", result)
