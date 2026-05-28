@@ -713,7 +713,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_disable_principal_which_is_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
-        """Test disabling a principal that is in a group."""
+        """Test deleting a principal that is in a group when inactive."""
         principal_name = "principal-test"
         self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
         self.principal.save()
@@ -730,21 +730,20 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         process_principal_events_from_kafka()
 
-        # Principal should be disabled, not deleted
-        self.assertTrue(Principal.objects.filter(username=principal_name).exists())
-        principal = Principal.objects.get(username=principal_name)
-        self.assertFalse(principal.is_active)
+        # Principal should be deleted when inactive and not found in proxy
+        self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         cache_mock.delete_policy.assert_called_once_with(self.principal.uuid)
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_disable_principal_without_user_id_in_group(self, consumer_mock, cache_class, proxy_mock):
-        """Test disabling a principal without user_id that is in a group."""
+        """Test deleting a principal without user_id that is in a group when inactive."""
         principal_name = "principal-test"
         # Principal without user_id
         self.principal = Principal(username=principal_name, tenant=self.tenant)
         self.principal.save()
+        principal_uuid = self.principal.uuid
         self.group.principals.add(self.principal)
         self.group.save()
 
@@ -758,10 +757,9 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         process_principal_events_from_kafka()
 
-        # Principal should get user_id assigned and be disabled
-        principal = Principal.objects.get(username=principal_name)
-        self.assertEqual(principal.user_id, "56780000")
-        self.assertFalse(principal.is_active)
+        # Principal should be deleted when inactive and not found in proxy
+        self.assertFalse(Principal.objects.filter(username=principal_name).exists())
+        cache_mock.delete_policy.assert_called_once_with(principal_uuid)
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 200, "data": []})
     @patch("management.principal.cleaner.KafkaConsumer")
@@ -818,8 +816,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         process_principal_events_from_kafka()
 
-        # Principal should be disabled
-        principal = Principal.objects.get(username=principal_name)
-        self.assertFalse(principal.is_active)
+        # Principal should be deleted when inactive and not found in proxy
+        self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         # No replication events should be produced for non-V2 tenants
         consumer_instance.close.assert_called_once()
