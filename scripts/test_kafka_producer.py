@@ -15,7 +15,7 @@ SAMPLE_MESSAGE = {
             "Operation": "update",
             "Type": "User",
             "InstanceId": "test-instance-123",
-            "Timestamp": "2025-03-26T12:00:00.000"
+            "Timestamp": "2025-03-26T12:00:00.000",
         },
         "Payload": {
             "Sync": {
@@ -28,32 +28,24 @@ SAMPLE_MESSAGE = {
                         ],
                         "Reference": [
                             {"system": "WEB", "entity-name": "Customer", "qualifier": "id", "text": "99999999"},
-                            {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "88888888"}
-                        ]
+                            {"system": "EBS", "entity-name": "Account", "qualifier": "number", "text": "88888888"},
+                        ],
                     },
-                    "Status": {
-                        "State": "Inactive"  # This will trigger cleanup
-                    },
-                    "Person": {
-                        "FirstName": "Test",
-                        "LastName": "User",
-                        "Credentials": {
-                            "Login": "test-user"
-                        }
-                    }
+                    "Status": {"State": "Inactive"},  # This will trigger cleanup
+                    "Person": {"FirstName": "Test", "LastName": "User", "Credentials": {"Login": "test-user"}},
                 }
             }
-        }
+        },
     }
 }
+
 
 def send_test_message(bootstrap_servers="localhost:9092", topic="VirtualTopic.canonical.user"):
     """Send a test message to Kafka."""
     print(f"Connecting to Kafka at {bootstrap_servers}...")
 
     producer = KafkaProducer(
-        bootstrap_servers=bootstrap_servers,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        bootstrap_servers=bootstrap_servers, value_serializer=lambda v: json.dumps(v).encode("utf-8")
     )
 
     print(f"Sending test message to topic: {topic}")
@@ -72,6 +64,7 @@ def send_test_message(bootstrap_servers="localhost:9092", topic="VirtualTopic.ca
     producer.close()
     print("\nMessage content:")
     print(json.dumps(SAMPLE_MESSAGE, indent=2))
+
 
 if __name__ == "__main__":
     import sys
