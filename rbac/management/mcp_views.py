@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from typing import Any, Callable
 
+import jsonschema
 from django.conf import settings
 from django.core.cache import cache as django_cache
 from django.db.models import Count, Prefetch
@@ -5084,6 +5085,50 @@ def _get_tools() -> list[Any]:
     return asyncio.run(mcp.list_tools())
 
 
+@lru_cache(maxsize=1)
+def _get_tool_schemas() -> dict[str, dict[str, Any]]:
+    """Build a {tool_name: inputSchema} lookup from the cached tool list."""
+    return {tool.name: tool.inputSchema for tool in _get_tools()}
+
+
+def _sanitize_validation_error(error: jsonschema.ValidationError) -> str:
+    """Build a human-readable validation message without exposing internals."""
+    path = ".".join(str(p) for p in error.absolute_path) if error.absolute_path else ""
+    if error.validator == "type":
+        expected = error.schema.get("type", "unknown")
+        actual = type(error.instance).__name__
+        field = f"'{path}'" if path else "input"
+        return f"Expected {field} to be {expected}, got {actual}"
+    if error.validator == "required":
+        missing = error.message
+        return f"Missing required argument: {missing}"
+    if error.validator == "additionalProperties":
+        return f"Unknown argument provided: {error.message}"
+    if path:
+        return f"Validation failed for '{path}': {error.message}"
+    return f"Validation failed: {error.message}"
+
+
+def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    """Validate arguments against the tool's JSON schema.
+
+    Injects ``additionalProperties: false`` so unknown arguments are
+    rejected even though FastMCP-generated schemas omit that keyword.
+
+    Returns None on success, or a sanitized error message on failure.
+    """
+    schemas = _get_tool_schemas()
+    schema = schemas.get(tool_name)
+    if schema is None:
+        return None
+    strict_schema = {**schema, "additionalProperties": False}
+    try:
+        jsonschema.validate(instance=arguments, schema=strict_schema)
+    except jsonschema.ValidationError as exc:
+        return _sanitize_validation_error(exc)
+    return None
+
+
 def _is_v2_available() -> bool:
     """Check whether V2 API routes are mounted."""
     return getattr(settings, "V2_APIS_ENABLED", False)
@@ -5402,6 +5447,11 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
             return _error_response(request_id, -32003, "Permission denied")
 
     confirmation_token = arguments.pop("confirmation_token", None)
+
+    validation_error = _validate_tool_arguments(tool_name, arguments)
+    if validation_error:
+        logger.warning("mcp: tools/call tool='%s' schema validation failed: %s", tool_name, validation_error)
+        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {validation_error}")
 
     if config.write and _is_write_confirmation_enabled():
         if confirmation_token:
