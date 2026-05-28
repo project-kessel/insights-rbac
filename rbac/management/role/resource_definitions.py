@@ -18,7 +18,7 @@
 
 import dataclasses
 import uuid
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from django.conf import settings
 from management.relation_replicator.types import ObjectType
@@ -96,7 +96,7 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
     invalid = []
     has_null = False
 
-    for value in values_from_attribute_filter(attribute_filter):
+    for value in _values_from_attribute_filter(attribute_filter):
         if value is None:
             has_null = True
             continue
@@ -134,7 +134,7 @@ def get_workspace_ids_from_resource_definition_with_malformed(attributeFilter: d
     valid = []
     invalid = []
 
-    for value in values_from_attribute_filter(attributeFilter):
+    for value in _values_from_attribute_filter(attributeFilter):
         if is_str_valid_uuid(value):
             valid.append(uuid.UUID(value))
         else:
@@ -148,11 +148,31 @@ def get_workspace_ids_from_resource_definition(attributeFilter: dict) -> list[uu
     return get_workspace_ids_from_resource_definition_with_malformed(attributeFilter)[0]
 
 
-def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
+# We have established that only "in" and "equal" are used as operators in all environments, so it's safe to check for
+# those here. We've also established that all "equal" operator values are strings.
+#
+# There is one entry that has a string as an "in" operator value, but its key is irrelevant and will never be used, so
+# we can ignore it.
+#
+# We have not established that all existing "in" operator values that are lists contain only strings, so we can't add a
+# stronger type hint. (We want to allow them to be returned as invalid values.)
+#
+# For attribute filters that aren't already stored, nulls are valid as values, so we need to handle them.
+def _values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list:
     """Split a resource definition into a list of resource IDs."""
-    resource_id: Union[list[str], str] = attribute_filter.get("value", [])
+    operation = attribute_filter["operation"]
+    value = attribute_filter["value"]
 
-    if isinstance(resource_id, list):
-        return resource_id
+    if operation == "equal":
+        if not (value is None or isinstance(value, str)):
+            raise TypeError(f'Expected "equal" value to be a string, but got: {value!r}')
 
-    return [resource_id]
+        return [value]
+
+    if operation == "in":
+        if not isinstance(value, list):
+            raise TypeError(f'Expected "in" value to be a list, but got: {value!r}')
+
+        return list(value)
+
+    raise ValueError(f"Unexpected operation: {operation!r}")
