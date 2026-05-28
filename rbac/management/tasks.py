@@ -49,7 +49,7 @@ from management.parity_check import run_parity_checks
 from management.permission.scope_service import ImplicitResourceService
 from management.principal.cleaner import (
     clean_tenants_principals,
-    process_principal_events_from_umb,
+    process_principal_events_from_kafka,
 )
 from management.role.v2_model import CustomRoleV2, SeededRoleV2
 from management.tenant_mapping.model import TenantMapping
@@ -69,9 +69,9 @@ def principal_cleanup():
 
 
 @shared_task
-def principal_cleanup_via_umb():
-    """Celery task to clean up principals no longer existing."""
-    process_principal_events_from_umb()
+def principal_cleanup_via_kafka():
+    """Celery task to clean up principals via Kafka messages."""
+    process_principal_events_from_kafka()
 
 
 @shared_task
