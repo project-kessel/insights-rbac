@@ -5100,8 +5100,9 @@ def _sanitize_validation_error(error: jsonschema.ValidationError) -> str:
         field = f"'{path}'" if path else "input"
         return f"Expected {field} to be {expected}, got {actual}"
     if error.validator == "required":
-        missing = error.message
-        return f"Missing required argument: {missing}"
+        match = re.match(r"'(.+)' is a required property", error.message)
+        field_name = match.group(1) if match else error.message
+        return f"Missing required argument: {field_name}"
     if error.validator == "additionalProperties":
         return f"Unknown argument provided: {error.message}"
     if path:

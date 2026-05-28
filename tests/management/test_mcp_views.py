@@ -7651,7 +7651,7 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
             js.validate({}, schema)
         except js.ValidationError as exc:
             msg = _sanitize_validation_error(exc)
-            self.assertIn("Missing required argument", msg)
+            self.assertEqual(msg, "Missing required argument: name")
 
     def test_sanitize_additional_properties_error(self):
         """_sanitize_validation_error formats additionalProperties errors cleanly."""
