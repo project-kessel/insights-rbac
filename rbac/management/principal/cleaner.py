@@ -241,8 +241,9 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     }
 
     # Add authentication if configured
-    if settings.KAFKA_AUTH:
-        kafka_config.update(settings.KAFKA_AUTH)
+    kafka_auth = getattr(settings, "KAFKA_AUTH", None)
+    if kafka_auth:
+        kafka_config.update(kafka_auth)
 
     # Get topic name from settings
     topic = f"VirtualTopic.canonical.user"
