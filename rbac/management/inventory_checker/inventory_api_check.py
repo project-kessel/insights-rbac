@@ -485,9 +485,7 @@ def generate_seeded_role_hierarchy_tuples(
 
     if v1_role.admin_default:
         try:
-            admin_scope = admin_platform_parent_scope_for_seeded_system_role(
-                v1_role.name, v1_role.admin_default, scope, apply_override=True
-            )
+            admin_scope = admin_platform_parent_scope_for_seeded_system_role(v1_role.name, scope, apply_override=True)
             parent_uuid = platform_v2_role_uuid_for(DefaultAccessType.ADMIN, admin_scope, policy_service)
             tuples.append(role_child_relationship(parent_uuid, seeded_role.uuid))
         except DefaultGroupNotAvailableError:

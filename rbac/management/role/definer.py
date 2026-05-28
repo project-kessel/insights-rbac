@@ -369,7 +369,7 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
         if v1_role.admin_default:
             for scope in binding_scopes:
                 admin_scope = admin_platform_parent_scope_for_seeded_system_role(
-                    v1_role.name, v1_role.admin_default, scope, apply_override=True
+                    v1_role.name, scope, apply_override=True
                 )
                 admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
                 admin_platform_role.children.add(v2_role)

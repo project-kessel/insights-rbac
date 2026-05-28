@@ -824,6 +824,11 @@ class RoleDefinerTests(IdentityRequest):
         )
         self._assert_child(
             tuples,
+            parent_uuid=default_platform_default_uuid,
+            child_uuid=approval_role.uuid,
+        )
+        self._assert_child(
+            tuples,
             parent_uuid=tenant_admin_default_uuid,
             child_uuid=user_access_role.uuid,
         )
@@ -845,11 +850,16 @@ class RoleDefinerTests(IdentityRequest):
             child_uuid=inventory_role.uuid,
         )
 
+        # Second force-update net tuple delta (+2): both platform-default approval roles in
+        # approval_local_test.json move from ROOT-only to TENANT + DEFAULT platform parents.
+        #   • Approval Approver: remove root platform parent, add tenant + default (+1)
+        #   • Approval Administrator Local Test: same scope change (+1)
+        # All other roles seeded here keep the same binding scopes, so their parent tuples
+        # are removed and re-added unchanged (net 0).
         self.assertEqual(
             count_after_first_update + 2,
             len(tuples),
-            "Approval platform-default roles with mixed TENANT and workspace permissions "
-            "gain an additional platform parent binding per role.",
+            "Both approval platform-default roles gain tenant and default workspace platform parents.",
         )
 
     def test_admin_default_seeded_roles_force_root_scope(self):
@@ -857,7 +867,7 @@ class RoleDefinerTests(IdentityRequest):
         for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
             for derived_scope in Scope:
                 result = admin_platform_parent_scope_for_seeded_system_role(
-                    role_name, admin_default=True, permission_derived_scope=derived_scope, apply_override=True
+                    role_name, derived_scope, apply_override=True
                 )
                 self.assertEqual(
                     result,
@@ -865,27 +875,19 @@ class RoleDefinerTests(IdentityRequest):
                     f"{role_name!r} with derived scope {derived_scope.name} should be forced to ROOT",
                 )
 
-    def test_admin_default_force_root_does_not_apply_without_admin_default(self):
-        """Test that the ROOT override only applies when admin_default=True."""
-        for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
-            result = admin_platform_parent_scope_for_seeded_system_role(
-                role_name, admin_default=False, permission_derived_scope=Scope.DEFAULT, apply_override=True
-            )
-            self.assertEqual(result, Scope.DEFAULT)
-
     def test_admin_default_force_root_does_not_apply_without_override(self):
         """Test that the ROOT override is skipped when apply_override=False."""
         for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
             for derived_scope in Scope:
                 result = admin_platform_parent_scope_for_seeded_system_role(
-                    role_name, admin_default=True, permission_derived_scope=derived_scope, apply_override=False
+                    role_name, derived_scope, apply_override=False
                 )
                 self.assertEqual(result, derived_scope)
 
     def test_admin_default_force_root_does_not_apply_to_other_roles(self):
         """Test that ordinary admin_default roles are NOT forced to ROOT."""
         result = admin_platform_parent_scope_for_seeded_system_role(
-            "Some Other Role", admin_default=True, permission_derived_scope=Scope.DEFAULT, apply_override=True
+            "Some Other Role", Scope.DEFAULT, apply_override=True
         )
         self.assertEqual(result, Scope.DEFAULT)
 
@@ -1115,9 +1117,9 @@ class V2RoleSeedingTests(IdentityRequest):
         default_platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, Scope.DEFAULT, policy_service)
         default_platform_role = PlatformRoleV2.objects.get(uuid=default_platform_role_uuid)
 
-        self.assertIn(
-            default_platform_role,
+        self.assertCountEqual(
             list(v2_role.parents.all()),
+            [default_platform_role],
             "v2_role should have DEFAULT platform role as parent initially",
         )
 
@@ -1135,15 +1137,10 @@ class V2RoleSeedingTests(IdentityRequest):
 
         # Verify: old parent (DEFAULT) should be removed, new parent (ROOT) should be present
         parents = list(v2_role.parents.all())
-        self.assertNotIn(
-            default_platform_role,
+        self.assertCountEqual(
             parents,
-            "DEFAULT platform role should be removed from parents after scope change",
-        )
-        self.assertIn(
-            root_platform_role,
-            parents,
-            "ROOT platform role should be added as parent after scope change",
+            [root_platform_role],
+            "Scope change to ROOT should leave a single ROOT platform parent",
         )
 
     def test_v2_role_parents_cleared_when_scope_changes_to_tenant(self):
@@ -1164,7 +1161,7 @@ class V2RoleSeedingTests(IdentityRequest):
         default_platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, Scope.DEFAULT, policy_service)
         default_platform_role = PlatformRoleV2.objects.get(uuid=default_platform_role_uuid)
 
-        self.assertIn(default_platform_role, list(v2_role.parents.all()))
+        self.assertCountEqual(list(v2_role.parents.all()), [default_platform_role])
 
         # notifications:notifications:read becomes TENANT-scoped; integrations:endpoints:read stays DEFAULT.
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="notifications:*:*"):
@@ -1177,15 +1174,10 @@ class V2RoleSeedingTests(IdentityRequest):
         tenant_platform_role = PlatformRoleV2.objects.get(uuid=tenant_platform_role_uuid)
 
         parents = list(v2_role.parents.all())
-        self.assertIn(
-            default_platform_role,
+        self.assertCountEqual(
             parents,
-            "DEFAULT platform role remains for workspace-scoped permissions after TENANT scope is introduced",
-        )
-        self.assertIn(
-            tenant_platform_role,
-            parents,
-            "TENANT platform role should be added for tenant-scoped permissions",
+            [default_platform_role, tenant_platform_role],
+            "Mixed TENANT and DEFAULT permissions should yield both platform parents",
         )
 
     def test_v2_role_seeded_for_unchanged_v1_role(self):

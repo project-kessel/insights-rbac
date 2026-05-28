@@ -49,7 +49,11 @@ from management.tenant_mapping.model import DefaultAccessType
 from management.tenant_mapping.v2_activation import assert_v1_write_allowed
 from migration_tool.migrate_role import migrate_role, relation_tuples_for_bindings
 from migration_tool.models import V2boundresource
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import v1_perm_to_v2_perm
+from migration_tool.sharedSystemRolesReplicatedRoleBindings import (
+    bound_resource_resolver_from_map,
+    v1_perm_to_v2_perm,
+    with_workspace_scope_inheritance,
+)
 from migration_tool.utils import create_relationship
 
 
@@ -153,7 +157,6 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             try:
                 admin_scope = admin_platform_parent_scope_for_seeded_system_role(
                     role.name,
-                    role.admin_default,
                     role_scope,
                     apply_override=apply_seeded_admin_scope_override,
                 )
@@ -419,30 +422,23 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             logger.info("[Dual Write] Generate new relations from role(%s): '%s'", self.role.uuid, self.role.name)
 
             binding_scopes = self.resource_service.binding_scopes_for_role(self.role)
-
-            if len(binding_scopes) > 1:
-                target_resources: dict[Scope, V2boundresource] = {}
-                for scope in binding_scopes:
-                    model = bound_model_for_scope(
-                        scope=scope,
-                        tenant=self.tenant,
-                        root_workspace=self.root_workspace,
-                        default_workspace=self.default_workspace,
+            resource_map = with_workspace_scope_inheritance(
+                {
+                    scope: V2boundresource.for_model(
+                        bound_model_for_scope(
+                            scope=scope,
+                            tenant=self.tenant,
+                            root_workspace=self.root_workspace,
+                            default_workspace=self.default_workspace,
+                        )
                     )
-                    target_resources[scope] = V2boundresource.for_model(model)
-                default_resource_arg: V2boundresource | dict = target_resources
-            else:
-                target_model = bound_model_for_scope(
-                    scope=binding_scopes[0],
-                    tenant=self.tenant,
-                    root_workspace=self.root_workspace,
-                    default_workspace=self.default_workspace,
-                )
-                default_resource_arg = V2boundresource.for_model(target_model)
+                    for scope in binding_scopes
+                }
+            )
 
             relations, migrate_result = migrate_role(
                 self.role,
-                default_resource=default_resource_arg,
+                resource_for_scope=bound_resource_resolver_from_map(resource_map),
                 current_bindings=self.binding_mappings.values(),
                 current_v2_roles=self.v2_roles.values(),
             )
