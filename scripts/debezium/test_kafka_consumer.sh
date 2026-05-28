@@ -26,6 +26,7 @@ if [ "$MODE" = "background" ]; then
       -e RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=kafka:9092 \
       -e RBAC_KAFKA_CONSUMER_TOPIC="$TOPIC" \
       -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
+      -e METRICS_PORT=9000 \
       --name rbac-kafka-consumer-test \
       --rm \
       rbac_server python rbac/manage.py launch-rbac-kafka-consumer)
@@ -43,6 +44,7 @@ else
       -e RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=kafka:9092 \
       -e RBAC_KAFKA_CONSUMER_TOPIC="$TOPIC" \
       -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
+      -e METRICS_PORT=9000 \
       --rm \
       rbac_server python rbac/manage.py launch-rbac-kafka-consumer
 fi

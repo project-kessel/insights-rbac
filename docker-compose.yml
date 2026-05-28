@@ -37,8 +37,11 @@ services:
         - PRINCIPAL_PROXY_SERVICE_SSL_VERIFY=${PRINCIPAL_PROXY_SERVICE_SSL_VERIFY-False}
         - RBAC_DESTRUCTIVE_API_ENABLED_UNTIL=${RBAC_DESTRUCTIVE_API_ENABLED_UNTIL}
         - RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL=${RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL}
-        - KAFKA_ENABLED=false
+        - KAFKA_ENABLED=true
         - RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=kafka:9092
+        - PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA=False
+        - PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=False
+        - KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True
         - RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.relations-replication-event
         - RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group
         - REPLICATION_TO_RELATION_ENABLED=true
@@ -64,6 +67,8 @@ services:
         rbac-worker:
           condition: service_healthy
         rbac-scheduler:
+          condition: service_healthy
+        kafka:
           condition: service_healthy
       healthcheck:
         test: curl -q http://localhost:8080/metrics
@@ -134,6 +139,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  zookeeper:
+    container_name: rbac_zookeeper
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    container_name: rbac_kafka
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   wait_for_app:
     container_name: wait_for_app

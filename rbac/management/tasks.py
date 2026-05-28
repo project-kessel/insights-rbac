@@ -26,6 +26,11 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
+from management.principal.cleaner import (
+    clean_tenants_principals,
+    process_principal_events_from_kafka,
+    process_principal_events_from_umb,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +78,9 @@ def principal_cleanup():
 
 
 @shared_task
-def principal_cleanup_via_umb():
-    """Celery task to clean up principals no longer existing."""
-    from management.principal.cleaner import process_principal_events_from_umb
-
-    process_principal_events_from_umb()
+def principal_cleanup_via_kafka():
+    """Celery task to clean up principals via Kafka messages."""
+    process_principal_events_from_kafka()
 
 
 @shared_task
