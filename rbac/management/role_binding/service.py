@@ -32,6 +32,8 @@ from management.permission.scope_service import (
     SCOPE_DISPLAY_NAME,
     Scope,
     default_implicit_resource_service,
+    permission_scope_cache,
+    resolve_workspace_scope,
     scope_for_resource,
 )
 from management.principal.model import Principal
@@ -1113,6 +1115,10 @@ class RoleBindingService:
         Uses ``ImplicitResourceService.highest_scope_for_permissions`` to compute
         the scope from each role's permission strings.
 
+        For standard (child) workspaces, additionally rejects roles that have
+        any explicit-DEFAULT permissions or no permissions at all, since those
+        represent grants no service checks at that workspace level.
+
         Must be called after ``_validate_resource`` which ensures the resource
         exists. Empty *roles* is valid (means "unbind all") and skips the check.
 
@@ -1124,21 +1130,40 @@ class RoleBindingService:
         if self._skip_scope_validation or not roles:
             return
 
-        expected = scope_for_resource(resource_type, resource_id, self.tenant)
-        if expected is None:
-            if resource_type in ("workspace", "tenant"):
+        is_standard_workspace = False
+        expected: Scope
+        if resource_type == "workspace":
+            result = resolve_workspace_scope(resource_id, self.tenant)
+            if result is None:
                 raise NotFoundError(resource_type, resource_id)
-            return
+            expected, is_standard_workspace = result
+        else:
+            resolved = scope_for_resource(resource_type, resource_id, self.tenant)
+            if resolved is None:
+                if resource_type == "tenant":
+                    raise NotFoundError(resource_type, resource_id)
+                return
+            expected = resolved
+
+        explicit_default_ids = permission_scope_cache.explicit_default_ids if is_standard_workspace else frozenset()
 
         mismatched: list[str] = []
         for role in roles:
-            perm_strings = list(role.permissions.values_list("permission", flat=True))
+            perm_rows = list(role.permissions.values_list("id", "permission"))
+            perm_strings = [row[1] for row in perm_rows]
             role_scope = default_implicit_resource_service.highest_scope_for_permissions(perm_strings)
             if role_scope != expected:
                 mismatched.append(f"{role.name} ({role.uuid})")
+            elif is_standard_workspace:
+                if not perm_rows:
+                    mismatched.append(f"{role.name} ({role.uuid})")
+                elif explicit_default_ids:
+                    perm_ids = {row[0] for row in perm_rows}
+                    if perm_ids & explicit_default_ids:
+                        mismatched.append(f"{role.name} ({role.uuid})")
 
         if mismatched:
-            scope_label = SCOPE_DISPLAY_NAME[expected]
+            scope_label = "Standard Workspace" if is_standard_workspace else SCOPE_DISPLAY_NAME[expected]
             raise InvalidFieldError(
                 "roles",
                 f"The following roles are not scoped for this resource ({scope_label}): {', '.join(mismatched)}",

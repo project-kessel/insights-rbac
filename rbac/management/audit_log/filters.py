@@ -38,7 +38,9 @@ class AuditLogFilter(CommonFilters):
         field_name="action",
         choices=AuditLog.ACTION_CHOICES,
     )
+    created_after = filters.IsoDateTimeFilter(field_name="created", lookup_expr="gte")
+    created_before = filters.IsoDateTimeFilter(field_name="created", lookup_expr="lte")
 
     class Meta:
         model = AuditLog
-        fields = ["principal_username", "resource_type", "action"]
+        fields = ["principal_username", "resource_type", "action", "created_after", "created_before"]

@@ -34,7 +34,7 @@ from management.permission.scope_service import (
     Scope,
     default_implicit_resource_service,
     permission_scope_cache,
-    scope_for_resource,
+    resolve_workspace_scope,
     scopes_for_resource_type,
 )
 from management.permission.service import PermissionService
@@ -291,9 +291,15 @@ class RoleV2Service:
         """Filter roles to those whose highest permission scope maps to resource_type.
 
         For ``resource_type=workspace``:
-        - With no ``resource_id``: only DEFAULT-scoped roles (default workspace and custom workspaces).
+        - With no ``resource_id``: DEFAULT-scoped roles (both explicit-DEFAULT
+          and workspace-granular, plus permissionless).
         - With ``resource_id`` the root workspace UUID: only ROOT-scoped roles.
-        - With any other workspace UUID: only DEFAULT-scoped roles.
+        - With ``resource_id`` the default workspace UUID: explicit-DEFAULT +
+          workspace-granular + permissionless roles.
+        - With ``resource_id`` a standard workspace UUID: only workspace-granular
+          roles (fallback-DEFAULT).  Explicit-DEFAULT and permissionless roles
+          are excluded because they represent grants that no service checks at
+          standard workspace level.
 
         Uses DB-level filtering with cached Permission-ID-to-Scope mappings to
         avoid loading all roles and their permissions into Python memory.
@@ -302,12 +308,14 @@ class RoleV2Service:
         if not matching_scopes:
             return queryset.none()
 
+        is_standard_workspace = False
         if resource_type == "workspace":
             if resource_id is not None:
                 assert self.tenant is not None
-                resolved = scope_for_resource(resource_type, str(resource_id), self.tenant)
-                if resolved is None:
+                result = resolve_workspace_scope(str(resource_id), self.tenant)
+                if result is None:
                     return queryset.none()
+                resolved, is_standard_workspace = result
                 matching_scopes = {resolved}
             else:
                 matching_scopes = {Scope.DEFAULT}
@@ -322,6 +330,12 @@ class RoleV2Service:
             higher_ids = permission_scope_cache.ids_for_scopes(higher_non_matching)
             if higher_ids:
                 queryset = queryset.exclude(permissions__id__in=higher_ids)
+
+        if is_standard_workspace:
+            explicit_default_ids = permission_scope_cache.explicit_default_ids
+            if explicit_default_ids:
+                queryset = queryset.exclude(permissions__id__in=explicit_default_ids)
+            queryset = queryset.filter(permissions__isnull=False).distinct()
 
         return queryset
 

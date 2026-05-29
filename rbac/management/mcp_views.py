@@ -410,6 +410,50 @@ def _resolve_group_for_tool(request: HttpRequest, group_uuid: str, group_name: s
     return _resolve_group_uuid(group_uuid, group_name, tenant)
 
 
+def _lookup_principal(
+    request: HttpRequest, username_or_name: str, tenant
+) -> tuple[Principal | None, str | None, list[dict] | None]:
+    """Resolve a principal by username or display name.
+
+    Returns (principal, resolved_username, candidates).
+    - On exact or unique match: principal and resolved_username are set, candidates is None.
+    - On multiple matches: principal/resolved_username are None, candidates is a list of user dicts.
+    - On no matches: everything is None.
+    """
+    principal = Principal.objects.filter(username=username_or_name, tenant=tenant).first()
+    if principal:
+        return principal, username_or_name, None
+
+    # Username not found -- try display name search via BOP
+    result_json = _list_principals_by_name(
+        request, username_or_name, limit=5, offset=0, sort_order="asc", status="enabled"
+    )
+    try:
+        result = json.loads(result_json)
+        matches = result.get("data", [])
+    except (json.JSONDecodeError, AttributeError):
+        matches = []
+
+    if len(matches) == 1:
+        resolved_username = matches[0].get("username")
+        if resolved_username:
+            principal = Principal.objects.filter(username=resolved_username, tenant=tenant).first()
+            if principal:
+                return principal, resolved_username, None
+
+    if len(matches) > 1:
+        candidates = [
+            {
+                "username": u.get("username"),
+                "name": f"{u.get('first_name', '')} {u.get('last_name', '')}".strip(),
+            }
+            for u in matches
+        ]
+        return None, None, candidates
+
+    return None, None, None
+
+
 # --- Tool implementations ---
 
 
@@ -1160,14 +1204,17 @@ def list_role_access(
         "To find which roles grant a specific permission, call "
         "search_roles(permission='<app>:<resource>:<verb>'). Accepts comma-separated permissions. "
         "To see all roles for an application, call search_roles(application='<app>'). "
+        "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
         "V2 orgs support name with '*' wildcards (e.g., name='Cost*') and resource_type filter. "
-        "V1 orgs additionally support display_name, system flag filters. "
+        "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
         "- The permission filter finds roles containing that permission, but does not account for "
         "ResourceDefinition filters that may narrow the permission's effective scope.\n"
         "- Role names are not unique across V1 and V2. The org_version field indicates which API "
-        "version the result came from."
+        "version the result came from.\n"
+        "- The username filter is V1-only. For V2 orgs, it is ignored and returned in ignored_filters "
+        "with guidance to use list_role_bindings instead."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1186,12 +1233,27 @@ def search_roles(
     system: str = "",
     resource_type: str = "",
     order_by: str = "",
+    username: str = "",
 ) -> str:
     """Search roles, auto-detecting V1/V2 and delegating to the appropriate view."""
     tenant = getattr(request, "tenant", None)
     if tenant and is_v2_write_activated(tenant):
-        return _search_roles_v2(request, limit, offset, name, resource_type, permission, order_by)
-    return _search_roles_v1(request, limit, offset, name, display_name, permission, application, system, order_by)
+        return _search_roles_v2(
+            request,
+            limit,
+            offset,
+            name,
+            resource_type,
+            permission,
+            order_by,
+            username,
+            display_name,
+            application,
+            system,
+        )
+    return _search_roles_v1(
+        request, limit, offset, name, display_name, permission, application, system, order_by, username
+    )
 
 
 def _search_roles_v1(
@@ -1204,6 +1266,7 @@ def _search_roles_v1(
     application: str,
     system: str,
     order_by: str,
+    username: str,
 ) -> str:
     """Search roles using V1 API."""
     query_params: dict[str, str] = {
@@ -1222,6 +1285,8 @@ def _search_roles_v1(
         query_params["system"] = system
     if order_by:
         query_params["order_by"] = order_by
+    if username:
+        query_params["username"] = username
 
     path = reverse("v1_management:role-list")
     raw = _call_view(request, _role_v1_list_view, path, query_params)
@@ -1238,6 +1303,10 @@ def _search_roles_v2(
     resource_type: str,
     permission: str,
     order_by: str,
+    username: str,
+    display_name: str,
+    application: str,
+    system: str,
 ) -> str:
     """Search roles using V2 API."""
     query_params: dict[str, str] = {
@@ -1257,6 +1326,46 @@ def _search_roles_v2(
     raw = _call_view(request, _role_v2_list_view, path, query_params)
     result = json.loads(raw)
     result["org_version"] = "v2"
+
+    ignored_filters: dict[str, dict[str, str]] = {}
+
+    if username:
+        ignored_filters["username"] = {
+            "value": username,
+            "reason": "V2 orgs use role bindings instead of group-based role assignment.",
+            "alternative": (
+                "Use list_role_bindings(granted_subject_type='principal', "
+                f"granted_subject_principal_user_id='{username}') to find roles bound to this user."
+            ),
+        }
+
+    if display_name:
+        ignored_filters["display_name"] = {
+            "value": display_name,
+            "reason": "V2 roles do not have a separate display_name field.",
+            "alternative": "Use the 'name' parameter instead, which supports wildcard matching (e.g., name='Cost*').",
+        }
+
+    if application:
+        ignored_filters["application"] = {
+            "value": application,
+            "reason": "V2 roles do not support filtering by application.",
+            "alternative": (
+                "Use the 'permission' parameter to filter by specific permissions "
+                "(e.g., permission='cost-management:*:*')."
+            ),
+        }
+
+    if system:
+        ignored_filters["system"] = {
+            "value": system,
+            "reason": "V2 roles use 'type' (custom/system/seeded) instead of a boolean 'system' flag.",
+            "alternative": "V2 role results include a 'type' field you can filter client-side.",
+        }
+
+    if ignored_filters:
+        result["ignored_filters"] = ignored_filters
+
     return json.dumps(result)
 
 
@@ -2633,19 +2742,56 @@ def check_user_permission(
 
     tenant = getattr(request, "tenant", None)
     if not tenant or not is_v2_write_activated(tenant):
+        # V1 path: resolve display name then delegate
+        if tenant:
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+            if candidates:
+                return json.dumps(
+                    {
+                        "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                        "candidates": candidates,
+                    }
+                )
+            if resolved_username:
+                username = resolved_username
+            else:
+                return json.dumps(
+                    {
+                        "allowed": False,
+                        "username": username,
+                        "permission": permission,
+                        "hint": f"User '{username}' not found in this organization. "
+                        "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
+                    }
+                )
         return _check_user_permission_v1(request, username, permission)
 
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    if not principal:
+    # V2 path: resolve display name → principal
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
         return json.dumps(
             {
                 "allowed": False,
                 "username": username,
                 "permission": permission,
                 "org_version": "v2",
-                "hint": f"User '{username}' not found in this organization.",
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
             }
         )
+    if not resolved_principal or not resolved_username:
+        return json.dumps(
+            {
+                "allowed": False,
+                "username": username,
+                "permission": permission,
+                "org_version": "v2",
+                "hint": f"User '{username}' not found in this organization. "
+                "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
+            }
+        )
+    principal: Principal = resolved_principal
+    username = resolved_username
 
     bindings_path = reverse("v2_management:role-bindings-list")
     raw = _call_view(
@@ -2818,16 +2964,24 @@ def get_user_state(
     is_v2 = tenant and is_v2_write_activated(tenant)
     org_version = "v2" if is_v2 else "v1"
 
-    # Check if user exists
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    if not principal:
+    # Resolve username or display name
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
+        return json.dumps(
+            {
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
+            }
+        )
+    if not resolved_principal or not resolved_username:
         return json.dumps(
             {
                 "error": f"User '{username}' not found in this organization",
-                "org_version": org_version,
-                "hint": "Use list_principals(usernames='<user>', match_criteria='exact') to verify the user exists.",
+                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
             }
         )
+    principal: Principal = resolved_principal
+    username = resolved_username
 
     result: dict[str, Any] = {
         "username": username,
@@ -3470,17 +3624,25 @@ def investigate_user_access(
     is_v2 = is_v2_write_activated(tenant)
     org_version = "v2" if is_v2 else "v1"
 
-    # Step 1: Check if user exists and get org admin status
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    is_org_admin = False
-
-    if not principal:
+    # Step 1: Resolve username or display name and get org admin status
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
+        return json.dumps(
+            {
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
+            }
+        )
+    if not resolved_principal or not resolved_username:
         return json.dumps(
             {
                 "error": f"User '{username}' not found in this organization",
-                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search for the user.",
+                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
             }
         )
+    principal: Principal = resolved_principal
+    username = resolved_username
+    is_org_admin = False
 
     # Check org admin status via BOP
     if org_id:
@@ -4229,17 +4391,28 @@ def guide_user_access_delegation(
             "existing_assignments": [],
         }
 
-        # Check if user exists
+        # Check if user exists (reuse shared lookup helper)
         try:
-            principals_raw = list_principals(request, usernames=username, match_criteria="exact", limit=1)
-            principals_data = json.loads(principals_raw)
-            if principals_data.get("data"):
-                user_data = principals_data["data"][0]
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+            if candidates:
                 result["user_info"] = {
-                    "username": user_data.get("username"),
-                    "is_org_admin": user_data.get("is_org_admin", False),
-                    "is_active": user_data.get("is_active", True),
+                    "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                    "candidates": candidates,
                 }
+            elif resolved_username:
+                username = resolved_username
+                # Fetch user details (org admin status, active status) via BOP
+                principals_raw = list_principals(request, usernames=username, match_criteria="exact", limit=1)
+                principals_data = json.loads(principals_raw)
+                if principals_data.get("data"):
+                    user_data = principals_data["data"][0]
+                    result["user_info"] = {
+                        "username": username,
+                        "is_org_admin": user_data.get("is_org_admin", False),
+                        "is_active": user_data.get("is_active", True),
+                    }
+                else:
+                    result["user_info"] = {"username": username}
             else:
                 result["user_info"] = {"error": f"User '{username}' not found"}
         except Exception as e:

@@ -89,3 +89,33 @@ class TestECSCustomFormatter(TestCase):
             "http.request.bytes does not match actual Content-Length.",
         )
         self.assertEqual(log_output["http"]["request"]["method"], "POST")
+
+    def test_env_name_included_in_labels(self):
+        log_record = logging.LogRecord(
+            name="test.logger",
+            level=logging.INFO,
+            pathname="dummy_module.py",
+            lineno=0,
+            msg="Test log message.",
+            args=(),
+            exc_info=None,
+        )
+        log_record.env_name = "prod"
+        log_output = self.format(log_record)
+
+        self.assertIn("labels", log_output)
+        self.assertEqual(log_output["labels"]["env"], "prod")
+
+    def test_env_name_missing_no_labels(self):
+        log_record = logging.LogRecord(
+            name="test.logger",
+            level=logging.INFO,
+            pathname="dummy_module.py",
+            lineno=0,
+            msg="Test log message.",
+            args=(),
+            exc_info=None,
+        )
+        log_output = self.format(log_record)
+
+        self.assertNotIn("labels", log_output)

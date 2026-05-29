@@ -25,6 +25,7 @@ from api.models import Tenant
 from management.models import Permission, Role
 from management.permission.scope_service import (
     ImplicitResourceService,
+    PermissionScopeCache,
     Scope,
     scopes_for_resource_type,
 )
@@ -711,6 +712,135 @@ class RoleTests(TestCase):
         )
 
         self._assert_role_scope(Scope.ROOT)
+
+
+class ExplicitlyScopedTest(TestCase):
+    """Tests for ImplicitResourceService.is_explicitly_scoped."""
+
+    def test_root_permission_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=["root_app:*:*"],
+            tenant_scope_permissions=[],
+        )
+        self.assertTrue(service.is_explicitly_scoped("root_app:resource:verb"))
+
+    def test_tenant_permission_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["tenant_app:*:*"],
+        )
+        self.assertTrue(service.is_explicitly_scoped("tenant_app:resource:verb"))
+
+    def test_default_permission_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:*:*"],
+            default_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertTrue(service.is_explicitly_scoped("rbac:role_binding:read"))
+
+    def test_fallback_default_is_not_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=["root_app:*:*"],
+            tenant_scope_permissions=[],
+        )
+        self.assertFalse(service.is_explicitly_scoped("unrelated:resource:verb"))
+
+    def test_exact_match_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=["app:resource:verb"],
+            tenant_scope_permissions=[],
+        )
+        self.assertTrue(service.is_explicitly_scoped("app:resource:verb"))
+        self.assertFalse(service.is_explicitly_scoped("app:resource:other"))
+        self.assertFalse(service.is_explicitly_scoped("app:other:verb"))
+
+    def test_wildcard_match_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=["app:resource:*"],
+            tenant_scope_permissions=[],
+        )
+        self.assertTrue(service.is_explicitly_scoped("app:resource:read"))
+        self.assertTrue(service.is_explicitly_scoped("app:resource:write"))
+        self.assertFalse(service.is_explicitly_scoped("app:other:read"))
+
+    def test_empty_service_nothing_is_explicitly_scoped(self):
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+        )
+        self.assertFalse(service.is_explicitly_scoped("any:resource:verb"))
+
+    def test_invalid_permission_raises_value_error(self):
+        service = ImplicitResourceService(root_scope_permissions=[], tenant_scope_permissions=[])
+        for permission in INVALID_PERMISSIONS_V1:
+            with self.subTest(permission=permission):
+                self.assertRaises(ValueError, service.is_explicitly_scoped, permission)
+
+
+class PermissionScopeCacheExplicitDefaultTest(TestCase):
+    """Tests for PermissionScopeCache.explicit_default_ids."""
+
+    def setUp(self):
+        self.public_tenant = Tenant.objects.get(tenant_name="public")
+
+    def test_explicit_default_ids_with_default_scope_permissions(self):
+        """Permissions matching DEFAULT_SCOPE_PERMISSIONS should be in explicit_default_ids."""
+        perm_rb = Permission.objects.create(permission="rbac:role_binding:read", tenant=self.public_tenant)
+        perm_ws = Permission.objects.create(permission="other:resource:read", tenant=self.public_tenant)
+
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:*:*"],
+            default_scope_permissions=["rbac:role_binding:*"],
+        )
+        cache = PermissionScopeCache(service)
+
+        self.assertIn(perm_rb.id, cache.explicit_default_ids)
+        self.assertNotIn(perm_ws.id, cache.explicit_default_ids)
+
+    def test_explicit_default_ids_empty_when_no_default_scope_permissions(self):
+        """With no default_scope_permissions, explicit_default_ids should be empty."""
+        Permission.objects.create(permission="app:resource:read", tenant=self.public_tenant)
+
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+        )
+        cache = PermissionScopeCache(service)
+
+        self.assertEqual(cache.explicit_default_ids, frozenset())
+
+    def test_explicit_default_ids_excludes_root_and_tenant(self):
+        """ROOT and TENANT permissions should not appear in explicit_default_ids."""
+        root_perm = Permission.objects.create(permission="root_app:resource:read", tenant=self.public_tenant)
+        tenant_perm = Permission.objects.create(permission="tenant_app:resource:read", tenant=self.public_tenant)
+
+        service = ImplicitResourceService(
+            root_scope_permissions=["root_app:*:*"],
+            tenant_scope_permissions=["tenant_app:*:*"],
+        )
+        cache = PermissionScopeCache(service)
+
+        self.assertNotIn(root_perm.id, cache.explicit_default_ids)
+        self.assertNotIn(tenant_perm.id, cache.explicit_default_ids)
+
+    def test_invalidate_clears_explicit_default_ids(self):
+        """invalidate() should clear explicit_default_ids so they are rebuilt on next access."""
+        Permission.objects.create(permission="rbac:role_binding:read", tenant=self.public_tenant)
+
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:*:*"],
+            default_scope_permissions=["rbac:role_binding:*"],
+        )
+        cache = PermissionScopeCache(service)
+
+        _ = cache.explicit_default_ids
+        cache.invalidate()
+        self.assertIsNone(cache._explicit_default_ids)
+        _ = cache.explicit_default_ids
+        self.assertIsNotNone(cache._explicit_default_ids)
 
 
 class ResourceTypeMappingTest(TestCase):
