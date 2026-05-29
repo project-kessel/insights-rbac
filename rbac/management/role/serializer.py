@@ -136,7 +136,7 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         return hierarchy_enabled and is_access_request and self._is_workspace_filter(instance)
 
     def _is_workspace_filter(self, instance):
-        return is_resource_a_workspace(instance.application, instance.resource_type, instance.attributeFilter)
+        return is_resource_a_workspace(attribute_filter=instance.attributeFilter)
 
 
 class AccessListSerializer(serializers.ListSerializer):

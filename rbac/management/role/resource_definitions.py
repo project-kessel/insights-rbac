@@ -64,7 +64,13 @@ class ParsedAttributeFilter:
 
 
 _workspace_type = ObjectType("rbac", "workspace")
-_resource_type_by_attribute = {"group.id": _workspace_type}
+
+
+def _resource_type_for(attribute_filter: dict) -> Optional[ObjectType]:
+    if attribute_filter["key"] == settings.WORKSPACE_ATTRIBUTE_FILTER:
+        return _workspace_type
+
+    return None
 
 
 def _parse_id_for_resource_type(id, resource_type: ObjectType) -> Optional[str]:
@@ -82,12 +88,7 @@ def _parse_id_for_resource_type(id, resource_type: ObjectType) -> Optional[str]:
 
 def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFilter]:
     """Parse a raw attribute filter dict into a ParsedAttributeFilter."""
-    attribute = attribute_filter.get("key")
-
-    if not isinstance(attribute, str):
-        return None
-
-    resource_type = _resource_type_by_attribute.get(attribute)
+    resource_type = _resource_type_for(attribute_filter)
 
     if resource_type is None:
         return None
@@ -121,12 +122,9 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
     )
 
 
-def is_resource_a_workspace(application: str, resource_type: str, attributeFilter: dict) -> bool:
+def is_resource_a_workspace(attribute_filter: dict) -> bool:
     """Check if a given ResourceDefinition is a Workspace."""
-    is_workspace_application = application == settings.WORKSPACE_APPLICATION_NAME
-    is_workspace_resource_type = resource_type in settings.WORKSPACE_RESOURCE_TYPE
-    is_workspace_group_filter = attributeFilter.get("key") == settings.WORKSPACE_ATTRIBUTE_FILTER
-    return is_workspace_application and is_workspace_resource_type and is_workspace_group_filter
+    return _resource_type_for(attribute_filter=attribute_filter) == _workspace_type
 
 
 # We have established that only "in" and "equal" are used as operators in all environments, so it's safe to check for
