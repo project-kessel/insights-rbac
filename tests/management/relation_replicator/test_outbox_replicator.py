@@ -374,6 +374,42 @@ class OutboxReplicatorTest(TestCase):
         self.assertEqual(context["org_id"], "")
         self.assertEqual(context["event_type"], ReplicationEventType.CREATE_GROUP.value)
 
+    def test_resource_context_for_migrate_binding_scope_with_notify_token(self):
+        """Test resource context includes notify_token for migrate_binding_scope events."""
+        relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
+
+        event = ReplicationEvent(
+            add=[relation],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456", "notify_token": "scope-batch-token"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+        self.replicator.replicate(event)
+
+        logged_event = self.log[0]
+        context = logged_event.payload["resource_context"]
+        self.assertEqual(context["org_id"], "123456")
+        self.assertEqual(context["event_type"], ReplicationEventType.MIGRATE_BINDING_SCOPE.value)
+        self.assertEqual(context["notify_token"], "scope-batch-token")
+
+    def test_resource_context_for_migrate_binding_scope_without_notify_token(self):
+        """Test migrate_binding_scope without notify_token falls back to standard context."""
+        relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
+
+        event = ReplicationEvent(
+            add=[relation],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+
+        context = event.resource_context()
+        self.assertEqual(context["org_id"], "123456")
+        self.assertEqual(context["event_type"], ReplicationEventType.MIGRATE_BINDING_SCOPE.value)
+        self.assertNotIn("notify_token", context)
+
     def test_replicate_empty_event_warns_instead_of_saving(self):
         """Test replicate with empty event warns."""
         event = ReplicationEvent(

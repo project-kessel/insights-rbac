@@ -20,6 +20,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import transaction
+from internal.pg_notify_wait import NotifyCoordinatedReplicator
 from management.atomic_transactions import atomic as atomic_serializable
 from management.group.model import Group
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
@@ -329,7 +330,7 @@ _all_sources = {custom_role_source, system_role_source, car_source}
 
 
 def migrate_all_role_bindings(
-    replicator: RelationReplicator = OutboxReplicator(),
+    replicator: RelationReplicator | None = None,
     tenant: Optional[Tenant] = None,
     sources: Optional[set[str]] = None,
 ):
@@ -346,6 +347,12 @@ def migrate_all_role_bindings(
 
     Returns: Tuple of (items_checked, items_migrated)
     """
+    if replicator is None:
+        replicator = NotifyCoordinatedReplicator(
+            OutboxReplicator(),
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+        )
+
     if tenant:
         if tenant.tenant_name == "public":
             raise ValueError("Cannot migrate binding scope for the public tenant.")

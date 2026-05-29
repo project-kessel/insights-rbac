@@ -114,21 +114,15 @@ class ReplicationEvent:
 
     def resource_context(self) -> Dict[str, object] | None:
         """Build context for all replication events that have identifiable resources."""
-        if self.event_type == ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS:
-            token = self.event_info.get("notify_token")
-            if not token:
-                logger.warning(
-                    "remove_root_parent_tenant_relationships batch missing notify_token in event_info=%s",
-                    self.event_info,
-                )
+        from internal.pg_notify_wait import build_migration_notify_resource_context, migration_notify_coordination
+
+        coordination = migration_notify_coordination(self.event_type)
+        if coordination is not None:
+            context = build_migration_notify_resource_context(self.event_type, self.event_info, coordination)
+            if context is not None:
+                return context
+            if coordination.require_notify_token:
                 return None
-            context = ReplicationEventResourceContext(
-                org_id="",
-                event_type=self.event_type.value,
-            )
-            result = context.to_json()
-            result["notify_token"] = str(token)
-            return result
 
         # Validate org_id exists for all events
         org_id = str(self.event_info.get("org_id", ""))
