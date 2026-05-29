@@ -3150,6 +3150,19 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("view_audit_details", tool_output["hints"])
         self.assertIn("trace_role_permissions", tool_output["hints"])
 
+    def test_get_user_state_description_contains_offboarding_keywords(self):
+        """Positive: get_user_state tool description contains offboarding trigger keywords."""
+        body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        tools = response.json()["result"]["tools"]
+        tool = next(t for t in tools if t["name"] == "get_user_state")
+        description = tool["description"]
+
+        self.assertIn("offboard", description)
+        self.assertIn("contractor", description.lower())
+        self.assertIn("compliance report", description)
+        self.assertIn("AFTER ANALYSIS", description)
+
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)
 class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
@@ -3551,6 +3564,7 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["requests"]), 0)
         self.assertIn("filtered_count", tool_output["analysis"])
+        self.assertIn("lifecycle", tool_output["analysis"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_investigate_tam_access_required_permission_found(self, mock_proxy):
@@ -3590,7 +3604,7 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         )
 
     def test_investigate_tam_access_no_requests(self):
-        """Negative: investigate_tam_access returns empty when no requests exist."""
+        """Negative: investigate_tam_access returns enriched response when no requests exist."""
         # Delete the test cross-account request
         self.car.delete()
 
@@ -3600,6 +3614,23 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(len(tool_output["requests"]), 0)
         self.assertIn("message", tool_output["analysis"])
         self.assertIn("hint", tool_output["analysis"])
+        self.assertIn("other_statuses", tool_output["analysis"])
+        self.assertIn("pending", tool_output["analysis"]["other_statuses"])
+        self.assertIn("expired", tool_output["analysis"]["other_statuses"])
+        self.assertIn("lifecycle", tool_output["analysis"])
+        self.assertIn("create", tool_output["analysis"]["lifecycle"])
+
+    def test_investigate_tam_access_no_requests_with_pending(self):
+        """Positive: investigate_tam_access shows pending count when no approved requests exist."""
+        self.car.status = "pending"
+        self.car.save()
+
+        response = self._call_tool("investigate_tam_access")
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(len(tool_output["requests"]), 0)
+        self.assertEqual(tool_output["analysis"]["other_statuses"]["pending"], 1)
+        self.assertIn("pending", tool_output["analysis"]["hint"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_investigate_tam_access_shows_days_remaining(self, mock_proxy):
@@ -3847,7 +3878,7 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("other-app", tool_output["summary"]["permissions_by_application"])
 
     def test_audit_redhat_access_no_requests(self):
-        """Negative: audit_redhat_access returns empty when no requests exist."""
+        """Negative: audit_redhat_access returns enriched response when no requests exist."""
         CrossAccountRequest.objects.all().delete()
 
         response = self._call_tool("audit_redhat_access")
@@ -3855,7 +3886,26 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["active_access"]), 0)
         self.assertIn("message", tool_output["summary"])
-        self.assertIn("hint", tool_output["summary"])
+        self.assertIn("ciso_briefing", tool_output["summary"])
+        self.assertIn("Zero Red Hat personnel", tool_output["summary"]["ciso_briefing"])
+        self.assertIn("briefing_template", tool_output["summary"])
+        self.assertIn("monitoring", tool_output["summary"])
+        self.assertIn("pending_requests", tool_output["summary"])
+        self.assertIn("expired_requests", tool_output["summary"])
+
+    def test_audit_redhat_access_no_active_with_pending(self):
+        """Positive: audit_redhat_access shows pending count when no active access exists."""
+        # Change existing request to pending
+        for car in CrossAccountRequest.objects.all():
+            car.status = "pending"
+            car.save()
+
+        response = self._call_tool("audit_redhat_access")
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(len(tool_output["active_access"]), 0)
+        self.assertGreaterEqual(tool_output["summary"]["pending_requests"], 1)
+        self.assertIn("pending", tool_output["summary"]["ciso_briefing"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_audit_redhat_access_include_inactive(self, mock_proxy):
@@ -6006,10 +6056,12 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32000)
 
+    @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_nonexistent_user(self, mock_list_principals):
+    def test_guide_user_access_delegation_nonexistent_user(self, mock_list_principals, mock_name_search):
         """Edge case: guide_user_access_delegation handles non-existent user gracefully."""
         mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = '{"data": []}'
 
         response = self._call_tool("guide_user_access_delegation", {"username": "nonexistent_user"})
 
@@ -6096,6 +6148,66 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         group_names = [a["name"] for a in tool_output["existing_assignments"]]
         self.assertIn("Access Governance", group_names)
         self.assertIn("Security Team", group_names)
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_single_match(self, mock_list_principals, mock_name_search):
+        """Positive: fuzzy fallback resolves display name to single user."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = json.dumps(
+            {
+                "data": [
+                    {
+                        "username": self.test_username,
+                        "first_name": "Joe",
+                        "last_name": "Doe",
+                        "is_org_admin": False,
+                        "is_active": True,
+                    }
+                ]
+            }
+        )
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Joe"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["user_info"]["username"], self.test_username)
+        self.assertIn("resolved_from", tool_output["user_info"])
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_multiple_matches(self, mock_list_principals, mock_name_search):
+        """Edge case: fuzzy fallback returns candidates when multiple users match."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = json.dumps(
+            {
+                "data": [
+                    {"username": "joedoe1", "first_name": "Joe", "last_name": "Doe"},
+                    {"username": "joedoe2", "first_name": "Joe", "last_name": "Smith"},
+                ]
+            }
+        )
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Joe"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("error", tool_output["user_info"])
+        self.assertIn("candidates", tool_output["user_info"])
+        self.assertEqual(len(tool_output["user_info"]["candidates"]), 2)
+        self.assertIn("hint", tool_output["user_info"])
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_no_match(self, mock_list_principals, mock_name_search):
+        """Negative: fuzzy fallback returns error when no users match."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = '{"data": []}'
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Nonexistent"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("error", tool_output["user_info"])
+        self.assertNotIn("candidates", tool_output["user_info"])
 
     def test_guide_user_access_delegation_v1_org_version(self):
         """Positive: V1 organization shows org_version=v1."""
