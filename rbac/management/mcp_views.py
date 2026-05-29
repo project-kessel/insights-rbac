@@ -5273,11 +5273,20 @@ def _sanitize_validation_error(error: jsonschema.ValidationError) -> str:
         field = f"'{path}'" if path else "input"
         return f"Expected {field} to be {expected}, got {actual}"
     if error.validator == "required":
+        if isinstance(error.instance, dict) and error.validator_value:
+            missing = [p for p in error.validator_value if p not in error.instance]
+            if missing:
+                return f"Missing required argument: {missing[0]}"
         match = re.match(r"'(.+)' is a required property", error.message)
         field_name = match.group(1) if match else error.message
         return f"Missing required argument: {field_name}"
     if error.validator == "additionalProperties":
-        return f"Unknown argument provided: {error.message}"
+        names = re.findall(r"'([^']+)'", error.message)
+        if names:
+            if len(names) == 1:
+                return f"Unknown argument: {names[0]}"
+            return f"Unknown arguments: {', '.join(names)}"
+        return "Unknown argument provided"
     if path:
         return f"Validation failed for '{path}': {error.message}"
     return f"Validation failed: {error.message}"
@@ -5295,7 +5304,8 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
     schema = schemas.get(tool_name)
     if schema is None:
         return None
-    strict_schema = {**schema, "additionalProperties": False}
+    strict_schema = dict(schema)
+    strict_schema.setdefault("additionalProperties", False)
     try:
         jsonschema.validate(instance=arguments, schema=strict_schema)
     except jsonschema.ValidationError as exc:
