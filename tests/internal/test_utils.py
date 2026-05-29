@@ -703,14 +703,16 @@ class CleanInvalidResourceDefinitionsTest(TestCase):
         # Create RD with invalid workspace IDs
         fake_ws_id_1 = "95473d62-56ea-4c0c-8945-4f3f6a620669"
         fake_ws_id_2 = "64f65afb-e6f7-4dbb-ba43-ffcdb4a7fb9b"
-        original_value = [None, fake_ws_id_1, fake_ws_id_2]
+
+        original_filter = {
+            "key": "group.id",
+            "operation": "in",
+            "value": [None, fake_ws_id_1, fake_ws_id_2],
+        }
+
         rd = ResourceDefinition.objects.create(
             access=access,
-            attributeFilter={
-                "key": "group.id",
-                "operation": "in",
-                "value": original_value,
-            },
+            attributeFilter=original_filter,
             tenant=self.tenant,
         )
 
@@ -725,16 +727,16 @@ class CleanInvalidResourceDefinitionsTest(TestCase):
         # Verify change info contains before/after details
         change = results["changes"][0]
         self.assertEqual(change["action"], "would_update")
-        self.assertEqual(change["original_value"], original_value)
-        self.assertEqual(change["new_value"], [None])  # Only None preserved
+        self.assertEqual(change["original_filter"], original_filter)
+        self.assertEqual(
+            change["new_filter"], {"key": "group.id", "operation": "in", "value": [None]}
+        )  # Only None preserved
         self.assertEqual(len(change["invalid_workspaces"]), 2)
         self.assertTrue(change["preserved_none"])
 
         # CRITICAL: Verify database was NOT changed
         rd.refresh_from_db()
-        self.assertEqual(rd.attributeFilter["value"], original_value)
-        self.assertIn(fake_ws_id_1, rd.attributeFilter["value"])
-        self.assertIn(fake_ws_id_2, rd.attributeFilter["value"])
+        self.assertEqual(rd.attributeFilter, original_filter)
 
         # Now run without dry_run to verify it actually makes changes
         results = clean_invalid_workspace_resource_definitions(dry_run=False)

@@ -18,7 +18,7 @@
 
 import dataclasses
 import uuid
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from django.conf import settings
 from management.relation_replicator.types import ObjectType
@@ -155,3 +155,34 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
 def is_resource_a_workspace(attribute_filter: dict) -> bool:
     """Check if a given ResourceDefinition is a Workspace."""
     return _resource_type_for(attribute_filter=attribute_filter) == _workspace_type
+
+
+def updated_attribute_filter_with_ids(attribute_filter: dict, new_ids: Iterable[str | None]) -> dict:
+    """Return an attribute filter equivalent to the provided one, but with new resource IDs."""
+    operation = attribute_filter["operation"]
+    new_ids = list(new_ids)
+
+    if not all((x is None) or (isinstance(x, str)) for x in new_ids):
+        raise TypeError(f"Expected all IDs to be strings or None, but got: {new_ids}")
+
+    if operation == "equal":
+        if len(new_ids) == 1:
+            return {
+                **attribute_filter,
+                "value": new_ids[0],
+            }
+        elif len(new_ids) == 0:
+            # Empty string represents something that cannot match (distinct from None).
+            return {
+                **attribute_filter,
+                "value": "",
+            }
+        else:
+            raise ValueError(f'Cannot add more than one ID for a filter with operation "equal", but got: {new_ids}')
+    elif operation == "in":
+        return {
+            **attribute_filter,
+            "value": new_ids,
+        }
+    else:
+        raise ValueError(f"Unexpected operation: {operation!r}")
