@@ -86,6 +86,36 @@ def _parse_id_for_resource_type(id, resource_type: ObjectType) -> Optional[str]:
     return id
 
 
+# We have established that only "in" and "equal" are used as operators in all environments, so it's safe to check for
+# those here. We've also established that all "equal" operator values are strings.
+#
+# There is one entry that has a string as an "in" operator value, but its key is irrelevant and will never be used, so
+# we can ignore it.
+#
+# We have not established that all existing "in" operator values that are lists contain only strings, so we can't add a
+# stronger type hint. (We want to allow them to be returned as invalid values.)
+#
+# For attribute filters that aren't already stored, nulls are valid as values, so we need to handle them.
+def _values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list:
+    """Split a resource definition into a list of resource IDs."""
+    operation = attribute_filter["operation"]
+    value = attribute_filter["value"]
+
+    if operation == "equal":
+        if not (value is None or isinstance(value, str)):
+            raise TypeError(f'Expected "equal" value to be a string, but got: {value!r}')
+
+        return [value]
+
+    if operation == "in":
+        if not isinstance(value, list):
+            raise TypeError(f'Expected "in" value to be a list, but got: {value!r}')
+
+        return list(value)
+
+    raise ValueError(f"Unexpected operation: {operation!r}")
+
+
 def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFilter]:
     """Parse a raw attribute filter dict into a ParsedAttributeFilter."""
     resource_type = _resource_type_for(attribute_filter)
@@ -125,33 +155,3 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
 def is_resource_a_workspace(attribute_filter: dict) -> bool:
     """Check if a given ResourceDefinition is a Workspace."""
     return _resource_type_for(attribute_filter=attribute_filter) == _workspace_type
-
-
-# We have established that only "in" and "equal" are used as operators in all environments, so it's safe to check for
-# those here. We've also established that all "equal" operator values are strings.
-#
-# There is one entry that has a string as an "in" operator value, but its key is irrelevant and will never be used, so
-# we can ignore it.
-#
-# We have not established that all existing "in" operator values that are lists contain only strings, so we can't add a
-# stronger type hint. (We want to allow them to be returned as invalid values.)
-#
-# For attribute filters that aren't already stored, nulls are valid as values, so we need to handle them.
-def _values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list:
-    """Split a resource definition into a list of resource IDs."""
-    operation = attribute_filter["operation"]
-    value = attribute_filter["value"]
-
-    if operation == "equal":
-        if not (value is None or isinstance(value, str)):
-            raise TypeError(f'Expected "equal" value to be a string, but got: {value!r}')
-
-        return [value]
-
-    if operation == "in":
-        if not isinstance(value, list):
-            raise TypeError(f'Expected "in" value to be a list, but got: {value!r}')
-
-        return list(value)
-
-    raise ValueError(f"Unexpected operation: {operation!r}")
