@@ -89,7 +89,7 @@ def principal_cleanup():
         )
     except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Principal cleanup task failed",
             extra={
                 "action": "DELETE",
@@ -141,7 +141,7 @@ def run_seeds_in_worker(kwargs):
         )
     except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Seeding task failed",
             extra={
                 "action": "SEED",
@@ -199,7 +199,7 @@ def migrate_data_in_worker(kwargs):
         )
     except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Data migration task failed",
             extra={
                 "action": "MIGRATE",
@@ -286,7 +286,7 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
         return result
     except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Orphan binding cleanup task failed",
             extra={
                 "action": "DELETE",
@@ -335,7 +335,7 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
         return result
     except Exception:
         # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Bulk orphan binding cleanup task failed",
             extra={
                 "action": "DELETE",

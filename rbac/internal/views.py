@@ -262,7 +262,7 @@ def run_migrations(request):
             extra={
                 "action": "MIGRATE",
                 "resource_type": "database",
-                "outcome": "success",
+                "outcome": "in_progress",
                 "org_id": getattr(request.user, "org_id", None),
                 "username": getattr(request.user, "username", None),
             },

@@ -202,7 +202,7 @@ def reset_imported_tenants(query: str, limit: int, excluded: list[str]):
         )
     except Exception:
         # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-        logger.error(
+        logger.exception(
             "Bulk tenant deletion failed",
             extra={
                 "action": "DELETE",
