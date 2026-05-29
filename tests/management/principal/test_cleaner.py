@@ -16,14 +16,11 @@
 #
 """Test the principal cleaner."""
 
-from functools import partial
-from threading import Event, Thread
-import uuid
 import json
+import uuid
+from functools import partial
+from unittest.mock import MagicMock, Mock, patch
 
-from unittest.mock import MagicMock, patch, Mock
-
-from django.db import connections, transaction
 from django.test import override_settings
 from prometheus_client import REGISTRY
 from rest_framework import status
@@ -31,30 +28,26 @@ from rest_framework import status
 from management.group.definer import seed_group
 from management.group.model import Group
 from management.policy.model import Policy
-from management.principal.cleaner import LOCK_ID, clean_tenant_principals
-from management.principal.model import Principal
 from management.principal.cleaner import (
-    process_principal_events_from_kafka,
-    METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
     METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
+    METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
+    clean_tenant_principals,
+    process_principal_events_from_kafka,
 )
-from management.principal.proxy import external_principal_to_user
-from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
+from management.principal.model import Principal
 from management.tenant_mapping.model import TenantMapping
-from management.tenant_service import get_tenant_bootstrap_service
 from management.workspace.model import Workspace
-from api.models import Tenant, User
-from management.relation_replicator.types import ObjectReference, ObjectType, SubjectReference
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
-    RelationTuple,
     all_of,
     relation,
     resource,
     subject,
 )
 from tests.identity_request import IdentityRequest
+
+from api.models import Tenant
 
 
 class PrincipalCleanerTests(IdentityRequest):
@@ -489,6 +482,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     _tuples: InMemoryTuples
 
     def setUp(self):
+        """Set up V2 tenant bootstrap tests."""
         super().setUp()
         seed_group()
         self._tuples = InMemoryTuples()
