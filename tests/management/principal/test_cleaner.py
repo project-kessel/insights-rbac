@@ -562,21 +562,23 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_principal_creation_event_bootstraps_new_tenant(self, consumer_mock, proxy_mock):
-        """Test that principal creation event creates a new tenant."""
-        # Ensure tenant doesn't exist initially
-        Tenant.objects.filter(org_id="17685860").delete()
+        """Test that principal creation event creates and bootstraps a new tenant."""
+        Tenant.objects.get(org_id="17685860").delete()
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        with patch(
+            "management.principal.cleaner.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)
+        ):
+            process_principal_events_from_kafka()
 
-        consumer_instance.close.assert_called_once()
-        self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
-        tenant = Tenant.objects.get(org_id="17685860")
-        self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id, tenant=tenant).exists())
+            consumer_instance.close.assert_called_once()
+
+            self.assertTenantBootstrappedByOrgId("17685860")
+            self.assertFalse(Tenant.objects.get(org_id="17685860").ready)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
@@ -598,23 +600,20 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_principal_creation_event_bootstraps_existing_tenants(self, consumer_mock, proxy_mock):
-        """Test that principal creation event bootstraps existing unready tenant."""
-        tenant = Tenant.objects.get(org_id="17685860")
-        tenant.ready = False
-        tenant.save()
-
+        """Test that principal creation event bootstraps existing tenant."""
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        with patch(
+            "management.principal.cleaner.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)
+        ):
+            process_principal_events_from_kafka()
 
-        consumer_instance.close.assert_called_once()
-        tenant.refresh_from_db()
-        # Principal cleanup does not ready tenants (ready_tenant=False in implementation)
-        # but it should create the principal
-        self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id, tenant=tenant).exists())
+            consumer_instance.close.assert_called_once()
+
+            self.assertTenantBootstrappedByOrgId("17685860")
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
@@ -654,12 +653,26 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
-        return_value={"status_code": 200, "data": []},
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "email": "test_user@email.com",
+                    "first_name": "user",
+                    "last_name": "test",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_principal_creation_event_does_not_create_principal(self, consumer_mock, proxy_mock):
-        """Test that principal creation doesn't create principal when proxy returns empty."""
-        Tenant.objects.filter(org_id="17685860").delete()
+        """Test that principal creation event creates tenant but does not create principal (upsert=False)."""
+        Tenant.objects.get(org_id="17685860").delete()
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
@@ -669,10 +682,8 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         process_principal_events_from_kafka()
 
         consumer_instance.close.assert_called_once()
-        # Tenant should still be created even if principal fetch fails
         self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
-        # But principal shouldn't exist
-        self.assertFalse(Principal.objects.filter(username=self.principal_name).exists())
+        self.assertFalse(Principal.objects.filter(user_id=self.principal_user_id).exists())
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 500})
     @patch("management.principal.cleaner.KafkaConsumer")
@@ -705,15 +716,16 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
                     "first_name": "user",
                     "last_name": "test",
                     "is_org_admin": False,
-                    "is_active": False,  # Disabled user
+                    "is_active": True,
                 }
             ],
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @override_settings(PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=False)
     def test_principal_creation_event_disabled(self, consumer_mock, proxy_mock):
-        """Test that disabled user in creation event doesn't create active principal."""
-        Tenant.objects.filter(org_id="17685860").delete()
+        """Test that when update setting is disabled we do not add tenants for new, active users."""
+        Tenant.objects.get(org_id="17685860").delete()
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
@@ -723,10 +735,8 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         process_principal_events_from_kafka()
 
         consumer_instance.close.assert_called_once()
-        tenant = Tenant.objects.get(org_id="17685860")
-        # Principal should exist but not be active
-        principal = Principal.objects.get(username=self.principal_name, tenant=tenant)
-        self.assertFalse(principal.is_active)
+        self.assertFalse(Tenant.objects.filter(org_id="17685860").exists())
+        self.assertFalse(Principal.objects.filter(user_id=self.principal_user_id).exists())
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
@@ -854,3 +864,82 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         # No replication events should be produced for non-V2 tenants
         consumer_instance.close.assert_called_once()
+
+    def assertTenantBootstrappedByOrgId(self, org_id: str):
+        """Assert that a tenant has been fully bootstrapped with V2 components."""
+        tenant = Tenant.objects.get(org_id=org_id)
+        self.assertIsNotNone(tenant)
+        mapping = TenantMapping.objects.get(tenant=tenant)
+        self.assertIsNotNone(mapping)
+        workspaces = list(Workspace.objects.filter(tenant=tenant))
+        self.assertEqual(len(workspaces), 2)
+        default = Workspace.objects.default(tenant=tenant)
+        self.assertIsNotNone(default)
+        root = Workspace.objects.root(tenant=tenant)
+        self.assertIsNotNone(root)
+
+        platform_default_policy = Policy.objects.get(group=Group.objects.get(platform_default=True))
+        admin_default_policy = Policy.objects.get(group=Group.objects.get(admin_default=True))
+
+        self.assertEqual(default.parent_id, root.id)
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "workspace", default.id),
+                    relation("binding"),
+                    subject("rbac", "role_binding", mapping.default_role_binding_uuid),
+                )
+            ),
+        )
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "role_binding", mapping.default_role_binding_uuid),
+                    relation("subject"),
+                    subject("rbac", "group", mapping.default_group_uuid, "member"),
+                )
+            ),
+        )
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "role_binding", mapping.default_role_binding_uuid),
+                    relation("role"),
+                    subject("rbac", "role", platform_default_policy.uuid),
+                )
+            ),
+        )
+
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "workspace", default.id),
+                    relation("binding"),
+                    subject("rbac", "role_binding", mapping.default_admin_role_binding_uuid),
+                )
+            ),
+        )
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "role_binding", mapping.default_admin_role_binding_uuid),
+                    relation("subject"),
+                    subject("rbac", "group", mapping.default_admin_group_uuid, "member"),
+                )
+            ),
+        )
+        self.assertEqual(
+            1,
+            self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "role_binding", mapping.default_admin_role_binding_uuid),
+                    relation("role"),
+                    subject("rbac", "role", admin_default_policy.uuid),
+                )
+            ),
+        )
