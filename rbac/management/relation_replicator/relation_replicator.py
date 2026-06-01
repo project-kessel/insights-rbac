@@ -24,6 +24,10 @@ from enum import Enum
 from typing import Dict, TYPE_CHECKING, Union
 
 from django.conf import settings
+from internal.migration_coordination import (
+    build_migration_notify_resource_context,
+    migration_notify_coordination,
+)
 from kessel.relations.v1beta1 import common_pb2
 
 if TYPE_CHECKING:
@@ -114,13 +118,11 @@ class ReplicationEvent:
 
     def resource_context(self) -> Dict[str, object] | None:
         """Build context for all replication events that have identifiable resources."""
-        from internal.pg_notify_wait import build_migration_notify_resource_context, migration_notify_coordination
-
         coordination = migration_notify_coordination(self.event_type)
         if coordination is not None:
-            context = build_migration_notify_resource_context(self.event_type, self.event_info, coordination)
-            if context is not None:
-                return context
+            migration_context = build_migration_notify_resource_context(self.event_type, self.event_info, coordination)
+            if migration_context is not None:
+                return migration_context
             if coordination.require_notify_token:
                 return None
 

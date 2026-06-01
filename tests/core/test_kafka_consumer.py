@@ -52,6 +52,7 @@ from core.kafka_consumer import (
 )
 from django.test import TestCase
 from django.test.utils import override_settings
+from internal.migration_coordination import MigrationNotifyCoordination
 from kafka.errors import KafkaError
 
 
@@ -710,7 +711,7 @@ class RBACKafkaConsumerTests(TestCase):
         self.assertEqual(delete_fencing_check.lock_id, "test-group/0")
         self.assertEqual(delete_fencing_check.lock_token, "test-lock-token")
 
-    @patch("internal.pg_notify_wait.migration_notify_coordination")
+    @patch("internal.migration_coordination.migration_notify_coordination")
     @patch("core.kafka_consumer.connection.cursor")
     @patch("core.kafka_consumer.json_format.ParseDict")
     @patch("core.kafka_consumer.relations_api_replication.write_relationships")
@@ -722,7 +723,10 @@ class RBACKafkaConsumerTests(TestCase):
         """Consumer NOTIFYs after remove_root_parent_tenant_relationships batch replication."""
         from management.relation_replicator.relation_replicator import ReplicationEventType
 
-        mock_coordination.return_value = Mock(channel="test_legacy_ch")
+        mock_coordination.return_value = MigrationNotifyCoordination(
+            channel="test_legacy_ch",
+            log_label="test_remove_legacy",
+        )
         mock_tenant_get.return_value = Mock(org_id="12345")
         mock_parse_dict.return_value = Mock()
         mock_write.return_value = Mock(consistency_token=Mock(token="tok"))
@@ -765,7 +769,7 @@ class RBACKafkaConsumerTests(TestCase):
         self.assertEqual(len(notify_sql_calls), 1)
         self.assertEqual(notify_sql_calls[0][0][1], ["test_legacy_ch", "batch-ack-token"])
 
-    @patch("internal.pg_notify_wait.migration_notify_coordination")
+    @patch("internal.migration_coordination.migration_notify_coordination")
     @patch("core.kafka_consumer.connection.cursor")
     @patch("core.kafka_consumer.json_format.ParseDict")
     @patch("core.kafka_consumer.relations_api_replication.write_relationships")
@@ -777,7 +781,10 @@ class RBACKafkaConsumerTests(TestCase):
         """Consumer NOTIFYs after migrate_binding_scope batch replication."""
         from management.relation_replicator.relation_replicator import ReplicationEventType
 
-        mock_coordination.return_value = Mock(channel="test_migrate_binding_scope_ch")
+        mock_coordination.return_value = MigrationNotifyCoordination(
+            channel="test_migrate_binding_scope_ch",
+            log_label="test_migrate_binding_scope",
+        )
         mock_tenant_get.return_value = Mock(org_id="12345")
         mock_parse_dict.return_value = Mock()
         mock_write.return_value = Mock(consistency_token=Mock(token="tok"))

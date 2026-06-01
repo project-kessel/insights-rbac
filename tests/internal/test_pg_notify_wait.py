@@ -20,12 +20,14 @@
 from unittest.mock import Mock, patch
 
 from django.test import TestCase
-from internal.pg_notify_wait import (
+from internal.migration_coordination import (
     MIGRATION_NOTIFY_COORDINATIONS,
     MIGRATION_NOTIFY_TIMEOUT_SECONDS,
-    NotifyCoordinatedReplicator,
     build_migration_notify_resource_context,
     notify_migration_batch_completion,
+)
+from internal.pg_notify_wait import (
+    NotifyCoordinatedReplicator,
     replicate_with_notify,
 )
 from management.relation_replicator.relation_replicator import (
@@ -39,11 +41,13 @@ from migration_tool.utils import create_relationship
 class ReplicateWithNotifyTests(TestCase):
     """Tests for replicate_with_notify."""
 
+    @patch("internal.pg_notify_wait.connection")
     @patch("internal.pg_notify_wait.wait_for_pg_notify")
     @patch("internal.pg_notify_wait.uuid.uuid4", return_value="test-notify-token")
-    def test_replicate_injects_notify_token_and_waits(self, _mock_uuid, mock_wait):
+    def test_replicate_injects_notify_token_and_waits(self, _mock_uuid, mock_wait, mock_connection):
+        mock_connection.in_atomic_block = False
         replicator = Mock()
-        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE]
+        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE.value]
         relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
         event = ReplicationEvent(
             add=[relation],
@@ -63,6 +67,31 @@ class ReplicateWithNotifyTests(TestCase):
             timeout_seconds=MIGRATION_NOTIFY_TIMEOUT_SECONDS,
             log_label=coordination.log_label,
         )
+
+    @patch("internal.pg_notify_wait.connection")
+    @patch("internal.pg_notify_wait.transaction.on_commit")
+    @patch("internal.pg_notify_wait.wait_for_pg_notify")
+    @patch("internal.pg_notify_wait.uuid.uuid4", return_value="test-notify-token")
+    def test_defer_wait_until_transaction_commits(self, _mock_uuid, mock_wait, mock_on_commit, mock_connection):
+        mock_connection.in_atomic_block = True
+        replicator = Mock()
+        relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
+        event = ReplicationEvent(
+            add=[relation],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+
+        replicate_with_notify(replicator, event)
+
+        replicator.replicate.assert_called_once_with(event)
+        mock_wait.assert_not_called()
+        mock_on_commit.assert_called_once()
+        wait_callback = mock_on_commit.call_args[0][0]
+        wait_callback()
+        mock_wait.assert_called_once()
 
 
 class NotifyCoordinatedReplicatorTests(TestCase):
@@ -93,7 +122,7 @@ class MigrationNotifyResourceContextTests(TestCase):
     """Tests for build_migration_notify_resource_context."""
 
     def test_includes_notify_token_for_migrate_binding_scope(self):
-        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE]
+        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE.value]
         context = build_migration_notify_resource_context(
             ReplicationEventType.MIGRATE_BINDING_SCOPE,
             {"org_id": "123456", "notify_token": "scope-batch-token"},
@@ -104,13 +133,27 @@ class MigrationNotifyResourceContextTests(TestCase):
         self.assertEqual(context["notify_token"], "scope-batch-token")
 
     def test_without_token_returns_none(self):
-        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS]
+        coordination = MIGRATION_NOTIFY_COORDINATIONS[
+            ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS.value
+        ]
         context = build_migration_notify_resource_context(
             ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS,
             {"batch_size": 1},
             coordination,
         )
         self.assertIsNone(context)
+
+    @patch("internal.migration_coordination.logger")
+    def test_without_optional_token_does_not_warn(self, mock_logger):
+        coordination = MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE.value]
+        context = build_migration_notify_resource_context(
+            ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            {"org_id": "123456"},
+            coordination,
+        )
+        self.assertIsNone(context)
+        mock_logger.warning.assert_not_called()
+        mock_logger.debug.assert_called_once()
 
 
 class NotifyMigrationBatchCompletionTests(TestCase):
@@ -124,7 +167,7 @@ class NotifyMigrationBatchCompletionTests(TestCase):
             send_notify,
         )
         send_notify.assert_called_once_with(
-            MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE].channel,
+            MIGRATION_NOTIFY_COORDINATIONS[ReplicationEventType.MIGRATE_BINDING_SCOPE.value].channel,
             "batch-ack-token",
             f"{ReplicationEventType.MIGRATE_BINDING_SCOPE.value} batch (token=batch-ack-token)",
         )

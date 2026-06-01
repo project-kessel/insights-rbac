@@ -30,7 +30,7 @@ import grpc
 from django.conf import settings
 from django.db import connection
 from google.protobuf import json_format
-from internal.pg_notify_wait import notify_migration_batch_completion
+from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from kafka.errors import KafkaError

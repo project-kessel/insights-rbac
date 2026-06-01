@@ -23,13 +23,12 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
 
-from django.db import connection
+from django.db import connection, transaction
+from internal.migration_coordination import migration_notify_coordination
 from management.relation_replicator.relation_replicator import (
     RelationReplicator,
     ReplicationEvent,
-    ReplicationEventResourceContext,
     ReplicationEventType,
     WorkspaceEvent,
     WorkspaceEventStream,
@@ -38,84 +37,16 @@ from psycopg2 import sql
 
 logger = logging.getLogger(__name__)
 
-# Coordinates ``remove_legacy_root_workspace_tenant_parent_relations`` with the RBAC Kafka consumer.
-REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL = "remove_legacy_root_workspace_parent_batch"
-
-# Coordinates ``migrate_binding_scope`` with the RBAC Kafka consumer.
-MIGRATE_BINDING_SCOPE_NOTIFY_CHANNEL = "migrate_binding_scope_batch"
-
-MIGRATION_NOTIFY_TIMEOUT_SECONDS = 600
-
-
-@dataclass(frozen=True)
-class MigrationNotifyCoordination:
-    """Configuration shared by migration producers, outbox context, and the Kafka consumer."""
-
-    channel: str
-    log_label: str
-    timeout_seconds: float = MIGRATION_NOTIFY_TIMEOUT_SECONDS
-    include_org_id_in_context: bool = True
-    require_notify_token: bool = True
-
-
-MIGRATION_NOTIFY_COORDINATIONS: dict[ReplicationEventType, MigrationNotifyCoordination] = {
-    ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS: MigrationNotifyCoordination(
-        channel=REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL,
-        log_label="remove_legacy_root_workspace_tenant_parent",
-        include_org_id_in_context=False,
-        require_notify_token=True,
-    ),
-    ReplicationEventType.MIGRATE_BINDING_SCOPE: MigrationNotifyCoordination(
-        channel=MIGRATE_BINDING_SCOPE_NOTIFY_CHANNEL,
-        log_label="migrate_binding_scope",
-        include_org_id_in_context=True,
-        require_notify_token=False,
-    ),
-}
-
-
-def migration_notify_coordination(
-    event_type: ReplicationEventType | str,
-) -> MigrationNotifyCoordination | None:
-    """Return coordination config for ``event_type``, or ``None`` if not a coordinated migration."""
-    if not isinstance(event_type, ReplicationEventType):
-        try:
-            event_type = ReplicationEventType(str(event_type))
-        except ValueError:
-            return None
-    return MIGRATION_NOTIFY_COORDINATIONS.get(event_type)
-
-
-def build_migration_notify_resource_context(
-    event_type: ReplicationEventType,
-    event_info: dict[str, object],
-    coordination: MigrationNotifyCoordination,
-) -> dict[str, object] | None:
-    """Build resource context when ``notify_token`` is present; otherwise return ``None``."""
-    token = event_info.get("notify_token")
-    if not token:
-        logger.warning(
-            "%s event missing notify_token in event_info=%s",
-            event_type.value,
-            event_info,
-        )
-        return None
-
-    org_id = str(event_info.get("org_id", "")) if coordination.include_org_id_in_context else ""
-    context = ReplicationEventResourceContext(
-        org_id=org_id,
-        event_type=event_type.value,
-    )
-    result = context.to_json()
-    result["notify_token"] = str(token)
-    return result
-
 
 def replicate_with_notify(
     replicator: RelationReplicator,
     event: ReplicationEvent,
 ) -> None:
-    """Enqueue a replication event and LISTEN until the consumer NOTIFYs batch completion."""
+    """Enqueue a replication event and LISTEN until the consumer NOTIFYs batch completion.
+
+    When called inside ``transaction.atomic``, the LISTEN is deferred until after commit so the
+    outbox row is visible to Debezium before the consumer can process it and send NOTIFY.
+    """
     coordination = migration_notify_coordination(event.event_type)
     if coordination is None:
         raise ValueError(f"Event type {event.event_type.value} is not notify-coordinated")
@@ -123,33 +54,19 @@ def replicate_with_notify(
     notify_token = str(uuid.uuid4())
     event.event_info["notify_token"] = notify_token
     replicator.replicate(event)
-    wait_for_pg_notify(
-        channel=coordination.channel,
-        expected_payload=notify_token,
-        timeout_seconds=coordination.timeout_seconds,
-        log_label=coordination.log_label,
-    )
 
+    def wait_for_batch_completion() -> None:
+        wait_for_pg_notify(
+            channel=coordination.channel,
+            expected_payload=notify_token,
+            timeout_seconds=coordination.timeout_seconds,
+            log_label=coordination.log_label,
+        )
 
-def notify_migration_batch_completion(
-    event_type: str | None,
-    resource_context: dict[str, object] | None,
-    send_notify: Callable[[str, str, str], None],
-) -> None:
-    """NOTIFY the migration producer after the consumer applies a coordinated batch."""
-    if not event_type or not resource_context:
-        return
-
-    notify_token = resource_context.get("notify_token")
-    if not notify_token:
-        return
-
-    coordination = migration_notify_coordination(event_type)
-    if coordination is None:
-        return
-
-    payload = str(notify_token).strip()
-    send_notify(coordination.channel, payload, f"{event_type} batch (token={payload})")
+    if connection.in_atomic_block:
+        transaction.on_commit(wait_for_batch_completion)
+    else:
+        wait_for_batch_completion()
 
 
 def wait_for_pg_notify(
