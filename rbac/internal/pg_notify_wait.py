@@ -20,17 +20,61 @@
 import logging
 import select
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 
-from django.db import connection
+from django.db import connection, transaction
+from internal.migration_coordination import migration_notify_coordination
+from management.relation_replicator.relation_replicator import (
+    RelationReplicator,
+    ReplicationEvent,
+    ReplicationEventType,
+    WorkspaceEvent,
+    WorkspaceEventStream,
+)
 from psycopg2 import sql
 
 logger = logging.getLogger(__name__)
 
-# Coordinates ``remove_legacy_root_workspace_tenant_parent_relations`` with the RBAC Kafka consumer.
-REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL = "remove_legacy_root_workspace_parent_batch"
-REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_TIMEOUT_SECONDS = 600
+
+def replicate_with_notify(
+    replicator: RelationReplicator,
+    event: ReplicationEvent,
+) -> None:
+    """Enqueue a replication event and LISTEN until the consumer NOTIFYs batch completion.
+
+    When called inside ``transaction.atomic``, the LISTEN is deferred until after commit so the
+    outbox row is visible to Debezium before the consumer can process it and send NOTIFY.
+    """
+    coordination = migration_notify_coordination(event.event_type)
+    if coordination is None:
+        raise ValueError(f"Event type {event.event_type.value} is not notify-coordinated")
+
+    if not event.add and not event.remove:
+        logger.debug(
+            "%s skipping notify coordination for empty replication event",
+            coordination.log_label,
+        )
+        replicator.replicate(event)
+        return
+
+    notify_token = str(uuid.uuid4())
+    event.event_info["notify_token"] = notify_token
+    replicator.replicate(event)
+
+    def wait_for_batch_completion() -> None:
+        wait_for_pg_notify(
+            channel=coordination.channel,
+            expected_payload=notify_token,
+            timeout_seconds=coordination.timeout_seconds,
+            log_label=coordination.log_label,
+        )
+
+    if connection.in_atomic_block:
+        transaction.on_commit(wait_for_batch_completion)
+    else:
+        wait_for_batch_completion()
 
 
 def wait_for_pg_notify(
@@ -158,3 +202,32 @@ def wait_for_pg_notify(
                 cursor.execute(unlisten_sql)
         except Exception:
             pass
+
+
+class NotifyCoordinatedReplicator(RelationReplicator):
+    """Replicator wrapper that waits for the Kafka consumer to acknowledge each replicated event."""
+
+    def __init__(
+        self,
+        inner: RelationReplicator,
+        *,
+        event_type: ReplicationEventType,
+    ):
+        """Wrap ``inner`` and wait for consumer NOTIFY after each coordinated ``replicate`` call."""
+        if migration_notify_coordination(event_type) is None:
+            raise ValueError(f"Event type {event_type.value} is not notify-coordinated")
+        self._inner = inner
+        self._event_type = event_type
+
+    def replicate(self, event: ReplicationEvent) -> None:
+        """Replicate ``event`` and block until the consumer acknowledges it."""
+        if event.event_type != self._event_type:
+            raise ValueError(
+                f"NotifyCoordinatedReplicator configured for {self._event_type.value}, "
+                f"got {event.event_type.value}"
+            )
+        replicate_with_notify(self._inner, event)
+
+    def replicate_workspace(self, event: WorkspaceEvent, event_stream: WorkspaceEventStream) -> None:
+        """Delegate workspace replication to the wrapped replicator."""
+        self._inner.replicate_workspace(event, event_stream)

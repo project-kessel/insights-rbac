@@ -120,6 +120,29 @@ class PermissionValueTests(TestCase):
         self.assertEqual(app_only, app_only.with_unconstrained_resource_type())
         self.assertEqual(app_only, app_only.with_application_only())
 
+    def test_is_wildcard(self):
+        """Test that is_wildcard is true when resource type or verb is *."""
+        self.assertFalse(PermissionValue("app", "resource", "verb").is_wildcard)
+        self.assertTrue(PermissionValue("app", "*", "verb").is_wildcard)
+        self.assertTrue(PermissionValue("app", "resource", "*").is_wildcard)
+        self.assertTrue(PermissionValue("app", "*", "*").is_wildcard)
+
+    def test_subsumes(self):
+        """Test that subsumes reflects wildcard coverage between patterns."""
+        concrete = PermissionValue("app", "resource", "verb")
+        resource_wildcard = PermissionValue("app", "*", "verb")
+        verb_wildcard = PermissionValue("app", "resource", "*")
+        app_wildcard = PermissionValue("app", "*", "*")
+
+        self.assertTrue(app_wildcard.subsumes(concrete))
+        self.assertTrue(resource_wildcard.subsumes(concrete))
+        self.assertTrue(verb_wildcard.subsumes(concrete))
+        self.assertTrue(concrete.subsumes(concrete))
+
+        self.assertFalse(concrete.subsumes(resource_wildcard))
+        self.assertFalse(resource_wildcard.subsumes(verb_wildcard))
+        self.assertFalse(app_wildcard.subsumes(PermissionValue("other", "resource", "verb")))
+
 
 class PermissionModelTests(IdentityRequest):
     """Test the permission model."""

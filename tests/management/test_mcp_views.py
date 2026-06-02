@@ -34,6 +34,8 @@ from management.mcp_views import (
     _check_v1_access,
     _execute_with_timeout,
     _permission_matches,
+    _sanitize_validation_error,
+    _validate_tool_arguments,
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
 from management.workspace.model import Workspace
@@ -3148,6 +3150,122 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("view_audit_details", tool_output["hints"])
         self.assertIn("trace_role_permissions", tool_output["hints"])
 
+    def test_get_user_state_description_contains_offboarding_keywords(self):
+        """Positive: get_user_state tool description contains offboarding trigger keywords."""
+        body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        tools = response.json()["result"]["tools"]
+        tool = next(t for t in tools if t["name"] == "get_user_state")
+        description = tool["description"]
+
+        self.assertIn("offboard", description)
+        self.assertIn("contractor", description.lower())
+        self.assertIn("compliance report", description)
+        self.assertIn("AFTER ANALYSIS", description)
+
+
+class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
+    """Tests for the lookup_person MCP tool (forwarding alias for get_user_state)."""
+
+    def setUp(self):
+        """Set up lookup_person tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.test_username = self.user_data["username"]
+        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+
+        self.group = Group.objects.create(
+            name="Contractor Team", description="External contractors", tenant=self.tenant
+        )
+        self.group.principals.add(self.principal)
+
+        self.role = Role.objects.create(name="Viewer", display_name="Viewer", tenant=self.tenant)
+        self.permission = Permission.objects.create(
+            application="inventory",
+            resource_type="hosts",
+            verb="read",
+            permission="inventory:hosts:read",
+            tenant=self.tenant,
+        )
+        self.access = Access.objects.create(permission=self.permission, role=self.role, tenant=self.tenant)
+
+        self.policy = Policy.objects.create(name="contractor_policy", group=self.group, tenant=self.tenant)
+        self.policy.roles.add(self.role)
+
+    def tearDown(self):
+        """Tear down lookup_person tests."""
+        Policy.objects.all().delete()
+        Access.objects.all().delete()
+        Role.objects.all().delete()
+        Permission.objects.all().delete()
+        Group.objects.all().delete()
+        Principal.objects.all().delete()
+        super().tearDown()
+
+    def test_lookup_person_registered_in_tools_list(self):
+        """Positive: lookup_person appears in the MCP tools/list response."""
+        tool_names = self._get_tool_names()
+        self.assertIn("lookup_person", tool_names)
+
+    def test_lookup_person_description_contains_contractor_keywords(self):
+        """Positive: lookup_person description contains contractor/offboarding keywords."""
+        body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        tools = response.json()["result"]["tools"]
+        tool = next(t for t in tools if t["name"] == "lookup_person")
+        description = tool["description"]
+
+        self.assertIn("contractor", description)
+        self.assertIn("vendor", description)
+        self.assertIn("consultant", description)
+        self.assertIn("offboarding", description)
+
+    def test_lookup_person_returns_same_data_as_get_user_state(self):
+        """Positive: lookup_person returns identical output to get_user_state."""
+        response_person = self._call_tool("lookup_person", {"username": self.test_username})
+        response_state = self._call_tool("get_user_state", {"username": self.test_username})
+
+        output_person = self._get_tool_output(response_person)
+        output_state = self._get_tool_output(response_state)
+
+        self.assertEqual(output_person["username"], output_state["username"])
+        self.assertEqual(output_person["org_version"], output_state["org_version"])
+        self.assertEqual(output_person["summary"]["group_count"], output_state["summary"]["group_count"])
+        self.assertEqual(output_person["summary"]["permission_count"], output_state["summary"]["permission_count"])
+
+    def test_lookup_person_success(self):
+        """Positive: lookup_person returns comprehensive user state."""
+        response = self._call_tool("lookup_person", {"username": self.test_username})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+
+        self.assertEqual(tool_output["username"], self.test_username)
+        self.assertIn("groups", tool_output)
+        self.assertIn("access", tool_output)
+        self.assertIn("summary", tool_output)
+
+        self.assertEqual(tool_output["summary"]["group_count"], 1)
+        self.assertEqual(tool_output["groups"][0]["name"], "Contractor Team")
+
+    def test_lookup_person_user_not_found(self):
+        """Negative: lookup_person returns error for non-existent user."""
+        response = self._call_tool("lookup_person", {"username": "nonexistent_contractor"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("error", tool_output)
+        self.assertIn("not found", tool_output["error"])
+
+    def test_lookup_person_without_auth_returns_error(self):
+        """Permission: lookup_person without auth returns auth error."""
+        response = self._call_tool("lookup_person", {"username": self.test_username}, use_auth=False)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32000)
+
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)
 class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
@@ -3549,6 +3667,7 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["requests"]), 0)
         self.assertIn("filtered_count", tool_output["analysis"])
+        self.assertIn("lifecycle", tool_output["analysis"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_investigate_tam_access_required_permission_found(self, mock_proxy):
@@ -3588,7 +3707,7 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         )
 
     def test_investigate_tam_access_no_requests(self):
-        """Negative: investigate_tam_access returns empty when no requests exist."""
+        """Negative: investigate_tam_access returns enriched response when no requests exist."""
         # Delete the test cross-account request
         self.car.delete()
 
@@ -3598,6 +3717,23 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(len(tool_output["requests"]), 0)
         self.assertIn("message", tool_output["analysis"])
         self.assertIn("hint", tool_output["analysis"])
+        self.assertIn("other_statuses", tool_output["analysis"])
+        self.assertIn("pending", tool_output["analysis"]["other_statuses"])
+        self.assertIn("expired", tool_output["analysis"]["other_statuses"])
+        self.assertIn("lifecycle", tool_output["analysis"])
+        self.assertIn("create", tool_output["analysis"]["lifecycle"])
+
+    def test_investigate_tam_access_no_requests_with_pending(self):
+        """Positive: investigate_tam_access shows pending count when no approved requests exist."""
+        self.car.status = "pending"
+        self.car.save()
+
+        response = self._call_tool("investigate_tam_access")
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(len(tool_output["requests"]), 0)
+        self.assertEqual(tool_output["analysis"]["other_statuses"]["pending"], 1)
+        self.assertIn("pending", tool_output["analysis"]["hint"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_investigate_tam_access_shows_days_remaining(self, mock_proxy):
@@ -3845,7 +3981,7 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("other-app", tool_output["summary"]["permissions_by_application"])
 
     def test_audit_redhat_access_no_requests(self):
-        """Negative: audit_redhat_access returns empty when no requests exist."""
+        """Negative: audit_redhat_access returns enriched response when no requests exist."""
         CrossAccountRequest.objects.all().delete()
 
         response = self._call_tool("audit_redhat_access")
@@ -3853,7 +3989,26 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["active_access"]), 0)
         self.assertIn("message", tool_output["summary"])
-        self.assertIn("hint", tool_output["summary"])
+        self.assertIn("ciso_briefing", tool_output["summary"])
+        self.assertIn("Zero Red Hat personnel", tool_output["summary"]["ciso_briefing"])
+        self.assertIn("briefing_template", tool_output["summary"])
+        self.assertIn("monitoring", tool_output["summary"])
+        self.assertIn("pending_requests", tool_output["summary"])
+        self.assertIn("expired_requests", tool_output["summary"])
+
+    def test_audit_redhat_access_no_active_with_pending(self):
+        """Positive: audit_redhat_access shows pending count when no active access exists."""
+        # Change existing request to pending
+        for car in CrossAccountRequest.objects.all():
+            car.status = "pending"
+            car.save()
+
+        response = self._call_tool("audit_redhat_access")
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(len(tool_output["active_access"]), 0)
+        self.assertGreaterEqual(tool_output["summary"]["pending_requests"], 1)
+        self.assertIn("pending", tool_output["summary"]["ciso_briefing"])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_audit_redhat_access_include_inactive(self, mock_proxy):
@@ -6004,10 +6159,12 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32000)
 
+    @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_nonexistent_user(self, mock_list_principals):
+    def test_guide_user_access_delegation_nonexistent_user(self, mock_list_principals, mock_name_search):
         """Edge case: guide_user_access_delegation handles non-existent user gracefully."""
         mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = '{"data": []}'
 
         response = self._call_tool("guide_user_access_delegation", {"username": "nonexistent_user"})
 
@@ -6094,6 +6251,66 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         group_names = [a["name"] for a in tool_output["existing_assignments"]]
         self.assertIn("Access Governance", group_names)
         self.assertIn("Security Team", group_names)
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_single_match(self, mock_list_principals, mock_name_search):
+        """Positive: fuzzy fallback resolves display name to single user."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = json.dumps(
+            {
+                "data": [
+                    {
+                        "username": self.test_username,
+                        "first_name": "Joe",
+                        "last_name": "Doe",
+                        "is_org_admin": False,
+                        "is_active": True,
+                    }
+                ]
+            }
+        )
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Joe"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["user_info"]["username"], self.test_username)
+        self.assertIn("resolved_from", tool_output["user_info"])
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_multiple_matches(self, mock_list_principals, mock_name_search):
+        """Edge case: fuzzy fallback returns candidates when multiple users match."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = json.dumps(
+            {
+                "data": [
+                    {"username": "joedoe1", "first_name": "Joe", "last_name": "Doe"},
+                    {"username": "joedoe2", "first_name": "Joe", "last_name": "Smith"},
+                ]
+            }
+        )
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Joe"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("error", tool_output["user_info"])
+        self.assertIn("candidates", tool_output["user_info"])
+        self.assertEqual(len(tool_output["user_info"]["candidates"]), 2)
+        self.assertIn("hint", tool_output["user_info"])
+
+    @patch("management.mcp_views._list_principals_by_name")
+    @patch("management.mcp_views.list_principals")
+    def test_guide_user_access_delegation_fuzzy_no_match(self, mock_list_principals, mock_name_search):
+        """Negative: fuzzy fallback returns error when no users match."""
+        mock_list_principals.return_value = '{"data": []}'
+        mock_name_search.return_value = '{"data": []}'
+
+        response = self._call_tool("guide_user_access_delegation", {"username": "Nonexistent"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("error", tool_output["user_info"])
+        self.assertNotIn("candidates", tool_output["user_info"])
 
     def test_guide_user_access_delegation_v1_org_version(self):
         """Positive: V1 organization shows org_version=v1."""
@@ -7688,3 +7905,146 @@ class MCPWritePreviewTests(MCPToolTestMixin, IdentityRequest):
         )
         self.assertIn("update group 'Dev Team'", msg)
         self.assertIn("Platform Team", msg)
+
+
+class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
+    """Test JSON schema pre-validation of MCP tool arguments."""
+
+    def setUp(self):
+        """Set up schema validation tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+
+    def tearDown(self):
+        """Tear down schema validation tests."""
+        Principal.objects.all().delete()
+        super().tearDown()
+
+    def _call_tool_raw(self, tool_name: str, arguments: dict) -> dict:
+        """Call tool and return the parsed JSON response."""
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 200,
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.json()
+
+    # --- Wrong type tests ---
+
+    def test_wrong_type_string_as_integer(self):
+        """Schema validation rejects string where integer is expected."""
+        data = self._call_tool_raw("hello", {"message": 123})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Expected", data["error"]["message"])
+        self.assertIn("string", data["error"]["message"])
+        self.assertNotIn("TypeError", data["error"]["message"])
+
+    def test_wrong_type_does_not_leak_internal_names(self):
+        """Schema validation error does not expose Python exception details."""
+        data = self._call_tool_raw("hello", {"message": ["not", "a", "string"]})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertNotIn("TypeError", data["error"]["message"])
+        self.assertNotIn("unexpected keyword", data["error"]["message"])
+        self.assertNotIn("traceback", data["error"]["message"].lower())
+
+    # --- Extra unknown arguments ---
+
+    def test_extra_unknown_argument_rejected(self):
+        """Schema validation rejects arguments not in the tool schema."""
+        data = self._call_tool_raw("hello", {"message": "hi", "unknown_param": "x"})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Unknown argument", data["error"]["message"])
+
+    def test_multiple_extra_arguments_rejected(self):
+        """Schema validation rejects even when valid args are mixed with extra ones."""
+        data = self._call_tool_raw("hello", {"message": "hi", "foo": 1, "bar": 2})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+
+    # --- Missing required arguments ---
+
+    def test_missing_required_argument_rejected(self):
+        """Schema validation rejects calls missing required arguments."""
+        data = self._call_tool_raw("get_role", {})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("Missing required argument", data["error"]["message"])
+
+    # --- Valid arguments pass through ---
+
+    def test_valid_arguments_pass_validation(self):
+        """Schema validation allows valid arguments through to tool execution."""
+        data = self._call_tool_raw("hello", {"message": "Hi there!"})
+        self.assertIn("result", data)
+        self.assertNotIn("error", data)
+        output = json.loads(data["result"]["content"][0]["text"])
+        self.assertIn("Hi there!", output["response"])
+
+    def test_valid_arguments_with_defaults_omitted(self):
+        """Schema validation passes when optional arguments are omitted."""
+        data = self._call_tool_raw("hello", {})
+        self.assertIn("result", data)
+        self.assertNotIn("error", data)
+
+    # --- Unit tests for _sanitize_validation_error ---
+
+    def test_sanitize_type_error(self):
+        """_sanitize_validation_error formats type errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        try:
+            js.validate({"name": 42}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertIn("Expected", msg)
+            self.assertIn("string", msg)
+            self.assertIn("int", msg)
+
+    def test_sanitize_required_error(self):
+        """_sanitize_validation_error formats required errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        try:
+            js.validate({}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertEqual(msg, "Missing required argument: name")
+
+    def test_sanitize_additional_properties_error(self):
+        """_sanitize_validation_error formats additionalProperties errors cleanly."""
+        import jsonschema as js
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}
+        try:
+            js.validate({"name": "ok", "extra": "bad"}, schema)
+        except js.ValidationError as exc:
+            msg = _sanitize_validation_error(exc)
+            self.assertIn("Unknown argument", msg)
+
+    # --- Unit test for _validate_tool_arguments ---
+
+    def test_validate_unknown_tool_returns_none(self):
+        """_validate_tool_arguments returns None for tools with no schema."""
+        result = _validate_tool_arguments("nonexistent_tool_xyz", {"anything": True})
+        self.assertIsNone(result)
+
+    def test_validate_valid_returns_none(self):
+        """_validate_tool_arguments returns None for valid arguments."""
+        result = _validate_tool_arguments("hello", {"message": "test"})
+        self.assertIsNone(result)
+
+    def test_validate_invalid_returns_message(self):
+        """_validate_tool_arguments returns error message for invalid arguments."""
+        result = _validate_tool_arguments("hello", {"message": 999})
+        self.assertIsNotNone(result)
+        self.assertIn("string", result)

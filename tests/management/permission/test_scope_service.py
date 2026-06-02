@@ -854,3 +854,193 @@ class ResourceTypeMappingTest(TestCase):
 
     def test_scopes_for_unknown_resource_type(self):
         self.assertEqual(scopes_for_resource_type("unknown"), set())
+
+
+class SplitPermissionsTest(TestCase):
+    """Tests for split_permissions_by_binding_scope and binding_scopes_for_permissions."""
+
+    def setUp(self):
+        self.service = ImplicitResourceService(
+            root_scope_permissions=["advisor:*:*", "patch:*:*"],
+            tenant_scope_permissions=["rbac:*:*", "subscriptions:*:*"],
+            default_scope_permissions=["subscriptions:reports:*", "subscriptions:manifests:*"],
+        )
+
+    def test_single_scope_default(self):
+        """All DEFAULT permissions → single DEFAULT scope."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["inventory:hosts:read", "compliance:policy:read"], self.service)
+        self.assertEqual(set(result.keys()), {Scope.DEFAULT})
+        self.assertCountEqual(result[Scope.DEFAULT], ["inventory:hosts:read", "compliance:policy:read"])
+
+    def test_single_scope_root(self):
+        """All ROOT permissions → single ROOT scope."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["advisor:recommendation:read", "patch:system:write"], self.service
+        )
+        self.assertEqual(set(result.keys()), {Scope.ROOT})
+        self.assertCountEqual(result[Scope.ROOT], ["advisor:recommendation:read", "patch:system:write"])
+
+    def test_single_scope_tenant(self):
+        """All TENANT permissions → single TENANT scope."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["rbac:role:read", "subscriptions:organization:read"], self.service
+        )
+        self.assertEqual(set(result.keys()), {Scope.TENANT})
+        self.assertCountEqual(result[Scope.TENANT], ["rbac:role:read", "subscriptions:organization:read"])
+
+    def test_root_default_not_split(self):
+        """ROOT+DEFAULT mixed → collapsed to single ROOT (workspace parent inheritance)."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["advisor:recommendation:read", "inventory:hosts:read"], self.service
+        )
+        self.assertEqual(set(result.keys()), {Scope.ROOT})
+        self.assertCountEqual(result[Scope.ROOT], ["advisor:recommendation:read", "inventory:hosts:read"])
+
+    def test_tenant_default_split(self):
+        """TENANT+DEFAULT → two groups."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["subscriptions:organization:read", "inventory:hosts:read", "compliance:policy:read"],
+            self.service,
+        )
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertEqual(result[Scope.TENANT], ["subscriptions:organization:read"])
+        self.assertCountEqual(result[Scope.DEFAULT], ["inventory:hosts:read", "compliance:policy:read"])
+
+    def test_tenant_root_default_split(self):
+        """TENANT+ROOT+DEFAULT → TENANT split out, ROOT+DEFAULT merge to ROOT."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            [
+                "subscriptions:organization:read",
+                "advisor:recommendation:read",
+                "inventory:hosts:read",
+            ],
+            self.service,
+        )
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.ROOT})
+        self.assertEqual(result[Scope.TENANT], ["subscriptions:organization:read"])
+        self.assertCountEqual(result[Scope.ROOT], ["advisor:recommendation:read", "inventory:hosts:read"])
+
+    def test_subscriptions_wildcard_spans_tenant_and_default(self):
+        """subscriptions:*:* subsumes DEFAULT patterns → duplicated to both scopes."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["subscriptions:*:*"], self.service)
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertIn("subscriptions:*:*", result[Scope.TENANT])
+        self.assertIn("subscriptions:*:*", result[Scope.DEFAULT])
+
+    def test_rbac_wildcard_spans_tenant_and_default(self):
+        """rbac:*:* subsumes rbac:role_binding:* in DEFAULT → duplicated to both scopes."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        svc = ImplicitResourceService(
+            root_scope_permissions=["advisor:*:*"],
+            tenant_scope_permissions=["rbac:*:*", "subscriptions:*:*"],
+            default_scope_permissions=["rbac:role_binding:*", "subscriptions:reports:*"],
+        )
+        result = split_permissions_by_binding_scope(["rbac:*:*"], svc)
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertIn("rbac:*:*", result[Scope.TENANT])
+        self.assertIn("rbac:*:*", result[Scope.DEFAULT])
+
+    def test_default_scope_override_respected(self):
+        """subscriptions:reports:read matches DEFAULT override, not TENANT wildcard."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["subscriptions:reports:read", "subscriptions:organization:read"], self.service
+        )
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertEqual(result[Scope.TENANT], ["subscriptions:organization:read"])
+        self.assertEqual(result[Scope.DEFAULT], ["subscriptions:reports:read"])
+
+    def test_empty_permissions(self):
+        """Empty permissions → empty dict."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope([], self.service)
+        self.assertEqual(result, {})
+
+    def test_binding_scopes_single(self):
+        """binding_scopes_for_permissions with single scope returns one entry."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        result = binding_scopes_for_permissions(["inventory:hosts:read"], self.service)
+        self.assertEqual(result, [Scope.DEFAULT])
+
+    def test_binding_scopes_mixed_tenant(self):
+        """binding_scopes_for_permissions with TENANT mix returns both."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        result = binding_scopes_for_permissions(
+            ["subscriptions:organization:read", "advisor:recommendation:read", "inventory:hosts:read"],
+            self.service,
+        )
+        self.assertEqual(sorted(result), sorted([Scope.TENANT, Scope.ROOT]))
+
+    def test_wildcard_tenant_perm_spanning_default_scope_is_mixed(self):
+        """subscriptions:*:* alone is mixed because DEFAULT_SCOPE has subscriptions:reports:* etc."""
+        from management.permission.scope_service import (
+            binding_scopes_for_permissions,
+            split_permissions_by_binding_scope,
+        )
+
+        result = binding_scopes_for_permissions(["subscriptions:*:*"], self.service)
+        self.assertEqual(sorted(result), sorted([Scope.TENANT, Scope.DEFAULT]))
+
+    def test_wildcard_tenant_perm_split_duplicates_to_both_scopes(self):
+        """subscriptions:*:* is placed in both TENANT and workspace groups."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["subscriptions:*:*"], self.service)
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertIn("subscriptions:*:*", result[Scope.TENANT])
+        self.assertIn("subscriptions:*:*", result[Scope.DEFAULT])
+
+    def test_wildcard_tenant_perm_with_other_perms_split_correctly(self):
+        """subscriptions:*:* + inventory:hosts:read → both groups, wildcard duplicated."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["subscriptions:*:*", "inventory:hosts:read"], self.service)
+        self.assertEqual(set(result.keys()), {Scope.TENANT, Scope.DEFAULT})
+        self.assertIn("subscriptions:*:*", result[Scope.TENANT])
+        self.assertIn("subscriptions:*:*", result[Scope.DEFAULT])
+        self.assertIn("inventory:hosts:read", result[Scope.DEFAULT])
+
+    def test_rbac_wildcard_no_default_patterns_stays_tenant(self):
+        """rbac:*:* with no rbac:... entries in DEFAULT_SCOPE → single TENANT (no overlap)."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        result = binding_scopes_for_permissions(["rbac:*:*"], self.service)
+        self.assertEqual(result, [Scope.TENANT])
+
+    def test_rbac_wildcard_with_default_pattern_spans_both(self):
+        """rbac:*:* spans TENANT+DEFAULT when rbac:role_binding:* is in DEFAULT_SCOPE."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        svc = ImplicitResourceService(
+            root_scope_permissions=["advisor:*:*"],
+            tenant_scope_permissions=["rbac:*:*", "subscriptions:*:*"],
+            default_scope_permissions=["rbac:role_binding:*", "subscriptions:reports:*"],
+        )
+        result = binding_scopes_for_permissions(["rbac:*:*"], svc)
+        self.assertEqual(sorted(result), sorted([Scope.TENANT, Scope.DEFAULT]))
+
+    def test_non_wildcard_tenant_perm_not_spanning(self):
+        """subscriptions:organization:read is concrete, not a wildcard → TENANT only."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        result = binding_scopes_for_permissions(["subscriptions:organization:read"], self.service)
+        self.assertEqual(result, [Scope.TENANT])
