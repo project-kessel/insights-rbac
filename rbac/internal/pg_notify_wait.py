@@ -51,6 +51,14 @@ def replicate_with_notify(
     if coordination is None:
         raise ValueError(f"Event type {event.event_type.value} is not notify-coordinated")
 
+    if not event.add and not event.remove:
+        logger.debug(
+            "%s skipping notify coordination for empty replication event",
+            coordination.log_label,
+        )
+        replicator.replicate(event)
+        return
+
     notify_token = str(uuid.uuid4())
     event.event_info["notify_token"] = notify_token
     replicator.replicate(event)
