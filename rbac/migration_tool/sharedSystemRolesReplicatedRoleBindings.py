@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import dataclasses
 import logging
+from collections.abc import Callable
 from typing import Any, Iterable, Optional, Tuple, Union
 
 import uuid_utils.compat as uuid
@@ -24,6 +25,7 @@ from django.db.models import F
 from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
+from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
@@ -38,6 +40,36 @@ from migration_tool.models import (
 logger = logging.getLogger(__name__)
 
 _PermissionGroupings = dict[V2boundresource, set[Permission]]
+
+ScopeBoundResourceResolver = Callable[[Scope], V2boundresource]
+
+
+def constant_bound_resource(resource: V2boundresource) -> ScopeBoundResourceResolver:
+    """Return a resolver that always returns the same bound resource."""
+    return lambda _scope: resource
+
+
+def with_workspace_scope_inheritance(resource_map: dict[Scope, V2boundresource]) -> dict[Scope, V2boundresource]:
+    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT when needed.
+
+    Workspace bindings at ROOT cover the default workspace via parent inheritance,
+    so callers building a map from ``binding_scopes_for_role`` should apply this
+    before resolving per-permission scopes that may include DEFAULT.
+    """
+    result = dict(resource_map)
+    if Scope.ROOT in result and Scope.DEFAULT not in result:
+        result[Scope.DEFAULT] = result[Scope.ROOT]
+    return result
+
+
+def bound_resource_resolver_from_map(resource_map: dict[Scope, V2boundresource]) -> ScopeBoundResourceResolver:
+    """Return a resolver that maps scope to resource.
+
+    ``resource_map`` must contain an entry for every scope returned by
+    ``scope_for_permission`` for permissions being migrated. Use
+    ``with_workspace_scope_inheritance`` when building from binding scopes.
+    """
+    return lambda scope: resource_map[scope]
 
 
 def add_system_role(system_roles, role: V2role):
@@ -110,15 +142,26 @@ class MigrateCustomRoleResult:
 
 def v1_role_to_v2_bindings(
     v1_role: Role,
-    default_resource: V2boundresource,
+    resource_for_scope: ScopeBoundResourceResolver,
     existing_role_bindings: Iterable[BindingMapping],
     existing_v2_roles: Iterable[CustomRoleV2],
 ) -> MigrateCustomRoleResult:
-    """Convert a V1 role to a set of V2 role bindings."""
+    """Convert a V1 role to a set of V2 role bindings.
+
+    ``resource_for_scope`` maps each permission's implicit scope (from the scope
+    service) to the V2boundresource for permissions without explicit resource
+    definitions.
+    """
     from internal.utils import (
         get_or_create_ungrouped_workspace,
         get_workspace_ids_from_resource_definition,
     )
+
+    _scope_service = ImplicitResourceService.from_settings()
+
+    def _resolve_default(permission: Permission) -> V2boundresource:
+        scope = _scope_service.scope_for_permission(permission.permission)
+        return resource_for_scope(scope)
 
     perm_groupings: _PermissionGroupings = {}
 
@@ -179,7 +222,7 @@ def v1_role_to_v2_bindings(
         if default:
             add_element(
                 perm_groupings,
-                default_resource,
+                _resolve_default(permission),
                 permission,
                 collection=set,
             )

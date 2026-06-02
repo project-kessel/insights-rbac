@@ -27,6 +27,8 @@ https://docs.djangoproject.com/en/2.0/ref/settings/
 """
 
 import os
+import ssl
+from urllib.parse import quote as _url_quote
 
 import datetime
 import sys
@@ -239,7 +241,8 @@ LOGGING_FORMATTER = os.getenv("DJANGO_LOG_FORMATTER", "simple")
 DJANGO_LOGGING_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO")
 RBAC_LOGGING_LEVEL = os.getenv("RBAC_LOG_LEVEL", "INFO")
 LOGGING_HANDLERS = os.getenv("DJANGO_LOG_HANDLERS", "console").split(",")
-VERBOSE_FORMATTING = "%(levelname)s %(asctime)s %(module)s " "%(process)d %(thread)d %(message)s"
+ENV_NAME = os.getenv("ENV_NAME", "stage")
+VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
 
 if DEBUG and "ecs" in LOGGING_HANDLERS:
     DEBUG_LOG_HANDLERS = [v for v in LOGGING_HANDLERS if v != "ecs"]
@@ -258,20 +261,24 @@ if CW_AWS_ACCESS_KEY_ID:
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "env_name": {"()": "rbac.logging_filters.EnvironmentFilter", "env_name": ENV_NAME},
+    },
     "formatters": {
         "verbose": {"format": VERBOSE_FORMATTING},
-        "simple": {"format": "[%(asctime)s] %(levelname)s: %(message)s"},
+        "simple": {"format": "[%(asctime)s] %(levelname)s [%(env_name)s]: %(message)s"},
         "ecs_formatter": {"()": "rbac.ECSCustom.ECSCustomFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER},
+        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER, "filters": ["env_name"]},
         "file": {
             "level": RBAC_LOGGING_LEVEL,
             "class": "logging.FileHandler",
             "filename": LOGGING_FILE,
             "formatter": LOGGING_FORMATTER,
+            "filters": ["env_name"],
         },
-        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter"},
+        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter", "filters": ["env_name"]},
     },
     "loggers": {
         "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL},
@@ -309,6 +316,7 @@ if CW_AWS_ACCESS_KEY_ID:
         "formatter": LOGGING_FORMATTER,
         "use_queues": True,
         "create_log_group": CW_CREATE_LOG_GROUP,
+        "filters": ["env_name"],
     }
     LOGGING["handlers"]["watchtower"] = WATCHTOWER_HANDLER
 
@@ -322,14 +330,20 @@ CORS_EXPOSE_HEADERS = list(globals().get("CORS_EXPOSE_HEADERS", [])) + ["Mcp-Ses
 APPEND_SLASH = False
 
 # Celery settings
+REDIS_USERNAME = None
+REDIS_SSL_CA_CERTS = None
 if ENVIRONMENT.bool("CLOWDER_ENABLED", default=False):
     REDIS_HOST = LoadedConfig.inMemoryDb.hostname
     REDIS_PORT = LoadedConfig.inMemoryDb.port
     REDIS_PASSWORD = LoadedConfig.inMemoryDb.password
+    REDIS_SSL = REDIS_PASSWORD is not None
 else:
     REDIS_HOST = ENVIRONMENT.get_value("REDIS_HOST", default="localhost")
     REDIS_PORT = ENVIRONMENT.get_value("REDIS_PORT", default="6379")
     REDIS_PASSWORD = ENVIRONMENT.get_value("REDIS_PASSWORD", default=None)
+    REDIS_USERNAME = ENVIRONMENT.get_value("REDIS_USERNAME", default=None)
+    REDIS_SSL_CA_CERTS = ENVIRONMENT.get_value("REDIS_SSL_CA_CERTS", default=None)
+    REDIS_SSL = ENVIRONMENT.bool("REDIS_SSL", default=False)
 
 # Feature Flag settings
 FEATURE_FLAGS_CONF = LoadedConfig.featureFlags
@@ -348,8 +362,6 @@ CLOWDER_ENABLED = ENVIRONMENT.bool("CLOWDER_ENABLED", default=False)
 
 FEATURE_FLAGS_CACHE_DIR = ENVIRONMENT.get_value("FEATURE_FLAGS_CACHE_DIR", default="/tmp/")
 
-REDIS_SSL = REDIS_PASSWORD is not None
-
 ACCESS_CACHE_DB = 1
 ACCESS_CACHE_LIFETIME = 10 * 60
 ACCESS_CACHE_ENABLED = ENVIRONMENT.bool("ACCESS_CACHE_ENABLED", default=True)
@@ -367,14 +379,47 @@ REDIS_CACHE_CONNECTION_PARAMS = dict(
     socket_timeout=REDIS_SOCKET_TIMEOUT,
 )
 
+if REDIS_PASSWORD:
+    REDIS_CACHE_CONNECTION_PARAMS["password"] = REDIS_PASSWORD
+if REDIS_USERNAME:
+    REDIS_CACHE_CONNECTION_PARAMS["username"] = REDIS_USERNAME
 if REDIS_SSL:
     REDIS_CACHE_CONNECTION_PARAMS["connection_class"] = redis.SSLConnection
-    REDIS_CACHE_CONNECTION_PARAMS["password"] = REDIS_PASSWORD
-    DEFAULT_REDIS_URL = f"rediss://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0?ssl_cert_reqs=required"
+    REDIS_SSL_CERT_REQS = ssl.CERT_REQUIRED if REDIS_SSL_CA_CERTS else ssl.CERT_NONE
+    REDIS_CACHE_CONNECTION_PARAMS["ssl_cert_reqs"] = REDIS_SSL_CERT_REQS
+    if REDIS_SSL_CA_CERTS:
+        REDIS_CACHE_CONNECTION_PARAMS["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+
+_redis_scheme = "rediss" if REDIS_SSL else "redis"
+if REDIS_USERNAME and REDIS_PASSWORD:
+    _redis_auth = f"{_url_quote(REDIS_USERNAME)}:{_url_quote(REDIS_PASSWORD)}@"
+elif REDIS_PASSWORD:
+    _redis_auth = f":{_url_quote(REDIS_PASSWORD)}@"
 else:
-    DEFAULT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+    _redis_auth = ""
+DEFAULT_REDIS_URL = f"{_redis_scheme}://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/0"
+DJANGO_CACHE_URL = f"{_redis_scheme}://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/2"
+
+_cache_location = ENVIRONMENT.get_value("DJANGO_CACHE_BACKEND", default=DJANGO_CACHE_URL)
+if _cache_location.startswith("locmem"):
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+else:
+    _cache_config: dict = {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": _cache_location}
+    if REDIS_SSL:
+        _cache_options: dict = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
+        if REDIS_SSL_CA_CERTS:
+            _cache_options["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+        _cache_config["OPTIONS"] = _cache_options
+    CACHES = {"default": _cache_config}
 
 CELERY_BROKER_URL = ENVIRONMENT.get_value("CELERY_BROKER_URL", default=DEFAULT_REDIS_URL)
+
+if REDIS_SSL:
+    _celery_ssl_conf = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
+    if REDIS_SSL_CA_CERTS:
+        _celery_ssl_conf["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+    CELERY_BROKER_USE_SSL = _celery_ssl_conf
+    CELERY_REDIS_BACKEND_USE_SSL = _celery_ssl_conf
 
 ROLE_CREATE_ALLOW_LIST = ENVIRONMENT.get_value("ROLE_CREATE_ALLOW_LIST", default="").split(",")
 
@@ -581,8 +626,6 @@ if CLOWDER_ENABLED:
             f"Falling back to default INVENTORY_API_SERVER value: {INVENTORY_API_SERVER}"
         )
 
-ENV_NAME = ENVIRONMENT.get_value("ENV_NAME", default="stage")
-
 # Versioned API settings
 V2_APIS_ENABLED = ENVIRONMENT.bool("V2_APIS_ENABLED", default=False)
 V2_READ_ONLY_API_MODE = ENVIRONMENT.bool("V2_READ_ONLY_API_MODE", default=False)
@@ -641,6 +684,8 @@ MCP_ENABLED = ENVIRONMENT.bool("MCP_ENABLED", default=True)
 MCP_TOOL_TIMEOUT_SECONDS = ENVIRONMENT.int("MCP_TOOL_TIMEOUT_SECONDS", default=30)
 MCP_TOOL_MAX_WORKERS = ENVIRONMENT.int("MCP_TOOL_MAX_WORKERS", default=10)
 MCP_WRITE_ENABLED = ENVIRONMENT.bool("MCP_WRITE_ENABLED", default=False)
+MCP_WRITE_CONFIRMATION = ENVIRONMENT.bool("MCP_WRITE_CONFIRMATION", default=True)
+MCP_WRITE_CONFIRMATION_TTL = ENVIRONMENT.int("MCP_WRITE_CONFIRMATION_TTL", default=300)
 
 # Manipulation of response to include ungrouped hosts id
 ADD_UNGROUPED_HOSTS_ID = ENVIRONMENT.bool("ADD_UNGROUPED_HOSTS_ID", default=False)

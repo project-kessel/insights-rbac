@@ -519,7 +519,7 @@ namespace Workspaces {
 
         @doc("Filter by workspace type. Supports comma-separated values (e.g. type=standard,ungrouped-hosts). Defaults to all when not supplied. Case-insensitive.")
         @query type?: string = "all";
-        @doc("Filter by workspace name. Case-insensitive exact match by default; use * as a wildcard for partial matching (e.g. foo*).")
+        @doc("Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).")
         @query name?: string;
         @doc("Filter workspaces by parent workspace UUID. Returns only direct children of the specified workspace. Useful for lazy-loading a nested tree structure.")
         @query parent_id?: UUID;
@@ -770,7 +770,7 @@ namespace RoleBindings {
 
     model Resource {
         @doc("Resource identifier")
-        id?: UUID;
+        id?: string;
         @doc("Resource name")
         name?: string;
         @doc("Resource type")
@@ -784,11 +784,16 @@ namespace RoleBindings {
         subject: #{ id: "3fa85f64-5717-4562-b3fc-2c963f66afa6", type: BindingSubjectType.group },
         role: #{ id: "550e8400-e29b-41d4-a716-446655440002" }
     })
+    @example(#{
+        resource: #{ id: "redhat/12345", type: "tenant" },
+        subject: #{ id: "3fa85f64-5717-4562-b3fc-2c963f66afa6", type: BindingSubjectType.group },
+        role: #{ id: "550e8400-e29b-41d4-a716-446655440002" }
+    })
     model CreateRoleBindingsRequest {
         @doc("Resource to bind the role to")
         resource: {
-            @doc("UUID that uniquely identifies the resource")
-            id: UUID;
+            @doc("Identifier of the resource")
+            id: string;
             @doc("Type of resource")
             @example("workspace")
             type: string;
@@ -1381,7 +1386,7 @@ namespace Roles {
         @doc("Cursor for cursor-based pagination.")
         @query cursor?: Cursor;
 
-        @doc("Filter by role name. Exact match by default; use * as a wildcard for partial matching (e.g. foo*).")
+        @doc("Filter by role name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).")
         @query name?: string;
 
         @doc("Filter roles by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns roles from all scopes.")

@@ -548,7 +548,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
 
     def _do_test_destroy_with_bindings_v2(self, role: RoleV2):
         replicator = InMemoryRelationReplicator(self.tuples)
-        binding_service = RoleBindingService(tenant=self.tenant, replicator=replicator)
+        binding_service = RoleBindingService(tenant=self.tenant, replicator=replicator, skip_scope_validation=True)
         workspace_service = WorkspaceService(replicator=replicator)
 
         group = Group.objects.create(tenant=self.tenant, name="a group")

@@ -684,14 +684,15 @@ class RoleV2ViewSetTests(IdentityRequest):
         RoleV2.objects.create(name="test_role_beta", description="Beta", tenant=self.tenant)
         RoleV2.objects.create(name="other_role", description="Other", tenant=self.tenant)
 
-        # Filter by name containing "test_role" and order by last_modified descending
+        # Filter by substring "test_role" and order by last_modified descending
         url = f"{self.list_url}&name=test_role&order_by=-last_modified"
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Should only return exact match "test_role" from setUp()
-        self.assertEqual(len(response.data["data"]), 1)
-        self.assertEqual(response.data["data"][0]["name"], "test_role")
+        # Substring "test_role" matches test_role, test_role_alpha, test_role_beta
+        self.assertEqual(len(response.data["data"]), 3)
+        names = [r["name"] for r in response.data["data"]]
+        self.assertCountEqual(names, ["test_role", "test_role_alpha", "test_role_beta"])
 
     def test_list_roles_with_invalid_order_by(self):
         """Test that invalid order_by field returns 400 error."""
@@ -2044,9 +2045,11 @@ class RoleV2ViewSetTests(IdentityRequest):
         )
 
     def test_delete_empty(self):
-        """Test that deleting 0 roles is successful."""
+        """Test that deleting with an empty ids list returns 400."""
         response = self._request_delete({"ids": []})
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["errors"][0]["field"], "ids")
+        self.assertEqual(response.data["errors"][0]["message"], "Ensure this field has at least 1 elements.")
 
     def test_delete_nonexistent_role(self):
         """Test that deleting a nonexistent role fails with status 404."""

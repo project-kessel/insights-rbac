@@ -107,6 +107,25 @@ class PermissionValue:
         """Return the V1 representation of this permission: app:resource:verb."""
         return f"{self.application}:{self.resource_type}:{self.verb}"
 
+    @property
+    def is_wildcard(self) -> bool:
+        """Return True if the resource type or verb is the wildcard ``*``."""
+        return self.resource_type == "*" or self.verb == "*"
+
+    def subsumes(self, other: "PermissionValue") -> bool:
+        """Return True if this pattern covers ``other`` (is equal to or broader than it).
+
+        A wildcard in this value's resource type or verb matches any value in the
+        corresponding component of ``other``.  Applications must match exactly.
+        """
+        if self.application != other.application:
+            return False
+        if self.resource_type != "*" and self.resource_type != other.resource_type:
+            return False
+        if self.verb != "*" and self.verb != other.verb:
+            return False
+        return True
+
     @classmethod
     def from_v2_dict(cls, data: dict) -> "PermissionValue":
         """

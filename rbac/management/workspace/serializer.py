@@ -41,7 +41,10 @@ class WorkspaceListInputSerializer(serializers.Serializer):
     name = serializers.CharField(
         required=False,
         allow_blank=True,
-        help_text="Filter by workspace name. Use * as wildcard for partial matching.",
+        help_text=(
+            "Filter by workspace name. Case-insensitive substring match by default;"
+            " use * for glob patterns (e.g. foo*)."
+        ),
     )
     parent_id = serializers.CharField(required=False, allow_blank=True, help_text="Filter by parent workspace ID")
     ids = serializers.CharField(required=False, allow_blank=True, help_text="Filter by comma-separated workspace IDs")

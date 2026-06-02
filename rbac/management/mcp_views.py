@@ -19,6 +19,7 @@
 
 import asyncio
 import concurrent.futures
+import hashlib
 import inspect
 import json
 import logging
@@ -30,7 +31,9 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from typing import Any, Callable
 
+import jsonschema
 from django.conf import settings
+from django.core.cache import cache as django_cache
 from django.db.models import Count, Prefetch
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.test import RequestFactory
@@ -217,6 +220,7 @@ class ToolConfig:
     required_relation: str | None = None
     required_resource_type: str = "tenant"
     v1_permission: tuple[str, str] | None = None
+    caveats: str = ""
 
 
 _TOOL_CONFIG: dict[str, ToolConfig] = {}
@@ -231,6 +235,7 @@ def register_tool(
     required_relation: str | None = None,
     required_resource_type: str = "tenant",
     v1_permission: tuple[str, str] | None = None,
+    caveats: str = "",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a tool with both FastMCP and _TOOL_CONFIG.
 
@@ -247,6 +252,10 @@ def register_tool(
         first_param = next(iter(sig.parameters), None)
         passes_request = first_param == "request"
 
+        resolved_caveats = caveats
+        if not resolved_caveats and "Caveats:\n" in description:
+            resolved_caveats = description.split("Caveats:\n", 1)[1].strip()
+
         _TOOL_CONFIG[tool_name] = ToolConfig(
             fn=fn,
             requires_auth=requires_auth,
@@ -256,6 +265,7 @@ def register_tool(
             required_relation=required_relation,
             required_resource_type=required_resource_type,
             v1_permission=v1_permission,
+            caveats=resolved_caveats,
         )
 
         if passes_request:
@@ -304,6 +314,9 @@ def _clone_request(
     view_request.user = source.user
     view_request.tenant = getattr(source, "tenant", None)
     view_request.req_id = getattr(source, "req_id", None)
+
+    if getattr(source, "mcp_source", False):
+        view_request.mcp_source = True
 
     identity = source.META.get(RH_IDENTITY_HEADER)
     if identity:
@@ -395,6 +408,74 @@ def _resolve_group_for_tool(request: HttpRequest, group_uuid: str, group_name: s
     if not tenant:
         return None, json.dumps({"error": "No tenant context available"})
     return _resolve_group_uuid(group_uuid, group_name, tenant)
+
+
+_CROSS_ACCOUNT_LIFECYCLE = (
+    "Cross-account request lifecycle: "
+    "create → pending (awaits org admin approval) → approved (active access) → expired. "
+    "A request can also be denied or cancelled at any stage."
+)
+
+
+def _cross_account_status_counts(org_id: str) -> dict[str, int]:
+    """Return pending and expired cross-account request counts in a single query."""
+    rows = (
+        CrossAccountRequest.objects.filter(target_org=org_id, status__in=["pending", "expired"])
+        .values("status")
+        .annotate(count=Count("pk"))
+    )
+    counts = {r["status"]: r["count"] for r in rows}
+    return {"pending": counts.get("pending", 0), "expired": counts.get("expired", 0)}
+
+
+def _format_candidate_name(user: dict) -> str:
+    """Build a display name from BOP user data, falling back to username."""
+    name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+    return name or user.get("username", "")
+
+
+def _lookup_principal(
+    request: HttpRequest, username_or_name: str, tenant
+) -> tuple[Principal | None, str | None, list[dict] | None]:
+    """Resolve a principal by username or display name.
+
+    Returns (principal, resolved_username, candidates).
+    - On exact or unique match: principal and resolved_username are set, candidates is None.
+    - On multiple matches: principal/resolved_username are None, candidates is a list of user dicts.
+    - On no matches: everything is None.
+    """
+    principal = Principal.objects.filter(username=username_or_name, tenant=tenant).first()
+    if principal:
+        return principal, username_or_name, None
+
+    # Username not found -- try display name search via BOP
+    result_json = _list_principals_by_name(
+        request, username_or_name, limit=5, offset=0, sort_order="asc", status="enabled"
+    )
+    try:
+        result = json.loads(result_json)
+        matches = result.get("data", [])
+    except (json.JSONDecodeError, AttributeError):
+        matches = []
+
+    if len(matches) == 1:
+        resolved_username = matches[0].get("username")
+        if resolved_username:
+            principal = Principal.objects.filter(username=resolved_username, tenant=tenant).first()
+            if principal:
+                return principal, resolved_username, None
+
+    if len(matches) > 1:
+        candidates = [
+            {
+                "username": u.get("username"),
+                "name": _format_candidate_name(u),
+            }
+            for u in matches
+        ]
+        return None, None, candidates
+
+    return None, None, None
 
 
 # --- Tool implementations ---
@@ -793,6 +874,7 @@ def list_audit_logs(
                 "resource_type": e.resource_type,
                 "description": e.description,
                 "created": e.created.isoformat() if e.created else None,
+                "source": e.source,
             }
             for e in entries
         ]
@@ -836,6 +918,7 @@ def list_audit_logs(
             "resource_type": entry_resource,
             "description": entry.description,
             "created": entry.created.isoformat() if entry.created else None,
+            "source": entry.source,
             "authorized_by": auth_info,
         }
 
@@ -1145,14 +1228,17 @@ def list_role_access(
         "To find which roles grant a specific permission, call "
         "search_roles(permission='<app>:<resource>:<verb>'). Accepts comma-separated permissions. "
         "To see all roles for an application, call search_roles(application='<app>'). "
+        "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
         "V2 orgs support name with '*' wildcards (e.g., name='Cost*') and resource_type filter. "
-        "V1 orgs additionally support display_name, system flag filters. "
+        "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
         "- The permission filter finds roles containing that permission, but does not account for "
         "ResourceDefinition filters that may narrow the permission's effective scope.\n"
         "- Role names are not unique across V1 and V2. The org_version field indicates which API "
-        "version the result came from."
+        "version the result came from.\n"
+        "- The username filter is V1-only. For V2 orgs, it is ignored and returned in ignored_filters "
+        "with guidance to use list_role_bindings instead."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1171,12 +1257,27 @@ def search_roles(
     system: str = "",
     resource_type: str = "",
     order_by: str = "",
+    username: str = "",
 ) -> str:
     """Search roles, auto-detecting V1/V2 and delegating to the appropriate view."""
     tenant = getattr(request, "tenant", None)
     if tenant and is_v2_write_activated(tenant):
-        return _search_roles_v2(request, limit, offset, name, resource_type, permission, order_by)
-    return _search_roles_v1(request, limit, offset, name, display_name, permission, application, system, order_by)
+        return _search_roles_v2(
+            request,
+            limit,
+            offset,
+            name,
+            resource_type,
+            permission,
+            order_by,
+            username,
+            display_name,
+            application,
+            system,
+        )
+    return _search_roles_v1(
+        request, limit, offset, name, display_name, permission, application, system, order_by, username
+    )
 
 
 def _search_roles_v1(
@@ -1189,6 +1290,7 @@ def _search_roles_v1(
     application: str,
     system: str,
     order_by: str,
+    username: str,
 ) -> str:
     """Search roles using V1 API."""
     query_params: dict[str, str] = {
@@ -1207,6 +1309,8 @@ def _search_roles_v1(
         query_params["system"] = system
     if order_by:
         query_params["order_by"] = order_by
+    if username:
+        query_params["username"] = username
 
     path = reverse("v1_management:role-list")
     raw = _call_view(request, _role_v1_list_view, path, query_params)
@@ -1223,6 +1327,10 @@ def _search_roles_v2(
     resource_type: str,
     permission: str,
     order_by: str,
+    username: str,
+    display_name: str,
+    application: str,
+    system: str,
 ) -> str:
     """Search roles using V2 API."""
     query_params: dict[str, str] = {
@@ -1242,6 +1350,46 @@ def _search_roles_v2(
     raw = _call_view(request, _role_v2_list_view, path, query_params)
     result = json.loads(raw)
     result["org_version"] = "v2"
+
+    ignored_filters: dict[str, dict[str, str]] = {}
+
+    if username:
+        ignored_filters["username"] = {
+            "value": username,
+            "reason": "V2 orgs use role bindings instead of group-based role assignment.",
+            "alternative": (
+                "Use list_role_bindings(granted_subject_type='principal', "
+                f"granted_subject_principal_user_id='{username}') to find roles bound to this user."
+            ),
+        }
+
+    if display_name:
+        ignored_filters["display_name"] = {
+            "value": display_name,
+            "reason": "V2 roles do not have a separate display_name field.",
+            "alternative": "Use the 'name' parameter instead, which supports wildcard matching (e.g., name='Cost*').",
+        }
+
+    if application:
+        ignored_filters["application"] = {
+            "value": application,
+            "reason": "V2 roles do not support filtering by application.",
+            "alternative": (
+                "Use the 'permission' parameter to filter by specific permissions "
+                "(e.g., permission='cost-management:*:*')."
+            ),
+        }
+
+    if system:
+        ignored_filters["system"] = {
+            "value": system,
+            "reason": "V2 roles use 'type' (custom/system/seeded) instead of a boolean 'system' flag.",
+            "alternative": "V2 role results include a 'type' field you can filter client-side.",
+        }
+
+    if ignored_filters:
+        result["ignored_filters"] = ignored_filters
+
     return json.dumps(result)
 
 
@@ -1311,7 +1459,11 @@ def _get_role_v2(request: HttpRequest, role_uuid: str) -> str:
         "(1) create a new group and attach the role, ready for user assignment, "
         "(2) update the role's metadata (e.g. display_name) before assignment, "
         "(3) add additional permissions to the role. "
-        "Format as 'Reply 1, 2, or 3 -- or no'. Do NOT execute write tools without explicit user selection."
+        "Format as 'Reply 1, 2, or 3 -- or no'. Do NOT execute write tools without explicit user selection.\n"
+        "Caveats:\n"
+        "- Permission names are naming conventions only -- RBAC cannot confirm what UI elements "
+        "or API endpoints they control.\n"
+        "- ResourceDefinition filters are stored but enforced by the consuming application, not RBAC."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1729,6 +1881,11 @@ def get_cross_account_request(
         "investigate_tam_access(requester_name='Rachel') to see what roles/permissions she has. "
         "Set 'required_permission' to check if a specific permission is granted (e.g., "
         "'subscriptions:watch:read'). The tool will report whether that permission is present. "
+        "When no approved requests are found, the tool proactively checks for pending/expired "
+        "requests and explains the cross-account request lifecycle. "
+        "RESPONSE FORMAT: Present results as a table: "
+        "requester name | roles granted | specific permissions | expiration | status. "
+        "Explain the lifecycle: create → pending → approved → active → expired. "
         "Returns: {requests: [{request_id, status, end_date, days_remaining, requester_info, "
         "roles: [{name, permissions: [...]}], permission_summary}], analysis}. "
         "AFTER ANALYSIS: Present numbered options: "
@@ -1773,14 +1930,31 @@ def investigate_tam_access(
     requests_list = list(queryset)
 
     if not requests_list:
+        status_counts = _cross_account_status_counts(org_id)
+        pending_count = status_counts["pending"]
+        expired_count = status_counts["expired"]
+
+        hint: str
+        if pending_count or expired_count:
+            hint = (
+                f"There are {pending_count} pending and {expired_count} expired request(s). "
+                "Use investigate_tam_access(status='pending') or status='expired' to inspect them."
+            )
+        else:
+            hint = "No requests of any status exist for this organization."
+
         return json.dumps(
             {
                 "requests": [],
                 "analysis": {
                     "total_active_requests": 0,
                     "message": f"No {status} cross-account requests found for this organization.",
-                    "hint": "Use list_cross_account_requests(query_by='target_org', status='pending') "
-                    "to check for pending requests, or status='expired' for expired ones.",
+                    "other_statuses": {
+                        "pending": pending_count,
+                        "expired": expired_count,
+                    },
+                    "lifecycle": _CROSS_ACCOUNT_LIFECYCLE,
+                    "hint": hint,
                 },
             }
         )
@@ -1828,7 +2002,9 @@ def investigate_tam_access(
                     "filtered_count": 0,
                     "message": f"No cross-account requests found matching name='{requester_name}' "
                     f"or email='{requester_email}'.",
-                    "hint": "Call investigate_tam_access() without filters to see all active requests.",
+                    "lifecycle": _CROSS_ACCOUNT_LIFECYCLE,
+                    "hint": "Call investigate_tam_access() without filters to see all active requests, "
+                    "or try investigate_tam_access(status='pending') for pending requests.",
                 },
             }
         )
@@ -1938,6 +2114,10 @@ def investigate_tam_access(
         "a summary of all active approved cross-account requests with audit activity. "
         "Set include_inactive=true to also see expired or pending requests. "
         "Set audit_days to control how far back to look in audit logs (default 30 days). "
+        "FORMAT FOR CISO BRIEFING: Present as a table with columns: "
+        "Red Hat user | roles | access scope | expiration | approved by | recent activity. "
+        "When no active access exists, still present a summary stating zero access, "
+        "note any pending/expired requests, and provide a monitoring recommendation. "
         "Returns: {active_access: [{user_info, roles, permissions, expires, days_remaining, "
         "audit_activity: {total_actions, recent_actions, summary}}], summary: {total_users, "
         "expiring_soon, unused_access}}. "
@@ -1982,6 +2162,19 @@ def audit_redhat_access(
     requests_list = list(queryset)
 
     if not requests_list:
+        status_counts = _cross_account_status_counts(org_id)
+        pending_count = status_counts["pending"]
+        expired_count = status_counts["expired"]
+
+        ciso_parts = [
+            "CISO Summary: Zero Red Hat personnel currently have active access to this "
+            "organization's console.redhat.com environment."
+        ]
+        if pending_count:
+            ciso_parts.append(f"There are {pending_count} pending request(s) awaiting approval.")
+        if expired_count:
+            ciso_parts.append(f"There are {expired_count} previously expired access grant(s) on record.")
+
         return json.dumps(
             {
                 "active_access": [],
@@ -1989,8 +2182,20 @@ def audit_redhat_access(
                     "total_users": 0,
                     "expiring_soon": 0,
                     "unused_access": 0,
-                    "message": "No cross-account requests found for this organization.",
-                    "hint": "Use list_cross_account_requests(query_by='target_org') to see all requests.",
+                    "pending_requests": pending_count,
+                    "expired_requests": expired_count,
+                    "message": "No active Red Hat cross-account access found for this organization.",
+                    "ciso_briefing": " ".join(ciso_parts),
+                    "briefing_template": (
+                        "If active access existed, the report would include for each Red Hat user: "
+                        "name, email, roles granted, permission scope, access start/end dates, "
+                        "days remaining, and RBAC audit activity (actions performed during the access window)."
+                    ),
+                    "monitoring": (
+                        "To monitor future cross-account requests, periodically call "
+                        "audit_redhat_access() or list_cross_account_requests(query_by='target_org', "
+                        "status='pending') to catch new requests before they are approved."
+                    ),
                 },
             }
         )
@@ -2583,7 +2788,13 @@ def _permission_matches(granted_permission: str, requested_permission: str) -> b
         "Returns: {allowed: bool, username, permission, matched_permission, ...} "
         "or {allowed: false, hint: str}. "
         "V1 calls: GET /api/v1/access/?username=X&application=Y (internally). "
-        "V2 resolves: role bindings → roles → permissions (internally)."
+        "V2 resolves: role bindings → roles → permissions (internally).\n"
+        "Caveats:\n"
+        "- Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions, "
+        "not their effective unlimited access.\n"
+        "- ResourceDefinition filters are stored but enforced by the consuming application, not RBAC.\n"
+        "- Permission names are naming conventions only -- RBAC cannot confirm what UI elements "
+        "or API endpoints they control."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -2608,19 +2819,56 @@ def check_user_permission(
 
     tenant = getattr(request, "tenant", None)
     if not tenant or not is_v2_write_activated(tenant):
+        # V1 path: resolve display name then delegate
+        if tenant:
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+            if candidates:
+                return json.dumps(
+                    {
+                        "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                        "candidates": candidates,
+                    }
+                )
+            if resolved_username:
+                username = resolved_username
+            else:
+                return json.dumps(
+                    {
+                        "allowed": False,
+                        "username": username,
+                        "permission": permission,
+                        "hint": f"User '{username}' not found in this organization. "
+                        "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
+                    }
+                )
         return _check_user_permission_v1(request, username, permission)
 
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    if not principal:
+    # V2 path: resolve display name → principal
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
         return json.dumps(
             {
                 "allowed": False,
                 "username": username,
                 "permission": permission,
                 "org_version": "v2",
-                "hint": f"User '{username}' not found in this organization.",
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
             }
         )
+    if not resolved_principal or not resolved_username:
+        return json.dumps(
+            {
+                "allowed": False,
+                "username": username,
+                "permission": permission,
+                "org_version": "v2",
+                "hint": f"User '{username}' not found in this organization. "
+                "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
+            }
+        )
+    principal: Principal = resolved_principal
+    username = resolved_username
 
     bindings_path = reverse("v2_management:role-bindings-list")
     raw = _call_view(
@@ -2747,9 +2995,16 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
     )
 
 
+_DEFAULT_INCLUDE_GROUP_ROLES = True
+_DEFAULT_INCLUDE_PERMISSIONS = True
+_DEFAULT_AUDIT_LOG_LIMIT = 10
+
+
 @register_tool(
     description=(
         "Get comprehensive state for a specific user, returning all RBAC information in one call. "
+        "Users may be referred to by name, as contractors, vendors, temps, consultants, or other "
+        "employment types -- these are all regular RBAC principals and should be looked up the same way. "
         "This is the best tool for understanding a user's complete RBAC picture. "
         "Returns: (1) groups the user belongs to with roles assigned to each, "
         "(2) all permissions/access the user has (auto-detects V1/V2), "
@@ -2757,11 +3012,26 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
         "(4) actions performed BY the user with breakdown by group and action type. "
         "Supports both V1 and V2 organizations automatically. "
         "Use this instead of calling list_groups + list_access + list_audit_logs separately. "
+        "SCENARIO: 'Contractor X is being offboarded, I need their RBAC activity and current access' → "
+        "call get_user_state(username='X') to get groups, permissions, and audit trail in one call. "
+        "USE WHEN: 'offboard', 'offboarding', 'leaving the company', 'contractor leaving', "
+        "'deprovisioning', 'compliance report', 'activity summary for records', 'what access does user have'. "
         "RESPONSE FORMAT: Summarize as 'Member of: <groups>. Effective access: <role names>. "
         "Audit log: <N> actions performed by user on <groups> (action types).'. "
+        "AFTER ANALYSIS: Present numbered options: "
+        "(1) remove the user from all their group(s), "
+        "(2) generate a formatted compliance report for records, "
+        "(3) both. "
+        "Format as 'Reply 1, 2, or 3 -- or no'. "
+        "Note: Deactivating the user account itself is handled in the IT/account portal, not the RBAC API. "
         "Returns: {username, org_version, groups: [{name, roles, recent_activity}], "
         "access: [{permission, role_name, ...}], user_actions: {total_count, by_group, by_type, recent}, "
-        "summary: {group_count, permission_count, actions_by_user, recent_actions_on_groups}}."
+        "summary: {group_count, permission_count, actions_by_user, recent_actions_on_groups}}.\n"
+        "Caveats:\n"
+        "- Org admins have implicit full access that bypasses all RBAC checks; "
+        "this is not reflected in the returned data.\n"
+        "- Permission names are naming conventions only -- RBAC cannot confirm what UI elements "
+        "or API endpoints they control."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -2772,9 +3042,9 @@ def get_user_state(
     request: HttpRequest,
     *,
     username: str,
-    include_group_roles: bool = True,
-    include_permissions: bool = True,
-    audit_log_limit: int = 10,
+    include_group_roles: bool = _DEFAULT_INCLUDE_GROUP_ROLES,
+    include_permissions: bool = _DEFAULT_INCLUDE_PERMISSIONS,
+    audit_log_limit: int = _DEFAULT_AUDIT_LOG_LIMIT,
 ) -> str:
     """Get comprehensive RBAC state for a user including groups, access, and audit activity."""
     # Clamp audit_log_limit to prevent expensive queries
@@ -2788,16 +3058,24 @@ def get_user_state(
     is_v2 = tenant and is_v2_write_activated(tenant)
     org_version = "v2" if is_v2 else "v1"
 
-    # Check if user exists
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    if not principal:
+    # Resolve username or display name
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
+        return json.dumps(
+            {
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
+            }
+        )
+    if not resolved_principal or not resolved_username:
         return json.dumps(
             {
                 "error": f"User '{username}' not found in this organization",
-                "org_version": org_version,
-                "hint": "Use list_principals(usernames='<user>', match_criteria='exact') to verify the user exists.",
+                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
             }
         )
+    principal: Principal = resolved_principal
+    username = resolved_username
 
     result: dict[str, Any] = {
         "username": username,
@@ -2953,6 +3231,36 @@ def get_user_state(
     }
 
     return json.dumps(result, default=str)
+
+
+@register_tool(
+    description=(
+        "Look up a contractor, vendor, consultant, temp, intern, or any non-employee by name. "
+        "Returns their full RBAC state: group memberships, roles, permissions, and audit trail. "
+        "Use for offboarding, compliance reviews, access audits, or deprovisioning. "
+        "This is the same as get_user_state -- all employment types are regular RBAC users."
+    ),
+    requires_auth=True,
+    api_version=ApiVersion.UNIFIED,
+    required_relation="rbac_roles_read",
+    v1_permission=("principal", "read"),
+)
+def lookup_person(
+    request: HttpRequest,
+    *,
+    username: str,
+    include_group_roles: bool = _DEFAULT_INCLUDE_GROUP_ROLES,
+    include_permissions: bool = _DEFAULT_INCLUDE_PERMISSIONS,
+    audit_log_limit: int = _DEFAULT_AUDIT_LOG_LIMIT,
+) -> str:
+    """Alias for get_user_state that surfaces contractor/vendor/consultant terminology."""
+    return get_user_state(
+        request,
+        username=username,
+        include_group_roles=include_group_roles,
+        include_permissions=include_permissions,
+        audit_log_limit=audit_log_limit,
+    )
 
 
 def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, Any]]:
@@ -3409,7 +3717,14 @@ def _analyze_expected_permission(
         "(1) add a role containing the missing permission to the user's group, "
         "(2) create a new custom role with the missing permission and add it to the group, "
         "(3) do nothing -- audit the role definition first. "
-        "Format as 'Reply 1, 2, or 3 -- or no'. Do NOT execute write tools without explicit user selection."
+        "Format as 'Reply 1, 2, or 3 -- or no'. Do NOT execute write tools without explicit user selection.\n"
+        "Caveats:\n"
+        "- Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions, "
+        "not their effective unlimited access.\n"
+        "- In V1, roles are assigned to groups -- roles cannot be assigned directly to users. "
+        "In V2, roles are bound to subjects via role bindings, which can target individual users.\n"
+        "- Permission names are naming conventions only -- RBAC cannot confirm what UI elements "
+        "or API endpoints they control."
     ),
     requires_auth=True,
     api_version=ApiVersion.COMMON,
@@ -3433,17 +3748,25 @@ def investigate_user_access(
     is_v2 = is_v2_write_activated(tenant)
     org_version = "v2" if is_v2 else "v1"
 
-    # Step 1: Check if user exists and get org admin status
-    principal = Principal.objects.filter(username=username, tenant=tenant).first()
-    is_org_admin = False
-
-    if not principal:
+    # Step 1: Resolve username or display name and get org admin status
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+    if candidates:
+        return json.dumps(
+            {
+                "error": f"Multiple users match '{username}'. Please specify the exact username.",
+                "candidates": candidates,
+            }
+        )
+    if not resolved_principal or not resolved_username:
         return json.dumps(
             {
                 "error": f"User '{username}' not found in this organization",
-                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search for the user.",
+                "hint": "Use list_principals(usernames='<partial>', match_criteria='partial') to search.",
             }
         )
+    principal: Principal = resolved_principal
+    username = resolved_username
+    is_org_admin = False
 
     # Check org admin status via BOP
     if org_id:
@@ -4148,7 +4471,9 @@ def create_cross_account_request(
 @register_tool(
     description=(
         "Check if a user can be delegated user access management without Org Admin privileges. "
-        "\n\n"
+        "Accepts username (e.g., 'doejoe') or display name (e.g., 'Joe Doe'). "
+        "If a display name is given, the tool resolves it automatically. "
+        "If multiple users match, candidates are returned for disambiguation.\n\n"
         "USE WHEN: 'delegate user access', 'let someone manage users without Org Admin', "
         "'give RBAC permissions', 'User Access administrator role'.\n\n"
         "BACKGROUND: 'User Access administrator' is a system role with rbac:* permissions. "
@@ -4192,19 +4517,60 @@ def guide_user_access_delegation(
             "existing_assignments": [],
         }
 
-        # Check if user exists
+        # Check if user exists (reuse shared lookup helper)
+        original_input = username
         try:
-            principals_raw = list_principals(request, usernames=username, match_criteria="exact", limit=1)
-            principals_data = json.loads(principals_raw)
-            if principals_data.get("data"):
-                user_data = principals_data["data"][0]
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
+            if candidates:
                 result["user_info"] = {
-                    "username": user_data.get("username"),
-                    "is_org_admin": user_data.get("is_org_admin", False),
-                    "is_active": user_data.get("is_active", True),
+                    "error": f"Multiple users match '{original_input}'. Please specify the exact username.",
+                    "candidates": candidates,
+                    "hint": "Re-call with the exact username from the candidates list.",
                 }
+            elif resolved_username:
+                username = resolved_username
+                user_info: dict = {"username": username}
+                if resolved_username != original_input:
+                    user_info["resolved_from"] = f"Display name '{original_input}' matched to '{resolved_username}'"
+                # Fetch user details (org admin status, active status) via BOP
+                principals_raw = list_principals(request, usernames=username, match_criteria="exact", limit=1)
+                principals_data = json.loads(principals_raw)
+                if principals_data.get("data"):
+                    user_data = principals_data["data"][0]
+                    user_info["is_org_admin"] = user_data.get("is_org_admin", False)
+                    user_info["is_active"] = user_data.get("is_active", True)
+                result["user_info"] = user_info
             else:
-                result["user_info"] = {"error": f"User '{username}' not found"}
+                # Fuzzy fallback: try display name search
+                original_input = username
+                name_raw = _list_principals_by_name(
+                    request, username, limit=5, offset=0, sort_order="asc", status="enabled"
+                )
+                name_data = json.loads(name_raw)
+                candidates = name_data.get("data", [])
+                if len(candidates) == 1:
+                    user_data = candidates[0]
+                    username = user_data.get("username", username)
+                    result["user_info"] = {
+                        "username": username,
+                        "is_org_admin": user_data.get("is_org_admin", False),
+                        "is_active": user_data.get("is_active", True),
+                        "resolved_from": f"Display name '{original_input}' matched to '{username}'",
+                    }
+                elif len(candidates) > 1:
+                    result["user_info"] = {
+                        "error": f"Multiple users match '{original_input}'",
+                        "candidates": [
+                            {
+                                "username": c.get("username"),
+                                "name": _format_candidate_name(c),
+                            }
+                            for c in candidates
+                        ],
+                        "hint": "Re-call with the exact username from the candidates list.",
+                    }
+                else:
+                    result["user_info"] = {"error": f"User '{original_input}' not found"}
         except Exception as e:
             logger.warning("guide_user_access_delegation: Failed to verify user %s: %s", username, e)
             result["user_info"] = {"error": f"Could not verify user '{username}'"}
@@ -4981,12 +5347,39 @@ _MCP_INSTRUCTIONS_WRITE_ACTIONS = (
     "NEVER execute a write tool without the user explicitly selecting an option."
 )
 
+_MCP_INSTRUCTIONS_CONFIRMATION_PROTOCOL = (
+    "\n\n## Write Confirmation Protocol\n\n"
+    "All write operations (create, update, delete) require two-phase confirmation:\n\n"
+    "1. **First call**: Call the write tool with the desired arguments. The server returns a "
+    "confirmation message describing the action and a confirmation_token.\n"
+    "2. **Present to user**: Show the confirmation message to the user and ask for approval.\n"
+    "3. **Second call**: If the user approves, call the same tool again with the exact same "
+    'arguments plus confirmation_token="<token>".\n\n'
+    "Important:\n"
+    "- NEVER skip the confirmation step or auto-confirm on behalf of the user.\n"
+    "- If the user declines, do NOT call the tool again.\n"
+    "- Tokens expire after {ttl_display} -- if expired, repeat the first call to get a new token.\n"
+    "- The arguments in the second call must exactly match the first call."
+)
+
+_TOOL_DESCRIPTION_CONFIRMATION_SUFFIX = (
+    "\n\nWrite Confirmation: This tool requires user approval. "
+    "The first call returns a preview and confirmation_token. "
+    "Present the preview to the user. If approved, call again with the same arguments "
+    "plus confirmation_token. NEVER auto-confirm."
+)
+
 
 def _build_mcp_instructions() -> str:
     """Build MCP server instructions based on current feature flags."""
     parts = [_MCP_INSTRUCTIONS_BASE, _MCP_INSTRUCTIONS_HONEST_CAVEATS, _MCP_INSTRUCTIONS_REMEDIATION]
     if _is_write_enabled():
         parts.append(_MCP_INSTRUCTIONS_WRITE_ACTIONS)
+        if _is_write_confirmation_enabled():
+            ttl = getattr(settings, "MCP_WRITE_CONFIRMATION_TTL", _CONFIRM_TTL_DEFAULT)
+            ttl_minutes = max(1, ttl // 60)
+            ttl_display = f"{ttl_minutes} minute{'s' if ttl_minutes != 1 else ''}"
+            parts.append(_MCP_INSTRUCTIONS_CONFIRMATION_PROTOCOL.format(ttl_display=ttl_display))
     return "".join(parts)
 
 
@@ -5021,6 +5414,61 @@ def _get_tools() -> list[Any]:
     return asyncio.run(mcp.list_tools())
 
 
+@lru_cache(maxsize=1)
+def _get_tool_schemas() -> dict[str, dict[str, Any]]:
+    """Build a {tool_name: inputSchema} lookup from the cached tool list."""
+    return {tool.name: tool.inputSchema for tool in _get_tools()}
+
+
+def _sanitize_validation_error(error: jsonschema.ValidationError) -> str:
+    """Build a human-readable validation message without exposing internals."""
+    path = ".".join(str(p) for p in error.absolute_path) if error.absolute_path else ""
+    if error.validator == "type":
+        expected = error.schema.get("type", "unknown")
+        actual = type(error.instance).__name__
+        field = f"'{path}'" if path else "input"
+        return f"Expected {field} to be {expected}, got {actual}"
+    if error.validator == "required":
+        if isinstance(error.instance, dict) and error.validator_value:
+            missing = [p for p in error.validator_value if p not in error.instance]
+            if missing:
+                return f"Missing required argument: {missing[0]}"
+        match = re.match(r"'(.+)' is a required property", error.message)
+        field_name = match.group(1) if match else error.message
+        return f"Missing required argument: {field_name}"
+    if error.validator == "additionalProperties":
+        names = re.findall(r"'([^']+)'", error.message)
+        if names:
+            if len(names) == 1:
+                return f"Unknown argument: {names[0]}"
+            return f"Unknown arguments: {', '.join(names)}"
+        return "Unknown argument provided"
+    if path:
+        return f"Validation failed for '{path}': {error.message}"
+    return f"Validation failed: {error.message}"
+
+
+def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    """Validate arguments against the tool's JSON schema.
+
+    Injects ``additionalProperties: false`` so unknown arguments are
+    rejected even though FastMCP-generated schemas omit that keyword.
+
+    Returns None on success, or a sanitized error message on failure.
+    """
+    schemas = _get_tool_schemas()
+    schema = schemas.get(tool_name)
+    if schema is None:
+        return None
+    strict_schema = dict(schema)
+    strict_schema.setdefault("additionalProperties", False)
+    try:
+        jsonschema.validate(instance=arguments, schema=strict_schema)
+    except jsonschema.ValidationError as exc:
+        return _sanitize_validation_error(exc)
+    return None
+
+
 def _is_v2_available() -> bool:
     """Check whether V2 API routes are mounted."""
     return getattr(settings, "V2_APIS_ENABLED", False)
@@ -5029,6 +5477,117 @@ def _is_v2_available() -> bool:
 def _is_write_enabled() -> bool:
     """Check whether MCP write tools are enabled."""
     return getattr(settings, "MCP_WRITE_ENABLED", False)
+
+
+def _is_write_confirmation_enabled() -> bool:
+    """Check whether write tools require user confirmation before executing."""
+    return getattr(settings, "MCP_WRITE_CONFIRMATION", True)
+
+
+# --- Write confirmation token system ---
+
+_CONFIRM_CACHE_PREFIX = "mcp:confirm:"
+_CONFIRM_TTL_DEFAULT = 300
+
+
+def _hash_arguments(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Create a stable hash of tool name + arguments for token validation."""
+    payload = json.dumps({"tool": tool_name, "args": arguments}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _generate_confirmation_token(tool_name: str, arguments: dict[str, Any], org_id: str | None) -> str:
+    """Generate a single-use confirmation token and store it in the Django cache."""
+    token = uuid.uuid4().hex
+    args_hash = _hash_arguments(tool_name, arguments)
+    ttl = getattr(settings, "MCP_WRITE_CONFIRMATION_TTL", _CONFIRM_TTL_DEFAULT)
+    value = {"tool": tool_name, "args_hash": args_hash, "org_id": org_id or ""}
+    django_cache.set(f"{_CONFIRM_CACHE_PREFIX}{token}", value, timeout=ttl)
+    return token
+
+
+def _validate_confirmation_token(
+    token: str, tool_name: str, arguments: dict[str, Any], org_id: str | None
+) -> tuple[bool, str]:
+    """Validate and consume a confirmation token. Returns (valid, error_message)."""
+    key = f"{_CONFIRM_CACHE_PREFIX}{token}"
+    stored = django_cache.get(key)
+    if not stored:
+        return False, "Confirmation token is invalid or expired. Please retry the operation."
+
+    if stored["tool"] != tool_name:
+        return False, f"Token was issued for '{stored['tool']}', not '{tool_name}'."
+    expected_hash = _hash_arguments(tool_name, arguments)
+    if stored["args_hash"] != expected_hash:
+        return False, "Arguments have changed since the confirmation was issued. Please retry."
+    if stored["org_id"] != (org_id or ""):
+        return False, "Token was issued for a different organization."
+
+    django_cache.delete(key)
+    return True, ""
+
+
+def _generate_write_preview(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Generate a human-readable one-liner summary of a write operation."""
+    name = arguments.get("name", "")
+    group_name = arguments.get("group_name", "")
+    group_uuid = arguments.get("group_uuid", "")
+    group_ref = group_name or group_uuid or ""
+    role_uuid = arguments.get("role_uuid", "")
+    workspace_id = arguments.get("workspace_id", arguments.get("workspace_uuid", ""))
+
+    if tool_name == "create_group":
+        return f"This will create a new group '{name}'."
+    if tool_name == "add_principals_to_group":
+        principals = arguments.get("principals") or []
+        return f"This will add {len(principals)} principal(s) to group '{group_ref}'."
+    if tool_name == "add_roles_to_group":
+        roles = arguments.get("roles") or []
+        return f"This will assign {len(roles)} role(s) to group '{group_ref}'."
+    if tool_name in ("create_role_v1", "create_role"):
+        return f"This will create a new role '{name}'."
+    if tool_name == "create_role_bindings":
+        bindings = arguments.get("bindings") or []
+        return f"This will create {len(bindings)} role binding(s)."
+    if tool_name == "create_workspace":
+        return f"This will create a new workspace '{name}'."
+    if tool_name == "create_cross_account_request":
+        target = arguments.get("target_org", "")
+        return f"This will create a cross-account access request to org '{target}'."
+    if tool_name == "update_group":
+        return f"This will update group '{group_ref}' (name -> '{name}')."
+    if tool_name in ("update_role_v1", "update_role"):
+        return f"This will replace role '{role_uuid}' with new definition (name: '{name}')."
+    if tool_name == "patch_role_v1":
+        return f"This will partially update role '{role_uuid}'."
+    if tool_name == "update_role_binding":
+        subject = arguments.get("subject_id", "")
+        return f"This will replace role bindings for subject '{subject}'."
+    if tool_name in ("update_workspace", "move_workspace"):
+        action = "update" if tool_name == "update_workspace" else "move"
+        return f"This will {action} workspace '{workspace_id}'."
+    if tool_name in ("update_cross_account_request", "patch_cross_account_request"):
+        req_id = arguments.get("request_id", "")
+        return f"This will update cross-account request '{req_id}'."
+    if tool_name == "delete_group":
+        return f"DESTRUCTIVE: This will permanently delete group '{group_ref}'. This is irreversible."
+    if tool_name == "remove_principals_from_group":
+        users = arguments.get("usernames", "")
+        svc = arguments.get("service_accounts", "")
+        who = users or svc or "specified principals"
+        return f"DESTRUCTIVE: This will remove {who} from group '{group_ref}'. This is irreversible."
+    if tool_name == "remove_roles_from_group":
+        return f"DESTRUCTIVE: This will remove role(s) from group '{group_ref}'. This is irreversible."
+    if tool_name == "delete_role_v1":
+        return f"DESTRUCTIVE: This will permanently delete role '{role_uuid}'. This is irreversible."
+    if tool_name == "bulk_delete_roles":
+        ids = arguments.get("ids") or []
+        return f"DESTRUCTIVE: This will permanently delete {len(ids)} role(s). This is irreversible."
+    if tool_name == "delete_workspace":
+        ws = arguments.get("workspace_uuid", "")
+        return f"DESTRUCTIVE: This will permanently delete workspace '{ws}'. This is irreversible."
+
+    return f"This will execute write operation '{tool_name}'."
 
 
 def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
@@ -5044,6 +5603,8 @@ def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, 
         description = overrides.get(tool.name, tool.description or "")
         if config.write and not write_enabled:
             description = f"[DISABLED -- write mode off] {description}"
+        elif config.write and write_enabled and _is_write_confirmation_enabled():
+            description = f"{description}{_TOOL_DESCRIPTION_CONFIRMATION_SUFFIX}"
         tools_data.append(
             {
                 "name": tool.name,
@@ -5204,6 +5765,9 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
             _record_metric(tool_name, "auth_error")
             return _error_response(request_id, -32000, "Authentication required")
 
+    if config.write:
+        request.mcp_source = True
+
     if config.required_relation:
         tenant = getattr(request, "tenant", None)
         if tenant and is_v2_write_activated(tenant):
@@ -5221,6 +5785,37 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
             )
             _record_metric(tool_name, "permission_denied")
             return _error_response(request_id, -32003, "Permission denied")
+
+    confirmation_token = arguments.pop("confirmation_token", None)
+
+    validation_error = _validate_tool_arguments(tool_name, arguments)
+    if validation_error:
+        logger.warning("mcp: tools/call tool='%s' schema validation failed: %s", tool_name, validation_error)
+        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {validation_error}")
+
+    if config.write and _is_write_confirmation_enabled():
+        if confirmation_token:
+            valid, error_msg = _validate_confirmation_token(confirmation_token, tool_name, arguments, org_id)
+            if not valid:
+                logger.warning("mcp: tools/call tool='%s' confirmation failed: %s", tool_name, error_msg)
+                _record_metric(tool_name, "confirmation_failed")
+                content = [{"type": "text", "text": json.dumps({"error": error_msg})}]
+                return _success_response(request_id, {"content": content, "isError": True})
+            logger.info("mcp: tools/call tool='%s' confirmed, executing", tool_name)
+        else:
+            token = _generate_confirmation_token(tool_name, arguments, org_id)
+            preview = _generate_write_preview(tool_name, arguments)
+            logger.info("mcp: tools/call tool='%s' awaiting confirmation, token issued", tool_name)
+            _record_metric(tool_name, "confirmation_pending")
+            content = [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"confirmation_required": True, "message": preview, "confirmation_token": token}
+                    ),
+                }
+            ]
+            return _success_response(request_id, {"content": content, "isError": False})
 
     track = tool_name != "hello"
     start = time.monotonic() if track else 0
@@ -5243,7 +5838,13 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
             _record_metric(tool_name, "success", duration)
             logger.info("mcp: tools/call tool='%s' completed in %.3fs", tool_name, duration)
 
-        content = [{"type": "text", "text": _normalize_tool_result(result)}]
+        result_text = _normalize_tool_result(result)
+        content = [{"type": "text", "text": result_text}]
+        if config.caveats:
+            content.append(
+                {"type": "text", "text": f"IMPORTANT — INCLUDE THESE CAVEATS IN YOUR ANSWER:\n{config.caveats}"}
+            )
+
         return _success_response(request_id, {"content": content, "isError": False})
     except ToolTimeoutError:
         duration = time.monotonic() - start if track else timeout

@@ -745,11 +745,13 @@ class RoleV2ServiceListTests(IdentityRequest):
         self.assertEqual(queryset.count(), 1)
         self.assertEqual(queryset.first().name, "role_one")
 
-    def test_list_name_exact_match_unchanged(self):
-        """Test that name without wildcard still requires exact match."""
+    def test_list_name_substring_match(self):
+        """Test that name without wildcard does substring match."""
         queryset = self.service.list({"name": "role"})
 
-        self.assertEqual(queryset.count(), 0)
+        self.assertEqual(queryset.count(), 2)
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"role_one", "role_two"})
 
     def test_list_filters_by_name_wildcard_no_match(self):
         """Test that a wildcard pattern matching nothing returns empty."""
@@ -982,7 +984,7 @@ class RoleV2ServiceListResourceTypeTests(IdentityRequest):
         self.assertEqual(queryset.count(), 0)
 
     def test_list_resource_type_workspace_with_standard_resource_id_returns_default_scoped_only(self):
-        """A non-root (e.g. standard) workspace id lists the same as default: DEFAULT-scoped roles only."""
+        """A non-root (e.g. standard) workspace id lists only workspace-granular roles (no explicit config)."""
         child = Workspace.objects.create(
             name="Sub WS",
             tenant=self.tenant,
@@ -992,3 +994,154 @@ class RoleV2ServiceListResourceTypeTests(IdentityRequest):
         queryset = self.service.list({"resource_type": "workspace", "resource_id": child.id})
         names = set(queryset.values_list("name", flat=True))
         self.assertEqual(names, {"default_role"})
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
+class RoleV2ServiceListExplicitDefaultScopeTests(IdentityRequest):
+    """Test workspace-level role scoping with explicit DEFAULT_SCOPE_PERMISSIONS.
+
+    When DEFAULT_SCOPE_PERMISSIONS is configured, roles with explicit-DEFAULT
+    permissions should only appear at the default workspace, not at standard
+    (child) workspaces.  Workspace-granular roles (fallback-DEFAULT) should
+    appear at both.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.service = RoleV2Service(tenant=self.tenant)
+
+        self._root_ws, _ = Workspace.objects.get_or_create(
+            tenant=self.tenant,
+            type=Workspace.Types.ROOT,
+            defaults={
+                "name": Workspace.SpecialNames.ROOT,
+                "description": Workspace.SpecialDescriptions.ROOT,
+            },
+        )
+        self._default_ws, _ = Workspace.objects.get_or_create(
+            tenant=self.tenant,
+            type=Workspace.Types.DEFAULT,
+            defaults={
+                "name": Workspace.SpecialNames.DEFAULT,
+                "description": Workspace.SpecialDescriptions.DEFAULT,
+                "parent": self._root_ws,
+            },
+        )
+        self._standard_ws = Workspace.objects.create(
+            name="Standard WS",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=self._default_ws,
+        )
+
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=["tenant_app:*:*"],
+            root_scope_permissions=["root_app:*:*"],
+            default_scope_permissions=["explicit_app:*:*"],
+        )
+        test_cache = PermissionScopeCache(scope_service)
+        self._cache_patcher = patch("management.role.v2_service.permission_scope_cache", test_cache)
+        self._cache_patcher.start()
+
+        self.ws_granular_perm = Permission.objects.create(permission="granular_app:resource:read", tenant=self.tenant)
+        self.explicit_default_perm = Permission.objects.create(
+            permission="explicit_app:resource:read", tenant=self.tenant
+        )
+        self.root_perm = Permission.objects.create(permission="root_app:resource:read", tenant=self.tenant)
+        self.tenant_perm = Permission.objects.create(permission="tenant_app:resource:read", tenant=self.tenant)
+
+        self.ws_granular_role = RoleV2.objects.create(
+            name="ws_granular_role", description="Workspace-granular (fallback DEFAULT)", tenant=self.tenant
+        )
+        self.ws_granular_role.permissions.add(self.ws_granular_perm)
+
+        self.explicit_default_role = RoleV2.objects.create(
+            name="explicit_default_role", description="Explicit DEFAULT scoped", tenant=self.tenant
+        )
+        self.explicit_default_role.permissions.add(self.explicit_default_perm)
+
+        self.mixed_granular_explicit_role = RoleV2.objects.create(
+            name="mixed_granular_explicit_role",
+            description="Has both workspace-granular and explicit-DEFAULT perms",
+            tenant=self.tenant,
+        )
+        self.mixed_granular_explicit_role.permissions.add(self.ws_granular_perm, self.explicit_default_perm)
+
+        self.permissionless_role = RoleV2.objects.create(
+            name="permissionless_role", description="No permissions (OCM external)", tenant=self.tenant
+        )
+
+        self.root_role = RoleV2.objects.create(name="root_role", description="Root scoped", tenant=self.tenant)
+        self.root_role.permissions.add(self.root_perm)
+
+        self.tenant_role = RoleV2.objects.create(name="tenant_role", description="Tenant scoped", tenant=self.tenant)
+        self.tenant_role.permissions.add(self.tenant_perm)
+
+    def tearDown(self):
+        from management.utils import PRINCIPAL_CACHE
+
+        self._cache_patcher.stop()
+        RoleV2.objects.all().delete()
+        Permission.objects.filter(tenant=self.tenant).delete()
+        PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
+        super().tearDown()
+
+    def test_standard_workspace_returns_only_workspace_granular_roles(self):
+        """Standard workspace should only return workspace-granular (fallback-DEFAULT) roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._standard_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"ws_granular_role"})
+
+    def test_standard_workspace_excludes_explicit_default_roles(self):
+        """Standard workspace should exclude roles with explicit-DEFAULT permissions."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._standard_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertNotIn("explicit_default_role", names)
+
+    def test_standard_workspace_excludes_mixed_granular_and_explicit_roles(self):
+        """Standard workspace should exclude roles that mix workspace-granular with explicit-DEFAULT permissions."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._standard_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertNotIn("mixed_granular_explicit_role", names)
+
+    def test_standard_workspace_excludes_permissionless_roles(self):
+        """Standard workspace should exclude roles with no permissions."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._standard_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertNotIn("permissionless_role", names)
+
+    def test_default_workspace_returns_explicit_default_and_workspace_granular(self):
+        """Default workspace should return both explicit-DEFAULT and workspace-granular roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._default_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertIn("ws_granular_role", names)
+        self.assertIn("explicit_default_role", names)
+        self.assertIn("mixed_granular_explicit_role", names)
+
+    def test_default_workspace_returns_permissionless_roles(self):
+        """Default workspace should include permissionless roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._default_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertIn("permissionless_role", names)
+
+    def test_default_workspace_excludes_root_and_tenant_roles(self):
+        """Default workspace should still exclude ROOT and TENANT scoped roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._default_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertNotIn("root_role", names)
+        self.assertNotIn("tenant_role", names)
+
+    def test_workspace_without_resource_id_returns_all_default_scoped(self):
+        """resource_type=workspace without resource_id returns all DEFAULT-scoped roles (both types)."""
+        queryset = self.service.list({"resource_type": "workspace"})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertIn("ws_granular_role", names)
+        self.assertIn("explicit_default_role", names)
+        self.assertIn("mixed_granular_explicit_role", names)
+        self.assertIn("permissionless_role", names)
+
+    def test_root_workspace_returns_root_roles_only(self):
+        """Root workspace should still return only ROOT-scoped roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._root_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"root_role"})

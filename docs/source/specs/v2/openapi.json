@@ -1296,7 +1296,7 @@
             "name": "name",
             "in": "query",
             "required": false,
-            "description": "Filter by role name. Exact match by default; use * as a wildcard for partial matching (e.g. foo*).",
+            "description": "Filter by role name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).",
             "schema": {
               "type": "string"
             },
@@ -2178,7 +2178,7 @@
             "name": "name",
             "in": "query",
             "required": false,
-            "description": "Filter by workspace name. Case-insensitive exact match by default; use * as a wildcard for partial matching (e.g. foo*).",
+            "description": "Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).",
             "schema": {
               "type": "string"
             },
@@ -3795,12 +3795,8 @@
             "type": "object",
             "properties": {
               "id": {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/UUID"
-                  }
-                ],
-                "description": "UUID that uniquely identifies the resource"
+                "type": "string",
+                "description": "Identifier of the resource"
               },
               "type": {
                 "type": "string",
@@ -3861,8 +3857,8 @@
         "description": "Request body for creating role bindings",
         "example": {
           "resource": {
-            "id": "550e8400-e29b-41d4-a716-446655440001",
-            "type": "workspace"
+            "id": "redhat/12345",
+            "type": "tenant"
           },
           "subject": {
             "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
@@ -3932,11 +3928,7 @@
         "type": "object",
         "properties": {
           "id": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/UUID"
-              }
-            ],
+            "type": "string",
             "description": "Resource identifier"
           },
           "name": {

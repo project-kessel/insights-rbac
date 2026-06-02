@@ -30,13 +30,12 @@ import grpc
 from django.conf import settings
 from django.db import connection
 from google.protobuf import json_format
-from internal.pg_notify_wait import REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL
+from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata
 from kessel.relations.v1beta1 import common_pb2
-from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.relation_replicator.relations_api_replicator import (
     RelationsApiReplicator,
 )
@@ -1374,15 +1373,11 @@ class RBACKafkaConsumer:
                     f"read-your-writes after workspace create (workspace_id={resource_id})",
                 )
 
-            # remove_legacy_root_workspace_tenant_parent_relations job LISTENs for batch completion
-            batch_notify_token = resource_context.get("notify_token") if resource_context else None
-            if event_type == ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS.value and batch_notify_token:
-                payload = str(batch_notify_token).strip()
-                _send_pg_notify_best_effort(
-                    REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL,
-                    payload,
-                    f"remove_root_parent_tenant_relationships batch (token={payload})",
-                )
+            notify_migration_batch_completion(
+                event_type,
+                resource_context,
+                lambda channel, payload, context: _send_pg_notify_best_effort(channel, payload, context),
+            )
 
             # Calculate processing duration and replication latency
             processing_duration_seconds = time.time() - processing_start

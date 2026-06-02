@@ -62,6 +62,9 @@ class AuditLog(TenantAwareModel):
         (REMOVE, "Remove"),
     )
 
+    SOURCE_AI_ASSISTANT = "ai_assistant"
+    SOURCE_CHOICES = ((SOURCE_AI_ASSISTANT, "AI Assistant"),)
+
     _model_class_by_resource_type = {
         GROUP: Group,
         ROLE: Role,
@@ -78,6 +81,7 @@ class AuditLog(TenantAwareModel):
     tenant = models.ForeignKey(Tenant, on_delete=models.SET_NULL, null=True)
     resource_uuid = models.UUIDField(null=True)
     secondary_resource_uuid = models.UUIDField(null=True)
+    source = models.CharField(max_length=32, choices=SOURCE_CHOICES, null=True, blank=True)
 
     class Meta:
         """Metadata for audit log model."""
@@ -90,6 +94,11 @@ class AuditLog(TenantAwareModel):
             # Index for filtering by tenant and action
             models.Index(fields=["tenant", "action"]),
         ]
+
+    def _apply_source(self, request):
+        """Set the source field if the request originated from an MCP tool."""
+        if getattr(request, "mcp_source", False):
+            self.source = AuditLog.SOURCE_AI_ASSISTANT
 
     @staticmethod
     def _format_resource_type(resource_type: str) -> str:
@@ -188,6 +197,7 @@ class AuditLog(TenantAwareModel):
         self.description = description[:255]
         self.action = action
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()
 
     def log_create(self, request, resource):
@@ -201,6 +211,7 @@ class AuditLog(TenantAwareModel):
 
         self.action = AuditLog.CREATE
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()
 
     def log_delete(self, request, resource, object):
@@ -216,6 +227,7 @@ class AuditLog(TenantAwareModel):
 
         self.action = AuditLog.DELETE
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()
 
     def log_edit(self, request, resource, object):
@@ -231,6 +243,7 @@ class AuditLog(TenantAwareModel):
         self.description = more_information
         self.action = AuditLog.EDIT
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()
 
     def log_group_assignment(
@@ -261,6 +274,7 @@ class AuditLog(TenantAwareModel):
 
         self.action = AuditLog.ADD
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()
 
     def log_group_remove(self, request, resource_type, resource, secondary_resource_object, assigned_resource_type):
@@ -291,4 +305,5 @@ class AuditLog(TenantAwareModel):
 
         self.action = AuditLog.REMOVE
         self.tenant_id = self.get_tenant_id(request)
+        self._apply_source(request)
         super(AuditLog, self).save()

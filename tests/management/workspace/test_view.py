@@ -2975,8 +2975,8 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(payload.get("data")[0]["id"], str(self.root_workspace.id))
         self.assertType(payload, "root")
 
-    def test_workspace_list_filter_by_name_exact(self):
-        """Test that name filter without wildcards does case-insensitive exact match."""
+    def test_workspace_list_filter_by_name_substring(self):
+        """Test that name filter without wildcards does case-insensitive substring match."""
         ws_name_1 = "Sales Team Alpha"
         ws_name_2 = "Sales Team Beta"
         ws_name_3 = "Engineering Squad"
@@ -3006,20 +3006,20 @@ class WorkspaceTestsList(WorkspaceViewTests):
         url = reverse("v2_management:workspace-list")
         client = APIClient()
 
-        # Exact match "Sales Team Alpha" returns only that workspace
+        # Full name "Sales Team Alpha" returns only that workspace
         response = client.get(f"{url}?name=Sales Team Alpha", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
         self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
 
-        # Partial string "Sales" without wildcard does NOT match (exact match semantics)
+        # Partial string "Sales" matches both Sales workspaces (substring semantics)
         response = client.get(f"{url}?name=Sales", None, format="json", **self.headers)
         payload = response.data
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(payload.get("meta").get("count"), 0)
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
 
-        # Exact match for "Engineering Squad"
+        # Full name match for "Engineering Squad"
         response = client.get(f"{url}?name=Engineering Squad", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
@@ -3110,7 +3110,7 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(payload.get("meta").get("count"), total_count)
 
     def test_workspace_list_filter_by_name_is_case_insensitive(self):
-        """Test that name filter is case-insensitive for both exact and wildcard matching."""
+        """Test that name filter is case-insensitive for both substring and wildcard matching."""
         Workspace.objects.create(
             name="Sales Team Alpha",
             tenant=self.tenant,
@@ -3121,14 +3121,14 @@ class WorkspaceTestsList(WorkspaceViewTests):
         url = reverse("v2_management:workspace-list")
         client = APIClient()
 
-        # Lowercase exact match
+        # Lowercase substring match
         response = client.get(f"{url}?name=sales team alpha", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
         self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
 
-        # Uppercase exact match
+        # Uppercase substring match
         response = client.get(f"{url}?name=SALES TEAM ALPHA", None, format="json", **self.headers)
         payload = response.data
         self.assertSuccessfulList(response, payload)

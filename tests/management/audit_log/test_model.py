@@ -51,3 +51,35 @@ class AuditLogModelTests(IdentityRequest):
         self.assertEqual(self.audit_log.description, "Created a role asdf1234")
         self.assertEqual(self.audit_log.action, "create")
         self.assertEqual(self.audit_log.tenant_id, "2")
+
+    def test_audit_log_source_default_is_none(self):
+        """Audit log entries default to source=None."""
+        self.assertIsNone(self.audit_log.source)
+
+    def test_audit_log_source_ai_assistant(self):
+        """Audit log entries can be created with ai_assistant source."""
+        entry = AuditLog.objects.create(
+            principal_username="mcp_user",
+            resource_type=AuditLog.GROUP,
+            resource_id="10",
+            description="Created group: Test",
+            action=AuditLog.CREATE,
+            source=AuditLog.SOURCE_AI_ASSISTANT,
+            tenant_id="2",
+        )
+        self.assertEqual(entry.source, AuditLog.SOURCE_AI_ASSISTANT)
+
+    def test_apply_source_sets_ai_assistant_when_mcp(self):
+        """_apply_source sets source to ai_assistant when request has mcp_source=True."""
+        request = Mock()
+        request.mcp_source = True
+        audit_log = AuditLog()
+        audit_log._apply_source(request)
+        self.assertEqual(audit_log.source, AuditLog.SOURCE_AI_ASSISTANT)
+
+    def test_apply_source_does_not_set_when_no_mcp(self):
+        """_apply_source leaves source as None when request has no mcp_source."""
+        request = Mock(spec=[])
+        audit_log = AuditLog()
+        audit_log._apply_source(request)
+        self.assertIsNone(audit_log.source)

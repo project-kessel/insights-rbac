@@ -354,22 +354,26 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
         if v1_permissions:
             v2_role.permissions.set(v1_permissions)
             logger.info("Added %d permissions to V2 role %s.", len(v1_permissions), display_name)
-        scope = resource_service.scope_for_role(v1_role)
+
+        binding_scopes = resource_service.binding_scopes_for_role(v1_role)
 
         # Clear parents first since scope may have changed since previous seeding
         v2_role.parents.clear()
-        platform_role = platform_roles[(DefaultAccessType.USER, scope)]
-        if v1_role.platform_default:
-            platform_role.children.add(v2_role)
-            logger.info("Added %s as child of platform role %s", display_name, platform_role.name)
 
-        admin_scope = admin_platform_parent_scope_for_seeded_system_role(
-            v1_role.name, v1_role.admin_default, scope, apply_override=True
-        )
-        admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
+        if v1_role.platform_default:
+            for scope in binding_scopes:
+                platform_role = platform_roles[(DefaultAccessType.USER, scope)]
+                platform_role.children.add(v2_role)
+                logger.info("Added %s as child of platform role %s", display_name, platform_role.name)
+
         if v1_role.admin_default:
-            admin_platform_role.children.add(v2_role)
-            logger.info("Added %s as child of admin platform role %s", display_name, admin_platform_role.name)
+            for scope in binding_scopes:
+                admin_scope = admin_platform_parent_scope_for_seeded_system_role(
+                    v1_role.name, scope, apply_override=True
+                )
+                admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
+                admin_platform_role.children.add(v2_role)
+                logger.info("Added %s as child of admin platform role %s", display_name, admin_platform_role.name)
 
         return v2_role
     except Exception as e:

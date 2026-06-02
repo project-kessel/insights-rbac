@@ -1105,9 +1105,9 @@ class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
     """Tests for remove_legacy_root_workspace_tenant_parent_relations."""
 
     def setUp(self):
-        timeout_patcher = patch("internal.utils.REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_TIMEOUT_SECONDS", 0)
-        timeout_patcher.start()
-        self.addCleanup(timeout_patcher.stop)
+        wait_patcher = patch("internal.pg_notify_wait.wait_for_pg_notify")
+        self.mock_wait_for_pg_notify = wait_patcher.start()
+        self.addCleanup(wait_patcher.stop)
         self.tenant = Tenant.objects.create(tenant_name="legacy_root_cleanup", org_id="9918877")
         self.tuples = InMemoryTuples()
         bootstrap_tenant_for_v2_test(self.tenant, tuples=self.tuples)

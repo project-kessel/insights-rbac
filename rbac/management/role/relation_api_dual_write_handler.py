@@ -49,7 +49,11 @@ from management.tenant_mapping.model import DefaultAccessType
 from management.tenant_mapping.v2_activation import assert_v1_write_allowed
 from migration_tool.migrate_role import migrate_role, relation_tuples_for_bindings
 from migration_tool.models import V2boundresource
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import v1_perm_to_v2_perm
+from migration_tool.sharedSystemRolesReplicatedRoleBindings import (
+    bound_resource_resolver_from_map,
+    v1_perm_to_v2_perm,
+    with_workspace_scope_inheritance,
+)
 from migration_tool.utils import create_relationship
 
 
@@ -153,7 +157,6 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             try:
                 admin_scope = admin_platform_parent_scope_for_seeded_system_role(
                     role.name,
-                    role.admin_default,
                     role_scope,
                     apply_override=apply_seeded_admin_scope_override,
                 )
@@ -207,13 +210,13 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
                     )
                 )
         else:
-            # Determine highest scope for the role's permissions
-            highest_scope: Scope = self.implicit_resource_service.scope_for_role(self.role)
-            relations.extend(
-                self._check_create_admin_platform_relation(
-                    self.role, highest_scope, apply_seeded_admin_scope_override=True
+            binding_scopes = self.implicit_resource_service.binding_scopes_for_role(self.role)
+            for scope in binding_scopes:
+                relations.extend(
+                    self._check_create_admin_platform_relation(
+                        self.role, scope, apply_seeded_admin_scope_override=True
+                    )
                 )
-            )
 
         for permission in v2_permissions:
             relations.append(
@@ -418,18 +421,24 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         try:
             logger.info("[Dual Write] Generate new relations from role(%s): '%s'", self.role.uuid, self.role.name)
 
-            target_model = bound_model_for_scope(
-                scope=self.resource_service.scope_for_role(self.role),
-                tenant=self.tenant,
-                root_workspace=self.root_workspace,
-                default_workspace=self.default_workspace,
+            binding_scopes = self.resource_service.binding_scopes_for_role(self.role)
+            resource_map = with_workspace_scope_inheritance(
+                {
+                    scope: V2boundresource.for_model(
+                        bound_model_for_scope(
+                            scope=scope,
+                            tenant=self.tenant,
+                            root_workspace=self.root_workspace,
+                            default_workspace=self.default_workspace,
+                        )
+                    )
+                    for scope in binding_scopes
+                }
             )
-
-            target_resource = V2boundresource.for_model(target_model)
 
             relations, migrate_result = migrate_role(
                 self.role,
-                default_resource=target_resource,
+                resource_for_scope=bound_resource_resolver_from_map(resource_map),
                 current_bindings=self.binding_mappings.values(),
                 current_v2_roles=self.v2_roles.values(),
             )

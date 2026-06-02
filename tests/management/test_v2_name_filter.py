@@ -48,21 +48,31 @@ class V2NameFilterTest(TestCase):
         )
         self.qs = Workspace.objects.filter(tenant=self.tenant, type="standard")
 
-    def test_exact_match(self):
-        """Without wildcards, name filter does case-insensitive exact match."""
+    def test_full_name_match(self):
+        """Without wildcards, full name matches via substring."""
         result = v2_name_filter(self.qs, "Sales Team Alpha")
         self.assertEqual(list(result.values_list("name", flat=True)), ["Sales Team Alpha"])
 
-    def test_exact_match_no_substring(self):
-        """Without wildcards, partial strings do not match."""
+    def test_substring_match(self):
+        """Without wildcards, partial strings match via icontains."""
         result = v2_name_filter(self.qs, "Sales")
-        self.assertEqual(result.count(), 0)
+        self.assertCountEqual(list(result.values_list("name", flat=True)), ["Sales Team Alpha", "Sales Team Beta"])
 
-    def test_exact_match_case_insensitive(self):
-        """Exact match is case-insensitive."""
+    def test_substring_match_case_insensitive(self):
+        """Substring match is case-insensitive."""
         result = v2_name_filter(self.qs, "sales team alpha")
         self.assertEqual(result.count(), 1)
         self.assertEqual(result.first().name, "Sales Team Alpha")
+
+    def test_substring_match_middle(self):
+        """Substring in the middle of a name matches."""
+        result = v2_name_filter(self.qs, "Team")
+        self.assertCountEqual(list(result.values_list("name", flat=True)), ["Sales Team Alpha", "Sales Team Beta"])
+
+    def test_substring_no_match(self):
+        """Substring matching nothing returns empty queryset."""
+        result = v2_name_filter(self.qs, "zzz")
+        self.assertEqual(result.count(), 0)
 
     def test_wildcard_prefix(self):
         """Prefix pattern matches names starting with the given string."""
