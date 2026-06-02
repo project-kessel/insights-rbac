@@ -204,7 +204,8 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService) ->
         bootstrap_service: Service for updating user/tenant state
 
     Returns:
-        bool: True if processing was successful, False otherwise
+        bool: False if another listener is running (lock contention), True otherwise.
+        Returning True continues processing the next message, even if this message failed.
     """
     with transaction.atomic():
         # This is locked per transaction to ensure another listener process does not run concurrently.
@@ -226,14 +227,12 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService) ->
                 bootstrap_service.update_user(user, ready_tenant=False)
 
             kafka_messages_success_total.inc()
-            return True
         except Exception as e:
             logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
             capture_exception(e)
             kafka_messages_failure_total.inc()
-            # For Kafka, we let the consumer auto-commit handle the offset
-            # Failed messages will not be reprocessed unless consumer is restarted
-            return False
+            
+    return True
 
 
 def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootstrapService] = None):
