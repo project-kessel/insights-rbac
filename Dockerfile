@@ -72,8 +72,7 @@ COPY Pipfile.lock .
 ENV PG_CONFIG=/usr/bin/pg_config
 RUN \
     # install the dependencies into the working dir (i.e. ${APP_ROOT}/.venv)
-    # NOTE: Using --skip-lock temporarily due to Pipfile.lock dependency conflicts
-    pipenv install --skip-lock && \
+    pipenv install --deploy --ignore-pipfile && \
     # delete the pipenv cache
     pipenv --clear
 
