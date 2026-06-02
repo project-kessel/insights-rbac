@@ -195,7 +195,7 @@ def retrieve_user_info(message) -> User:
     return external_principal_to_user(user_data)
 
 
-def process_kafka_message(message, bootstrap_service: TenantBootstrapService) -> bool:
+def process_kafka_message(message, bootstrap_service: TenantBootstrapService) -> tuple[bool, bool]:
     """
     Process each Kafka message.
 
@@ -204,15 +204,16 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService) ->
         bootstrap_service: Service for updating user/tenant state
 
     Returns:
-        bool: False if another listener is running (lock contention), True otherwise.
-        Returning True continues processing the next message, even if this message failed.
+        tuple[bool, bool]: (should_continue, success)
+        - should_continue: False if another listener is running (lock contention), True otherwise
+        - success: True if message was processed successfully, False if it failed
     """
     with transaction.atomic():
         # This is locked per transaction to ensure another listener process does not run concurrently.
         if not _lock_listener():
             # If there is another listener, let it run and abort this one.
             logger.info("process_kafka_message: Another listener is running. Aborting.")
-            return False
+            return (False, False)
 
         try:
             # Parse JSON message
@@ -227,12 +228,14 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService) ->
                 bootstrap_service.update_user(user, ready_tenant=False)
 
             kafka_messages_success_total.inc()
+            return (True, True)  # Continue processing, message succeeded
         except Exception as e:
             logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
             capture_exception(e)
             kafka_messages_failure_total.inc()
-            
-    return True
+            # Continue processing next message, but mark this one as failed
+            # Failed message offset will not be committed, so it can be retried on restart
+            return (True, False)  # Continue processing, message failed
 
 
 def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootstrapService] = None):
@@ -245,7 +248,7 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
         "bootstrap_servers": settings.KAFKA_SERVERS,
         "group_id": f"{settings.SA_NAME}-principal-cleanup",
         "auto_offset_reset": "earliest",
-        "enable_auto_commit": True,
+        "enable_auto_commit": False,  # Manual commit for at-least-once semantics
         "value_deserializer": lambda m: m.decode("utf-8"),
         "consumer_timeout_ms": 15000,  # 15 second timeout, similar to UMB
     }
@@ -269,9 +272,36 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
                 message.partition,
                 message.offset,
             )
-            if not process_kafka_message(message, bootstrap_service):
-                # If processing failed due to lock contention, break out
+            should_continue, success = process_kafka_message(message, bootstrap_service)
+            if not should_continue:
+                # Lock contention - another listener is running, abort this consumer
+                logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
                 break
+
+            # Commit offset only after successful processing
+            # This ensures at-least-once semantics: failed messages are not committed
+            # and will be retried on consumer restart
+            if success:
+                try:
+                    consumer.commit()
+                    logger.debug(
+                        "process_principal_events_from_kafka: Committed offset %d for partition %d",
+                        message.offset,
+                        message.partition,
+                    )
+                except Exception as commit_error:
+                    logger.error(
+                        "process_principal_events_from_kafka: Failed to commit offset %d: %s",
+                        message.offset,
+                        commit_error,
+                    )
+                    # Continue processing even if commit fails - offset will be retried on restart
+            else:
+                logger.warning(
+                    "process_principal_events_from_kafka: Message processing failed, offset %d not committed. "
+                    "Message will be retried on consumer restart.",
+                    message.offset,
+                )
 
     except KafkaError as e:
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))
