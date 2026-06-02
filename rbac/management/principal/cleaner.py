@@ -261,6 +261,9 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     # Get topic name from settings
     topic = "VirtualTopic.canonical.user"
 
+    # Initialize consumer to None to avoid UnboundLocalError in finally block
+    consumer = None
+
     try:
         consumer = KafkaConsumer(topic, **kafka_config)
         logger.info("process_principal_events_from_kafka: Connected to Kafka, subscribed to topic: %s", topic)
@@ -307,10 +310,12 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))
         capture_exception(e)
     finally:
-        try:
-            consumer.close()
-        except Exception:
-            pass
+        if consumer is not None:
+            try:
+                consumer.close()
+                logger.info("process_principal_events_from_kafka: Kafka consumer closed.")
+            except Exception as e:
+                logger.error("process_principal_events_from_kafka: Error closing consumer: %s", str(e))
         logger.info("process_principal_events_from_kafka: Principal event processing finished.")
 
 

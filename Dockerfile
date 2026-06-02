@@ -71,8 +71,7 @@ COPY Pipfile .
 COPY Pipfile.lock .
 RUN \
     # install the dependencies into the working dir (i.e. ${APP_ROOT}/.venv)
-    # NOTE: Using --skip-lock temporarily due to Pipfile.lock dependency conflicts
-    pipenv install --skip-lock && \
+    pipenv install --deploy --ignore-pipfile && \
     # delete the pipenv cache
     pipenv --clear
 
