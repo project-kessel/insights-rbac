@@ -72,7 +72,7 @@ COPY Pipfile.lock .
 ENV PG_CONFIG=/usr/bin/pg_config
 RUN \
     # install the dependencies into the working dir (i.e. ${APP_ROOT}/.venv)
-    pipenv install --deploy --ignore-pipfile && \
+    pipenv install --deploy && \
     # delete the pipenv cache
     pipenv --clear
 
