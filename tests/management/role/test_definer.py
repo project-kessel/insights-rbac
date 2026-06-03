@@ -36,7 +36,8 @@ from management.models import (
 )
 from management.permission.scope_service import Scope
 from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType
-from management.role.definer import seed_roles, seed_permissions, _seed_platform_roles
+from management.permission.scope_service import ImplicitResourceService
+from management.role.definer import seed_roles, seed_permissions, _seed_platform_roles, _seed_v2_role_from_v1
 from management.role.platform import (
     ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
     admin_platform_parent_scope_for_seeded_system_role,
@@ -1257,6 +1258,177 @@ class V2RoleSeedingTests(IdentityRequest):
         # V2 should now match V1's permissions (which were reset during seeding)
         v1_permissions = set(access.permission for access in v1_role.access.all())
         self.assertEqual(v2_permissions, v1_permissions)
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    def test_seed_v2_role_from_v1_succeeds_on_first_attempt(self, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 succeeds on first attempt without retries."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role First Attempt",
+            display_name="Test Role First Attempt",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        mock_do_seed.return_value = "success"
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        result = _seed_v2_role_from_v1(
+            v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+        )
+
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_do_seed.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    def test_seed_v2_role_from_v1_retries_on_failure_then_succeeds(self, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 retries on transient failure and eventually succeeds."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role Retry Success",
+            display_name="Test Role Retry Success",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        mock_do_seed.side_effect = [
+            Exception("Transient error 1"),
+            Exception("Transient error 2"),
+            "success",
+        ]
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        result = _seed_v2_role_from_v1(
+            v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+        )
+
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_do_seed.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_called_with(0.1)
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    def test_seed_v2_role_from_v1_raises_after_max_retries(self, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 raises exception after exhausting all retry attempts."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role Max Retries",
+            display_name="Test Role Max Retries",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        mock_do_seed.side_effect = Exception("Persistent error")
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        with self.assertRaises(Exception) as context:
+            _seed_v2_role_from_v1(
+                v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+            )
+
+        self.assertEqual(str(context.exception), "Persistent error")
+        self.assertEqual(mock_do_seed.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    def test_seed_v2_role_from_v1_succeeds_on_second_attempt(self, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 succeeds after one retry."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role Second Attempt",
+            display_name="Test Role Second Attempt",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        mock_do_seed.side_effect = [
+            Exception("Transient error"),
+            "success",
+        ]
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        result = _seed_v2_role_from_v1(
+            v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+        )
+
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_do_seed.call_count, 2)
+        self.assertEqual(mock_sleep.call_count, 1)
+        mock_sleep.assert_called_with(0.1)
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    @patch("management.role.definer.logger")
+    def test_seed_v2_role_from_v1_logs_warning_on_retry(self, mock_logger, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 logs warning on each retry attempt."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role Logging",
+            display_name="Test Role Logging",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        error = Exception("Transient error")
+        mock_do_seed.side_effect = [error, "success"]
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        _seed_v2_role_from_v1(
+            v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+        )
+
+        mock_logger.warning.assert_called_once_with(
+            "Attempt %d/%d failed for %s, retrying: %s", 1, 3, v1_role.display_name, error
+        )
+
+    @patch("management.role.definer._do_seed_v2_role")
+    @patch("management.role.definer.time.sleep")
+    @patch("management.role.definer.logger")
+    def test_seed_v2_role_from_v1_logs_error_on_final_failure(self, mock_logger, mock_sleep, mock_do_seed):
+        """Test that _seed_v2_role_from_v1 logs error on final failure after all retries."""
+        seed_group()
+        platform_roles = _seed_platform_roles()
+
+        v1_role = Role.objects.create(
+            name="Test Role Error Log",
+            display_name="Test Role Error Log",
+            system=True,
+            tenant=self.public_tenant,
+        )
+
+        error = Exception("Persistent error")
+        mock_do_seed.side_effect = error
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        with self.assertRaises(Exception):
+            _seed_v2_role_from_v1(
+                v1_role, v1_role.display_name, "description", self.public_tenant, platform_roles, resource_service
+            )
+
+        mock_logger.error.assert_called_once_with(
+            "Failed to seed V2 role %s after %d attempts: %s", v1_role.display_name, 3, error
+        )
 
 
 @override_settings(
