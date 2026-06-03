@@ -1875,7 +1875,7 @@ def list_group_principals(
         "list_cross_account_requests(query_by='target_org', status='approved'). "
         "Order by: 'request_id', 'start_date', 'end_date', 'created', 'modified', "
         "'status' (prefix with '-' to reverse). "
-        "Returns: {meta: {count}, links, data: [{request_id, target_account, status, start_date, end_date, ...}]}. "
+        "Returns: {meta: {count}, links, data: [{request_id, target_org, status, start_date, end_date, ...}]}. "
         "Calls: GET /api/v1/cross-account-requests/\n"
         "Caveats:\n"
         "- Cross-account requests are org-to-org, not user-to-user. A TAM requests access to your "
@@ -1921,8 +1921,8 @@ def list_cross_account_requests(
 @register_tool(
     description=(
         "Get details of a specific cross-account access request by its ID, including "
-        "status, start/end dates, target account, and the requested roles. "
-        "Returns: {request_id, target_account, status, start_date, end_date, created, roles, ...}. "
+        "status, start/end dates, target org, and the requested roles. "
+        "Returns: {request_id, target_org, status, start_date, end_date, created, roles, ...}. "
         "Calls: GET /api/v1/cross-account-requests/{request_id}/"
     ),
     requires_auth=True,
@@ -4504,9 +4504,9 @@ def create_workspace(
     description=(
         "Create a cross-account access request. Allows users from one org (e.g. TAMs) "
         "to request temporary access to another org's resources. "
-        "Required: target_account (the account number to request access to), "
+        "Required: target_org (the org ID to request access to), "
         "start_date (YYYY-MM-DD), end_date (YYYY-MM-DD), roles (list of role UUIDs). "
-        "Example: create_cross_account_request(target_account='12345', "
+        "Example: create_cross_account_request(target_org='12345', "
         "start_date='2026-06-01', end_date='2026-06-30', roles=['<role-uuid>']) "
         "Returns: the created request with request_id, status, dates. "
         "Calls: POST /api/v1/cross-account-requests/"
@@ -4517,14 +4517,14 @@ def create_workspace(
 def create_cross_account_request(
     request: HttpRequest,
     *,
-    target_account: str,
+    target_org: str,
     start_date: str,
     end_date: str,
     roles: list[str],
 ) -> str:
     """Create a cross-account request by delegating to CrossAccountRequestViewSet."""
     body: dict[str, Any] = {
-        "target_account": target_account,
+        "target_org": target_org,
         "start_date": start_date,
         "end_date": end_date,
         "roles": roles,

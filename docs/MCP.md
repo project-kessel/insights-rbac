@@ -915,7 +915,7 @@ List cross-account access requests. These allow users from one org (e.g. Red Hat
 **Auth:** `x-rh-identity` required
 **Calls:** `GET /api/v1/cross-account-requests/`
 
-**Returns:** `{meta: {count}, links, data: [{request_id, target_account, status, start_date, end_date, ...}]}`.
+**Returns:** `{meta: {count}, links, data: [{request_id, target_org, status, start_date, end_date, ...}]}`.
 
 **Caveats:**
 - Approved requests have a time window -- check `end_date` against current date.
@@ -936,7 +936,7 @@ Get details of a specific cross-account access request by its ID.
 **Auth:** `x-rh-identity` required
 **Calls:** `GET /api/v1/cross-account-requests/{request_id}/`
 
-**Returns:** `{request_id, target_account, status, start_date, end_date, created, roles, ...}`.
+**Returns:** `{request_id, target_org, status, start_date, end_date, created, roles, ...}`.
 
 ---
 
@@ -986,7 +986,7 @@ Create a cross-account access request for temporary access to another org's reso
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target_account` | string | _(required)_ | Account number to request access to |
+| `target_org` | string | _(required)_ | Org ID to request access to |
 | `start_date` | string | _(required)_ | Start date (`YYYY-MM-DD`) |
 | `end_date` | string | _(required)_ | End date (`YYYY-MM-DD`) |
 | `roles` | list[string] | _(required)_ | List of role UUIDs |
@@ -1021,7 +1021,7 @@ Update a cross-account access request (full replacement).
 
 **Caveats:**
 - Date format differs from `create_cross_account_request`: this endpoint requires `MM/DD/YYYY`, while create uses `YYYY-MM-DD`. This is an asymmetry in the underlying API serializers.
-- `roles` here takes role display name strings, not UUIDs (unlike create which takes UUIDs). The field name matches `target_org` (not `target_account` as in create).
+- `roles` here takes role display name strings, not UUIDs (unlike create which takes UUIDs).
 
 ---
 
