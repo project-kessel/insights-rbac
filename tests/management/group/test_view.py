@@ -7221,7 +7221,6 @@ class GroupReplicationTests(IdentityRequest):
 
         # Now approve a CAR for the tenant and the same role
         request = CrossAccountRequest.objects.create(
-            target_account=self.tenant.account_id,
             target_org=self.tenant.org_id,
             user_id="2222222",
             end_date=timezone.now() + timedelta(10),
@@ -7332,7 +7331,6 @@ class GroupReplicationTests(IdentityRequest):
 
         # Now approve a CAR for the tenant and the same role
         request = CrossAccountRequest.objects.create(
-            target_account=self.tenant.account_id,
             target_org=self.tenant.org_id,
             user_id="2222222",
             end_date=timezone.now() + timedelta(10),

@@ -6030,7 +6030,7 @@ class MCPCrossAccountRequestTests(MCPToolTestMixin, IdentityRequest):
         response = self._call_tool(
             "create_cross_account_request",
             {
-                "target_account": "9999999",
+                "target_org": "9999999",
                 "start_date": "2026-06-01",
                 "end_date": "2026-06-30",
                 "roles": [str(self.role.uuid)],
