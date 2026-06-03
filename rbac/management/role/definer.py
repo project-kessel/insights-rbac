@@ -21,14 +21,13 @@ import dataclasses
 import json
 import logging
 import os
-import time
 
 from core.utils import destructive_ok
 from django.conf import settings
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
-from management.atomic_transactions import atomic
+from management.atomic_transactions import atomic, retry
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.notifications.notification_handlers import role_obj_change_notification_handler
@@ -334,28 +333,8 @@ def _create_single_platform_role(access_type, scope, policy_service, public_tena
     return platform_role
 
 
+@retry(max_attempts=3, delay=0.1)
 def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, platform_roles, resource_service):
-    """Create or update V2 role from V1 role during seeding."""
-    max_attempts = 3
-    last_exception = None
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return _do_seed_v2_role(
-                v1_role, display_name, description, public_tenant, platform_roles, resource_service
-            )
-        except Exception as e:
-            last_exception = e
-            if attempt == max_attempts:
-                logger.error("Failed to seed V2 role %s after %d attempts: %s", display_name, max_attempts, e)
-                raise
-            logger.warning("Attempt %d/%d failed for %s, retrying: %s", attempt, max_attempts, display_name, e)
-            time.sleep(0.1)
-
-    raise last_exception
-
-
-def _do_seed_v2_role(v1_role, display_name, description, public_tenant, platform_roles, resource_service):
     """Perform the actual V2 role seeding."""
     v2_role, v2_created = SeededRoleV2.objects.update_or_create(
         uuid=v1_role.uuid,

@@ -17,10 +17,14 @@
 """Decorators for v2 services."""
 
 import functools
+import logging
+import time
 
 import pgtransaction
 from django.conf import settings
 from django.db import transaction
+
+logger = logging.getLogger(__name__)
 
 # Shared isolation level configuration
 ISOLATION_LEVEL = pgtransaction.SERIALIZABLE
@@ -68,3 +72,43 @@ def atomic_block():
         return transaction.atomic()
 
     return pgtransaction.atomic(isolation_level=ISOLATION_LEVEL)
+
+
+def retry(max_attempts: int = 3, delay: float = 0.1):
+    """Retry a function on any exception with a fixed delay between attempts.
+
+    Args:
+        max_attempts: Maximum number of attempts before giving up.
+        delay: Time in seconds to wait between retry attempts.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_attempts:
+                        logger.error(
+                            "Function %s failed after %d attempts: %s",
+                            func.__name__,
+                            max_attempts,
+                            e,
+                        )
+                        raise
+                    logger.warning(
+                        "Attempt %d/%d failed for %s, retrying: %s",
+                        attempt,
+                        max_attempts,
+                        func.__name__,
+                        e,
+                    )
+                    time.sleep(delay)
+            raise last_exception
+
+        return wrapper
+
+    return decorator
