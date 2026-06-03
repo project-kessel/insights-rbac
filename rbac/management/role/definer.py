@@ -335,50 +335,64 @@ def _create_single_platform_role(access_type, scope, policy_service, public_tena
 
 def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, platform_roles, resource_service):
     """Create or update V2 role from V1 role during seeding."""
-    try:
-        v2_role, v2_created = SeededRoleV2.objects.update_or_create(
-            uuid=v1_role.uuid,
-            defaults={
-                "name": display_name,
-                "description": description,
-                "tenant": public_tenant,
-                "v1_source": v1_role,
-            },
-        )
-        if v2_created:
-            logger.info("Created V2 system role %s.", display_name)
-        else:
-            logger.info("Updated V2 system role %s.", display_name)
-        v2_role.permissions.clear()
-        v1_permissions = [access.permission for access in v1_role.access.all()]
-        if v1_permissions:
-            v2_role.permissions.set(v1_permissions)
-            logger.info("Added %d permissions to V2 role %s.", len(v1_permissions), display_name)
+    max_attempts = 3
+    last_exception = None
 
-        binding_scopes = resource_service.binding_scopes_for_role(v1_role)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _do_seed_v2_role(
+                v1_role, display_name, description, public_tenant, platform_roles, resource_service
+            )
+        except Exception as e:
+            last_exception = e
+            if attempt == max_attempts:
+                logger.error("Failed to seed V2 role %s after %d attempts: %s", display_name, max_attempts, e)
+                raise
+            logger.warning("Attempt %d/%d failed for %s, retrying: %s", attempt, max_attempts, display_name, e)
 
-        # Clear parents first since scope may have changed since previous seeding
-        v2_role.parents.clear()
+    raise last_exception
 
-        if v1_role.platform_default:
-            for scope in binding_scopes:
-                platform_role = platform_roles[(DefaultAccessType.USER, scope)]
-                platform_role.children.add(v2_role)
-                logger.info("Added %s as child of platform role %s", display_name, platform_role.name)
 
-        if v1_role.admin_default:
-            for scope in binding_scopes:
-                admin_scope = admin_platform_parent_scope_for_seeded_system_role(
-                    v1_role.name, scope, apply_override=True
-                )
-                admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
-                admin_platform_role.children.add(v2_role)
-                logger.info("Added %s as child of admin platform role %s", display_name, admin_platform_role.name)
+def _do_seed_v2_role(v1_role, display_name, description, public_tenant, platform_roles, resource_service):
+    """Perform the actual V2 role seeding."""
+    v2_role, v2_created = SeededRoleV2.objects.update_or_create(
+        uuid=v1_role.uuid,
+        defaults={
+            "name": display_name,
+            "description": description,
+            "tenant": public_tenant,
+            "v1_source": v1_role,
+        },
+    )
+    if v2_created:
+        logger.info("Created V2 system role %s.", display_name)
+    else:
+        logger.info("Updated V2 system role %s.", display_name)
+    v2_role.permissions.clear()
+    v1_permissions = [access.permission for access in v1_role.access.all()]
+    if v1_permissions:
+        v2_role.permissions.set(v1_permissions)
+        logger.info("Added %d permissions to V2 role %s.", len(v1_permissions), display_name)
 
-        return v2_role
-    except Exception as e:
-        logger.error(f"Failed to seed V2 role for {display_name}: {e}")
-        return None
+    binding_scopes = resource_service.binding_scopes_for_role(v1_role)
+
+    # Clear parents first since scope may have changed since previous seeding
+    v2_role.parents.clear()
+
+    if v1_role.platform_default:
+        for scope in binding_scopes:
+            platform_role = platform_roles[(DefaultAccessType.USER, scope)]
+            platform_role.children.add(v2_role)
+            logger.info("Added %s as child of platform role %s", display_name, platform_role.name)
+
+    if v1_role.admin_default:
+        for scope in binding_scopes:
+            admin_scope = admin_platform_parent_scope_for_seeded_system_role(v1_role.name, scope, apply_override=True)
+            admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
+            admin_platform_role.children.add(v2_role)
+            logger.info("Added %s as child of admin platform role %s", display_name, admin_platform_role.name)
+
+    return v2_role
 
 
 def _seed_platform_roles():
