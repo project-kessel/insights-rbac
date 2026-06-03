@@ -19,7 +19,7 @@
 from uuid import UUID
 from django.conf import settings
 from django.test.utils import override_settings
-from unittest.mock import ANY, call, patch, mock_open
+from unittest.mock import ANY, MagicMock, call, patch, mock_open
 
 from api.models import Tenant
 from management.group.definer import seed_group
@@ -1273,9 +1273,7 @@ class V2RoleSeedingTests(IdentityRequest):
             tenant=self.public_tenant,
         )
 
-        mock_v2_role = SeededRoleV2(uuid=v1_role.uuid, name=v1_role.display_name, tenant=self.public_tenant)
-        mock_v2_role.permissions = type("MockManager", (), {"clear": lambda: None, "set": lambda x: None})()
-        mock_v2_role.parents = type("MockManager", (), {"clear": lambda: None})()
+        mock_v2_role = MagicMock()
         mock_update_or_create.return_value = (mock_v2_role, True)
 
         resource_service = ImplicitResourceService.from_settings()
@@ -1301,9 +1299,7 @@ class V2RoleSeedingTests(IdentityRequest):
             tenant=self.public_tenant,
         )
 
-        mock_v2_role = SeededRoleV2(uuid=v1_role.uuid, name=v1_role.display_name, tenant=self.public_tenant)
-        mock_v2_role.permissions = type("MockManager", (), {"clear": lambda: None, "set": lambda x: None})()
-        mock_v2_role.parents = type("MockManager", (), {"clear": lambda: None})()
+        mock_v2_role = MagicMock()
         mock_update_or_create.side_effect = [
             Exception("Transient error 1"),
             Exception("Transient error 2"),
@@ -1360,9 +1356,7 @@ class V2RoleSeedingTests(IdentityRequest):
             tenant=self.public_tenant,
         )
 
-        mock_v2_role = SeededRoleV2(uuid=v1_role.uuid, name=v1_role.display_name, tenant=self.public_tenant)
-        mock_v2_role.permissions = type("MockManager", (), {"clear": lambda: None, "set": lambda x: None})()
-        mock_v2_role.parents = type("MockManager", (), {"clear": lambda: None})()
+        mock_v2_role = MagicMock()
         mock_update_or_create.side_effect = [
             Exception("Transient error"),
             (mock_v2_role, True),
