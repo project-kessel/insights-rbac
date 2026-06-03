@@ -750,6 +750,72 @@ def get_status(request: HttpRequest) -> str:
 
 @register_tool(
     description=(
+        "Check MCP server health: tool registry integrity, database connectivity, "
+        "and Redis availability. No authentication required — designed for "
+        "infrastructure probing and readiness checks. "
+        "Returns status 'ok' when all checks pass, 'degraded' with per-check "
+        "details when any check fails."
+    ),
+    requires_auth=False,
+    api_version=ApiVersion.UNVERSIONED,
+)
+def health_check() -> str:
+    """Verify MCP-specific health: tool registry, database, and Redis."""
+    checks: dict[str, str] = {}
+    details: dict[str, str] = {}
+
+    # 1. Tool registry check
+    try:
+        config_count = len(_TOOL_CONFIG)
+        tools = _get_tools()
+        tools_count = len(tools)
+        if config_count > 0 and tools_count > 0:
+            checks["tools"] = "ok"
+        else:
+            checks["tools"] = "error"
+            details["tools"] = "registry empty"
+    except Exception:
+        logger.exception("mcp: health_check tools registry probe failed")
+        checks["tools"] = "error"
+        details["tools"] = "unavailable"
+
+    # 2. Database check
+    try:
+        _check_database()
+        checks["database"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check database probe failed")
+        checks["database"] = "error"
+        details["database"] = "unavailable"
+
+    # 3. Redis check
+    try:
+        _check_redis()
+        checks["redis"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check redis probe failed")
+        checks["redis"] = "error"
+        details["redis"] = "unavailable"
+
+    overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    result: dict[str, Any] = {"status": overall, "checks": checks}
+    if details:
+        result["details"] = details
+    return json.dumps(result)
+
+
+def _check_database() -> None:
+    """Probe database connectivity via a lightweight ORM query."""
+    Tenant.objects.exists()
+
+
+def _check_redis() -> None:
+    """Probe Redis connectivity via PING."""
+    _get_redis().ping()
+
+
+@register_tool(
+    description=(
         "List permissions available in RBAC. Each permission has the format 'application:resource_type:verb'. "
         "Filter by application, resource_type, or verb. Supports pagination and ordering by 'permission' or "
         "'-permission'. "
@@ -5456,7 +5522,10 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
 
     Returns None on success, or a sanitized error message on failure.
     """
-    schemas = _get_tool_schemas()
+    try:
+        schemas = _get_tool_schemas()
+    except Exception:
+        return None
     schema = schemas.get(tool_name)
     if schema is None:
         return None
