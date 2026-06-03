@@ -165,7 +165,6 @@ class MigrateTests(TestCase):
         # Setup cross account request to migrate
         self.ref_time = timezone.now()
         self.cross_account_request = CrossAccountRequest.objects.create(
-            target_account="098765",
             target_org="7654321",
             user_id="1111111",
             end_date=self.ref_time + timedelta(10),

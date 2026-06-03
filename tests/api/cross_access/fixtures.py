@@ -75,23 +75,22 @@ class CrossAccountRequestTest(IdentityRequest):
 
         """
             Create cross account requests 1 to 6: request_1 to request_6
-            self.associate_admin_request has user_id 1111111, and account number xxxxxx
+            self.associate_admin_request has user_id 1111111, and org_id = self.org_id
             It would be approver for request_1, request_2, request_5;
             It would be requestor for request_3, request_6
-            |    target_org  | user_id | start_date | end_date  |  status  | roles |
-            |     xxxxxx     | 1111111 |    now     | now+10day | approved |       |
-            |     xxxxxx     | 2222222 |    now     | now+10day | pending  |       |
-            |     123456     | 1111111 |    now     | now+10day | approved |       |
-            |     123456     | 2222222 |    now     | now+10day | pending  |       |
-            |     xxxxxx     | 2222222 |    now     | now+10day | expired  |       |
-            |     123456     | 1111111 |    now     | now_10day | pending  |       |
+            |  target_org     | user_id | start_date | end_date  |  status  | roles |
+            |  self.org_id    | 1111111 |    now     | now+10day | approved |       |
+            |  self.org_id    | 2222222 |    now     | now+10day | pending  |       |
+            |  another_org_id | 1111111 |    now     | now+10day | approved |       |
+            |  self.org_id    | 2222222 |    now     | now+10day | pending  |       |
+            |  self.org_id    | 2222222 |    now     | now+10day | expired  |       |
+            |  another_org_id | 1111111 |    now     | now_10day | pending  |       |
         """
 
         self.another_account = "123456"
         self.another_org_id = "54321"
 
         self.data4create = {
-            "target_account": None,
             "target_org": "054321",
             "start_date": self.format_date(self.ref_time),
             "end_date": self.format_date(self.ref_time + timedelta(90)),
@@ -100,14 +99,13 @@ class CrossAccountRequestTest(IdentityRequest):
 
         public_tenant = Tenant.objects.get(tenant_name="public")
 
-        tenant_for_target_account = Tenant.objects.create(
-            tenant_name=f"acct{self.data4create['target_account']}",
-            account_id=self.data4create["target_account"],
+        tenant_for_target_org = Tenant.objects.create(
+            tenant_name=f"org{self.data4create['target_org']}",
             org_id=self.data4create["target_org"],
         )
-        tenant_for_target_account.ready = True
-        tenant_for_target_account.save()
-        self.fixture.bootstrap_tenant(tenant_for_target_account)
+        tenant_for_target_org.ready = True
+        tenant_for_target_org.save()
+        self.fixture.bootstrap_tenant(tenant_for_target_org)
 
         self.role_1 = self.fixture.new_system_role(name="role_1")
         self.role_2 = self.fixture.new_system_role(name="role_2")
@@ -118,7 +116,6 @@ class CrossAccountRequestTest(IdentityRequest):
         Principal.objects.create(tenant=public_tenant, username="2222222", user_id="2222222")
 
         self.request_1 = CrossAccountRequest.objects.create(
-            target_account=self.account,
             target_org=self.org_id,
             user_id="1111111",
             end_date=self.ref_time + timedelta(10),
@@ -126,42 +123,36 @@ class CrossAccountRequestTest(IdentityRequest):
         )
         self.request_1.roles.add(*(self.role_1, self.role_2))
         self.request_2 = CrossAccountRequest.objects.create(
-            target_account=self.account,
             target_org=self.org_id,
             user_id="2222222",
             end_date=self.ref_time + timedelta(10),
         )
         self.request_2.roles.add(*(self.role_1, self.role_2))
         self.request_3 = CrossAccountRequest.objects.create(
-            target_account=self.another_account,
             target_org=self.another_org_id,
             user_id="1111111",
             end_date=self.ref_time + timedelta(10),
             status="approved",
         )
         self.request_4 = CrossAccountRequest.objects.create(
-            target_account=self.account,
             target_org=self.org_id,
             user_id="2222222",
             end_date=self.ref_time + timedelta(10),
             status="pending",
         )
         self.request_5 = CrossAccountRequest.objects.create(
-            target_account=self.account,
             target_org=self.org_id,
             user_id="2222222",
             end_date=self.ref_time + timedelta(10),
             status="expired",
         )
         self.request_6 = CrossAccountRequest.objects.create(
-            target_account=self.another_account,
             target_org=self.another_org_id,
             user_id="1111111",
             end_date=self.ref_time + timedelta(10),
             status="pending",
         )
         self.not_anemic_request_1 = CrossAccountRequest.objects.create(
-            target_account=self.not_anemic_account,
             target_org=self.not_anemic_org_id,
             user_id="1111111",
             end_date=self.ref_time + timedelta(10),
