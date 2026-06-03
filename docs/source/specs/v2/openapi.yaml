@@ -153,6 +153,12 @@ paths:
                       id: 550e8400-e29b-41d4-a716-446655440001
                     sources:
                       - id: 550e8400-e29b-41d4-a716-446655440001
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -354,6 +360,12 @@ paths:
                           id: 550e8400-e29b-41d4-a716-446655440001
                           name: Engineering Workspace
                           type: workspace
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -771,6 +783,12 @@ paths:
                         name: Workspace Admin
                         description: description
                         last_modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -972,6 +990,12 @@ paths:
                         resource_type: hosts
                         operation: write
                     last_modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -1312,6 +1336,12 @@ paths:
                     description: This is a basic workspace.
                     created: 2024-05-06T12:20-12-0700
                     modified: 2024-05-06T12:20-12-0700
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -1493,6 +1523,12 @@ paths:
                     description: Create a standard workspace.
                     created: '2024-08-04T12:00:00Z'
                     modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -1579,21 +1615,23 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 400
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - type: object
+                    properties:
+                      type:
+                        $ref: '#/components/schemas/Problems.ProblemType'
+                      status:
+                        type: number
+                        enum:
+                          - 400
+                      title:
+                        type: string
+                      detail:
+                        type: string
+                      instance:
+                        type: string
+                        format: uri
         '401':
           description: Access is unauthorized.
           content:
@@ -1682,21 +1720,23 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 400
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - type: object
+                    properties:
+                      type:
+                        $ref: '#/components/schemas/Problems.ProblemType'
+                      status:
+                        type: number
+                        enum:
+                          - 400
+                      title:
+                        type: string
+                      detail:
+                        type: string
+                      instance:
+                        type: string
+                        format: uri
         '401':
           description: Access is unauthorized.
           content:
@@ -1773,7 +1813,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
         '401':
           description: Access is unauthorized.
           content:
