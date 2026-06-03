@@ -21,6 +21,7 @@ import dataclasses
 import json
 import logging
 import os
+import time
 
 from core.utils import destructive_ok
 from django.conf import settings
@@ -349,6 +350,7 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
                 logger.error("Failed to seed V2 role %s after %d attempts: %s", display_name, max_attempts, e)
                 raise
             logger.warning("Attempt %d/%d failed for %s, retrying: %s", attempt, max_attempts, display_name, e)
+            time.sleep(0.1)
 
     raise last_exception
 
