@@ -875,12 +875,12 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
 
 
 @transaction.atomic
-def get_or_create_ungrouped_workspace(tenant: str) -> Workspace:
+def get_or_create_ungrouped_workspace(tenant: Tenant) -> Workspace:
     """
     Retrieve the ungrouped workspace for the given tenant.
 
     Args:
-        tenant (str): The tenant for which to retrieve the ungrouped workspace.
+        tenant (Tenant): The tenant for which to retrieve the ungrouped workspace.
     Returns:
         Workspace: The ungrouped workspace object for the given tenant.
     """
