@@ -286,7 +286,7 @@ class RoleV2Service:
         return queryset
 
     def _filter_by_resource_type(
-        self, queryset: QuerySet, resource_type: str, resource_id: Optional[uuid.UUID] = None
+        self, queryset: QuerySet, resource_type: str, resource_id: Optional[str] = None
     ) -> QuerySet:
         """Filter roles to those whose highest permission scope maps to resource_type.
 

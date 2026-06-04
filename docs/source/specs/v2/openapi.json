@@ -1098,7 +1098,17 @@
             "name": "resource_id",
             "in": "query",
             "required": false,
-            "description": "Filter by resource ID. Requires resource_type to be specified.",
+            "description": "Filter by resource ID. For workspace: UUID. For tenant: tenant resource ID (format: {domain}/{org_id}). Requires resource_type unless resource.tenant.org_id is provided.",
+            "schema": {
+              "type": "string"
+            },
+            "explode": false
+          },
+          {
+            "name": "resource.tenant.org_id",
+            "in": "query",
+            "required": false,
+            "description": "Org ID of the tenant resource to filter by. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.",
             "schema": {
               "type": "string"
             },
