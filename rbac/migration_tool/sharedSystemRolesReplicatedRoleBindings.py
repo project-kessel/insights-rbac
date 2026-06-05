@@ -26,6 +26,7 @@ from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
 from management.permission.scope_service import ImplicitResourceService, Scope
+from management.role.binding_checks import BindingAuthorizationPolicy, UnauthorizedResourceError
 from management.role.model import Role
 from management.role.resource_definitions import parse_attribute_filter
 from management.role.v2_model import CustomRoleV2, RoleV2
@@ -146,6 +147,7 @@ def v1_role_to_v2_bindings(
     resource_for_scope: ScopeBoundResourceResolver,
     existing_role_bindings: Iterable[BindingMapping],
     existing_v2_roles: Iterable[CustomRoleV2],
+    binding_policy: BindingAuthorizationPolicy,
 ) -> MigrateCustomRoleResult:
     """Convert a V1 role to a set of V2 role bindings.
 
@@ -220,8 +222,13 @@ def v1_role_to_v2_bindings(
                 collection=set,
             )
 
+    invalid_resources = [r for r in perm_groupings if not binding_policy.can_bind_to(r)]
+
+    if invalid_resources:
+        raise UnauthorizedResourceError(invalid_resources)
+
     # Project permission sets to roles per set of resources
-    return permission_groupings_to_v2_role_bindings(
+    return _permission_groupings_to_v2_role_bindings(
         perm_groupings,
         v1_role,
         existing_mappings=existing_role_bindings,
@@ -313,7 +320,7 @@ def _get_or_create_binding(
         return new_mapping, role_binding
 
 
-def permission_groupings_to_v2_role_bindings(
+def _permission_groupings_to_v2_role_bindings(
     perm_groupings: _PermissionGroupings,
     v1_role: Role,
     existing_mappings: Iterable[BindingMapping],
