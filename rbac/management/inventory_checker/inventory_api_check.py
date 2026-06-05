@@ -18,7 +18,7 @@
 """Inventory checker class which checks assignments on Inventory API."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import List, Optional, Union
 
 from django.conf import settings
@@ -39,6 +39,7 @@ from management.role.platform import admin_platform_parent_scope_for_seeded_syst
 from management.role.relations import role_child_relationship
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from management.utils import create_client_channel_inventory
+from migration_tool.models import V2boundresource
 from migration_tool.utils import create_relationship
 
 from api.models import Tenant
@@ -528,3 +529,38 @@ class SeededRoleHierarchyChecker(InventoryApiBaseChecker):
         else:
             logger.info(f"SeededRole: {role_uuid} has the correct parent-child relations in inventory.")
         return hierarchy_check
+
+
+class ResourceTenantInventoryChecker(InventoryApiBaseChecker):
+    """Subclass to check if resources have a given tenant on Inventory API."""
+
+    def check_resources(self, org_id: str, resources: Iterable[V2boundresource]) -> dict[V2boundresource, bool]:
+        """Core logic to check role V2 relation on inventory api."""
+        resources = list(set(resources))
+
+        tenant_subject = subject_reference_pb2.SubjectReference(
+            resource=resource_reference_pb2.ResourceReference(
+                resource_id=(Tenant.org_id_to_tenant_resource_id(org_id=org_id)),
+                resource_type="tenant",
+                reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
+            )
+        )
+
+        results = self._check_inventory_batch(
+            [
+                CheckRequest(
+                    object=resource_reference_pb2.ResourceReference(
+                        resource_id=resource.resource_id,
+                        resource_type=resource.resource_type[1],
+                        reporter=reporter_reference_pb2.ReporterReference(
+                            type=resource.resource_type[0],
+                        ),
+                    ),
+                    relation="tenant",
+                    subject=tenant_subject,
+                )
+                for resource in resources
+            ]
+        )
+
+        return dict(zip(resources, results))
