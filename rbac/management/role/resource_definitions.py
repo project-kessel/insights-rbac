@@ -38,8 +38,8 @@ class ParsedAttributeFilter:
     resource_type: ObjectType
 
     named_ids: frozenset[str]
-    has_null: bool
-    invalid_ids: tuple
+    has_null: bool = False
+    invalid_ids: tuple = tuple()
 
     def __post_init__(self):
         """Validate the ParsedAttributeFilter instance."""
