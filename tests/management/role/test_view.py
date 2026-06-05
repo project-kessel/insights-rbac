@@ -17,7 +17,8 @@
 """Test the role viewset."""
 
 import json
-from typing import Optional
+import uuid
+from typing import Optional, Callable, Iterable
 from uuid import uuid4
 from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
@@ -53,6 +54,7 @@ from migration_tool.in_memory_tuples import (
     subject,
     resource_type,
 )
+from migration_tool.models import V2boundresource
 
 from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
@@ -161,6 +163,7 @@ def find_in_list(list, predicate):
     return None
 
 
+@override_settings(ROLE_CREATE_ALLOW_LIST=["app", "cost-management"])
 class RoleViewsetTests(IdentityRequest):
     """Test the role viewset."""
 
@@ -2615,6 +2618,119 @@ class RoleViewsetTests(IdentityRequest):
             f"Role '{test_role_name}' incorrectly shows as being in groups: {group_names}. "
             f"Expected empty list since role is not in custom default group and should not fall back to public default.",
         )
+
+    def _use_binding_check(self, check_fn: Callable[[V2boundresource], bool]):
+        def do_check(org_id: str, resources: Iterable[V2boundresource]):
+            self.assertEqual(org_id, self.tenant.org_id)
+            return {r: check_fn(r) for r in set(resources)}
+
+        self.enterContext(self.settings(SKIP_RESOURCE_BINDING_CHECKS=False))
+
+        check = self.enterContext(
+            patch("management.inventory_checker.inventory_api_check.ResourceTenantInventoryChecker.check_resources")
+        )
+        check.side_effect = do_check
+
+    def test_check_default_binding(self):
+        # Using a function decorator causes an error in an unrelated test? Despite the fact that the settings do
+        # appear to actually be getting reset? I am baffled and don't have time to look into this.
+        self.enterContext(
+            self.settings(
+                ROLE_CREATE_ALLOW_LIST="default,root,tenant",
+                ROOT_SCOPE_PERMISSIONS="root:*:*",
+                TENANT_SCOPE_PERMISSIONS="tenant:*:*",
+            )
+        )
+
+        # Default resources should not need to be verified.
+        self._use_binding_check(lambda _: False)
+
+        Permission.objects.create(permission="default:*:*", tenant=self.public_tenant)
+        Permission.objects.create(permission="root:*:*", tenant=self.public_tenant)
+        Permission.objects.create(permission="tenant:*:*", tenant=self.public_tenant)
+
+        response = self.create_role(
+            "a role",
+            "a role",
+            [
+                {"permission": "default:*:*", "resourceDefinitions": []},
+                {"permission": "root:*:*", "resourceDefinitions": []},
+                {"permission": "tenant:*:*", "resourceDefinitions": []},
+            ],
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_check_authorized_workspace(self):
+        workspace = Workspace.objects.create(name="test workspace", parent=self.default_workspace, tenant=self.tenant)
+        self._use_binding_check(lambda r: r.resource_id == str(workspace.id))
+
+        response = self.create_role(
+            "a role",
+            "a role",
+            [
+                {
+                    "permission": "app:*:read",
+                    "resourceDefinitions": [
+                        {"attributeFilter": {"key": "group.id", "operation": "equal", "value": str(workspace.id)}}
+                    ],
+                },
+            ],
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_check_unauthorized_workspace(self):
+        workspace = Workspace.objects.create(name="test workspace", parent=self.default_workspace, tenant=self.tenant)
+        self._use_binding_check(lambda _: False)
+
+        response = self.create_role(
+            "a role",
+            "a role",
+            [
+                {
+                    "permission": "app:*:read",
+                    "resourceDefinitions": [
+                        {"attributeFilter": {"key": "group.id", "operation": "equal", "value": str(workspace.id)}}
+                    ],
+                },
+            ],
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn(f"rbac/workspace:{str(workspace.id)}", response.data["errors"][0]["detail"])
+
+    def test_check_partially_unauthorized_workspaces(self):
+        workspace_a = Workspace.objects.create(name="workspace a", parent=self.default_workspace, tenant=self.tenant)
+        workspace_b = Workspace.objects.create(name="workspace b", parent=self.default_workspace, tenant=self.tenant)
+
+        workspace_a_id = str(workspace_a.id)
+        workspace_b_id = str(workspace_b.id)
+
+        self._use_binding_check(lambda r: r.resource_id == workspace_a_id)
+
+        response = self.create_role(
+            "a role",
+            "a role",
+            [
+                {
+                    "permission": "app:*:read",
+                    "resourceDefinitions": [
+                        {
+                            "attributeFilter": {
+                                "key": "group.id",
+                                "operation": "in",
+                                "value": [str(workspace_a.id), str(workspace_b.id)],
+                            }
+                        }
+                    ],
+                },
+            ],
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertNotIn(f"rbac/workspace:{workspace_a_id}", response.data["errors"][0]["detail"])
+        self.assertIn(f"rbac/workspace:{workspace_b_id}", response.data["errors"][0]["detail"])
 
 
 class RoleViewNonAdminTests(IdentityRequest):

@@ -17,12 +17,14 @@
 
 """View for role management."""
 
+import itertools
 import json
 import logging
 import os
 import re
 import traceback
 import uuid
+from typing import Optional
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -39,10 +41,19 @@ from management.permissions import RoleAccessPermission
 from management.permissions.v2_edit_api_access import V1WriteBlockedWhenWorkspacesEnabled
 from management.querysets import get_role_queryset, user_has_perm
 from management.relation_replicator.relation_replicator import DualWriteException, ReplicationEventType
+from management.role.binding_checks import (
+    BindingAuthorizationPolicy,
+    BindingCheckResult,
+    RoleConflictError,
+    UnauthorizedResourceError,
+    check_binding_resources,
+    commit_binding_policy,
+    with_checked_bindings,
+)
 from management.role.relation_api_dual_write_handler import (
     RelationApiDualWriteHandler,
 )
-from management.role.resource_definitions import parse_attribute_filter
+from management.role.resource_definitions import ParsedAttributeFilter, parse_attribute_filter
 from management.role.serializer import AccessSerializer, RoleDynamicSerializer, RolePatchSerializer
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
 from management.utils import validate_uuid
@@ -50,6 +61,7 @@ from management.workspace.model import Workspace
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
 from api.models import Tenant
@@ -148,6 +160,8 @@ class RoleViewSet(
     ordering_fields = ("name", "display_name", "modified", "policyCount")
     ordering = ("name",)
 
+    _binding_check_result: Optional[BindingCheckResult] = None
+
     def get_queryset(self):
         """Obtain queryset for requesting user based on access and action."""
         # Although partial_update does not update access or policy, we do need to keep the V2 roles associated with the
@@ -218,6 +232,40 @@ class RoleViewSet(
 
         return serializer_class(*args, **kwargs)
 
+    def _set_binding_check_result(self, result: BindingCheckResult):
+        if self._binding_check_result is not None:
+            raise RuntimeError("_check_attribute_filters called twice")
+
+        self._binding_check_result = result
+
+    def _check_request_attribute_filters(self):
+        resource_definitions = list(
+            itertools.chain.from_iterable(
+                access.get("resourceDefinitions", [])
+                for access in self.validate_and_get_access_list(self.request.data)
+            )
+        )
+
+        parsed_filters: list[ParsedAttributeFilter] = list(
+            filter(
+                lambda f: f is not None,
+                (
+                    parse_attribute_filter(f)
+                    for f in [resource_definition["attributeFilter"] for resource_definition in resource_definitions]
+                ),
+            )
+        )
+
+        self._set_binding_check_result(
+            check_binding_resources(org_id=self.request.tenant.org_id, filters=parsed_filters)
+        )
+
+    def _commit_binding_policy(self) -> BindingAuthorizationPolicy:
+        if self._binding_check_result is None:
+            raise RuntimeError("_commit_binding_policy called before _check_attribute_filters")
+
+        return commit_binding_policy(self.request.tenant, self._binding_check_result)
+
     def create(self, request, *args, **kwargs):
         """Create a roles.
 
@@ -275,6 +323,8 @@ class RoleViewSet(
             }
         """
         try:
+            self._check_request_attribute_filters()
+
             with transaction.atomic():
                 assert_v1_write_allowed(request.tenant)
                 self.validate_role(request)
@@ -284,6 +334,8 @@ class RoleViewSet(
                 status=status.HTTP_403_FORBIDDEN,
                 data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
             )
+        except UnauthorizedResourceError as e:
+            return self.unauthorized_resource_response(e)
         except IntegrityError as e:
             if DUPLICATE_KEY_ERROR_MSG in e.args[0]:
                 raise serializers.ValidationError(
@@ -421,13 +473,24 @@ class RoleViewSet(
                 raise serializers.ValidationError(error)
 
         try:
-            with transaction.atomic():
-                assert_v1_write_allowed(request.tenant)
-                return super().update(request=request, args=args, kwargs=kwargs)
+
+            def do_update(role: Role, check_result: BindingCheckResult):
+                with transaction.atomic():
+                    self._set_binding_check_result(check_result)
+                    assert_v1_write_allowed(request.tenant)
+                    return super(RoleViewSet, self).update(request=request, args=args, kwargs=kwargs)
+
+            return with_checked_bindings(do_update, get_object_or_404(Role.objects.all(), uuid=kwargs["uuid"]))
         except V1WriteBlockedError:
             return Response(
                 status=status.HTTP_403_FORBIDDEN,
                 data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
+            )
+        except UnauthorizedResourceError as e:
+            return self.unauthorized_resource_response(e)
+        except RoleConflictError:
+            return Response(
+                status=status.HTTP_409_CONFLICT, data={"errors": [{"detail": "Too many concurrent updates to role."}]}
             )
         except DualWriteException as e:
             return self.dual_write_exception_response(e)
@@ -492,6 +555,8 @@ class RoleViewSet(
         """
         validate_uuid(kwargs.get("uuid"), "role uuid validation")
         try:
+            self._check_request_attribute_filters()
+
             with transaction.atomic():
                 assert_v1_write_allowed(request.tenant)
                 self.validate_role(request)
@@ -501,6 +566,8 @@ class RoleViewSet(
                 status=status.HTTP_403_FORBIDDEN,
                 data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
             )
+        except UnauthorizedResourceError as e:
+            return self.unauthorized_resource_response(e)
         except DualWriteException as e:
             return self.dual_write_exception_response(e)
 
@@ -512,7 +579,10 @@ class RoleViewSet(
         """
         role = serializer.save()
 
-        dual_write_handler = RelationApiDualWriteHandler(role, ReplicationEventType.CREATE_CUSTOM_ROLE)
+        dual_write_handler = RelationApiDualWriteHandler(
+            role, ReplicationEventType.CREATE_CUSTOM_ROLE, binding_policy=self._commit_binding_policy()
+        )
+
         # No need to replicate if creating role with empty access, which won't have any relationships
         if not role.access.all():
             expected_empty_relation_reason = (
@@ -534,7 +604,9 @@ class RoleViewSet(
 
         Assumes concurrent updates are prevented (e.g. with atomic block and locks).
         """
-        dual_write_handler = RelationApiDualWriteHandler(serializer.instance, ReplicationEventType.UPDATE_CUSTOM_ROLE)
+        dual_write_handler = RelationApiDualWriteHandler(
+            serializer.instance, ReplicationEventType.UPDATE_CUSTOM_ROLE, binding_policy=self._commit_binding_policy()
+        )
         dual_write_handler.prepare_for_update()
 
         role = serializer.save()
@@ -592,6 +664,18 @@ class RoleViewSet(
                         "source": "role",
                         "status": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
                     }
+                ]
+            },
+        )
+
+    def unauthorized_resource_response(self, e: UnauthorizedResourceError):
+        """Get the appropriate response for an UnauthorizedResourceError."""
+        return Response(
+            status=status.HTTP_403_FORBIDDEN,
+            data={
+                "errors": [
+                    {"detail": f"Cannot bind to resource: {r.resource_type[0]}/{r.resource_type[1]}:{r.resource_id}"}
+                    for r in e.resources
                 ]
             },
         )
