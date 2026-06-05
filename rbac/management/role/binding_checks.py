@@ -95,6 +95,14 @@ class BindingCheckResult:
     """
 
     named_resources: frozenset[V2boundresource]
+
+    # We store this bool rather than creating it early because we need check_binding_resources to run outside of a
+    # transaction, and we don't want to create an ungrouped hosts workspace if the transaction is going to fail later
+    # for some unrelated reason.
+    #
+    # This ends up requiring an extra step within the ultimate transaction, but that isn't particularly problematic.
+    # (The problematic part is ensuring that check_binding_resources *doesn't* run in a transaction, but creating the
+    # workspace early wouldn't remove that need.)
     ungrouped_hosts_workspace: bool
 
     def __post_init__(self):
