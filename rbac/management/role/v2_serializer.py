@@ -19,6 +19,7 @@
 import uuid
 
 from django.utils.translation import gettext as _
+from management.dotted_query_param_mixin import DottedQueryParamSerializerMixin
 from management.exceptions import RequiredFieldError
 from management.role.v2_exceptions import (
     InvalidRolePermissionsError,
@@ -28,13 +29,8 @@ from management.role.v2_exceptions import (
 )
 from management.role.v2_model import RoleV2
 from management.role.v2_service import RoleV2Service
-from management.utils import FieldSelection, FieldSelectionValidationError, UUIDStringField
+from management.utils import FieldSelection, FieldSelectionValidationError, UUIDStringField, normalize_blank_or_none
 from rest_framework import serializers
-
-
-def _normalize_blank_or_none(value: str | None) -> str | None:
-    """Return None for empty/blank values, pass through otherwise."""
-    return (value and value.strip()) or None
 
 
 class PermissionSerializer(serializers.Serializer):
@@ -157,7 +153,7 @@ def validate_fields_parameter(value: str, default_fields: set, strict: bool = Fa
     return resolved or default_fields
 
 
-class RoleV2ListSerializer(serializers.Serializer):
+class RoleV2ListSerializer(DottedQueryParamSerializerMixin, serializers.Serializer):
     """Input serializer for RoleV2 list query parameters."""
 
     DOTTED_PARAM_MAP = {
@@ -192,17 +188,6 @@ class RoleV2ListSerializer(serializers.Serializer):
     )
     fields = serializers.CharField(required=False, default="", allow_blank=True, help_text="Control included fields")
 
-    def to_internal_value(self, data):
-        """Remap dotted query param keys and sanitize NUL bytes before field validation."""
-        remapped = {key: data[key] for key in data}
-        for dotted, underscored in self.DOTTED_PARAM_MAP.items():
-            if dotted in remapped:
-                remapped[underscored] = remapped.pop(dotted)
-        sanitized = {
-            key: value.replace("\x00", "") if isinstance(value, str) else value for key, value in remapped.items()
-        }
-        return super().to_internal_value(sanitized)
-
     def validate_name(self, value: str | None) -> str | None:
         """Return None for empty values."""
         return value or None
@@ -215,9 +200,9 @@ class RoleV2ListSerializer(serializers.Serializer):
         """Parse, validate, and resolve fields parameter into a set of field names."""
         return validate_fields_parameter(value, RoleV2Service.DEFAULT_LIST_FIELDS)
 
-    validate_resource_id = staticmethod(_normalize_blank_or_none)
-    validate_resource_type = staticmethod(_normalize_blank_or_none)
-    validate_resource_tenant_org_id = staticmethod(_normalize_blank_or_none)
+    validate_resource_id = staticmethod(normalize_blank_or_none)
+    validate_resource_type = staticmethod(normalize_blank_or_none)
+    validate_resource_tenant_org_id = staticmethod(normalize_blank_or_none)
 
     def validate(self, data):
         """Cross-field validation for resource filters (aligned with role bindings)."""
@@ -227,10 +212,12 @@ class RoleV2ListSerializer(serializers.Serializer):
 
         if resource_tenant_org_id:
             if resource_id:
-                raise serializers.ValidationError("resource.tenant.org_id cannot be combined with resource_id.")
+                raise serializers.ValidationError(
+                    {"resource_tenant_org_id": "resource.tenant.org_id cannot be combined with resource_id."}
+                )
             if resource_type and resource_type != "tenant":
                 raise serializers.ValidationError(
-                    "resource_type must be 'tenant' when resource.tenant.org_id is provided."
+                    {"resource_type": "resource_type must be 'tenant' when resource.tenant.org_id is provided."}
                 )
         elif resource_id and not resource_type:
             raise serializers.ValidationError(

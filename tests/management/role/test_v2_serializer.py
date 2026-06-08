@@ -403,6 +403,7 @@ class RoleV2ListSerializerTests(IdentityRequest):
             },
         )
         self.assertFalse(serializer.is_valid())
+        self.assertIn("resource_tenant_org_id", serializer.errors)
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

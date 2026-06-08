@@ -115,7 +115,11 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         if validated_params.get("resource_tenant_org_id"):
             resource_type, resource_id = resolve_resource_identifiers(validated_params)
-            validated_params = {**validated_params, "resource_id": resource_id, "resource_type": resource_type}
+            validated_params = {
+                **{k: v for k, v in validated_params.items() if k != "resource_tenant_org_id"},
+                "resource_id": resource_id,
+                "resource_type": resource_type,
+            }
 
         service = RoleV2Service(tenant=request.tenant)
         queryset = service.list(validated_params)
