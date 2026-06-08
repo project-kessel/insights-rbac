@@ -16,10 +16,16 @@
 #
 """Tests for V2 write activation state."""
 
-from django.test import TestCase
+from unittest.mock import patch
+
+from django.test import TestCase, override_settings
 from django.db import transaction
 
 from api.models import Tenant
+from management.group.model import Group
+from management.relation_replicator.noop_replicator import NoopReplicator
+from management.role.model import BindingMapping, Role
+from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_mapping.v2_activation import (
     V1WriteBlockedError,
@@ -30,13 +36,27 @@ from management.tenant_mapping.v2_activation import (
     TenantVersion,
 )
 from management.tenant_service.v2 import TenantNotBootstrappedError
-from tests.management.role.test_dual_write import RbacFixture
+from management.workspace.service import WorkspaceService
+from migration_tool.in_memory_tuples import (
+    InMemoryTuples,
+    InMemoryRelationReplicator,
+    all_of,
+    resource,
+    relation,
+    subject,
+)
+from tests.management.role.test_dual_write import RbacFixture, DualWriteTestCase
+from tests.util import assert_v2_tuples_consistent
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class V2ActivationTests(TestCase):
     """Tests for V2 activation functions."""
 
     def setUp(self):
+        super().setUp()
+
         self.fixture = RbacFixture()
         self.bootstrapped = self.fixture.new_tenant(org_id="activation-test-org")
         self.tenant = self.bootstrapped.tenant
@@ -119,3 +139,73 @@ class V2ActivationTests(TestCase):
         with self.assertRaises(TenantNotBootstrappedError):
             with transaction.atomic():
                 lock_tenant_version(unbootstrapped)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
+class V2ActivationBindingRemovalTest(DualWriteTestCase):
+    def setUp(self):
+        super().setUp()
+        bootstrap_tenant_for_v2_test(self.tenant, tuples=self.tuples)
+
+        self.group, _ = self.given_group("group", ["p1"])
+
+        self.system_role = self.given_v1_system_role("a role", ["rbac:*:*"])
+        self.custom_role = self.given_v1_role("a role", default=["rbac:*:*"], **{self.ws_1_id: ["inventory:*:*"]})
+
+    def tearDown(self):
+        assert_v2_tuples_consistent(test=self, tuples=self.tuples)
+        super().tearDown()
+
+    def _expect_binding_counts(self, role: Role, v1_count: int, v2_count: int):
+        self.assertEqual(v1_count, BindingMapping.objects.filter(role=role).count())
+
+        role_bindings = list(RoleBinding.objects.filter(role__v1_source=role))
+        self.assertEqual(v2_count, len(role_bindings))
+
+        for binding in role_bindings:
+            self.assertEqual(
+                1,
+                self.tuples.count_tuples(
+                    all_of(
+                        resource("rbac", "role_binding", str(binding.uuid)),
+                        relation("role"),
+                        subject("rbac", "role", str(binding.role.uuid)),
+                    )
+                ),
+            )
+
+    def test_remove_system_binding(self):
+        self.given_roles_assigned_to_group(self.group, [self.system_role])
+
+        initial_tuples = set(self.tuples)
+        self._expect_binding_counts(self.system_role, 1, 1)
+
+        ensure_v2_write_activated(self.tenant)
+
+        self.assertSetEqual(initial_tuples, set(self.tuples))
+        self._expect_binding_counts(self.system_role, 0, 1)
+
+    def test_remove_custom_bindings(self):
+        self.given_roles_assigned_to_group(self.group, [self.custom_role])
+
+        initial_tuples = set(self.tuples)
+        self._expect_binding_counts(self.custom_role, 2, 2)
+
+        ensure_v2_write_activated(self.tenant)
+
+        self.assertSetEqual(initial_tuples, set(self.tuples))
+        self._expect_binding_counts(self.custom_role, 0, 2)
+
+    def test_fail_missing_binding_mapping(self):
+        self.given_roles_assigned_to_group(self.group, [self.system_role])
+        BindingMapping.objects.filter(role=self.system_role).delete()
+
+        with self.assertRaises(AssertionError):
+            ensure_v2_write_activated(self.tenant)
+
+    def test_fail_missing_role_binding(self):
+        self.given_roles_assigned_to_group(self.group, [self.system_role])
+        RoleBinding.objects.filter(role__v1_source=self.system_role).delete()
+
+        with self.assertRaises(AssertionError):
+            ensure_v2_write_activated(self.tenant)

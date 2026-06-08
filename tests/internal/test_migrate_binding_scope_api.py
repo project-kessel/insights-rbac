@@ -530,6 +530,7 @@ class BindingScopeMigrationTupleVerificationTest(TestCase):
         assert_v2_tuples_consistent(test=self, tuples=self.tuples)
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class SystemRoleBindingMigrationTest(TestCase):
     """Tests for system role binding migration via group operations."""
 

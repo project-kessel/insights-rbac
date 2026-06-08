@@ -42,17 +42,7 @@ def _do_tear_down_tenant(tenant: Tenant, replicator: RelationReplicator):
         .select_for_update(of=["self"])
     )
 
-    binding_mapping_predicate = Q(
-        resource_type_namespace="rbac",
-        resource_type_name="tenant",
-        resource_id=tenant_resource_id,
-    ) | (
-        Q(
-            resource_type_namespace="rbac",
-            resource_type_name="workspace",
-        )
-        & In(Cast(F("resource_id"), UUIDField()), Workspace.objects.filter(tenant=tenant).values("id"))
-    )
+    binding_mapping_predicate = BindingMapping.filter_known_in_tenant(tenant)
 
     if len(role_bindings) > 0:
         binding_mapping_predicate = binding_mapping_predicate | Q(
