@@ -1283,7 +1283,7 @@ objects:
           image: ${IMAGE}:${IMAGE_TAG}
           command:
             - /opt/rbac/rbac/manage.py
-            - replicate-default-workspaces
+            - replicate_default_workspaces
             - "--all"
           resources:
             limits:
