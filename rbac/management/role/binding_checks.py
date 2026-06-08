@@ -243,7 +243,7 @@ def with_checked_bindings[T](  # noqa: D103; I have no idea what it's on about.
             role = (
                 Role.objects.select_related("tenant")
                 .prefetch_related("access", "access__resourceDefinitions")
-                .select_for_update(("self", "access", "access_resourceDefinitions"))
+                .select_for_update(of=["self"])
                 .get(pk=role.pk)
             )
 
