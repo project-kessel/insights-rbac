@@ -17,6 +17,8 @@
 
 """Serializer for role management."""
 
+from typing import Any
+
 from django.conf import settings
 from django.utils.translation import gettext as _
 from feature_flags import FEATURE_FLAGS
@@ -29,13 +31,16 @@ from management.utils import (
     is_permission_blocked_for_v1,
     is_valid_uuid,
     validate_and_get_key,
-    value_to_list,
 )
 from rest_framework import serializers
 
 from api.models import Tenant
 from .model import Access, BindingMapping, Permission, ResourceDefinition, Role
-from .resource_definitions import is_resource_a_workspace, parse_attribute_filter
+from .resource_definitions import (
+    ParsedAttributeFilter,
+    parse_attribute_filter,
+    updated_attribute_filter_with_ids,
+)
 from ..querysets import ORG_ID_SCOPE, PRINCIPAL_SCOPE, SCOPE_KEY, VALID_SCOPES
 
 ALLOWED_OPERATIONS = ["in", "equal"]
@@ -93,21 +98,40 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
     def to_representation(self, instance):
         """Convert the ResourceDefinition instance to a dictionary."""
         serialized_data = super().to_representation(instance)
-        if FEATURE_FLAGS.is_remove_null_value_enabled() and instance.attributeFilter["key"] == "group.id":
-            value = instance.attributeFilter["value"]
-            if isinstance(value, list) and None in value:
+        parsed_filter = parse_attribute_filter(instance.attributeFilter)
+
+        if parsed_filter is None:
+            return serialized_data
+
+        new_ids: list[Any] = list(parsed_filter.named_ids) + list(parsed_filter.invalid_ids)
+
+        # Whether to force the operation to be "in" (even if it was previously "equal").
+        force_in_operation: bool = False
+
+        if parsed_filter.has_null:
+            # This preserves the number of values in the original filter, so we don't need to change the operation.
+            if parsed_filter.is_for_workspaces() and FEATURE_FLAGS.is_remove_null_value_enabled():
                 ungrouped_hosts = get_or_create_ungrouped_workspace(instance.tenant)
-                value = [v for v in value if v is not None]
-                value.append(str(ungrouped_hosts.id))
-            elif value is None:
-                ungrouped_hosts = get_or_create_ungrouped_workspace(instance.tenant)
-                value = str(ungrouped_hosts.id)
-            serialized_data["attributeFilter"]["value"] = value
-        if self._should_add_hierarchy(instance):
-            serialized_data.get("attributeFilter").update(
-                {"operation": "in", "value": self._original_vals_and_descendant_ids(instance)}
-            )
-        return serialized_data
+                new_ids.append(str(ungrouped_hosts.id))
+            else:
+                new_ids.append(None)
+
+        if self._should_add_hierarchy(parsed_filter):
+            # This, however, can add more values than were in the original filter, so we need to ensure the operation
+            # is always "in" (rather than "equal").
+            #
+            # Note that this will also preserve all invalid IDs (and None).
+            new_ids = self._original_vals_and_descendant_ids(tenant_id=instance.tenant_id, ids=new_ids)
+            force_in_operation = True
+
+        return {
+            **serialized_data,
+            "attributeFilter": updated_attribute_filter_with_ids(
+                attribute_filter=serialized_data["attributeFilter"],
+                new_ids=new_ids,
+                force_in_operation=force_in_operation,
+            ),
+        }
 
     class Meta:
         """Metadata for the serializer."""
@@ -115,20 +139,16 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         model = ResourceDefinition
         fields = ("attributeFilter",)
 
-    def _original_vals_and_descendant_ids(self, instance):
-        attr_filter_list = value_to_list(instance.attributeFilter.get("value"))
-        uuids = [val for val in attr_filter_list if is_valid_uuid(val)]
-        non_uuids = [val for val in attr_filter_list if not is_valid_uuid(val)]
-        ids_with_parents = Workspace.objects.descendant_ids_with_parents(uuids, instance.tenant_id)
+    def _original_vals_and_descendant_ids(self, tenant_id: int, ids: list[str | None]):
+        uuids = [val for val in ids if is_valid_uuid(val)]
+        non_uuids = [val for val in ids if not is_valid_uuid(val)]
+        ids_with_parents = Workspace.objects.descendant_ids_with_parents(uuids, tenant_id=tenant_id)
         return list(set(non_uuids + ids_with_parents))
 
-    def _should_add_hierarchy(self, instance):
+    def _should_add_hierarchy(self, parsed_filter: ParsedAttributeFilter):
         hierarchy_enabled = settings.WORKSPACE_HIERARCHY_ENABLED is True
         is_access_request = self.context.get("for_access") is True
-        return hierarchy_enabled and is_access_request and self._is_workspace_filter(instance)
-
-    def _is_workspace_filter(self, instance):
-        return is_resource_a_workspace(attribute_filter=instance.attributeFilter)
+        return hierarchy_enabled and is_access_request and parsed_filter.is_for_workspaces()
 
 
 class AccessListSerializer(serializers.ListSerializer):

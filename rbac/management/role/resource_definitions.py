@@ -152,18 +152,27 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
     )
 
 
-def is_resource_a_workspace(attribute_filter: dict) -> bool:
-    """Check if a given ResourceDefinition is a Workspace."""
-    return _resource_type_for(attribute_filter=attribute_filter) == _workspace_type
+def updated_attribute_filter_with_ids(
+    attribute_filter: dict, new_ids: Iterable[Any], *, force_in_operation: bool = False
+) -> dict:
+    """
+    Return an attribute filter equivalent to the provided one, but with new resource IDs.
 
+    If force_in_operation is set, the resulting filter will always have operation "in", and any number of IDs can be
+    provided. Otherwise, the original operation will be preserved; this means that, if attribute_filter has operation
+    "equal", only at most one ID can be provided.
 
-def updated_attribute_filter_with_ids(attribute_filter: dict, new_ids: Iterable[str | None]) -> dict:
-    """Return an attribute filter equivalent to the provided one, but with new resource IDs."""
+    The types of new_ids are not validated, since we need to be able to traffic in attribute filters with invalid IDs.
+    """
     operation = attribute_filter["operation"]
     new_ids = list(new_ids)
 
-    if not all((x is None) or (isinstance(x, str)) for x in new_ids):
-        raise TypeError(f"Expected all IDs to be strings or None, but got: {new_ids}")
+    if force_in_operation or (operation == "in"):
+        return {
+            **attribute_filter,
+            "operation": "in",
+            "value": new_ids,
+        }
 
     if operation == "equal":
         if len(new_ids) == 1:
@@ -179,10 +188,5 @@ def updated_attribute_filter_with_ids(attribute_filter: dict, new_ids: Iterable[
             }
         else:
             raise ValueError(f'Cannot add more than one ID for a filter with operation "equal", but got: {new_ids}')
-    elif operation == "in":
-        return {
-            **attribute_filter,
-            "value": new_ids,
-        }
-    else:
-        raise ValueError(f"Unexpected operation: {operation!r}")
+
+    raise ValueError(f"Unexpected operation: {operation!r}")
