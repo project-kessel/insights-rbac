@@ -186,8 +186,10 @@ def retrieve_user_info(message) -> User:
             )
             if is_web_customer:
                 user.org_id = ref.get("text") or ref.get("value")
-            elif is_ebs_account:
+                break
+            if is_ebs_account:
                 user.account = ref.get("text") or ref.get("value")
+                break
 
         return user
 
@@ -244,13 +246,18 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
 
     # Build Kafka consumer configuration
+    # NOTE: This consumer runs periodically via Celery beat (every 60s) and consumes for 15s,
+    # creating a 45-second gap between consumption periods. This matches the UMB behavior
+    # where the consumer also ran periodically. For continuous consumption, a persistent
+    # consumer (like launch-rbac-kafka-consumer) would be more appropriate, but this
+    # approach maintains compatibility with the existing UMB-based architecture.
     kafka_config = {
         "bootstrap_servers": settings.KAFKA_SERVERS,
         "group_id": f"{settings.SA_NAME}-principal-cleanup",
         "auto_offset_reset": "earliest",
         "enable_auto_commit": False,  # Manual commit for at-least-once semantics
         "value_deserializer": lambda m: m.decode("utf-8"),
-        "consumer_timeout_ms": 15000,  # 15 second timeout, similar to UMB
+        "consumer_timeout_ms": 15000,  # 15 second timeout per run, matches UMB behavior
     }
 
     # Add authentication if configured
@@ -259,7 +266,7 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
         kafka_config.update(kafka_auth)
 
     # Get topic name from settings
-    topic = "VirtualTopic.canonical.user"
+    topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
 
     # Initialize consumer to None to avoid UnboundLocalError in finally block
     consumer = None
@@ -281,30 +288,29 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
                 logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
                 break
 
-            # Commit offset only after successful processing
-            # This ensures at-least-once semantics: failed messages are not committed
-            # and will be retried on consumer restart
-            if success:
-                try:
-                    consumer.commit()
-                    logger.debug(
-                        "process_principal_events_from_kafka: Committed offset %d for partition %d",
-                        message.offset,
-                        message.partition,
-                    )
-                except Exception as commit_error:
-                    logger.error(
-                        "process_principal_events_from_kafka: Failed to commit offset %d: %s",
-                        message.offset,
-                        commit_error,
-                    )
-                    # Continue processing even if commit fails - offset will be retried on restart
-            else:
+            if not success:
                 logger.warning(
-                    "process_principal_events_from_kafka: Message processing failed, offset %d not committed. "
-                    "Message will be retried on consumer restart.",
+                    "process_principal_events_from_kafka: Message processing failed at offset %d. "
+                    "Stopping consumer to preserve at-least-once semantics. "
+                    "Consumer will retry from this offset on restart.",
                     message.offset,
                 )
+                break
+
+            try:
+                consumer.commit()
+                logger.debug(
+                    "process_principal_events_from_kafka: Committed offset %d for partition %d",
+                    message.offset,
+                    message.partition,
+                )
+            except Exception as commit_error:
+                logger.error(
+                    "process_principal_events_from_kafka: Failed to commit offset %d: %s",
+                    message.offset,
+                    commit_error,
+                )
+                break
 
     except KafkaError as e:
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))
