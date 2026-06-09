@@ -27,7 +27,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
-from management.atomic_transactions import atomic, retry
+from management.atomic_transactions import atomic, atomic_with_retry
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.notifications.notification_handlers import role_obj_change_notification_handler
@@ -86,8 +86,8 @@ class _SeedRolesConfig:
 
 
 # We do each operation in a SERIALIZABLE transaction so that other SERIALIZABLE transactions can have a consistent view
-# of what system roles exist.
-@atomic
+# of what system roles exist. Retry on serialization failures since concurrent seeding can conflict.
+@atomic_with_retry(retries=3)
 def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_service=None):
     """Create the role object in the database."""
     public_tenant = Tenant.objects.get(tenant_name="public")
@@ -160,6 +160,7 @@ def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_ser
 def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None, resource_service=None):
     """Update or create roles from list."""
     current_role_ids = set()
+    failed_roles = []
     # Sort roles by name to ensure consistent lock ordering and prevent deadlocks
     sorted_roles = sorted(roles, key=lambda r: r.get("name", ""))
     for role_json in sorted_roles:
@@ -167,7 +168,13 @@ def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None
             role = _make_role(role_json, config, platform_roles, resource_service)
             current_role_ids.add(role.id)
         except Exception as e:
-            logger.error(f"Failed to update or create system role: {role_json.get('name')} with error: {e}")
+            role_name = role_json.get("name")
+            logger.error(f"Failed to update or create system role: {role_name} with error: {e}")
+            failed_roles.append(role_name)
+
+    if failed_roles:
+        raise RuntimeError(f"Failed to seed {len(failed_roles)} system role(s): {', '.join(failed_roles)}")
+
     return current_role_ids
 
 
@@ -333,7 +340,6 @@ def _create_single_platform_role(access_type, scope, policy_service, public_tena
     return platform_role
 
 
-@retry(max_attempts=3, delay=0.1)
 def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, platform_roles, resource_service):
     """Perform the actual V2 role seeding."""
     v2_role, v2_created = SeededRoleV2.objects.update_or_create(
