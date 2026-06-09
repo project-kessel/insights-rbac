@@ -22,6 +22,7 @@ from django.db.models import Count
 from django.test import override_settings
 from rest_framework import serializers
 
+from api.models import Tenant
 from management.models import Permission
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role.v2_serializer import (
@@ -371,18 +372,38 @@ class RoleV2ListSerializerTests(IdentityRequest):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["fields"], set(RoleV2ResponseSerializer.Meta.fields))
 
-    def test_valid_resource_id_as_uuid(self):
-        """resource_id is parsed to uuid.UUID when valid."""
+    def test_valid_resource_id_as_uuid_for_workspace(self):
+        """resource_id is normalized to a UUID string when resource_type is workspace."""
         uid = "550e8400-e29b-41d4-a716-446655440000"
         serializer = RoleV2ListSerializer(data={"resource_type": "workspace", "resource_id": uid})
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(str(serializer.validated_data["resource_id"]), uid)
+        self.assertEqual(serializer.validated_data["resource_id"], uid)
 
-    def test_invalid_resource_id_returns_error(self):
-        """Non-UUID resource_id is rejected."""
+    def test_invalid_resource_id_returns_error_for_workspace(self):
+        """Non-UUID resource_id is rejected when resource_type is workspace."""
         serializer = RoleV2ListSerializer(data={"resource_type": "workspace", "resource_id": "not-a-uuid"})
         self.assertFalse(serializer.is_valid())
         self.assertIn("resource_id", serializer.errors)
+
+    def test_tenant_resource_id_accepted(self):
+        """Tenant resource IDs (domain/org_id) are accepted when resource_type is tenant."""
+        tenant_resource_id = Tenant.org_id_to_tenant_resource_id("20228402")
+        serializer = RoleV2ListSerializer(
+            data={"resource_type": "tenant", "resource_id": tenant_resource_id},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["resource_id"], tenant_resource_id)
+
+    def test_resource_tenant_org_id_cannot_combine_with_resource_id(self):
+        """resource.tenant.org_id and resource_id are mutually exclusive."""
+        serializer = RoleV2ListSerializer(
+            data={
+                "resource_tenant_org_id": "20228402",
+                "resource_id": Tenant.org_id_to_tenant_resource_id("20228402"),
+            },
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("resource_tenant_org_id", serializer.errors)
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

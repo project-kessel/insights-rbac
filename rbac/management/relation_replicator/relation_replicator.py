@@ -90,6 +90,8 @@ class ReplicationEventType(str, Enum):
     REMOVE_DELETED_WORKSPACE_BINDINGS = "remove_deleted_workspace_bindings"
     UPDATE_ROOT_WORKSPACE_TENANTS = "update_root_workspace_tenants"
     REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS = "remove_root_parent_tenant_relationships"
+    DR_CORRECTIVE_ADD = "dr_corrective_add"
+    DR_CORRECTIVE_REMOVE = "dr_corrective_remove"
 
 
 class ReplicationEvent:

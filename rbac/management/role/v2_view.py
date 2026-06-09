@@ -34,6 +34,7 @@ from management.role.v2_serializer import (
     validate_fields_parameter,
 )
 from management.role.v2_service import RoleV2Service
+from management.role_binding.serializer import resolve_resource_identifiers
 from management.utils import v2response_error_from_errors
 from management.v2_mixins import AtomicOperationsMixin
 from rest_framework import status
@@ -111,6 +112,14 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         input_serializer = RoleV2ListSerializer(data=request.query_params, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
         validated_params = input_serializer.validated_data
+
+        if validated_params.get("resource_tenant_org_id"):
+            resource_type, resource_id = resolve_resource_identifiers(validated_params)
+            validated_params = {
+                **{k: v for k, v in validated_params.items() if k != "resource_tenant_org_id"},
+                "resource_id": resource_id,
+                "resource_type": resource_type,
+            }
 
         service = RoleV2Service(tenant=request.tenant)
         queryset = service.list(validated_params)

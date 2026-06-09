@@ -17,6 +17,7 @@
 
 """View for internal tenant management."""
 
+import datetime
 import json
 import logging
 from typing import Optional
@@ -93,6 +94,7 @@ from management.tasks import (
     migrate_binding_scope_in_worker,
     migrate_data_in_worker,
     recompute_tenant_role_bindings_in_worker,
+    recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
@@ -2624,3 +2626,129 @@ def recompute_tenant_role_bindings(request, org_id):
             {"detail": f"Error recomputing role bindings for tenant: {str(e)}"},
             status=500,
         )
+
+
+@require_http_methods(["POST"])
+def recover_workspace_events(request: HttpRequest) -> JsonResponse:
+    """Trigger corrective workspace event generation after a DB restore.
+
+    POST /_private/api/disaster_recovery/workspaces/
+
+    Accepts JSON body:
+        {
+            "restore_timestamp": "2026-05-28T10:00:00Z",
+            "buffer_minutes": 5
+        }
+
+    Returns 202 with task_id on success.
+    """
+    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
+        return JsonResponse({"detail": "DR recovery is disabled (DR_RECOVERY_ENABLED=False)"}, status=403)
+
+    try:
+        body = load_request_body(request)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({"detail": "Invalid JSON body"}, status=400)
+
+    restore_timestamp = body.get("restore_timestamp")
+    if not restore_timestamp:
+        return JsonResponse({"detail": "restore_timestamp is required"}, status=400)
+
+    try:
+        parsed_ts = datetime.datetime.fromisoformat(restore_timestamp)
+    except (ValueError, TypeError):
+        return JsonResponse({"detail": "restore_timestamp must be a valid ISO 8601 datetime"}, status=400)
+
+    if parsed_ts.tzinfo is None:
+        parsed_ts = parsed_ts.replace(tzinfo=datetime.timezone.utc)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if parsed_ts > now:
+        return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
+
+    buffer_minutes = body.get("buffer_minutes", 5)
+    if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
+        return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
+
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
+
+    try:
+        task = recover_workspace_events_in_worker.delay(
+            restore_timestamp_iso=restore_timestamp,
+            buffer_minutes=buffer_minutes,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Workspace DR recovery task enqueued: task_id=%s restore_timestamp=%s buffer_minutes=%d",
+            task.id,
+            restore_timestamp,
+            buffer_minutes,
+        )
+        return JsonResponse(
+            {
+                "task_id": task.id,
+                "status": "enqueued",
+                "restore_timestamp": restore_timestamp,
+                "buffer_minutes": buffer_minutes,
+                "dry_run": dry_run,
+            },
+            status=202,
+        )
+    except Exception:
+        logger.exception("Error enqueuing workspace DR recovery task")
+        return JsonResponse({"detail": "Error enqueuing recovery task"}, status=500)
+
+
+@require_http_methods(["POST"])
+def disaster_recovery_reconcile(request):
+    """Trigger disaster recovery reconciliation for Kessel Relations.
+
+    POST /_private/api/disaster_recovery/reconcile/
+
+    Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
+    """
+    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+        return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
+
+    from datetime import datetime
+
+    from management.tasks import run_disaster_recovery_reconcile
+
+    body = load_request_body(request)
+
+    restore_timestamp_str = body.get("restore_timestamp")
+    if not restore_timestamp_str:
+        return JsonResponse({"error": "restore_timestamp is required"}, status=400)
+
+    try:
+        dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
+        restore_timestamp_ms = int(dt.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+
+    buffer_seconds = body.get("buffer_seconds", 300)
+    if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
+        return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
+
+    task = run_disaster_recovery_reconcile.delay(
+        restore_timestamp_ms=restore_timestamp_ms,
+        buffer_seconds=buffer_seconds,
+        dry_run=dry_run,
+    )
+
+    return JsonResponse(
+        {
+            "message": "Disaster recovery reconciliation enqueued.",
+            "task_id": str(task.id),
+            "restore_timestamp_ms": restore_timestamp_ms,
+            "buffer_seconds": buffer_seconds,
+            "dry_run": dry_run,
+        },
+        status=202,
+    )

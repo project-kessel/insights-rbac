@@ -19,6 +19,7 @@
 import uuid
 from collections.abc import Iterable
 from importlib import reload
+from urllib.parse import urlencode
 from unittest.mock import ANY, patch
 
 from django.conf import settings
@@ -1039,11 +1040,69 @@ class RoleV2ViewSetTests(IdentityRequest):
         self.assertIn("test_role", names)
         self.assertNotIn("root_scoped", names)
 
-    def test_list_roles_resource_id_invalid_uuid_returns_400(self):
-        """Invalid resource_id is rejected before listing."""
+    def test_list_roles_resource_id_invalid_uuid_returns_400_for_workspace(self):
+        """Invalid resource_id is rejected for workspace before listing."""
         url = f"{self.url}?resource_type=workspace&resource_id=not-a-uuid"
         response = self.client.get(url, **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch(CACHE_PATCH_TARGET, _scope_cache(tenant_perms="tenant_app:*:*"))
+    def test_list_roles_tenant_resource_id_accepted(self):
+        """Tenant resource_id (domain/org_id) is accepted for resource_type=tenant."""
+        tenant_perm = Permission.objects.create(permission="tenant_app:res:read", tenant=self.tenant)
+        tenant_role = RoleV2.objects.create(name="tenant_role", description="Tenant", tenant=self.tenant)
+        tenant_role.permissions.add(tenant_perm)
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        url = f"{self.url}?{urlencode({'resource_type': 'tenant', 'resource_id': tenant_resource_id})}"
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        names = {r["name"] for r in response.data["data"]}
+        self.assertIn("tenant_role", names)
+
+    @patch(
+        CACHE_PATCH_TARGET,
+        _scope_cache(tenant_perms="tenant_app:*:*", default_perms="inventory:hosts:read"),
+    )
+    def test_list_roles_resource_type_tenant_includes_custom_tenant_scoped_role(self):
+        """resource_type=tenant returns custom roles whose highest scope is tenant."""
+        tenant_perm = Permission.objects.create(permission="tenant_app:res:read", tenant=self.tenant)
+        custom_tenant_role = CustomRoleV2.objects.create(
+            name="custom_tenant_role",
+            description="Custom tenant scoped",
+            tenant=self.tenant,
+        )
+        custom_tenant_role.permissions.add(tenant_perm)
+
+        custom_workspace_role = CustomRoleV2.objects.create(
+            name="custom_workspace_role",
+            description="Custom workspace scoped",
+            tenant=self.tenant,
+        )
+        custom_workspace_role.permissions.add(self.permission2)
+
+        url = f"{self.url}?resource_type=tenant"
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        names = {r["name"] for r in response.data["data"]}
+        self.assertIn("custom_tenant_role", names)
+        self.assertNotIn("custom_workspace_role", names)
+
+    @patch(CACHE_PATCH_TARGET, _scope_cache(tenant_perms="tenant_app:*:*"))
+    def test_list_roles_resource_tenant_org_id_accepted(self):
+        """resource.tenant.org_id resolves to tenant resource_id like role bindings."""
+        tenant_perm = Permission.objects.create(permission="tenant_app:res:read", tenant=self.tenant)
+        tenant_role = RoleV2.objects.create(name="tenant_role", description="Tenant", tenant=self.tenant)
+        tenant_role.permissions.add(tenant_perm)
+
+        url = f"{self.url}?resource.tenant.org_id={self.tenant.org_id}"
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        names = {r["name"] for r in response.data["data"]}
+        self.assertIn("tenant_role", names)
 
     @patch(CACHE_PATCH_TARGET, _scope_cache())
     def test_list_roles_resource_id_unknown_workspace_returns_empty(self):

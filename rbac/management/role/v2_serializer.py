@@ -19,6 +19,7 @@
 import uuid
 
 from django.utils.translation import gettext as _
+from management.dotted_query_param_mixin import DottedQueryParamSerializerMixin
 from management.exceptions import RequiredFieldError
 from management.role.v2_exceptions import (
     InvalidRolePermissionsError,
@@ -28,7 +29,7 @@ from management.role.v2_exceptions import (
 )
 from management.role.v2_model import RoleV2
 from management.role.v2_service import RoleV2Service
-from management.utils import FieldSelection, FieldSelectionValidationError, UUIDStringField
+from management.utils import FieldSelection, FieldSelectionValidationError, UUIDStringField, normalize_blank_or_none
 from rest_framework import serializers
 
 
@@ -152,8 +153,12 @@ def validate_fields_parameter(value: str, default_fields: set, strict: bool = Fa
     return resolved or default_fields
 
 
-class RoleV2ListSerializer(serializers.Serializer):
+class RoleV2ListSerializer(DottedQueryParamSerializerMixin, serializers.Serializer):
     """Input serializer for RoleV2 list query parameters."""
+
+    DOTTED_PARAM_MAP = {
+        "resource.tenant.org_id": "resource_tenant_org_id",
+    }
 
     name = serializers.CharField(
         required=False,
@@ -171,16 +176,17 @@ class RoleV2ListSerializer(serializers.Serializer):
         required=False, allow_blank=True, help_text="Filter roles by the resource type they are scoped to"
     )
     resource_id = serializers.CharField(
-        required=False, allow_blank=True, help_text="Resource ID (requires resource_type)"
+        required=False,
+        allow_blank=True,
+        max_length=256,
+        help_text="Resource ID (requires resource_type unless resource.tenant.org_id is provided)",
+    )
+    resource_tenant_org_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Org ID of the tenant resource to filter by",
     )
     fields = serializers.CharField(required=False, default="", allow_blank=True, help_text="Control included fields")
-
-    def to_internal_value(self, data):
-        """Sanitize input data by stripping NUL bytes before field validation."""
-        sanitized = {
-            key: value.replace("\x00", "") if isinstance(value, str) else value for key, value in data.items()
-        }
-        return super().to_internal_value(sanitized)
 
     def validate_name(self, value: str | None) -> str | None:
         """Return None for empty values."""
@@ -194,21 +200,36 @@ class RoleV2ListSerializer(serializers.Serializer):
         """Parse, validate, and resolve fields parameter into a set of field names."""
         return validate_fields_parameter(value, RoleV2Service.DEFAULT_LIST_FIELDS)
 
-    def validate_resource_id(self, value):
-        """Return a UUID (or None if omitted/blank) for workspace resource filtering."""
-        if value in (None, ""):
-            return None
-        try:
-            return uuid.UUID(str(value).strip())
-        except ValueError as e:
-            raise serializers.ValidationError(_("Enter a valid UUID.")) from e
+    validate_resource_id = staticmethod(normalize_blank_or_none)
+    validate_resource_type = staticmethod(normalize_blank_or_none)
+    validate_resource_tenant_org_id = staticmethod(normalize_blank_or_none)
 
     def validate(self, data):
-        """Cross-field validation: resource_id requires resource_type."""
-        if data.get("resource_id") and not data.get("resource_type"):
+        """Cross-field validation for resource filters (aligned with role bindings)."""
+        resource_tenant_org_id = data.get("resource_tenant_org_id")
+        resource_id = data.get("resource_id")
+        resource_type = data.get("resource_type")
+
+        if resource_tenant_org_id:
+            if resource_id:
+                raise serializers.ValidationError(
+                    {"resource_tenant_org_id": "resource.tenant.org_id cannot be combined with resource_id."}
+                )
+            if resource_type and resource_type != "tenant":
+                raise serializers.ValidationError(
+                    {"resource_type": "resource_type must be 'tenant' when resource.tenant.org_id is provided."}
+                )
+        elif resource_id and not resource_type:
             raise serializers.ValidationError(
                 {"resource_id": "resource_type is required when resource_id is provided."}
             )
+
+        if resource_type == "workspace" and resource_id:
+            try:
+                data["resource_id"] = str(uuid.UUID(str(resource_id).strip()))
+            except ValueError as e:
+                raise serializers.ValidationError({"resource_id": _("Enter a valid UUID.")}) from e
+
         return data
 
 

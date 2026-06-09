@@ -131,6 +131,8 @@ urlpatterns = [
     ),
     path("api/utils/replicate_default_workspaces/", views.replicate_default_workspaces),
     path("api/utils/recompute_tenant_role_bindings/<str:org_id>/", views.recompute_tenant_role_bindings),
+    path("api/disaster_recovery/workspaces/", views.recover_workspace_events),
+    path("api/disaster_recovery/reconcile/", views.disaster_recovery_reconcile),
 ]
 
 urlpatterns.extend(integration_urlpatterns)

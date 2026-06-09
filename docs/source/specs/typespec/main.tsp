@@ -1392,8 +1392,11 @@ namespace Roles {
         @doc("Filter roles by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns roles from all scopes.")
         @query resource_type?: string;
 
-        @doc("Filter by resource ID. Requires resource_type to be specified.")
+        @doc("Filter by resource ID. For workspace: UUID. For tenant: tenant resource ID (format: {domain}/{org_id}). Requires resource_type unless resource.tenant.org_id is provided.")
         @query resource_id?: string;
+
+        @doc("Org ID of the tenant resource to filter by. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.")
+        @query("resource.tenant.org_id") resource_tenant_org_id?: string;
 
         @doc("Control which fields are included in the response to optimize payload size.")
         @query fields?: FieldMask = "id,name,description,last_modified";
