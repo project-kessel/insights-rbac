@@ -49,7 +49,7 @@ class UnconstrainedBindingAuthorizationPolicy(BindingAuthorizationPolicy):
         return True
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class EnumeratedBindingAuthorizationPolicy(BindingAuthorizationPolicy):
     """A BindingAuthorizationPolicy that permits bindings to a set of provided resources."""
 
@@ -58,7 +58,7 @@ class EnumeratedBindingAuthorizationPolicy(BindingAuthorizationPolicy):
     def __init__(self, resources: Iterable[V2boundresource]):
         """Create an EnumeratedBindingAuthorizationPolicy with the provided resources."""
         super().__init__()
-        self.__setattr__("resources", frozenset(resources))
+        object.__setattr__(self, "resources", frozenset(resources))
 
         if not all(isinstance(r, V2boundresource) for r in self.resources):
             raise TypeError(f"Expected all resources to be V2boundresource, but got: {resources!r}")
