@@ -35,7 +35,7 @@ from rest_framework import serializers
 
 from api.models import Tenant
 from .model import Access, BindingMapping, Permission, ResourceDefinition, Role
-from .resource_definitions import is_resource_a_workspace
+from .resource_definitions import is_resource_a_workspace, parse_attribute_filter
 from ..querysets import ORG_ID_SCOPE, PRINCIPAL_SCOPE, SCOPE_KEY, VALID_SCOPES
 
 ALLOWED_OPERATIONS = ["in", "equal"]
@@ -68,27 +68,25 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         elif op == "equal" and not isinstance(values, (str, type(None))):
             raise _make_error(key="format", message="attributeFilter operation 'equal' expects a String value or None")
 
-        # Validate that group.id only contains UUIDs or None
-        filter_key = value["key"]
+        parsed_filter = parse_attribute_filter(value)
 
-        if filter_key == "group.id":
-            if op == "in":
-                if isinstance(values, list):
-                    invalid_values = [v for v in values if v is not None and not is_valid_uuid(v)]
-                    if invalid_values:
-                        raise _make_error(
-                            key="format",
-                            message=(
-                                f"attributeFilter with key 'group.id' must contain only valid UUIDs or None, "
-                                f"invalid values: {invalid_values}"
-                            ),
-                        )
-            elif op == "equal":
-                if values is not None and not is_valid_uuid(values):
-                    raise _make_error(
-                        key="format",
-                        message=f"attributeFilter with key 'group.id' must be a valid UUID or None, got: {values}",
-                    )
+        # If we recognize the resource type, perform more in-depth validation. (We will still always have checked for
+        # basic validity above.)
+        if parsed_filter is not None:
+            filter_key = value["key"]
+
+            if len(parsed_filter.invalid_ids) > 0:
+                raise _make_error(
+                    key="format",
+                    message=(
+                        f"attributeFilter with key {filter_key!r} has invalid values: {list(parsed_filter.invalid_ids)}"
+                    ),
+                )
+
+            if parsed_filter.has_null and not parsed_filter.is_for_workspaces():
+                raise _make_error(
+                    key="format", message=f"attributeFilter with key {filter_key!r} has invalid null value"
+                )
 
         return value
 
