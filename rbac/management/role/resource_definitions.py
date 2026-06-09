@@ -38,22 +38,32 @@ class ParsedAttributeFilter:
     resource_type: ObjectType
 
     named_ids: frozenset[str]
-    has_null: bool = False
-    invalid_ids: tuple = tuple()
+    has_null: bool
+    invalid_ids: tuple[Any, ...]
 
-    def __post_init__(self):
-        """Validate the ParsedAttributeFilter instance."""
+    def __init__(
+        self,
+        *,
+        resource_type: ObjectType,
+        named_ids: Iterable[str],
+        has_null: bool = False,
+        invalid_ids: Iterable[Any] = tuple(),
+    ):
+        super().__init__()
+
+        object.__setattr__(self, "resource_type", resource_type)
+        object.__setattr__(self, "named_ids", frozenset(named_ids))
+        object.__setattr__(self, "has_null", has_null)
+        object.__setattr__(self, "invalid_ids", tuple(invalid_ids))
+
         if not isinstance(self.resource_type, ObjectType):
             raise TypeError(f"Expected resource_type to be ObjectType, got: {self.resource_type!r}")
 
-        if not isinstance(self.named_ids, frozenset) or not all(isinstance(x, str) for x in self.named_ids):
+        if not all(isinstance(x, str) for x in self.named_ids):
             raise TypeError(f"Expected named_ids to be frozenset of strs, got: {self.named_ids!r}")
 
         if not isinstance(self.has_null, bool):
             raise TypeError(f"Expected has_null to be bool, got: {self.has_null!r}")
-
-        if not isinstance(self.invalid_ids, tuple):
-            raise TypeError(f"Expected invalid_ids to be tuple, got: {self.invalid_ids!r}")
 
         if None in self.invalid_ids:
             raise TypeError("None should not be in invalid_ids; instead, set has_null to True")
@@ -146,9 +156,9 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
 
     return ParsedAttributeFilter(
         resource_type=resource_type,
-        named_ids=frozenset(valid),
+        named_ids=valid,
         has_null=has_null,
-        invalid_ids=tuple(invalid),
+        invalid_ids=invalid,
     )
 
 
