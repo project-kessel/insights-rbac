@@ -49,52 +49,46 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
 
     def validate_attributeFilter(self, value):
         """Validate the given attributeFilter."""
+
+        def _make_error(*, key: str, message: str) -> serializers.ValidationError:
+            return serializers.ValidationError({key: [_(message)]})
+
         if value.keys() != FILTER_FIELDS:
-            key = "format"
-            message = f"attributeFilter fields must be {FILTER_FIELDS}"
-            error = {key: [_(message)]}
-            raise serializers.ValidationError(error)
+            raise _make_error(key="format", message=f"attributeFilter fields must be {FILTER_FIELDS}")
 
-        op = value.get("operation")
+        op = value["operation"]
+
         if op not in ALLOWED_OPERATIONS:
-            key = "format"
-            message = f"attributeFilter operation must be one of {ALLOWED_OPERATIONS}"
-            error = {key: [_(message)]}
-            raise serializers.ValidationError(error)
-        else:
-            values = value.get("value")
-            error = False
-            if op == "in" and not isinstance(values, list):
-                key = "format"
-                message = "attributeFilter operation 'in' expects a List value"
-                error = {key: [_(message)]}
-            elif op == "equal" and not isinstance(values, (str, type(None))):
-                key = "format"
-                message = "attributeFilter operation 'equal' expects a String value or None"
-                error = {key: [_(message)]}
-            if error:
-                raise serializers.ValidationError(error)
+            raise _make_error(key="format", message=f"attributeFilter operation must be one of {ALLOWED_OPERATIONS}")
 
-            # Validate that group.id only contains UUIDs or None
-            filter_key = value.get("key")
-            if filter_key == "group.id":
-                if op == "in":
-                    if isinstance(values, list):
-                        invalid_values = [v for v in values if v is not None and not is_valid_uuid(v)]
-                        if invalid_values:
-                            key = "format"
-                            message = (
+        values = value["value"]
+
+        if op == "in" and not isinstance(values, list):
+            raise _make_error(key="format", message="attributeFilter operation 'in' expects a List value")
+        elif op == "equal" and not isinstance(values, (str, type(None))):
+            raise _make_error(key="format", message="attributeFilter operation 'equal' expects a String value or None")
+
+        # Validate that group.id only contains UUIDs or None
+        filter_key = value["key"]
+
+        if filter_key == "group.id":
+            if op == "in":
+                if isinstance(values, list):
+                    invalid_values = [v for v in values if v is not None and not is_valid_uuid(v)]
+                    if invalid_values:
+                        raise _make_error(
+                            key="format",
+                            message=(
                                 f"attributeFilter with key 'group.id' must contain only valid UUIDs or None, "
                                 f"invalid values: {invalid_values}"
-                            )
-                            error = {key: [_(message)]}
-                            raise serializers.ValidationError(error)
-                elif op == "equal":
-                    if values is not None and not is_valid_uuid(values):
-                        key = "format"
-                        message = f"attributeFilter with key 'group.id' must be a valid UUID or None, got: {values}"
-                        error = {key: [_(message)]}
-                        raise serializers.ValidationError(error)
+                            ),
+                        )
+            elif op == "equal":
+                if values is not None and not is_valid_uuid(values):
+                    raise _make_error(
+                        key="format",
+                        message=f"attributeFilter with key 'group.id' must be a valid UUID or None, got: {values}",
+                    )
 
         return value
 
