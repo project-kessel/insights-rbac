@@ -50,6 +50,43 @@ VALID_BOOLEAN_VALUES = ["true", "false"]
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
+def _workspace_retrieve_cache_key(pk: str) -> str:
+    """Build response cache key for a workspace retrieve."""
+    return f"retrieve::{pk}"
+
+
+def _workspace_list_cache_key(ws_type: str, offset: str, limit: str) -> str:
+    """Build response cache key for a workspace list filtered by built-in type."""
+    return f"list::{ws_type}::{offset}::{limit}"
+
+
+def _get_cached_response(org_id: str, key: str):
+    """Return a cached workspace API response or None."""
+    return WORKSPACE_CACHE.get_response(org_id, key)
+
+
+def _set_cached_response(org_id: str, key: str, data: dict):
+    """Write a workspace API response to cache."""
+    WORKSPACE_CACHE.cache_response(org_id, key, data)
+
+
+def is_cacheable_builtin_type(validated_params):
+    """Check if a workspace list request filters for exactly one built-in type with no other filters.
+
+    Returns the workspace type string ('root' or 'default') if cacheable, None otherwise.
+    """
+    if validated_params.get("name") or validated_params.get("parent_id") or validated_params.get("ids"):
+        return None
+
+    type_filter = validated_params.get("type")
+    if type_filter and len(type_filter) == 1:
+        ws_type = type_filter[0]
+        if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+            return ws_type
+
+    return None
+
+
 class WorkspacePagination(V2ResultsSetPagination):
     """Custom pagination for Workspace API with higher max_limit."""
 
@@ -172,33 +209,11 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 raise serializers.ValidationError(message)
             raise
 
-    def _get_org_id(self, request):
+    @staticmethod
+    def _get_org_id(request):
         """Resolve org_id from the request tenant."""
         tenant = getattr(request, "tenant", None)
-        if tenant and hasattr(tenant, "org_id"):
-            return tenant.org_id
-        return None
-
-    @staticmethod
-    def _is_single_builtin_type_filter(validated_params):
-        """Check if the request filters for exactly one built-in workspace type with no other filters.
-
-        Returns the workspace type string ('root' or 'default') if cacheable, None otherwise.
-        """
-        type_filter = validated_params.get("type")
-        name = validated_params.get("name")
-        parent_id = validated_params.get("parent_id")
-        ids = validated_params.get("ids")
-
-        if name or parent_id or ids:
-            return None
-
-        if type_filter and len(type_filter) == 1:
-            ws_type = type_filter[0]
-            if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
-                return ws_type
-
-        return None
+        return getattr(tenant, "org_id", None) if tenant else None
 
     def retrieve(self, request, *args, **kwargs):
         """Get a workspace, with response caching for built-in workspaces."""
@@ -206,16 +221,17 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         pk = kwargs.get("pk")
 
         if org_id and pk:
-            cached_response = WORKSPACE_CACHE.get_response(org_id, f"retrieve::{pk}")
-            if cached_response is not None:
-                return Response(cached_response)
+            key = _workspace_retrieve_cache_key(pk)
+            cached = _get_cached_response(org_id, key)
+            if cached is not None:
+                return Response(cached)
 
-        response = super().retrieve(request=request, args=args, kwargs=kwargs)
+        response = super().retrieve(request, *args, **kwargs)
 
         if org_id and response.status_code == 200:
             ws_type = response.data.get("type")
             if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
-                WORKSPACE_CACHE.cache_response(org_id, f"retrieve::{pk}", response.data)
+                _set_cached_response(org_id, _workspace_retrieve_cache_key(pk), response.data)
 
         return response
 
@@ -228,19 +244,24 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         WorkspaceListInputSerializer and applied by WorkspaceService.list().
 
         Responses for built-in workspace types (root, default) are cached when requested
-        as a single type filter with no other filters.
+        as a single type filter with no other filters. The cache key includes pagination
+        parameters (offset, limit) so different pages are cached independently.
         """
         input_serializer = WorkspaceListInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
         validated_params = input_serializer.validated_data
 
         org_id = self._get_org_id(request)
-        cacheable_type = self._is_single_builtin_type_filter(validated_params)
+        cacheable_type = is_cacheable_builtin_type(validated_params)
 
+        cache_key = None
         if org_id and cacheable_type:
-            cached_response = WORKSPACE_CACHE.get_response(org_id, f"list::{cacheable_type}")
-            if cached_response is not None:
-                return Response(cached_response)
+            offset = request.query_params.get("offset", "0")
+            limit = request.query_params.get("limit", "10")
+            cache_key = _workspace_list_cache_key(cacheable_type, offset, limit)
+            cached = _get_cached_response(org_id, cache_key)
+            if cached is not None:
+                return Response(cached)
 
         queryset = self.filter_queryset(self.get_queryset())
         queryset = self._service.list(queryset, validated_params)
@@ -249,8 +270,8 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         serializer = self.get_serializer(page, many=True)
         response = self.get_paginated_response(serializer.data)
 
-        if org_id and cacheable_type:
-            WORKSPACE_CACHE.cache_response(org_id, f"list::{cacheable_type}", response.data)
+        if cache_key:
+            _set_cached_response(org_id, cache_key, response.data)
 
         return response
 

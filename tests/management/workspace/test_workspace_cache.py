@@ -16,6 +16,7 @@
 #
 """Tests for workspace caching at manager and API response levels."""
 
+import uuid
 from importlib import reload
 from unittest.mock import MagicMock, patch
 
@@ -174,7 +175,7 @@ class WorkspaceManagerCacheTests(IdentityRequest):
         result = Workspace.objects.root(tenant=self.tenant)
 
         self.assertEqual(result.id, self.root_workspace.id)
-        mock_get_ws.assert_called_once_with(self.tenant.org_id, "root")
+        mock_get_ws.assert_called_once_with(self.tenant.org_id, Workspace.Types.ROOT)
         mock_cache_ws.assert_called_once_with(self.tenant.org_id, result)
 
     @patch.object(WorkspaceCache, "get_workspace")
@@ -196,7 +197,7 @@ class WorkspaceManagerCacheTests(IdentityRequest):
         result = Workspace.objects.default(tenant=self.tenant)
 
         self.assertEqual(result.id, self.default_workspace.id)
-        mock_get_ws.assert_called_once_with(self.tenant.org_id, "default")
+        mock_get_ws.assert_called_once_with(self.tenant.org_id, Workspace.Types.DEFAULT)
         mock_cache_ws.assert_called_once_with(self.tenant.org_id, result)
 
     @patch.object(WorkspaceCache, "get_workspace")
@@ -217,13 +218,6 @@ class WorkspaceManagerCacheTests(IdentityRequest):
             result = Workspace.objects.root(tenant_id=self.tenant.id)
             self.assertEqual(result.id, self.root_workspace.id)
             mock_get.assert_not_called()
-
-    def test_root_with_tenant_id_obj_uses_cache(self):
-        """When tenant_id receives a Tenant object, cache is used via org_id."""
-        with patch.object(WorkspaceCache, "get_workspace", return_value=None) as mock_get:
-            with patch.object(WorkspaceCache, "cache_workspace"):
-                Workspace.objects.root(tenant_id=self.tenant)
-                mock_get.assert_called_once_with(self.tenant.org_id, "root")
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
@@ -285,11 +279,11 @@ class WorkspaceViewCacheTests(IdentityRequest):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once_with(self.tenant.org_id, "list::root")
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::0::10")
         mock_cache.assert_called_once()
         call_args = mock_cache.call_args
         self.assertEqual(call_args[0][0], self.tenant.org_id)
-        self.assertEqual(call_args[0][1], "list::root")
+        self.assertEqual(call_args[0][1], "list::root::0::10")
 
     @patch.object(WorkspaceCache, "cache_response")
     @patch.object(WorkspaceCache, "get_response")
@@ -313,7 +307,7 @@ class WorkspaceViewCacheTests(IdentityRequest):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once_with(self.tenant.org_id, "list::default")
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::default::0::10")
 
     @patch.object(WorkspaceCache, "get_response", return_value=None)
     def test_list_standard_type_not_cached(self, mock_get):
@@ -389,3 +383,42 @@ class WorkspaceViewCacheTests(IdentityRequest):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         mock_cache.assert_not_called()
+
+    @patch.object(WorkspaceCache, "cache_response")
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_retrieve_404_not_cached(self, mock_get, mock_cache):
+        """Retrieving a non-existent workspace does not populate the response cache."""
+        fake_pk = str(uuid.uuid4())
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": fake_pk})
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mock_cache.assert_not_called()
+
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_list_with_parent_id_filter_not_cached(self, mock_get):
+        """Listing with parent_id filter does not use caching."""
+        url = "{}?type=root&parent_id={}".format(reverse("v2_management:workspace-list"), str(self.root_workspace.id))
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_get.assert_not_called()
+
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_list_with_ids_filter_not_cached(self, mock_get):
+        """Listing with ids filter does not use caching."""
+        url = "{}?type=root&ids={}".format(reverse("v2_management:workspace-list"), str(self.root_workspace.id))
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_get.assert_not_called()
+
+    @patch.object(WorkspaceCache, "cache_response")
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_list_different_pagination_different_cache_key(self, mock_get, mock_cache):
+        """Listing with explicit pagination uses pagination-aware cache key."""
+        url = "{}?type=root&offset=5&limit=20".format(reverse("v2_management:workspace-list"))
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::5::20")

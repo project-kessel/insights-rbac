@@ -427,6 +427,45 @@ class WorkspaceCache(BasicCache):
             obj_name="workspace",
         )
 
+    def _get_json(self, key: str, err_msg: str):
+        """Fetch a JSON-serialized value from Redis with health check.
+
+        :param key: The full Redis key.
+        :param err_msg: Error message for logging on failure.
+        :returns: The deserialized data or None.
+        """
+        if not settings.ACCESS_CACHE_ENABLED:
+            return None
+        try:
+            if not self.redis_health_check():
+                self.disable_caching()
+                return None
+            obj = self.connection.get(name=key)
+            return json.loads(obj) if obj else None
+        except exceptions.RedisError:
+            logger.exception(err_msg)
+            return None
+
+    def _cache_json(self, key: str, data, ttl: int, log_msg: str, err_msg: str):
+        """Write a JSON-serialized value to Redis with a TTL.
+
+        :param key: The full Redis key.
+        :param data: The data to serialize (must be JSON-serializable).
+        :param ttl: Time-to-live in seconds.
+        :param log_msg: Debug message logged on write.
+        :param err_msg: Error message for logging on failure.
+        """
+        if not settings.ACCESS_CACHE_ENABLED:
+            return
+        try:
+            logger.debug(log_msg)
+            with self.connection.pipeline() as pipe:
+                pipe.set(name=key, value=json.dumps(data))
+                pipe.expire(name=key, time=ttl)
+                pipe.execute()
+        except exceptions.RedisError:
+            logger.exception(err_msg)
+
     def get_response(self, org_id: str, cache_key: str):
         """Fetch a cached API response.
 
@@ -434,19 +473,10 @@ class WorkspaceCache(BasicCache):
         :param cache_key: The cache key suffix (e.g. workspace type or workspace id).
         :returns: The cached response data (dict) or None.
         """
-        if not settings.ACCESS_CACHE_ENABLED:
-            return None
-        try:
-            if self.redis_health_check() is True:
-                key = self.response_key_for(org_id, cache_key)
-                obj = self.connection.get(name=key)
-                if obj:
-                    return json.loads(obj)
-            else:
-                self.disable_caching()
-        except exceptions.RedisError:
-            logger.exception(f"Error fetching workspace response cache for org {org_id}")
-        return None
+        return self._get_json(
+            self.response_key_for(org_id, cache_key),
+            err_msg=f"Error fetching workspace response cache for org {org_id}",
+        )
 
     def cache_response(self, org_id: str, cache_key: str, data):
         """Cache an API response.
@@ -455,17 +485,13 @@ class WorkspaceCache(BasicCache):
         :param cache_key: The cache key suffix.
         :param data: The response data (must be JSON-serializable).
         """
-        if not settings.ACCESS_CACHE_ENABLED:
-            return
-        try:
-            key = self.response_key_for(org_id, cache_key)
-            logger.info(f"Caching workspace response for org {org_id} key {cache_key}")
-            with self.connection.pipeline() as pipe:
-                pipe.set(name=key, value=json.dumps(data))
-                pipe.expire(name=key, time=settings.ACCESS_CACHE_LIFETIME)
-                pipe.execute()
-        except exceptions.RedisError:
-            logger.exception(f"Error writing workspace response cache for org {org_id}")
+        self._cache_json(
+            self.response_key_for(org_id, cache_key),
+            data,
+            ttl=settings.ACCESS_CACHE_LIFETIME,
+            log_msg=f"Caching workspace response for org {org_id} key {cache_key}",
+            err_msg=f"Error writing workspace response cache for org {org_id}",
+        )
 
     def delete_workspaces_for_tenant(self, org_id: str):
         """Invalidate all workspace caches (model + response) for a tenant.
