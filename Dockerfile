@@ -46,8 +46,8 @@ RUN INSTALL_PKGS="python3.12 python3.12-devel glibc-langpack-en libpq-devel gcc 
     microdnf -y --setopt=tsflags=nodocs --setopt=install_weak_deps=0 install $INSTALL_PKGS && \
     rpm -V $INSTALL_PKGS && \
     # Temp fix: CVE-2026-46243, CVE-2026-31613, CVE-2026-31786 (RHSA-2026:24381)
-    # Remove after base image includes kernel >= 5.14.0-687.13.1.el9_8
-    microdnf -y update kernel-headers && \
+    # Remove after base image includes kernel-headers >= 5.14.0-687.13.1.el9_8
+    microdnf -y install kernel-headers-5.14.0-687.13.1.el9_8 && \
     microdnf -y clean all --enablerepo='*'
 
 # PIPENV_DEV is set to true in the docker-compose allowing
