@@ -1129,7 +1129,7 @@ class RoleBindingSerializerTests(IdentityRequest):
     def test_default_roles_structure_matches_spec(self):
         """Test that roles structure matches default spec.
 
-        Default behavior returns only role id.
+        Default behavior returns role id, created, and modified.
         """
         serializer = RoleBindingByGroupSerializer(self.annotated_group, context=self.context)
         data = serializer.data
@@ -1139,12 +1139,12 @@ class RoleBindingSerializerTests(IdentityRequest):
 
         role = roles[0]
         self.assertIn("id", role)
+        self.assertIn("created", role)
+        self.assertIn("modified", role)
         # Default behavior: no name included
         self.assertNotIn("name", role)
         self.assertNotIn("description", role)
         self.assertNotIn("type", role)
-        self.assertNotIn("created", role)
-        self.assertNotIn("modified", role)
 
     def test_default_resource_structure_matches_spec(self):
         """Test that resource structure matches default spec.
@@ -1185,7 +1185,7 @@ class RoleBindingSerializerTests(IdentityRequest):
     def test_field_selection_filters_role_fields(self):
         """Test that field selection filters role fields.
 
-        id is always included, plus explicitly requested fields.
+        Only explicitly requested fields are included.
         """
         field_selection = RoleBindingFieldSelection.parse("role(name)")
         context = {**self.context, "field_selection": field_selection}
@@ -1194,8 +1194,8 @@ class RoleBindingSerializerTests(IdentityRequest):
         data = serializer.data
 
         role = data["roles"][0]
-        # id is always included
-        self.assertIn("id", role)
+        # Only explicitly requested fields
+        self.assertNotIn("id", role)
         self.assertIn("name", role)
 
     def test_field_selection_filters_resource_fields(self):
