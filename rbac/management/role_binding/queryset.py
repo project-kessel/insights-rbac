@@ -18,10 +18,12 @@
 
 import uuid as uuid_mod
 
-from django.db.models import Case, Count, F, OuterRef, Q, QuerySet, Subquery, Value, When
+from django.db.models import Case, Count, DateTimeField, F, OuterRef, Q, QuerySet, Subquery, Value, When
 from django.db.models.fields import CharField, UUIDField
 from django.db.models.functions import Cast
 from management.subject import SubjectType
+
+_PLATFORM_TYPE = "platform"  # avoid circular import of RoleV2
 
 
 class RoleBindingQuerySet(QuerySet):
@@ -135,6 +137,43 @@ class RoleBindingQuerySet(QuerySet):
                 Q(principal_entries__principal__uuid=principal.uuid) | Q(group_entries__group__uuid__in=group_uuids)
             ).distinct()
         return self.none()
+
+    def with_expanded_platform_roles(self):
+        """Expand platform-role bindings into per-child-role rows at the DB level.
+
+        For non-platform bindings: one row per binding, effective_role_* = binding's own role.
+        For platform bindings: one row per child role, effective_role_* = child role's fields.
+        Platform bindings with no children are excluded (zero rows).
+
+        This must be called BEFORE pagination so that limit/offset operate on the
+        expanded row count rather than the raw binding count.
+        """
+        qs = self.annotate(
+            effective_role_uuid=Case(
+                When(role__type=_PLATFORM_TYPE, then=F("role__children__uuid")),
+                default=F("role__uuid"),
+            ),
+            effective_role_name=Case(
+                When(role__type=_PLATFORM_TYPE, then=F("role__children__name")),
+                default=F("role__name"),
+                output_field=CharField(),
+            ),
+            effective_role_created=Case(
+                When(role__type=_PLATFORM_TYPE, then=F("role__children__created")),
+                default=F("role__created"),
+                output_field=DateTimeField(),
+            ),
+            effective_role_modified=Case(
+                When(role__type=_PLATFORM_TYPE, then=F("role__children__modified")),
+                default=F("role__modified"),
+                output_field=DateTimeField(),
+            ),
+        ).exclude(
+            # Platform bindings with no children expand to a single NULL row — remove it.
+            Q(role__type=_PLATFORM_TYPE)
+            & Q(effective_role_name__isnull=True)
+        )
+        return qs
 
     def with_resource_names(self):
         """Annotate each binding with its resource's display name.
