@@ -50,14 +50,22 @@ VALID_BOOLEAN_VALUES = ["true", "false"]
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-def _workspace_retrieve_cache_key(pk: str) -> str:
-    """Build response cache key for a workspace retrieve."""
-    return f"retrieve::{pk}"
+def _workspace_retrieve_cache_key(pk: str, include_ancestry: str = "false") -> str:
+    """Build response cache key for a workspace retrieve.
+
+    Includes include_ancestry so that requests with/without ancestry data
+    are cached independently (different serializers produce different payloads).
+    """
+    return f"retrieve::{pk}::ancestry={include_ancestry}"
 
 
-def _workspace_list_cache_key(ws_type: str, offset: str, limit: str) -> str:
-    """Build response cache key for a workspace list filtered by built-in type."""
-    return f"list::{ws_type}::{offset}::{limit}"
+def _workspace_list_cache_key(ws_type: str, offset: str, limit: str, order_by: str = "name") -> str:
+    """Build response cache key for a workspace list filtered by built-in type.
+
+    Includes order_by for correctness even though built-in type filters (root, default)
+    currently return at most one workspace per tenant, making ordering irrelevant in practice.
+    """
+    return f"list::{ws_type}::{offset}::{limit}::{order_by}"
 
 
 def _get_cached_response(org_id: str, key: str):
@@ -216,12 +224,23 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         return getattr(tenant, "org_id", None) if tenant else None
 
     def retrieve(self, request, *args, **kwargs):
-        """Get a workspace, with response caching for built-in workspaces."""
+        """Get a workspace, with response caching for built-in workspaces.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch() before this
+        method is called. The queryset-level WorkspaceAccessFilterBackend is intentionally
+        bypassed on cache hit because root/default workspaces are never access-restricted
+        within a tenant — every authenticated user in the org can read them.
+        """
         org_id = self._get_org_id(request)
         pk = kwargs.get("pk")
+        include_ancestry = validate_and_get_key(
+            request.query_params, INCLUDE_ANCESTRY_KEY, VALID_BOOLEAN_VALUES, "false"
+        )
 
         if org_id and pk:
-            key = _workspace_retrieve_cache_key(pk)
+            key = _workspace_retrieve_cache_key(pk, include_ancestry)
             cached = _get_cached_response(org_id, key)
             if cached is not None:
                 return Response(cached)
@@ -231,7 +250,7 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         if org_id and response.status_code == 200:
             ws_type = response.data.get("type")
             if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
-                _set_cached_response(org_id, _workspace_retrieve_cache_key(pk), response.data)
+                _set_cached_response(org_id, _workspace_retrieve_cache_key(pk, include_ancestry), response.data)
 
         return response
 
@@ -245,7 +264,14 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
 
         Responses for built-in workspace types (root, default) are cached when requested
         as a single type filter with no other filters. The cache key includes pagination
-        parameters (offset, limit) so different pages are cached independently.
+        parameters (offset, limit) and order_by so different pages/orderings are cached
+        independently.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch(). The
+        queryset-level WorkspaceAccessFilterBackend is intentionally bypassed on cache hit
+        because root/default workspaces are never access-restricted within a tenant.
         """
         input_serializer = WorkspaceListInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
@@ -258,7 +284,8 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         if org_id and cacheable_type:
             offset = request.query_params.get("offset", "0")
             limit = request.query_params.get("limit", "10")
-            cache_key = _workspace_list_cache_key(cacheable_type, offset, limit)
+            order_by = request.query_params.get("order_by", "name")
+            cache_key = _workspace_list_cache_key(cacheable_type, offset, limit, order_by)
             cached = _get_cached_response(org_id, cache_key)
             if cached is not None:
                 return Response(cached)

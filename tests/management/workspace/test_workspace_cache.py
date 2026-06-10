@@ -279,11 +279,11 @@ class WorkspaceViewCacheTests(IdentityRequest):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::0::10")
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::0::10::name")
         mock_cache.assert_called_once()
         call_args = mock_cache.call_args
         self.assertEqual(call_args[0][0], self.tenant.org_id)
-        self.assertEqual(call_args[0][1], "list::root::0::10")
+        self.assertEqual(call_args[0][1], "list::root::0::10::name")
 
     @patch.object(WorkspaceCache, "cache_response")
     @patch.object(WorkspaceCache, "get_response")
@@ -307,7 +307,7 @@ class WorkspaceViewCacheTests(IdentityRequest):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once_with(self.tenant.org_id, "list::default::0::10")
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::default::0::10::name")
 
     @patch.object(WorkspaceCache, "get_response", return_value=None)
     def test_list_standard_type_not_cached(self, mock_get):
@@ -349,12 +349,15 @@ class WorkspaceViewCacheTests(IdentityRequest):
     @patch.object(WorkspaceCache, "get_response", return_value=None)
     def test_retrieve_builtin_populates_cache(self, mock_get, mock_cache):
         """Retrieving a built-in workspace populates the response cache."""
-        url = reverse("v2_management:workspace-detail", kwargs={"pk": str(self.root_workspace.id)})
+        pk = str(self.root_workspace.id)
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": pk})
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once()
+        mock_get.assert_called_once_with(self.tenant.org_id, f"retrieve::{pk}::ancestry=false")
         mock_cache.assert_called_once()
+        call_args = mock_cache.call_args
+        self.assertEqual(call_args[0][1], f"retrieve::{pk}::ancestry=false")
 
     @patch.object(WorkspaceCache, "cache_response")
     @patch.object(WorkspaceCache, "get_response")
@@ -421,7 +424,31 @@ class WorkspaceViewCacheTests(IdentityRequest):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::5::20")
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::5::20::name")
+
+    @patch.object(WorkspaceCache, "cache_response")
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_retrieve_with_ancestry_uses_different_cache_key(self, mock_get, mock_cache):
+        """Retrieve with include_ancestry=true uses a different cache key than without."""
+        pk = str(self.root_workspace.id)
+        url = "{}?include_ancestry=true".format(reverse("v2_management:workspace-detail", kwargs={"pk": pk}))
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_get.assert_called_once_with(self.tenant.org_id, f"retrieve::{pk}::ancestry=true")
+        mock_cache.assert_called_once()
+        call_args = mock_cache.call_args
+        self.assertEqual(call_args[0][1], f"retrieve::{pk}::ancestry=true")
+
+    @patch.object(WorkspaceCache, "cache_response")
+    @patch.object(WorkspaceCache, "get_response", return_value=None)
+    def test_list_different_order_by_different_cache_key(self, mock_get, mock_cache):
+        """Listing with different order_by uses order-aware cache key."""
+        url = "{}?type=root&order_by=-name".format(reverse("v2_management:workspace-list"))
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_get.assert_called_once_with(self.tenant.org_id, "list::root::0::10::-name")
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
