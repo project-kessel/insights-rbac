@@ -48,7 +48,7 @@ class RoleBindingFieldSelection(FieldSelection):
     VALID_ROOT_FIELDS = {"last_modified"}
     VALID_NESTED_FIELDS = {
         "subject": {"id", "type", "group.name", "group.description", "group.user_count", "user.username"},
-        "role": {"id", "name"},
+        "role": {"id", "name", "created", "modified"},
         "resource": {"id", "name", "type"},
         "sources": {"id", "name", "type"},
     }
@@ -60,7 +60,7 @@ class RoleBindingBySubjectFieldSelection(FieldSelection):
     VALID_ROOT_FIELDS = {"last_modified"}
     VALID_NESTED_FIELDS = {
         "subject": {"id", "type", "group.name", "group.description", "group.user_count", "user.username"},
-        "roles": {"id", "name"},
+        "roles": {"id", "name", "created", "modified"},
         "resource": {"id", "name", "type"},
         "sources": {"id", "name", "type"},
     }
@@ -478,15 +478,15 @@ class RoleBindingOutputSerializer(serializers.Serializer):
             field_selection: Optional field selection to determine which fields to include
 
         Returns:
-            Dictionary with role data (always includes 'id')
+            Dictionary with role data (always includes 'id', 'created', 'modified')
         """
-        role_data = {"id": role.uuid}
+        role_data = {"id": role.uuid, "created": role.created, "modified": role.modified}
 
         if field_selection is not None:
             # By-subject uses "roles", list endpoint uses "role" - support both
             role_fields = field_selection.get_nested("role") or field_selection.get_nested("roles")
             for field_name in role_fields:
-                if field_name != "id":
+                if field_name not in ("id", "created", "modified"):
                     value = getattr(role, field_name, None)
                     if value is not None:
                         role_data[field_name] = value
@@ -741,14 +741,14 @@ class RoleBindingOutputSerializerMixin:
             field_selection: Optional field selection to determine which fields to include
 
         Returns:
-            Dictionary with role data (always includes 'id')
+            Dictionary with role data (always includes 'id', 'created', 'modified')
         """
-        role_data = {"id": role.uuid}
+        role_data = {"id": role.uuid, "created": role.created, "modified": role.modified}
 
         if field_selection is not None:
             # Add explicitly requested fields
             for field_name in field_selection.get_nested("role"):
-                if field_name != "id":
+                if field_name not in ("id", "created", "modified"):
                     value = getattr(role, field_name, None)
                     if value is not None:
                         role_data[field_name] = value
@@ -1008,13 +1008,15 @@ class RoleBindingFieldMaskingMixin:
         field_selection = self._get_field_selection()
 
         if field_selection is None:
-            return {"id": role.uuid}
+            return {"id": role.uuid, "created": role.created, "modified": role.modified}
 
         role_data = {}
         role_fields = field_selection.get_nested("role") or field_selection.get_nested("roles")
         for field_name in role_fields:
             if field_name == "id":
                 role_data["id"] = role.uuid
+            elif field_name in ("created", "modified"):
+                role_data[field_name] = getattr(role, field_name, None)
             else:
                 value = getattr(role, field_name, None)
                 if value is not None:

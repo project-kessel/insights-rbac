@@ -537,6 +537,8 @@ class RoleBindingByGroupSerializerTest(IdentityRequest):
         self.assertNotIn("group", data["subject"])
         self.assertEqual(len(data["roles"]), 1)
         self.assertEqual(data["roles"][0]["id"], self.role.uuid)
+        self.assertIn("created", data["roles"][0])
+        self.assertIn("modified", data["roles"][0])
         self.assertNotIn("name", data["roles"][0])
         self.assertEqual(data["resource"], {"id": "ws-12345"})
 
@@ -844,7 +846,7 @@ class RoleBindingListInputSerializerTest(TestCase):
         valid_values = [
             ("role_name", "role.name"),
             ("descending", "-role.name"),
-            ("role_uuid", "role.uuid"),
+            ("role_created", "role.created"),
         ]
         for label, value in valid_values:
             with self.subTest(label=label):
@@ -1435,11 +1437,14 @@ class RoleBindingListOutputSerializerTest(IdentityRequest):
         self.assertNotIn("last_modified", data)
         self.assertNotIn("roles", data)
 
-    def test_default_role_returns_id_only(self):
-        """Test that default role contains only id."""
+    def test_default_role_returns_id_created_modified(self):
+        """Test that default role contains id, created, and modified."""
         data = self._serialize(self.binding)
 
-        self.assertEqual(data["role"], {"id": self.role.uuid})
+        self.assertEqual(data["role"]["id"], self.role.uuid)
+        self.assertEqual(data["role"]["created"], self.role.created)
+        self.assertEqual(data["role"]["modified"], self.role.modified)
+        self.assertEqual(set(data["role"].keys()), {"id", "created", "modified"})
 
     def test_default_subject_returns_id_and_type(self):
         """Test that default subject contains id and type."""
@@ -1878,11 +1883,13 @@ class BatchCreateResponseSerializerTests(IdentityRequest):
         super().tearDown()
 
     def test_default_fields(self):
-        """Default output includes role.id, subject.id, subject.type, resource.id."""
+        """Default output includes role.id/created/modified, subject.id, subject.type, resource.id."""
         serializer = BatchCreateRoleBindingResponseItemSerializer(self.group_result, context={})
         data = serializer.data
 
-        self.assertEqual(data["role"], {"id": self.role.uuid})
+        self.assertEqual(data["role"]["id"], self.role.uuid)
+        self.assertEqual(data["role"]["created"], self.role.created)
+        self.assertEqual(data["role"]["modified"], self.role.modified)
         self.assertEqual(data["subject"]["id"], self.group.uuid)
         self.assertEqual(data["subject"]["type"], "group")
         self.assertEqual(data["resource"], {"id": "ws-123"})
@@ -1906,8 +1913,8 @@ class BatchCreateResponseSerializerTests(IdentityRequest):
         )
         data = serializer.data
 
-        self.assertEqual(data["role"], {"id": self.role.uuid})
-        self.assertNotIn("name", data["role"])
+        self.assertEqual(data["role"]["id"], self.role.uuid)
+        self.assertEqual(set(data["role"].keys()), {"id"})
         self.assertNotIn("subject", data)
         self.assertNotIn("resource", data)
 
@@ -2230,15 +2237,18 @@ class UpdateRoleBindingResponseSerializerTests(IdentityRequest):
     # ── Default behaviour (no field_selection) ───────────────────────
 
     def test_default_group_response(self):
-        """Default response for a group subject includes id+type, role id only, resource id only."""
+        """Default response for a group subject includes id+type, role id/created/modified, resource id only."""
         result = self._make_group_result()
         serializer = UpdateRoleBindingResponseSerializer(result)
         data = serializer.data
 
         # subject: id + type only
         self.assertEqual(data["subject"], {"id": self.group.uuid, "type": "group"})
-        # roles: id only
-        self.assertEqual(data["roles"], [{"id": self.role1.uuid}])
+        # roles: id, created, modified
+        self.assertEqual(len(data["roles"]), 1)
+        self.assertEqual(data["roles"][0]["id"], self.role1.uuid)
+        self.assertIn("created", data["roles"][0])
+        self.assertIn("modified", data["roles"][0])
         # resource: id only
         self.assertEqual(data["resource"], {"id": "ws-123"})
         # only subject, roles, resource keys
@@ -2254,12 +2264,15 @@ class UpdateRoleBindingResponseSerializerTests(IdentityRequest):
             data["subject"],
             {"id": self.principal.uuid, "type": "user", "user": {"username": "testuser"}},
         )
-        self.assertEqual(data["roles"], [{"id": self.role1.uuid}])
+        self.assertEqual(len(data["roles"]), 1)
+        self.assertEqual(data["roles"][0]["id"], self.role1.uuid)
+        self.assertIn("created", data["roles"][0])
+        self.assertIn("modified", data["roles"][0])
         self.assertEqual(data["resource"], {"id": "ws-123"})
         self.assertEqual(set(data.keys()), {"subject", "roles", "resource"})
 
-    def test_default_multiple_roles_returns_id_only(self):
-        """Default response with multiple roles returns id for each, no name."""
+    def test_default_multiple_roles_returns_id_created_modified(self):
+        """Default response with multiple roles returns id, created, modified for each."""
         result = self._make_group_result(roles=[self.role1, self.role2])
         serializer = UpdateRoleBindingResponseSerializer(result)
         data = serializer.data
@@ -2267,6 +2280,8 @@ class UpdateRoleBindingResponseSerializerTests(IdentityRequest):
         role_ids = {r["id"] for r in data["roles"]}
         self.assertEqual(role_ids, {self.role1.uuid, self.role2.uuid})
         for role in data["roles"]:
+            self.assertIn("created", role)
+            self.assertIn("modified", role)
             self.assertNotIn("name", role)
 
     # ── With field_selection ─────────────────────────────────────────
@@ -2577,6 +2592,8 @@ class RoleBindingUserSubjectSerializerTest(IdentityRequest):
         self.assertNotIn("user", data["subject"])
         self.assertEqual(len(data["roles"]), 1)
         self.assertEqual(data["roles"][0]["id"], self.role.uuid)
+        self.assertIn("created", data["roles"][0])
+        self.assertIn("modified", data["roles"][0])
         self.assertNotIn("name", data["roles"][0])
         self.assertEqual(data["resource"], {"id": "ws-12345"})
 

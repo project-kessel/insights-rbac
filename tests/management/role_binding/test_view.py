@@ -2240,21 +2240,15 @@ class RoleBindingViewSetTest(IdentityRequest):
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
         return_value=True,
     )
-    def test_by_subject_order_by_role_uuid(self, mock_permission):
-        """Test ordering by role.uuid ascending."""
+    def test_by_subject_order_by_role_uuid_rejected(self, mock_permission):
+        """Test that ordering by role.uuid is rejected (role.uuid was removed; use role.id instead)."""
         url = self._get_by_subject_url()
         response = self.client.get(
             f"{url}?resource_id={self.workspace.id}&resource_type=workspace&order_by=role.uuid&limit=100",
             **self.headers,
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.data["data"]
-        self.assertGreater(len(data), 1)
-
-        # Extract role UUIDs and verify ascending order
-        role_uuids = [str(item["roles"][0]["id"]) for item in data if item["roles"]]
-        self.assertEqual(role_uuids, sorted(role_uuids))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -4241,7 +4235,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                     {"roles": [{"id": str(self.role1.uuid)}]},
                     "Invalid field(s): Unknown field: 'bogus_field'."
                     " Valid resource fields: ['id', 'name', 'type']."
-                    " Valid roles fields: ['id', 'name']."
+                    " Valid roles fields: ['created', 'id', 'modified', 'name']."
                     " Valid sources fields: ['id', 'name', 'type']."
                     " Valid subject fields: ['group.description', 'group.name',"
                     " 'group.user_count', 'id', 'type', 'user.username']."
@@ -4347,7 +4341,8 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["resource"]["id"], tenant_resource_id)
-        self.assertEqual(response.data["roles"], [{"id": self.role1.uuid}])
+        self.assertEqual(len(response.data["roles"]), 1)
+        self.assertEqual(response.data["roles"][0]["id"], self.role1.uuid)
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",

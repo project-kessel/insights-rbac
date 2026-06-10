@@ -411,13 +411,18 @@ class V2CursorPaginationTest(TestCase):
             "role_binding_entries__binding__role__name",
         )
         self.assertEqual(
-            self.paginator._convert_order_field("role.uuid", field_mapping),
-            "role_binding_entries__binding__role__uuid",
-        )
-        self.assertEqual(
             self.paginator._convert_order_field("-role.modified", field_mapping),
             "-role_binding_entries__binding__role__modified",
         )
+
+    def test_convert_order_field_rejects_role_uuid(self):
+        """Test _convert_order_field rejects role.uuid (removed; use role.id instead)."""
+        for field_mapping in (
+            self.paginator.GROUP_FIELD_MAPPING,
+            self.paginator.USER_FIELD_MAPPING,
+            self.paginator.ROLE_BINDING_FIELD_MAPPING,
+        ):
+            self.assertIsNone(self.paginator._convert_order_field("role.uuid", field_mapping))
 
     def test_convert_order_field_rejects_unknown_dot_notation(self):
         """Test _convert_order_field rejects unknown dot notation fields."""
@@ -517,10 +522,6 @@ class V2CursorPaginationTest(TestCase):
     def test_convert_order_field_user_mapping_role_fields(self):
         """Test _convert_order_field with user mapping for all role fields."""
         field_mapping = self.paginator.USER_FIELD_MAPPING
-        self.assertEqual(
-            self.paginator._convert_order_field("role.uuid", field_mapping),
-            "role_binding_entries__binding__role__uuid",
-        )
         self.assertEqual(
             self.paginator._convert_order_field("role.modified", field_mapping),
             "role_binding_entries__binding__role__modified",
