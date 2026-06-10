@@ -23,7 +23,12 @@ from django.db.models.fields import CharField, UUIDField
 from django.db.models.functions import Cast
 from management.subject import SubjectType
 
-_PLATFORM_TYPE = "platform"  # avoid circular import of RoleV2
+
+def _get_platform_type() -> str:
+    """Lazily resolve the canonical platform role type to avoid a circular import."""
+    from management.role.v2_model import RoleV2
+
+    return RoleV2.Types.PLATFORM
 
 
 class RoleBindingQuerySet(QuerySet):
@@ -148,30 +153,31 @@ class RoleBindingQuerySet(QuerySet):
         This must be called BEFORE pagination so that limit/offset operate on the
         expanded row count rather than the raw binding count.
         """
+        platform_type = _get_platform_type()
         qs = self.annotate(
             effective_role_uuid=Case(
-                When(role__type=_PLATFORM_TYPE, then=F("role__children__uuid")),
+                When(role__type=platform_type, then=F("role__children__uuid")),
                 default=F("role__uuid"),
             ),
             effective_role_name=Case(
-                When(role__type=_PLATFORM_TYPE, then=F("role__children__name")),
+                When(role__type=platform_type, then=F("role__children__name")),
                 default=F("role__name"),
                 output_field=CharField(),
             ),
             effective_role_created=Case(
-                When(role__type=_PLATFORM_TYPE, then=F("role__children__created")),
+                When(role__type=platform_type, then=F("role__children__created")),
                 default=F("role__created"),
                 output_field=DateTimeField(),
             ),
             effective_role_modified=Case(
-                When(role__type=_PLATFORM_TYPE, then=F("role__children__modified")),
+                When(role__type=platform_type, then=F("role__children__modified")),
                 default=F("role__modified"),
                 output_field=DateTimeField(),
             ),
         ).exclude(
             # Platform bindings with no children expand to a single NULL row — remove it.
-            Q(role__type=_PLATFORM_TYPE)
-            & Q(effective_role_name__isnull=True)
+            Q(role__type=platform_type)
+            & Q(effective_role_uuid__isnull=True)
         )
         return qs
 
