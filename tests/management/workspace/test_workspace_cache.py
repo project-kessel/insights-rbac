@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
-from management.cache import WORKSPACE_CACHE, WorkspaceCache
+from management.cache import WORKSPACE_CACHE, WorkspaceCache, workspace_cache_total
 from management.models import Workspace
 from management.workspace.service import WorkspaceService
 from redis import exceptions as redis_exceptions
@@ -422,3 +422,71 @@ class WorkspaceViewCacheTests(IdentityRequest):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         mock_get.assert_called_once_with(self.tenant.org_id, "list::root::5::20")
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
+class WorkspaceCacheMetricsTests(IdentityRequest):
+    """Tests for workspace cache Prometheus metrics."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.tenant.save()
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+        self.cache = WorkspaceCache()
+
+    def tearDown(self):
+        """Clean up."""
+        Workspace.objects.update(parent=None)
+        Workspace.objects.all().delete()
+
+    @patch.object(WorkspaceCache, "get_from_redis", return_value=None)
+    @patch.object(WorkspaceCache, "redis_health_check", return_value=True)
+    def test_get_workspace_miss_increments_metric(self, mock_health, mock_get_redis):
+        """Cache miss on get_workspace increments model miss counter."""
+        before = workspace_cache_total.labels(cache_layer="model", result="miss")._value.get()
+        self.cache.get_workspace(self.tenant.org_id, "root")
+        after = workspace_cache_total.labels(cache_layer="model", result="miss")._value.get()
+        self.assertEqual(after - before, 1)
+
+    @patch.object(WorkspaceCache, "get_from_redis")
+    @patch.object(WorkspaceCache, "redis_health_check", return_value=True)
+    def test_get_workspace_hit_increments_metric(self, mock_health, mock_get_redis):
+        """Cache hit on get_workspace increments model hit counter."""
+        mock_get_redis.return_value = self.root_workspace
+        before = workspace_cache_total.labels(cache_layer="model", result="hit")._value.get()
+        self.cache.get_workspace(self.tenant.org_id, "root")
+        after = workspace_cache_total.labels(cache_layer="model", result="hit")._value.get()
+        self.assertEqual(after - before, 1)
+
+    def test_get_response_miss_increments_metric(self):
+        """Cache miss on get_response increments response miss counter."""
+        mock_conn = MagicMock()
+        mock_conn.get.return_value = None
+
+        with patch.object(WorkspaceCache, "redis_health_check", return_value=True):
+            with patch.object(type(self.cache), "connection", new_callable=lambda: property(lambda s: mock_conn)):
+                before = workspace_cache_total.labels(cache_layer="response", result="miss")._value.get()
+                self.cache.get_response(self.tenant.org_id, "list::root")
+                after = workspace_cache_total.labels(cache_layer="response", result="miss")._value.get()
+                self.assertEqual(after - before, 1)
+
+    def test_get_response_hit_increments_metric(self):
+        """Cache hit on get_response increments response hit counter."""
+        import json
+
+        test_data = {"meta": {"count": 1}, "data": [{"id": "test"}]}
+        mock_conn = MagicMock()
+        mock_conn.get.return_value = json.dumps(test_data).encode()
+
+        with patch.object(WorkspaceCache, "redis_health_check", return_value=True):
+            with patch.object(type(self.cache), "connection", new_callable=lambda: property(lambda s: mock_conn)):
+                before = workspace_cache_total.labels(cache_layer="response", result="hit")._value.get()
+                self.cache.get_response(self.tenant.org_id, "list::root")
+                after = workspace_cache_total.labels(cache_layer="response", result="hit")._value.get()
+                self.assertEqual(after - before, 1)

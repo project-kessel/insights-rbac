@@ -18,6 +18,12 @@ redis_disable_cache_get_total = Counter(
     "redis_disable_cache_get_total", "Total amount of times cache has been disabled"
 )
 
+workspace_cache_total = Counter(
+    "rbac_workspace_cache_total",
+    "Total workspace cache lookups",
+    ["cache_layer", "result"],
+)
+
 BATCH_DELETE_SIZE = 1000
 
 
@@ -408,10 +414,12 @@ class WorkspaceCache(BasicCache):
         """
         if not settings.ACCESS_CACHE_ENABLED:
             return None
-        return super().get_cached(
+        result = super().get_cached(
             self.key_for(org_id, workspace_type),
             f"Unable to fetch workspace ({workspace_type}) from cache for org {org_id}",
         )
+        workspace_cache_total.labels(cache_layer="model", result="hit" if result is not None else "miss").inc()
+        return result
 
     def cache_workspace(self, org_id: str, workspace):
         """Cache a workspace instance.
@@ -473,10 +481,12 @@ class WorkspaceCache(BasicCache):
         :param cache_key: The cache key suffix (e.g. workspace type or workspace id).
         :returns: The cached response data (dict) or None.
         """
-        return self._get_json(
+        result = self._get_json(
             self.response_key_for(org_id, cache_key),
             err_msg=f"Error fetching workspace response cache for org {org_id}",
         )
+        workspace_cache_total.labels(cache_layer="response", result="hit" if result is not None else "miss").inc()
+        return result
 
     def cache_response(self, org_id: str, cache_key: str, data):
         """Cache an API response.
