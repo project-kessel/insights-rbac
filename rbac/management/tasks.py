@@ -29,6 +29,7 @@ from django.core.management import call_command
 from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
 from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
+from internal.migrations.remove_v2_tenant_binding_mappings import remove_v2_tenant_binding_mappings
 from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
 from internal.utils import (
     clean_invalid_workspace_resource_definitions,
@@ -199,6 +200,12 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
     return recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+
+
+@shared_task
+def remove_v2_tenant_binding_mappings_in_worker():
+    """Celery task to remove BindingMappings for V2 tenants."""
+    return remove_v2_tenant_binding_mappings()
 
 
 @shared_task

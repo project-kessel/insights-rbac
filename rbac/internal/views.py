@@ -97,6 +97,7 @@ from management.tasks import (
     recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
+    remove_v2_tenant_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
@@ -2624,6 +2625,27 @@ def recompute_tenant_role_bindings(request, org_id):
         logger.exception(f"Error recomputing role bindings for tenant {org_id}")
         return JsonResponse(
             {"detail": f"Error recomputing role bindings for tenant: {str(e)}"},
+            status=500,
+        )
+
+
+@require_http_methods(["POST"])
+def remove_v2_tenant_binding_mappings(request):
+    """
+    Remove BindingMappings for all tenants that have migrated to V2.
+
+    POST /_private/api/utils/remove_v2_tenant_binding_mappings/
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    try:
+        remove_v2_tenant_binding_mappings_in_worker.delay()
+        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+    except Exception as e:
+        logger.exception("Error removing BindingMappings")
+        return JsonResponse(
+            {"detail": f"Error removing BindingMappings: {str(e)}"},
             status=500,
         )
 
