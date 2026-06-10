@@ -811,17 +811,34 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
 
         return {"type": _SUBJECT_TYPE_GROUP}
 
+    def _get_effective_role(self, obj: RoleBinding):
+        """Return the effective role for this binding.
+
+        For expanded platform-role bindings (annotated by
+        ``with_expanded_platform_roles``), the effective role is one of
+        the platform role's children.  For regular bindings the effective
+        role is the binding's own role.
+        """
+        effective_uuid = getattr(obj, "effective_role_uuid", None)
+        if effective_uuid is not None and obj.role and str(obj.role.uuid) != str(effective_uuid):
+            # Platform binding expanded to child — look up from prefetch cache.
+            for child in obj.role.children.all():
+                if str(child.uuid) == str(effective_uuid):
+                    return child
+        return obj.role
+
     def get_role(self, obj: RoleBinding):
         """Extract role information from the RoleBinding.
 
         Default (no fields param): Returns only role id.
         With fields param: id is always included, plus explicitly requested fields.
         """
-        if not obj.role:
+        role = self._get_effective_role(obj)
+        if not role:
             return None
 
         field_selection = self._get_field_selection()
-        return self._build_role_data(obj.role, field_selection)
+        return self._build_role_data(role, field_selection)
 
     def get_resource(self, obj: RoleBinding):
         """Extract resource information from the RoleBinding.
