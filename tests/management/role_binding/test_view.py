@@ -1059,7 +1059,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
         )
 
         url = self._get_list_url()
-        response = self.client.get(f"{url}?role_id={seeded_role.uuid}&fields=role(name)&limit=100", **self.headers)
+        response = self.client.get(f"{url}?role_id={seeded_role.uuid}&fields=role(id,name)&limit=100", **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["data"]), 1)
@@ -1078,7 +1078,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
 
         url = self._get_list_url()
         response = self.client.get(
-            f"{url}?resource_id={self.workspace.id}&resource_type=workspace&fields=role(name)&limit=100",
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace&fields=role(id,name)&limit=100",
             **self.headers,
         )
 

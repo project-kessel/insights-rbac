@@ -1552,8 +1552,8 @@ class RoleBindingListOutputSerializerTest(IdentityRequest):
         fs = RoleBindingFieldSelection.parse("role(name),subject(group.name),resource(type)")
         data = self._serialize(self.binding, field_selection=fs)
 
-        # Role includes id (always) + name
-        self.assertEqual(data["role"]["id"], self.role.uuid)
+        # Role includes only explicitly requested fields (name)
+        self.assertNotIn("id", data["role"])
         self.assertEqual(data["role"]["name"], "test_role")
 
         # Subject includes type (always) + group.name, but not id
@@ -2522,7 +2522,8 @@ class RoleBindingUserSubjectSerializerTest(IdentityRequest):
         result = serializer.get_roles(self.principal)
 
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], self.role.uuid)
+        # Only explicitly requested fields are returned
+        self.assertNotIn("id", result[0])
         self.assertEqual(result[0]["name"], "test_role")
 
     def test_roles_deduplicates_same_role_from_multiple_bindings(self):
@@ -2635,8 +2636,8 @@ class RoleBindingUserSubjectSerializerTest(IdentityRequest):
         self.assertEqual(data["subject"]["type"], "user")
         self.assertEqual(data["subject"]["user"]["username"], "testuser")
 
-        # Check roles with name
-        self.assertEqual(data["roles"][0]["id"], self.role.uuid)
+        # Check roles with name (only explicitly requested fields)
+        self.assertNotIn("id", data["roles"][0])
         self.assertEqual(data["roles"][0]["name"], "test_role")
 
         # Check resource with name and type
