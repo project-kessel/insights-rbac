@@ -92,6 +92,8 @@ objects:
           name: default-role-config
         - mountPath: /opt/rbac/rbac/management/role/permissions
           name: model-access-permissions
+        - mountPath: /opt/rbac/rbac/management/principal/umb_certificates
+          name: umb-certificates
         volumes:
         - configMap:
             name: ${CONFIG_MAP_NAME}
@@ -99,6 +101,10 @@ objects:
         - configMap:
             name: ${MODEL_ACCESS_PERMISSIONS}
           name: model-access-permissions
+        - name: umb-certificates
+          secret:
+            optional: true
+            secretName: it-umb-key-pair
         resources:
           limits:
             cpu: ${CELERY_WORKER_CPU_LIMIT}
@@ -211,6 +217,10 @@ objects:
             value: ${EXTERNAL_CHROME_TOPIC}
           - name: MIGRATE_AND_SEED_ON_INIT
             value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
+          - name: UMB_HOST
+            value: ${UMB_HOST}
+          - name: UMB_PORT
+            value: ${UMB_PORT}
           - name: SA_NAME
             value: ${SA_NAME}
           - name: RELATION_API_SERVER
@@ -233,6 +243,8 @@ objects:
             value: ${REDHAT_SSO}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
+            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -270,6 +282,16 @@ objects:
           - name: DEFAULT_SCOPE_PERMISSIONS
             value: ${DEFAULT_SCOPE_PERMISSIONS}
           ####### Following envs are for scheduler, doesn't hurt to put in worker
+          - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
+            value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB}
+          - name: UMB_JOB_ENABLED
+            value: ${UMB_JOB_ENABLED}
+          - name: PARITY_CHECK_ENABLED
+            value: ${PARITY_CHECK_ENABLED}
+          - name: PARITY_CHECK_ORG_IDS
+            value: ${PARITY_CHECK_ORG_IDS}
+          - name: PARITY_CHECK_SCHEDULE
+            value: ${PARITY_CHECK_SCHEDULE}
           - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
             value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA}
           - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
@@ -525,10 +547,16 @@ objects:
             value: ${EXTERNAL_CHROME_TOPIC}
           - name: MIGRATE_AND_SEED_ON_INIT
             value: ${SERVICE_MIGRATE_AND_SEED_ON_INIT}
+          - name: UMB_HOST
+            value: ${UMB_HOST}
+          - name: UMB_PORT
+            value: ${UMB_PORT}
           - name: SA_NAME
             value: ${SA_NAME}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
+            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -918,8 +946,14 @@ objects:
               value: ${EXTERNAL_CHROME_TOPIC}
             - name: MIGRATE_AND_SEED_ON_INIT
               value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
+            - name: UMB_HOST
+              value: ${UMB_HOST}
+            - name: UMB_PORT
+              value: ${UMB_PORT}
             - name: SA_NAME
               value: ${SA_NAME}
+            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
+              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -1135,8 +1169,14 @@ objects:
               value: ${EXTERNAL_CHROME_TOPIC}
             - name: MIGRATE_AND_SEED_ON_INIT
               value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
+            - name: UMB_HOST
+              value: ${UMB_HOST}
+            - name: UMB_PORT
+              value: ${UMB_PORT}
             - name: SA_NAME
               value: ${SA_NAME}
+            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
+              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -1649,12 +1689,18 @@ parameters:
     or from a single identity infrastructure domain (identity header, SSO, BOP).
     This defines that single domain.
   value: 'redhat'
+- name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
+  description: Allow cleanup job to delete principals via messages from UMB
 - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
   description: Allow cleanup job to delete principals via messages from Kafka
   value: 'False'
+- name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
+  description: Allow cleanup job to update principals via messages from UMB
 - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
   description: Allow cleanup job to update principals via messages from Kafka
   value: 'False'
+- name: UMB_JOB_ENABLED
+  description: Temp env to enable the UMB job
 - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
   description: Enable the Kafka-based principal cleanup job
   value: 'True'
