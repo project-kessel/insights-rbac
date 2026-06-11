@@ -28,9 +28,8 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_ready
 from django.conf import settings
-from prometheus_client import CollectorRegistry, multiprocess, start_http_server
-
 from feature_flags import FEATURE_FLAGS
+from prometheus_client import CollectorRegistry, multiprocess, start_http_server
 
 logger = logging.getLogger("__name__")
 

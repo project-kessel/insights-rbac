@@ -49,8 +49,8 @@ from management.parity_check import run_parity_checks
 from management.permission.scope_service import ImplicitResourceService
 from management.principal.cleaner import (
     clean_tenants_principals,
-    process_principal_events_from_umb,
     process_principal_events_from_kafka,
+    process_principal_events_from_umb,
 )
 from management.role.v2_model import CustomRoleV2, SeededRoleV2
 from management.tenant_mapping.model import TenantMapping
