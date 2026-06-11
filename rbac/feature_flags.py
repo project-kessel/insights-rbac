@@ -43,6 +43,8 @@ class FeatureFlags:
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
     # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # When enabled, use Kafka for principal cleanup; when disabled, use UMB.
+    TOGGLE_USE_KAFKA_CLEANUP = "rbac.principal-cleanup.use-kafka.enabled"
 
     def __init__(self):
         """Add attributes."""
@@ -180,6 +182,18 @@ class FeatureFlags:
             feature_name=self.TOGGLE_V2_EDIT_API_ENABLED,
             context={"orgId": str(org_id)},
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
+        )
+
+    def is_kafka_principal_cleanup_enabled(self):
+        """Check whether to use Kafka for principal cleanup.
+
+        When enabled (True), use Kafka for principal cleanup.
+        When disabled (False), use UMB for principal cleanup.
+        Falls back to False (UMB) if Unleash is unavailable - UMB is the proven original method.
+        """
+        return self.is_enabled(
+            feature_name=self.TOGGLE_USE_KAFKA_CLEANUP,
+            fallback_function=lambda ignored_toggle_name, ignored_context: False,
         )
 
 
