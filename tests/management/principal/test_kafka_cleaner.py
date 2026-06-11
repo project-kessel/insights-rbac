@@ -445,7 +445,7 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
         self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id).exists())
 
-    @patch("management.principal.cleaner.retrieve_user_info")
+    @patch("management.principal.cleaner.retrieve_user_info_kafka")
     @patch("management.principal.cleaner.KafkaConsumer")
     def test_failure_processing_message(self, consumer_mock, retrieve_user_mock):
         """Test failure handling when processing message."""
