@@ -28,6 +28,7 @@ from django.conf import settings
 from django.core.management import call_command
 from management.principal.cleaner import (
     clean_tenants_principals,
+    process_principal_events_from_umb,
     process_principal_events_from_kafka,
     process_principal_events_from_umb,
 )
@@ -75,6 +76,12 @@ def principal_cleanup():
             },
         )
         raise
+
+
+@shared_task
+def principal_cleanup_via_umb():
+    """Celery task to clean up principals no longer existing."""
+    process_principal_events_from_umb()
 
 
 @shared_task
