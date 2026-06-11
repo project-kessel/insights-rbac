@@ -209,6 +209,8 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RECONCILE_ENABLED
+            value: ${DR_RECONCILE_ENABLED}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -533,6 +535,8 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RECONCILE_ENABLED
+            value: ${DR_RECONCILE_ENABLED}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -1630,6 +1634,9 @@ parameters:
   value: 'platform.notifications.ingress'
 - description: Enable kafka
   name: KAFKA_ENABLED
+  value: 'False'
+- description: Enable disaster recovery reconciliation endpoint and Celery task
+  name: DR_RECONCILE_ENABLED
   value: 'False'
 - name: EXTERNAL_SYNC_TOPIC
   value: 'platform.rbac.sync'

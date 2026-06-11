@@ -28,7 +28,7 @@ from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connection, transaction
 from django.db.migrations.recorder import MigrationRecorder
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.html import escape
 from django.views.decorators.http import require_http_methods
@@ -62,6 +62,7 @@ from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,
+    CrossAccountRequestInventoryChecker,
     GroupPrincipalInventoryChecker,
     RoleRelationInventoryChecker,
     WorkspaceRelationInventoryChecker,
@@ -118,7 +119,8 @@ from rest_framework import status
 
 from api.common.pagination import StandardResultsSetPagination, WSGIRequestResultsSetPagination
 from api.cross_access.model import RequestsRoles
-from api.models import Tenant, User
+from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.models import CrossAccountRequest, Tenant, User
 from api.tasks import (
     cross_account_cleanup,
     populate_tenant_account_id_in_worker,
@@ -2086,6 +2088,8 @@ def check_role(request, role_uuid):
                 },
             }
         )
+    except Http404:
+        raise
     except RpcError as e:
         return JsonResponse(
             {"detail": "gRPC error occurred during inventory role relation check", "error": str(e)},
@@ -2094,6 +2098,89 @@ def check_role(request, role_uuid):
     except Exception as e:
         return JsonResponse(
             {"detail": "Unexpected error occurred during inventory role relation check", "error": str(e)}, status=500
+        )
+
+
+def check_cross_account_request(request, request_id):
+    """Check an approved cross account request has correct relations on Inventory API.
+
+    Re-runs the CAR dual writer with an in-memory replicator to determine the expected
+    relation tuples, then verifies each exists in the Inventory API.
+
+    The InMemoryRelationReplicator used here has no external side effects — it writes
+    only to an in-memory tuple store — so the transaction.atomic() + set_rollback(True)
+    block safely prevents any DB mutations without risk of non-transactional side effects.
+    """
+    try:
+        car = get_object_or_404(CrossAccountRequest, request_id=request_id)
+
+        if car.status != CrossAccountRequest.STATUS_APPROVED:
+            return JsonResponse(
+                {"detail": f"Cross account request {request_id} is not approved (status: {car.status})."},
+                status=400,
+            )
+
+        cross_account_roles = car.roles.all()
+        if not cross_account_roles.exists():
+            return JsonResponse(
+                {
+                    "cross_account_request_checks": {
+                        "request_id": str(car.request_id),
+                        "target_org": car.target_org,
+                        "user_id": car.user_id,
+                        "status": car.status,
+                        "roles": [],
+                        "relations_correct": True,
+                    },
+                }
+            )
+
+        tuples = InMemoryTuples()
+
+        with transaction.atomic():
+            handler = RelationApiDualWriteCrossAccessHandler(
+                cross_account_request=car,
+                event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
+                replicator=InMemoryRelationReplicator(tuples),
+            )
+            handler.generate_relations_to_add_roles(cross_account_roles)
+            handler.replicate()
+
+            # Ensure that we don't accidentally update any models.
+            transaction.set_rollback(True)
+
+        car_checker = CrossAccountRequestInventoryChecker()
+        car_correct = car_checker.check_cross_account_request(list(tuples), str(car.request_id))
+
+        return JsonResponse(
+            {
+                "cross_account_request_checks": {
+                    "request_id": str(car.request_id),
+                    "target_org": car.target_org,
+                    "user_id": car.user_id,
+                    "status": car.status,
+                    "roles": [str(r.uuid) for r in cross_account_roles],
+                    "relations_correct": car_correct,
+                },
+            }
+        )
+    except Http404:
+        raise
+    except RpcError as e:
+        return JsonResponse(
+            {
+                "detail": "gRPC error occurred during inventory cross account request check",
+                "error": str(e),
+            },
+            status=400,
+        )
+    except Exception:
+        logger.exception("Unexpected error during inventory cross account request check")
+        return JsonResponse(
+            {
+                "detail": "Unexpected error during inventory cross account request check",
+            },
+            status=500,
         )
 
 

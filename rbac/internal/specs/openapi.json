@@ -4355,6 +4355,132 @@
         }
       }
     },
+    "/api/inventory/check_cross_account_request/{request_id}/": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "summary": "Check an approved cross account request has correct relations on Inventory API.",
+        "description": "Re-runs the CAR dual writer with an in-memory replicator to determine the expected relation tuples, then verifies each tuple exists in the Inventory API. Only approved requests can be checked.",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "UUID of the cross account request to check.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cross account request check result returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cross_account_request_checks": {
+                      "type": "object",
+                      "properties": {
+                        "request_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "example": "a8d33564-628f-4eba-bd59-6a2948bfb31e"
+                        },
+                        "target_org": {
+                          "type": "string",
+                          "example": "12345"
+                        },
+                        "user_id": {
+                          "type": "string",
+                          "example": "user123"
+                        },
+                        "status": {
+                          "type": "string",
+                          "example": "approved"
+                        },
+                        "roles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "example": ["a8d33564-628f-4eba-bd59-6a2948bfb31e"]
+                        },
+                        "relations_correct": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "cross_account_request_checks": {
+                    "request_id": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "target_org": "12345",
+                    "user_id": "user123",
+                    "status": "approved",
+                    "roles": ["b9e44675-739g-5fca-ce6a-7b3059cgc42f"],
+                    "relations_correct": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request not approved or gRPC error.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "notApproved": {
+                    "value": {
+                      "detail": "Cross account request a8d33564-... is not approved (status: pending)."
+                    }
+                  },
+                  "gRPCError": {
+                    "value": {
+                      "detail": "gRPC error occurred during inventory cross account request check",
+                      "error": "gRPC Error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Cross account request not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error500"
+                },
+                "examples": {
+                  "Error": {
+                    "value": {
+                      "detail": "Unexpected error during inventory cross account request check"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tenant/unmodified/": {
       "get": {
         "tags": [
