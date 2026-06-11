@@ -215,7 +215,7 @@ def retrieve_user_info_umb(message) -> User:
                 break
 
         return user
-    
+
     user_data = bop_resp["data"][0]
     return external_principal_to_user(user_data)
 
@@ -297,6 +297,7 @@ def retrieve_user_info_kafka(message) -> User:
     user_data = bop_resp["data"][0]
     return external_principal_to_user(user_data)
 
+
 def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstrapService) -> bool:
     """
     Process each umb frame.
@@ -337,6 +338,7 @@ def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstr
             stomp_messages_nack_total.inc()
 
     return True
+
 
 def process_kafka_message(message, bootstrap_service: TenantBootstrapService) -> tuple[bool, bool]:
     """

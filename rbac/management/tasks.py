@@ -28,7 +28,6 @@ from django.conf import settings
 from django.core.management import call_command
 from management.principal.cleaner import (
     clean_tenants_principals,
-    process_principal_events_from_umb,
     process_principal_events_from_kafka,
     process_principal_events_from_umb,
 )
