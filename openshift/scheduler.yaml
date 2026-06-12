@@ -260,7 +260,7 @@ parameters:
   displayName: Git Repository URL
   name: SOURCE_REPOSITORY_URL
   required: true
-  value: https://github.com/RedHatInsights/insights-rbac.git
+  value: https://github.com/project-kessel/insights-rbac.git
 - description: Set this to a branch name, tag or other ref of your repository if you
     are not using the default branch.
   displayName: Git Reference

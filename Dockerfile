@@ -33,7 +33,7 @@ LABEL summary="$SUMMARY" \
       maintainer="Red Hat Insights" \
       distribution-scope="private" \
       release="1" \
-      url="https://github.com/RedHatInsights/insights-rbac" \
+      url="https://github.com/project-kessel/insights-rbac" \
       vendor="Red Hat, Inc."
 
 
