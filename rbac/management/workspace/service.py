@@ -195,18 +195,20 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
                 if workspace_id not in workspace_ids:
                     continue
 
+                workspace_ids.remove(workspace_id)
+
                 # This resource definition references the removed workspace
                 role_had_updates = True
 
-                # Remove the workspace ID from the list
-                remaining_workspace_ids: set[str | None] = {
-                    str(ws_id) for ws_id in workspace_ids if ws_id != workspace_id
-                }
+                # We've removed the deleted workspace ID; now we ensure that we preserve None if present (since we
+                # ignored it when parsing valid_ids above) and any invalid IDs.
+                new_ids = (
+                    [str(u) for u in workspace_ids]
+                    + ([None] if None in parsed_filter.valid_ids else [])
+                    + list(parsed_filter.invalid_ids)
+                )
 
-                if None in parsed_filter.valid_ids:
-                    remaining_workspace_ids.add(None)
-
-                new_filter = updated_attribute_filter_with_ids(rd.attributeFilter, remaining_workspace_ids)
+                new_filter = updated_attribute_filter_with_ids(rd.attributeFilter, new_ids)
 
                 # Update resource definition to remove the workspace ID
                 # Create new dict to ensure Django detects the change (JSONField mutation issue)
