@@ -160,6 +160,10 @@ class RoleViewSet(
     ordering_fields = ("name", "display_name", "modified", "policyCount")
     ordering = ("name",)
 
+    # We need a place to stash BindingCheckResults, since the check itself must be done outside of a transaction,
+    # while creating the policy must be done inside a transaction. (See check_binding_resources and
+    # commit_binding_policy.) Since there appears to be no way to thread a value from, e.g., update to perform_update
+    # in Django Rest Framework, we are left with either this field or a contextvar; the field seems simpler.
     _binding_check_result: Optional[BindingCheckResult] = None
 
     def get_queryset(self):
@@ -480,6 +484,12 @@ class RoleViewSet(
                     assert_v1_write_allowed(request.tenant)
                     return super(RoleViewSet, self).update(request=request, args=args, kwargs=kwargs)
 
+            # We can't just use UnconstrainedBindingAuthorizationPolicy because of the following situation:
+            # 1. A role R with a resource definition for "foo.id" is added, which at the time doesn't mean a resource.
+            # 2. We then make "foo.id" refer to a resource.
+            # 3. Before we successfully validate all existing resource definitions, R is partially updated.
+            # If we don't check binding permissions for partial updates, then the final step could create a binding
+            # to an unauthorized resource.
             return with_checked_bindings(do_update, get_object_or_404(Role.objects.all(), uuid=kwargs["uuid"]))
         except V1WriteBlockedError:
             return Response(
