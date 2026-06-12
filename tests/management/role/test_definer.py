@@ -709,7 +709,7 @@ class RoleDefinerTests(IdentityRequest):
         user_access_role = Role.objects.public_tenant_only().get(name="User Access administrator")
 
         # This role is a special case: when assigned as part of default access (only), it should always be assigned in
-        # root scope. See RHCLOUD-45734 and https://github.com/RedHatInsights/insights-rbac/pull/2653
+        # root scope. See RHCLOUD-45734 and https://github.com/project-kessel/insights-rbac/pull/2653
         inventory_role = Role.objects.public_tenant_only().get(name="Inventory Groups Administrator")
 
         # Assert that seed_role creates relations in the default scope for ordinary roles.
