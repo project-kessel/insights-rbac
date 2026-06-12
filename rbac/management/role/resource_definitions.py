@@ -127,8 +127,8 @@ def parse_attribute_filter(attribute_filter: dict) -> Optional[ParsedAttributeFi
     if resource_type is None:
         return None
 
-    valid = []
-    invalid = []
+    valid: list[str | None] = []
+    invalid: list[Any] = []
 
     for value in _values_from_attribute_filter(attribute_filter):
         if value is None:
