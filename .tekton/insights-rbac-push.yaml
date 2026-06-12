@@ -10,10 +10,10 @@ metadata:
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
       == "master"
   labels:
-    appstudio.openshift.io/application: rbac
-    appstudio.openshift.io/component: rbac
+    appstudio.openshift.io/application: insights-rbac
+    appstudio.openshift.io/component: insights-rbac
     pipelines.appstudio.openshift.io/type: build
-  name: rbac-on-push
+  name: insights-rbac-on-push
   namespace: hcc-accessmanagement-tenant
 spec:
   params:
@@ -22,7 +22,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/hcc-accessmanagement-tenant/rbac:{{revision}}
+    value: quay.io/redhat-user-workloads/hcc-accessmanagement-tenant/insights-rbac:{{revision}}
   - name: dockerfile
     value: Dockerfile
   - name: path-context
@@ -519,7 +519,7 @@ spec:
     - name: netrc
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline-rbac
+    serviceAccountName: build-pipeline-insights-rbac
   workspaces:
   - name: git-auth
     secret:
