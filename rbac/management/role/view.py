@@ -61,7 +61,6 @@ from management.workspace.model import Workspace
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
-from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
 from api.models import Tenant
@@ -490,7 +489,7 @@ class RoleViewSet(
             # 3. Before we successfully validate all existing resource definitions, R is partially updated.
             # If we don't check binding permissions for partial updates, then the final step could create a binding
             # to an unauthorized resource.
-            return with_checked_bindings(do_update, get_object_or_404(Role.objects.all(), uuid=kwargs["uuid"]))
+            return with_checked_bindings(do_update, self.get_object())
         except V1WriteBlockedError:
             return Response(
                 status=status.HTTP_403_FORBIDDEN,
