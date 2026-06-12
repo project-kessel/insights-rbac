@@ -87,7 +87,7 @@ class CheckBindingResourcesTest(TestCase):
         self._allow_predicate = lambda r: r == workspace
 
         result = self._do_check_for(
-            [ParsedAttributeFilter(resource_type=_workspace_type, named_ids={workspace.resource_id})]
+            [ParsedAttributeFilter(resource_type=_workspace_type, valid_ids={workspace.resource_id})]
         )
 
         self.assertEqual(
@@ -99,7 +99,7 @@ class CheckBindingResourcesTest(TestCase):
         self._allow_predicate = lambda r: r == workspace
 
         result = self._do_check_for(
-            [ParsedAttributeFilter(resource_type=_workspace_type, named_ids={workspace.resource_id}, has_null=True)]
+            [ParsedAttributeFilter(resource_type=_workspace_type, valid_ids={workspace.resource_id, None})]
         )
 
         self.assertEqual(
@@ -112,7 +112,7 @@ class CheckBindingResourcesTest(TestCase):
 
         with self.assertRaises(UnauthorizedResourceError) as ctx:
             self._do_check_for(
-                [ParsedAttributeFilter(resource_type=_workspace_type, named_ids={workspace.resource_id})]
+                [ParsedAttributeFilter(resource_type=_workspace_type, valid_ids={workspace.resource_id})]
             )
 
         self.assertIn(str(workspace), str(ctx.exception))
@@ -120,12 +120,10 @@ class CheckBindingResourcesTest(TestCase):
     def test_non_workspace_null(self):
         self._allow_predicate = lambda _: False
 
-        with self.assertRaises(ValueError) as ctx:
-            self._do_check_for(
-                [ParsedAttributeFilter(resource_type=ObjectType("rbac", "tenant"), named_ids={}, has_null=True)]
-            )
+        with self.assertRaises(TypeError) as ctx:
+            self._do_check_for([ParsedAttributeFilter(resource_type=ObjectType("rbac", "tenant"), valid_ids={None})])
 
-        self.assertIn("null resource ID", str(ctx.exception))
+        self.assertEqual("None is only a valid ID for workspaces", str(ctx.exception))
 
 
 class CommitBindingPolicyTest(TestCase):

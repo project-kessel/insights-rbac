@@ -180,9 +180,9 @@ def v1_role_to_v2_bindings(
 
             # validate permission was not added to workspace out of users org for v1 (RHCLOUD-35481)
             if parsed_filter.is_for_workspaces():
-                # We do not need to handle a null ID here; the ungrouped hosts workspace will be created later if
+                # We do not need to handle a None ID here; the ungrouped hosts workspace will be created later if
                 # necessary.
-                requested_workspace_ids = set(uuid.UUID(u) for u in parsed_filter.named_ids)
+                requested_workspace_ids = set(uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None)
 
                 if len(requested_workspace_ids) > 0:
                     actual_workspace_ids = set(
@@ -198,13 +198,13 @@ def v1_role_to_v2_bindings(
 
                         continue
 
-            all_ids = set(parsed_filter.named_ids)
+            all_ids = set(u for u in parsed_filter.valid_ids if u is not None)
 
-            if parsed_filter.has_null:
+            if None in parsed_filter.valid_ids:
                 if not parsed_filter.is_for_workspaces():
                     raise ValueError(f"Resource ID is None for {parsed_filter.resource_type}")
 
-                # A null ID means the ungrouped hosts workspace (if the flag is enabled).
+                # A None ID means the ungrouped hosts workspace (if the flag is enabled).
                 if FEATURE_FLAGS.is_remove_null_value_enabled():
                     ungrouped_ws = get_or_create_ungrouped_workspace(v1_role.tenant)
                     all_ids.add(str(ungrouped_ws.id))

@@ -764,9 +764,11 @@ class RoleViewSet(
                     parsed_filter = parse_attribute_filter(attributeFilter)
 
                     if filter_key is not None and parsed_filter is not None and parsed_filter.is_for_workspaces():
-                        # Note that we don't care about a null ID, since the ungrouped hosts workspace is guaranteed
+                        # Note that we don't care about a None ID, since the ungrouped hosts workspace is guaranteed
                         # to be valid.
-                        requested_workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
+                        requested_workspace_ids: set[uuid.UUID] = {
+                            uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None
+                        }
 
                         if len(requested_workspace_ids) >= 1:
                             valid_workspace_ids: set[uuid.UUID] = set(

@@ -785,8 +785,10 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
                     if not parsed_filter.is_for_workspaces():
                         continue
 
-                    # Get workspace IDs from resource definition. (A null ID is always valid, so we ignore it here.)
-                    requested_workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
+                    # Get workspace IDs from resource definition. (A None ID will be handled later.)
+                    requested_workspace_ids: set[uuid.UUID] = {
+                        uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None
+                    }
 
                     # Previously, we would attempt to exit early if workspace_ids is empty (believing there would be
                     # nothing to process). However, this isn't always valid. If the resource definition contains only
@@ -800,17 +802,17 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
                         )
                     )
 
-                    invalid_workspace_ids = requested_workspace_ids - valid_workspace_ids
-
-                    if invalid_workspace_ids or parsed_filter.invalid_ids:
+                    if (valid_workspace_ids != requested_workspace_ids) or (len(parsed_filter.invalid_ids) > 0):
                         role_had_invalid_rds = True
 
-                        new_ids: set[str | None] = set(str(u) for u in valid_workspace_ids)
-
-                        if parsed_filter.has_null:
-                            new_ids.add(None)
+                        new_ids = [
+                            x for x in parsed_filter.valid_ids if (x is None) or (uuid.UUID(x) in valid_workspace_ids)
+                        ]
 
                         new_filter = updated_attribute_filter_with_ids(original_filter, new_ids)
+
+                        invalid_workspace_ids = [str(u) for u in (requested_workspace_ids - valid_workspace_ids)]
+                        preserved_none = None in parsed_filter.valid_ids
 
                         change_info = {
                             "role_uuid": str(role.uuid),
@@ -819,10 +821,10 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
                             "resource_definition_id": rd.id,
                             "original_filter": original_filter,
                             "new_filter": new_filter,
-                            "invalid_workspaces": list(invalid_workspace_ids),
+                            "invalid_workspaces": invalid_workspace_ids,
                             "malformed_workspaces": parsed_filter.invalid_ids,
                             "valid_workspaces": list(valid_workspace_ids),
-                            "preserved_none": parsed_filter.has_null,
+                            "preserved_none": preserved_none,
                         }
 
                         if dry_run:
@@ -831,9 +833,9 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
                                 f"permission '{permission.permission}', RD #{rd.id}:\n"
                                 f"  Original filter: {original_filter}\n"
                                 f"  New filter: {new_filter}\n"
-                                f"  Invalid workspace IDs removed: {list(invalid_workspace_ids)}\n"
+                                f"  Invalid workspace IDs removed: {invalid_workspace_ids}\n"
                                 f"  Valid workspace IDs kept: {list(valid_workspace_ids)}\n"
-                                f"  None preserved: {parsed_filter.has_null}"
+                                f"  None preserved: {preserved_none}"
                             )
                             change_info["action"] = "would_update"
                         else:

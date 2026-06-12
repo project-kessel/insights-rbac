@@ -153,14 +153,15 @@ def check_binding_resources(org_id: str, filters: list[ParsedAttributeFilter]) -
     for filter in filters:
         raw_type = filter.resource_type.as_tuple()
 
-        for resource_id in filter.named_ids:
+        for resource_id in filter.valid_ids:
+            if resource_id is None:
+                if not filter.is_for_workspaces():
+                    raise ValueError(f"Invalid null resource ID for resource type: {raw_type}")
+
+                ungrouped_hosts_workspace = True
+                continue
+
             resources.add(V2boundresource(raw_type, resource_id))
-
-        if filter.has_null:
-            if not filter.is_for_workspaces():
-                raise ValueError(f"Invalid null resource ID for resource type: {raw_type}")
-
-            ungrouped_hosts_workspace = True
 
     if not settings.SKIP_RESOURCE_BINDING_CHECKS:
         check_result = ResourceTenantInventoryChecker().check_resources(org_id=org_id, resources=resources)

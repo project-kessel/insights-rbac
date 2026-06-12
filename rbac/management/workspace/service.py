@@ -188,9 +188,8 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
                 if not parsed_filter.is_for_workspaces():
                     continue
 
-                # Get workspace IDs from resource definition. (We will never remove an ungrouped hosts workspace,
-                # so we don't need to worry about a null ID.)
-                workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.named_ids}
+                # Get workspace IDs from resource definition. (A None ID will be restored below if present.)
+                workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None}
 
                 # Check if this resource definition references the removed workspace
                 if workspace_id not in workspace_ids:
@@ -200,7 +199,12 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
                 role_had_updates = True
 
                 # Remove the workspace ID from the list
-                remaining_workspace_ids = {str(ws_id) for ws_id in workspace_ids if ws_id != workspace_id}
+                remaining_workspace_ids: set[str | None] = {
+                    str(ws_id) for ws_id in workspace_ids if ws_id != workspace_id
+                }
+
+                if None in parsed_filter.valid_ids:
+                    remaining_workspace_ids.add(None)
 
                 new_filter = updated_attribute_filter_with_ids(rd.attributeFilter, remaining_workspace_ids)
 

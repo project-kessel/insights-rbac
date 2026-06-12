@@ -88,11 +88,6 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
                     ),
                 )
 
-            if parsed_filter.has_null and not parsed_filter.is_for_workspaces():
-                raise _make_error(
-                    key="format", message=f"attributeFilter with key {filter_key!r} has invalid null value"
-                )
-
         return value
 
     def to_representation(self, instance):
@@ -103,12 +98,15 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         if parsed_filter is None:
             return serialized_data
 
-        new_ids: list[Any] = list(parsed_filter.named_ids) + list(parsed_filter.invalid_ids)
+        # A None ID will be handled below.
+        new_ids: list[Any] = list(x for x in parsed_filter.valid_ids if x is not None) + list(
+            parsed_filter.invalid_ids
+        )
 
         # Whether to force the operation to be "in" (even if it was previously "equal").
         force_in_operation: bool = False
 
-        if parsed_filter.has_null:
+        if None in parsed_filter.valid_ids:
             # This preserves the number of values in the original filter, so we don't need to change the operation.
             if parsed_filter.is_for_workspaces() and FEATURE_FLAGS.is_remove_null_value_enabled():
                 ungrouped_hosts = get_or_create_ungrouped_workspace(instance.tenant)
