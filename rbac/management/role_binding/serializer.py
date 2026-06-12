@@ -820,11 +820,15 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
         role is the binding's own role.
         """
         effective_uuid = getattr(obj, "effective_role_uuid", None)
-        if effective_uuid is not None and obj.role and str(obj.role.uuid) != str(effective_uuid):
-            # Platform binding expanded to child — look up from prefetch cache.
-            for child in obj.role.children.all():
-                if str(child.uuid) == str(effective_uuid):
-                    return child
+        if effective_uuid is not None and obj.role:
+            # Normalize to UUID for direct comparison (annotation may return str or UUID)
+            if not isinstance(effective_uuid, uuid.UUID):
+                effective_uuid = uuid.UUID(str(effective_uuid))
+            if obj.role.uuid != effective_uuid:
+                # Platform binding expanded to child — look up from prefetch cache.
+                for child in obj.role.children.all():
+                    if child.uuid == effective_uuid:
+                        return child
         return obj.role
 
     def get_role(self, obj: RoleBinding):
