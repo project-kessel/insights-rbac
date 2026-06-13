@@ -38,6 +38,7 @@ from management.audit_log.model import AuditLog
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
 from management.models import Group, Permission, Principal, Workspace
+from management.utils import PROBLEM_TYPES
 from management.permission.scope_service import Scope
 from management.role.definer import seed_roles
 from management.role.platform import platform_v2_role_uuid_for
@@ -3601,6 +3602,7 @@ class BatchCreateViewTests(IdentityRequest):
         expected = {
             "status": 404,
             "title": "Not found.",
+            "type": PROBLEM_TYPES[404],
             "detail": expected_detail,
             "errors": [{"message": expected_detail, "field": "detail"}],
         }
@@ -3623,6 +3625,9 @@ class BatchCreateViewTests(IdentityRequest):
             "detail": expected_detail,
             "errors": [{"message": expected_detail, "field": expected_field}],
         }
+        problem_type = PROBLEM_TYPES.get(expected_status)
+        if problem_type:
+            expected["type"] = problem_type
         self.assertEqual(response.status_code, expected_status)
         self.assertEqual(response.data, expected)
 
@@ -4082,6 +4087,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
+                    "type": PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": missing_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4135,6 +4141,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
+                    "type": PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": expected_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4196,6 +4203,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 404,
                     "title": "Not found.",
+                    "type": PROBLEM_TYPES[404],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": "detail"}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4263,6 +4271,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
+                    "type": PROBLEM_TYPES[400],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": expected_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",

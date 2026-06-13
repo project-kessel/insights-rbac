@@ -206,6 +206,12 @@ model OffsetPaginationLinks {
 namespace Problems {
     enum ProblemType {
         InsufficientPermission:"http://project-kessel.org/problems/insufficient-permission",
+        Unauthenticated:"http://project-kessel.org/problems/unauthenticated",
+        NotFound:"http://project-kessel.org/problems/not-found",
+        InternalError:"http://project-kessel.org/problems/internal-error",
+        InvalidRequest:"http://project-kessel.org/problems/invalid-request",
+        AlreadyExists:"http://project-kessel.org/problems/already-exists",
+        WorkspaceNotEmpty:"http://project-kessel.org/problems/workspace-not-empty",
     }
 
     @error
@@ -229,30 +235,45 @@ namespace Problems {
         title: "You do not have permission to perform this action.";
     }
 
-    alias Problem401 = ProblemDetails<Status = 401>;
+    @error
+    model Problem401 extends ProblemDetails<Status = 401>{
+        type: ProblemType.Unauthenticated,
+        title: "Authentication credentials were not provided or are invalid.";
+    }
 
     @error
     model Problem404 extends ProblemDetails<Status = 404>{
+        type: ProblemType.NotFound,
         title: "Resource was not found",
         @example("Not found")
         detail: string
     }
 
-    alias Problem500 = ProblemDetails<Status = 500>;
+    @error
+    model Problem500 extends ProblemDetails<Status = 500>{
+        type: ProblemType.InternalError,
+        title: "Unexpected error occurred.";
+    }
 
     @error
     model Problem400 extends ProblemDetails<Status = 400>{
+        type: ProblemType.InvalidRequest,
         title: "The request payload contains invalid syntax.",
         @example("JSON parse error - Expecting value: line 1 column 1 (char 0)")
         detail: string
     }
 
-    alias Problem400AlreadyExists = ProblemDetails<Status = 400>;
+    @error
+    model Problem400AlreadyExists extends ProblemDetails<Status = 400>{
+        type: ProblemType.AlreadyExists,
+        title: "The resource already exists.";
+    }
 
     alias CommonProblems = Problem401 | Problem403 | Problem500;
 
     namespace Workspace {
         model Problem400WorkspaceNotEmpty extends Problems.ProblemDetails<Status = 400>{
+            type: ProblemType.WorkspaceNotEmpty,
             title: "Unable to delete due to workspace dependencies",
         }
     }

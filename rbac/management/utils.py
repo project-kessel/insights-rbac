@@ -670,9 +670,28 @@ PROBLEM_TITLES = {
     500: "Unexpected error occurred.",
 }
 
+# RFC 9457 problem type URIs matching the TypeSpec ProblemType enum.
+# Each URI identifies a specific problem category for machine-readable error handling.
+PROBLEM_TYPES = {
+    400: "http://project-kessel.org/problems/invalid-request",
+    401: "http://project-kessel.org/problems/unauthenticated",
+    403: "http://project-kessel.org/problems/insufficient-permission",
+    404: "http://project-kessel.org/problems/not-found",
+    500: "http://project-kessel.org/problems/internal-error",
+}
 
-def v2response_error_from_errors(errors, exc=None, context=None):
-    """Build a ProblemDetails-formatted error response from errors."""
+
+def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):
+    """Build a ProblemDetails-formatted error response from errors.
+
+    Args:
+        errors: List of error dicts with "detail", "status", and optional "source" keys.
+        exc: The original exception (optional).
+        context: DRF context dict with "request" (optional).
+        problem_type: Explicit RFC 9457 problem type URI override. When set, this
+            takes precedence over the default status-code-based lookup in PROBLEM_TYPES.
+            Use for specialized problem types like "http://project-kessel.org/problems/already-exists".
+    """
     detail = ""
     status_code = 0
     field_errors = []
@@ -688,11 +707,16 @@ def v2response_error_from_errors(errors, exc=None, context=None):
                     field_error["field"] = error["source"]
                 field_errors.append(field_error)
 
+    resolved_type = problem_type or PROBLEM_TYPES.get(status_code)
+
     response = {
         "status": status_code,
         "title": PROBLEM_TITLES.get(status_code, "An error occurred."),
         "detail": detail,
     }
+
+    if resolved_type:
+        response["type"] = resolved_type
 
     if field_errors:
         response["errors"] = field_errors
