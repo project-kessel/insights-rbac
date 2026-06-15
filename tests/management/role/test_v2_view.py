@@ -1934,12 +1934,36 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self.client.put(update_url, data, format="json")
 
-        # Platform roles are filtered out in get_queryset() for update action
+        # Platform roles are filtered out by assignable() so they're invisible (404)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response["Content-Type"], "application/problem+json")
         self.assertEqual(response.data["status"], 404)
         self.assertIn("title", response.data)
         self.assertIn("detail", response.data)
+
+    def test_update_seeded_role_returns_400(self):
+        """Test that attempting to update a seeded role returns 400, not 404."""
+        public_tenant, _ = Tenant.objects.get_or_create(tenant_name="public")
+        seeded_role = SeededRoleV2.objects.create(
+            name="Seeded Role For Update Test",
+            description="A seeded role",
+            tenant=public_tenant,
+        )
+        seeded_role.permissions.add(self.permission1)
+
+        update_url = reverse("v2_management:roles-detail", kwargs={"uuid": str(seeded_role.uuid)})
+        data = {
+            "name": "Attempt to Update Seeded Role",
+            "description": "This should fail with 400",
+            "permissions": [{"application": "inventory", "resource_type": "hosts", "operation": "read"}],
+        }
+
+        response = self.client.put(update_url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response["Content-Type"], "application/problem+json")
+        self.assertEqual(response.data["status"], 400)
+        self.assertIn("System roles may not be updated", str(response.data))
 
     # --- Problem RFC format on errors ---
 
@@ -2134,7 +2158,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         self.assertTrue(RoleV2.objects.filter(pk=role.pk).exists())
 
     def test_delete_seeded(self):
-        """Test that deleting a seeded role fails with status 404."""
+        """Test that deleting a seeded role fails with status 400, not 404."""
         seed_roles()
 
         seeded_role = SeededRoleV2.objects.first()
@@ -2142,7 +2166,23 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self._request_delete({"ids": [str(seeded_role.uuid)]})
 
-        self._assert_delete_not_found(response, [seeded_role.uuid])
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("System roles may not be deleted", str(response.data))
+        self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
+
+    def test_delete_mix_of_custom_and_seeded_returns_400(self):
+        """Test that bulk-deleting a mix of custom + seeded roles returns 400 and deletes nothing."""
+        seed_roles()
+        seeded_role = SeededRoleV2.objects.first()
+        self.assertIsNotNone(seeded_role)
+
+        custom_role = self._create_role()
+
+        response = self._request_delete({"ids": [custom_role["id"], str(seeded_role.uuid)]})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("System roles may not be deleted", str(response.data))
+        self.assertTrue(RoleV2.objects.filter(uuid=custom_role["id"]).exists())
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
 
     def test_delete_missing_ids(self):
