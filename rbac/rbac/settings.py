@@ -240,7 +240,24 @@ CW_CREATE_LOG_GROUP = ENVIRONMENT.bool("CW_CREATE_LOG_GROUP", default=False)
 LOGGING_FORMATTER = os.getenv("DJANGO_LOG_FORMATTER", "simple")
 DJANGO_LOGGING_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO")
 RBAC_LOGGING_LEVEL = os.getenv("RBAC_LOG_LEVEL", "INFO")
-LOGGING_HANDLERS = os.getenv("DJANGO_LOG_HANDLERS", "console").split(",")
+
+
+def _parse_logging_handlers(raw_value):
+    """Parse comma-separated handler names, strip whitespace, and deduplicate.
+
+    'console' and 'ecs' both write to stderr.  Having both produces duplicate
+    log lines for every event.  When both are specified, keep only 'ecs'
+    (structured JSON for CloudWatch / log aggregation).
+    Use DJANGO_LOG_HANDLERS=console for plain-text development output.
+    """
+    handlers = [h.strip() for h in raw_value.split(",") if h.strip()]
+    if "console" in handlers and "ecs" in handlers:
+        handlers = [h for h in handlers if h != "console"]
+    return handlers
+
+
+LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "console"))
+
 ENV_NAME = os.getenv("ENV_NAME", "stage")
 VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
 
@@ -470,6 +487,7 @@ except ValueError as e:
 
 KAFKA_ENABLED = ENVIRONMENT.get_value("KAFKA_ENABLED", default=False)
 MOCK_KAFKA = ENVIRONMENT.get_value("MOCK_KAFKA", default=False)
+MOCK_REDIS = ENVIRONMENT.get_value("MOCK_REDIS", default=False)
 
 NOTIFICATIONS_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_ENABLED", default=False)
 NOTIFICATIONS_RH_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_RH_ENABLED", default=False)
@@ -673,6 +691,11 @@ PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE = ENVIRONMENT.int("PARITY_CHECK_PRINCIPAL_SAM
 PARITY_CHECK_ORG_IDS = ENVIRONMENT.str("PARITY_CHECK_ORG_IDS", default="")
 PARITY_CHECK_SCHEDULE = ENVIRONMENT.str("PARITY_CHECK_SCHEDULE", default="0 0 * * *")
 
+# Disaster recovery settings
+DR_RECONCILE_ENABLED = ENVIRONMENT.bool("DR_RECONCILE_ENABLED", default=False)
+DR_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("DR_KAFKA_CONSUMER_GROUP_ID", default="rbac-dr-consumer-group")
+DR_MAX_EVENTS_PER_RECONCILE = ENVIRONMENT.int("DR_MAX_EVENTS_PER_RECONCILE", default=10000)
+
 # Org level permissons parent role uuids
 SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID", default="")
 SYSTEM_DEFAULT_TENANT_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_TENANT_ROLE_UUID", default="")
@@ -697,3 +720,8 @@ SYSTEM_USERS = ENVIRONMENT.json("SYSTEM_USERS", default={})
 
 # Principal caching settings
 PRINCIPAL_CACHE_LIFETIME = ENVIRONMENT.int("PRINCIPAL_CACHE_LIFETIME", default=3600)
+
+# Disaster recovery settings
+DR_RECOVERY_ENABLED = ENVIRONMENT.bool("DR_RECOVERY_ENABLED", default=False)
+DR_WORKSPACE_TOPIC = ENVIRONMENT.str("DR_WORKSPACE_TOPIC", default="outbox.event.workspace")
+DR_KAFKA_CONSUMER_TIMEOUT_MS = ENVIRONMENT.int("DR_KAFKA_CONSUMER_TIMEOUT_MS", default=30000)

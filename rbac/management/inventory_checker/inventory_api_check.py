@@ -425,6 +425,36 @@ class RoleBindingInventoryChecker(InventoryApiBaseChecker):
         return binding_check
 
 
+class CrossAccountRequestInventoryChecker(InventoryApiBaseChecker):
+    """Subclass to check cross account request relations are correct on inventory api."""
+
+    def check_cross_account_request(self, tuples: Sequence[RelationTuple], request_id: str) -> bool:
+        """Core logic to check approved cross account request relations on inventory api.
+
+        An approved CAR produces role binding relations that assign the requesting
+        user to roles in the target org's workspaces/tenant.
+
+        Args:
+            tuples: List of RelationTuple objects from re-running the CAR dual writer
+            request_id: UUID of the cross account request being checked
+
+        Returns:
+            True if all relations exist in the inventory, False otherwise
+        """
+        if not tuples:
+            logger.debug(f"CrossAccountRequest: {request_id} has no relations, skipping check")
+            return True
+
+        check_requests = [relation_tuple_to_check_request(tuple_obj) for tuple_obj in tuples]
+
+        car_check = self.check_inventory_core(check_requests)
+        if not car_check:
+            logger.warning(f"CrossAccountRequest: {request_id} does not have the expected relations in inventory.")
+        else:
+            logger.info(f"CrossAccountRequest: {request_id} has the correct relations in inventory.")
+        return car_check
+
+
 class CustomRolePermissionChecker(InventoryApiBaseChecker):
     """Subclass to check custom role permission relations are correct on inventory api."""
 

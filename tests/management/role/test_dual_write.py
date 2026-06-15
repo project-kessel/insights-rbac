@@ -16,7 +16,9 @@
 #
 """Test tuple changes for RBAC operations."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from django.utils import timezone
 from typing import Callable, Optional, Tuple, Iterable
 from django.test import TestCase, override_settings
 from django.db.models import Q
@@ -3247,7 +3249,7 @@ class RbacFixture:
         return CrossAccountRequest.objects.create(
             target_org=tenant.org_id,
             user_id=user_id,
-            start_date=datetime.now(),
-            end_date=datetime.now() + timedelta(days=1),
+            start_date=timezone.now(),
+            end_date=timezone.now() + timedelta(days=1),
             status="approved",
         )

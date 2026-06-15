@@ -43,7 +43,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from management.access.view import AccessView
 from management.audit_log.view import AuditLogViewSet
-from management.cache import _connection_pool
+from management.cache import _get_connection_pool, _is_mock_redis
 from management.group.view import GroupViewSet
 from management.models import Access, AuditLog, Group, Permission
 from management.permission.view import PermissionViewSet
@@ -152,12 +152,17 @@ _REDIS_DESC_PREFIX = "mcp:desc:"
 
 def _get_redis():
     """Get a Redis connection using the shared connection pool from management.cache."""
-    return Redis(connection_pool=_connection_pool, ssl=settings.REDIS_SSL)
+    if _is_mock_redis():
+        return None
+    return Redis(connection_pool=_get_connection_pool(), ssl=settings.REDIS_SSL)
 
 
 def _get_description_override(tool_name: str) -> str | None:
     try:
-        value = _get_redis().get(f"{_REDIS_DESC_PREFIX}{tool_name}")
+        conn = _get_redis()
+        if conn is None:
+            return None
+        value = conn.get(f"{_REDIS_DESC_PREFIX}{tool_name}")
         return value.decode() if value else None
     except redis_exceptions.RedisError:
         logger.debug("mcp: redis unavailable for description override, tool=%s", tool_name)
@@ -165,16 +170,22 @@ def _get_description_override(tool_name: str) -> str | None:
 
 
 def _set_description_override(tool_name: str, description: str) -> None:
-    _get_redis().set(f"{_REDIS_DESC_PREFIX}{tool_name}", description)
+    conn = _get_redis()
+    if conn is not None:
+        conn.set(f"{_REDIS_DESC_PREFIX}{tool_name}", description)
 
 
 def _delete_description_override(tool_name: str) -> None:
-    _get_redis().delete(f"{_REDIS_DESC_PREFIX}{tool_name}")
+    conn = _get_redis()
+    if conn is not None:
+        conn.delete(f"{_REDIS_DESC_PREFIX}{tool_name}")
 
 
 def _get_all_description_overrides() -> dict[str, str]:
     try:
         r = _get_redis()
+        if r is None:
+            return {}
         keys = r.keys(f"{_REDIS_DESC_PREFIX}*")
         if not keys:
             return {}
@@ -746,6 +757,75 @@ def get_status(request: HttpRequest) -> str:
     """Return server status by delegating to the status view."""
     path = reverse("v1_api:server-status")
     return _call_view(request, _status_view, path, {})
+
+
+@register_tool(
+    description=(
+        "Check MCP server health: tool registry integrity, database connectivity, "
+        "and Redis availability. No authentication required — designed for "
+        "infrastructure probing and readiness checks. "
+        "Returns status 'ok' when all checks pass, 'degraded' with per-check "
+        "details when any check fails."
+    ),
+    requires_auth=False,
+    api_version=ApiVersion.UNVERSIONED,
+)
+def health_check() -> str:
+    """Verify MCP-specific health: tool registry, database, and Redis."""
+    checks: dict[str, str] = {}
+    details: dict[str, str] = {}
+
+    # 1. Tool registry check
+    try:
+        config_count = len(_TOOL_CONFIG)
+        tools = _get_tools()
+        tools_count = len(tools)
+        if config_count > 0 and tools_count > 0:
+            checks["tools"] = "ok"
+        else:
+            checks["tools"] = "error"
+            details["tools"] = "registry empty"
+    except Exception:
+        logger.exception("mcp: health_check tools registry probe failed")
+        checks["tools"] = "error"
+        details["tools"] = "unavailable"
+
+    # 2. Database check
+    try:
+        _check_database()
+        checks["database"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check database probe failed")
+        checks["database"] = "error"
+        details["database"] = "unavailable"
+
+    # 3. Redis check
+    try:
+        _check_redis()
+        checks["redis"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check redis probe failed")
+        checks["redis"] = "error"
+        details["redis"] = "unavailable"
+
+    overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    result: dict[str, Any] = {"status": overall, "checks": checks}
+    if details:
+        result["details"] = details
+    return json.dumps(result)
+
+
+def _check_database() -> None:
+    """Probe database connectivity via a lightweight ORM query."""
+    Tenant.objects.exists()
+
+
+def _check_redis() -> None:
+    """Probe Redis connectivity via PING. No-op when Redis is mocked."""
+    conn = _get_redis()
+    if conn is None:
+        return
+    conn.ping()
 
 
 @register_tool(
@@ -1809,7 +1889,7 @@ def list_group_principals(
         "list_cross_account_requests(query_by='target_org', status='approved'). "
         "Order by: 'request_id', 'start_date', 'end_date', 'created', 'modified', "
         "'status' (prefix with '-' to reverse). "
-        "Returns: {meta: {count}, links, data: [{request_id, target_account, status, start_date, end_date, ...}]}. "
+        "Returns: {meta: {count}, links, data: [{request_id, target_org, status, start_date, end_date, ...}]}. "
         "Calls: GET /api/v1/cross-account-requests/\n"
         "Caveats:\n"
         "- Cross-account requests are org-to-org, not user-to-user. A TAM requests access to your "
@@ -1855,8 +1935,8 @@ def list_cross_account_requests(
 @register_tool(
     description=(
         "Get details of a specific cross-account access request by its ID, including "
-        "status, start/end dates, target account, and the requested roles. "
-        "Returns: {request_id, target_account, status, start_date, end_date, created, roles, ...}. "
+        "status, start/end dates, target org, and the requested roles. "
+        "Returns: {request_id, target_org, status, start_date, end_date, created, roles, ...}. "
         "Calls: GET /api/v1/cross-account-requests/{request_id}/"
     ),
     requires_auth=True,
@@ -4438,9 +4518,9 @@ def create_workspace(
     description=(
         "Create a cross-account access request. Allows users from one org (e.g. TAMs) "
         "to request temporary access to another org's resources. "
-        "Required: target_account (the account number to request access to), "
+        "Required: target_org (the org ID to request access to), "
         "start_date (YYYY-MM-DD), end_date (YYYY-MM-DD), roles (list of role UUIDs). "
-        "Example: create_cross_account_request(target_account='12345', "
+        "Example: create_cross_account_request(target_org='12345', "
         "start_date='2026-06-01', end_date='2026-06-30', roles=['<role-uuid>']) "
         "Returns: the created request with request_id, status, dates. "
         "Calls: POST /api/v1/cross-account-requests/"
@@ -4451,14 +4531,14 @@ def create_workspace(
 def create_cross_account_request(
     request: HttpRequest,
     *,
-    target_account: str,
+    target_org: str,
     start_date: str,
     end_date: str,
     roles: list[str],
 ) -> str:
     """Create a cross-account request by delegating to CrossAccountRequestViewSet."""
     body: dict[str, Any] = {
-        "target_account": target_account,
+        "target_org": target_org,
         "start_date": start_date,
         "end_date": end_date,
         "roles": roles,
@@ -5456,7 +5536,10 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
 
     Returns None on success, or a sanitized error message on failure.
     """
-    schemas = _get_tool_schemas()
+    try:
+        schemas = _get_tool_schemas()
+    except Exception:
+        return None
     schema = schemas.get(tool_name)
     if schema is None:
         return None

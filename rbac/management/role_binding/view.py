@@ -291,6 +291,10 @@ class RoleBindingViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         serializer.is_valid(raise_exception=True)
         result = serializer.save()
 
+        if result.custom_default_group_created is not None:
+            audit_log = AuditLog()
+            audit_log.log_create_from_object(request, AuditLog.GROUP, result.custom_default_group_created)
+
         subject_name = self._get_subject_name(result.subject, result.subject_type)
         resource_label = result.resource_name or result.resource_id
         self._log_audit(

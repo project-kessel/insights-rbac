@@ -6030,7 +6030,7 @@ class MCPCrossAccountRequestTests(MCPToolTestMixin, IdentityRequest):
         response = self._call_tool(
             "create_cross_account_request",
             {
-                "target_account": "9999999",
+                "target_org": "9999999",
                 "start_date": "2026-06-01",
                 "end_date": "2026-06-30",
                 "roles": [str(self.role.uuid)],
@@ -7167,6 +7167,100 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         data = response.json()
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32000)
+
+
+class MCPHealthCheckTests(MCPToolTestMixin, IdentityRequest):
+    """Test the health_check MCP tool."""
+
+    def setUp(self):
+        """Set up health check tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+
+    @patch("management.mcp_views._check_redis")
+    def test_health_check_all_healthy(self, _mock_redis):
+        """health_check returns status ok when all checks pass."""
+        response = self._call_tool("health_check")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["result"]["isError"])
+        output = self._get_tool_output(response)
+        self.assertEqual(output["status"], "ok")
+        self.assertEqual(output["checks"]["tools"], "ok")
+        self.assertEqual(output["checks"]["database"], "ok")
+        self.assertEqual(output["checks"]["redis"], "ok")
+        self.assertNotIn("details", output)
+
+    @patch("management.mcp_views._check_redis")
+    def test_health_check_works_without_auth(self, _mock_redis):
+        """health_check does not require authentication."""
+        response = self._call_tool("health_check", use_auth=False)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("result", data)
+        self.assertFalse(data["result"]["isError"])
+        output = self._get_tool_output(response)
+        self.assertIn("status", output)
+        self.assertIn("checks", output)
+
+    @patch("management.mcp_views._check_redis")
+    @patch("management.mcp_views._check_database", side_effect=Exception("connection refused"))
+    def test_health_check_database_failure(self, _mock_db, _mock_redis):
+        """health_check returns degraded when database is unreachable."""
+        response = self._call_tool("health_check")
+
+        self.assertEqual(response.status_code, 200)
+        output = self._get_tool_output(response)
+        self.assertEqual(output["status"], "degraded")
+        self.assertEqual(output["checks"]["database"], "error")
+        self.assertEqual(output["details"]["database"], "unavailable")
+        # Other checks should still report independently
+        self.assertEqual(output["checks"]["tools"], "ok")
+
+    @patch("management.mcp_views._check_redis", side_effect=Exception("redis down"))
+    def test_health_check_redis_failure(self, _mock_redis):
+        """health_check returns degraded when Redis is unreachable."""
+        response = self._call_tool("health_check")
+
+        self.assertEqual(response.status_code, 200)
+        output = self._get_tool_output(response)
+        self.assertEqual(output["status"], "degraded")
+        self.assertEqual(output["checks"]["redis"], "error")
+        self.assertEqual(output["details"]["redis"], "unavailable")
+        self.assertEqual(output["checks"]["tools"], "ok")
+        self.assertEqual(output["checks"]["database"], "ok")
+
+    @patch("management.mcp_views._check_redis")
+    @patch("management.mcp_views._get_tools", side_effect=RuntimeError("event loop error"))
+    def test_health_check_tool_registry_failure(self, _mock_tools, _mock_redis):
+        """health_check returns degraded when tool registry cannot be resolved."""
+        response = self._call_tool("health_check")
+
+        self.assertEqual(response.status_code, 200)
+        output = self._get_tool_output(response)
+        self.assertEqual(output["status"], "degraded")
+        self.assertEqual(output["checks"]["tools"], "error")
+        self.assertEqual(output["details"]["tools"], "unavailable")
+
+    @patch("management.mcp_views._get_tools", side_effect=RuntimeError("tools broken"))
+    @patch("management.mcp_views._check_redis", side_effect=Exception("redis down"))
+    @patch("management.mcp_views._check_database", side_effect=Exception("db down"))
+    def test_health_check_all_degraded(self, _mock_db, _mock_redis, _mock_tools):
+        """health_check returns degraded with all checks failing."""
+        response = self._call_tool("health_check")
+
+        self.assertEqual(response.status_code, 200)
+        output = self._get_tool_output(response)
+        self.assertEqual(output["status"], "degraded")
+        self.assertEqual(output["checks"]["tools"], "error")
+        self.assertEqual(output["checks"]["database"], "error")
+        self.assertEqual(output["checks"]["redis"], "error")
+        self.assertEqual(len(output["details"]), 3)
+        for val in output["details"].values():
+            self.assertEqual(val, "unavailable")
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)

@@ -93,6 +93,26 @@ class ReplicateWithNotifyTests(TestCase):
         wait_callback()
         mock_wait.assert_called_once()
 
+    @patch("internal.pg_notify_wait.connection")
+    @patch("internal.pg_notify_wait.wait_for_pg_notify")
+    @patch("internal.pg_notify_wait.uuid.uuid4", return_value="test-notify-token")
+    def test_skips_notify_wait_for_empty_replication_event(self, _mock_uuid, mock_wait, mock_connection):
+        mock_connection.in_atomic_block = False
+        replicator = Mock()
+        event = ReplicationEvent(
+            add=[],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+
+        replicate_with_notify(replicator, event)
+
+        replicator.replicate.assert_called_once_with(event)
+        self.assertNotIn("notify_token", event.event_info)
+        mock_wait.assert_not_called()
+
 
 class NotifyCoordinatedReplicatorTests(TestCase):
     """Tests for NotifyCoordinatedReplicator."""

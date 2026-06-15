@@ -214,21 +214,26 @@ class AuditLog(TenantAwareModel):
         self._apply_source(request)
         super(AuditLog, self).save()
 
-    def log_delete(self, request, resource, object):
-        """Audit Log when a role or a group is deleted."""
+    def _log_object_action(self, request, resource, object, action, verb):
+        """Shared helper for logging create/delete actions using a model instance."""
         self.principal_username = request.user.username
-
         self.resource_type = resource
         self.resource_id = object.id
         self.resource_uuid = object.uuid
         resource_name = self._format_resource_type(self.resource_type) + ": " + object.name
-
-        self.description = "Deleted " + resource_name
-
-        self.action = AuditLog.DELETE
+        self.description = verb + " " + resource_name
+        self.action = action
         self.tenant_id = self.get_tenant_id(request)
         self._apply_source(request)
         super(AuditLog, self).save()
+
+    def log_create_from_object(self, request, resource, object):
+        """Audit Log when a resource is created, using the object directly instead of request data."""
+        self._log_object_action(request, resource, object, AuditLog.CREATE, "Created")
+
+    def log_delete(self, request, resource, object):
+        """Audit Log when a role or a group is deleted."""
+        self._log_object_action(request, resource, object, AuditLog.DELETE, "Deleted")
 
     def log_edit(self, request, resource, object):
         """Audit Log when a role or a group is edit."""

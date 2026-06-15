@@ -27,8 +27,9 @@ from migration_tool.models import (
     V2boundresource,
 )
 from migration_tool.utils import create_relationship
-from datetime import datetime, timedelta
 from datetime import timedelta
+
+from django.utils import timezone
 
 
 class RoleModelTests(IdentityRequest):
@@ -126,15 +127,15 @@ class BindingMappingTests(IdentityRequest):
             [
                 CrossAccountRequest(
                     target_org=self.tenant.org_id,
-                    start_date=datetime.now(),
-                    end_date=datetime.now() + timedelta(days=1),
+                    start_date=timezone.now(),
+                    end_date=timezone.now() + timedelta(days=1),
                     status="approved",
                     user_id=self.user_id_1,
                 ),
                 CrossAccountRequest(
                     target_org=self.tenant.org_id,
-                    start_date=datetime.now(),
-                    end_date=datetime.now() + timedelta(days=1),
+                    start_date=timezone.now(),
+                    end_date=timezone.now() + timedelta(days=1),
                     status="approved",
                     user_id=self.user_id_2,
                 ),

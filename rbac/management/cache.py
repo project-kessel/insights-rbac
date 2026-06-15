@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import pickle
+import threading
 
 from django.conf import settings
 from prometheus_client import Counter
@@ -11,7 +12,25 @@ from redis import BlockingConnectionPool, exceptions
 from redis.client import Pipeline, Redis
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-_connection_pool = BlockingConnectionPool(**settings.REDIS_CACHE_CONNECTION_PARAMS)  # should match gunicorn.threads
+
+_connection_pool = None
+_connection_pool_lock = threading.Lock()
+
+
+def _is_mock_redis():
+    """Check if Redis mocking is enabled (similar to MOCK_KAFKA)."""
+    return getattr(settings, "MOCK_REDIS", False)
+
+
+def _get_connection_pool():
+    """Lazily initialize the Redis connection pool (thread-safe, double-checked locking)."""
+    global _connection_pool
+    if _connection_pool is None and not _is_mock_redis():
+        with _connection_pool_lock:
+            if _connection_pool is None:
+                _connection_pool = BlockingConnectionPool(**settings.REDIS_CACHE_CONNECTION_PARAMS)
+    return _connection_pool
+
 
 redis_enable_cache_get_total = Counter("redis_enable_cache_get_total", "Total amount of use_caching is true")
 redis_disable_cache_get_total = Counter(
@@ -22,18 +41,26 @@ BATCH_DELETE_SIZE = 1000
 
 
 class BasicCache:
-    """Basic cache class to be inherited."""
+    """Basic cache class to be inherited.
+
+    When MOCK_REDIS is enabled, all Redis operations become no-ops.
+    The _redis_mocked flag centralizes this check so individual methods
+    do not need to call _is_mock_redis() directly.
+    """
 
     def __init__(self):
         """Init the class."""
         self._connection = None
-        self.use_caching = True
+        self._redis_mocked = _is_mock_redis()
+        self.use_caching = not self._redis_mocked
 
     @property
     def connection(self):
-        """Get Redis connection from the pool."""
+        """Get Redis connection from the pool. Returns None when Redis is mocked."""
+        if self._redis_mocked:
+            return None
         if not self._connection:
-            self._connection = Redis(connection_pool=_connection_pool, ssl=settings.REDIS_SSL)
+            self._connection = Redis(connection_pool=_get_connection_pool(), ssl=settings.REDIS_SSL)
             try:
                 self._connection.ping()
             except exceptions.RedisError:
@@ -57,7 +84,9 @@ class BasicCache:
 
     def redis_health_check(self):
         """Check whether redis cache is reachable. If it is not reachable, then disable caching."""
-        self._connection = Redis(connection_pool=_connection_pool, ssl=settings.REDIS_SSL)
+        if self._redis_mocked:
+            return False
+        self._connection = Redis(connection_pool=_get_connection_pool(), ssl=settings.REDIS_SSL)
         try:
             response = self._connection.ping()
             if response:
@@ -85,6 +114,8 @@ class BasicCache:
 
     def get_cached(self, key, error_message):
         """Get cached object from redis, throw error if there is any."""
+        if self._redis_mocked:
+            return None
         try:
             if self.redis_health_check() is True:
                 if self.use_caching:
@@ -100,6 +131,8 @@ class BasicCache:
 
     def delete_cached(self, key, obj_name):
         """Delete cache from redis."""
+        if self._redis_mocked:
+            return
         err_msg = f"Error deleting {obj_name} for {key}"
         with self.delete_handler(err_msg):
             logger.info(f"Deleting {obj_name} cache for {key}")
@@ -111,6 +144,8 @@ class BasicCache:
 
     def save(self, key, item, obj_name):
         """Save cache including exception handler."""
+        if self._redis_mocked:
+            return
         try:
             logger.info(f"Caching {obj_name} for {key}")
             with self.connection.pipeline() as pipe:
@@ -198,7 +233,7 @@ class AccessCache(BasicCache):
 
     def delete_all_policies_for_tenant(self):
         """Purge users' policies for a given tenant from the cache."""
-        if not settings.ACCESS_CACHE_ENABLED:
+        if not settings.ACCESS_CACHE_ENABLED or self._redis_mocked:
             return
         err_msg = f"Error deleting all policies for tenant {self.tenant}"
         with self.delete_handler(err_msg):
@@ -289,7 +324,7 @@ class JWTCacheOptimized(JWTCache):
 
     def get_jwt_response(self):
         """Get the JWT token response from Redis without health check overhead."""
-        if not self.use_caching:
+        if self._redis_mocked or not self.use_caching:
             return None
 
         try:
@@ -356,6 +391,8 @@ class PrincipalCache(BasicCache):
 
         :param org_id: The tenant org_id to clear principals for.
         """
+        if self._redis_mocked:
+            return
         err_msg = f"Error deleting all principals for tenant {org_id}"
         with self.delete_handler(err_msg):
             logger.info(f"Deleting entire principal cache for tenant {org_id}")

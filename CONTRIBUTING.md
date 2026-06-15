@@ -7,7 +7,7 @@ Thank you for contributing to the RBAC service. This guide covers the workflows,
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/RedHatInsights/insights-rbac.git
+   git clone https://github.com/project-kessel/insights-rbac.git
    cd insights-rbac
    ```
 

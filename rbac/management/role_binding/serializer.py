@@ -24,6 +24,7 @@ This module contains:
 import uuid
 from typing import Optional
 
+from management.dotted_query_param_mixin import DottedQueryParamSerializerMixin
 from management.models import Group
 from management.principal.model import Principal
 from management.role.v2_model import RoleV2
@@ -31,7 +32,7 @@ from management.role.v2_serializer import RoleIdSerializer
 from management.role_binding.model import RoleBinding
 from management.role_binding.service import CreateBindingRequest, ExcludeSources, RoleBindingService
 from management.subject import SubjectType
-from management.utils import FieldSelection, FieldSelectionValidationError
+from management.utils import FieldSelection, FieldSelectionValidationError, normalize_blank_or_none
 from rest_framework import serializers
 
 from api.models import Tenant
@@ -63,11 +64,6 @@ class RoleBindingBySubjectFieldSelection(FieldSelection):
         "resource": {"id", "name", "type"},
         "sources": {"id", "name", "type"},
     }
-
-
-def _normalize_blank_or_none(value: str | None) -> str | None:
-    """Return None for empty/blank values, pass through otherwise."""
-    return (value and value.strip()) or None
 
 
 def _normalize_uuid_or_none(value: str | None) -> uuid.UUID | None:
@@ -127,21 +123,8 @@ def resolve_resource_identifiers(params: dict) -> tuple[str, str]:
     return resource_type, resource_id
 
 
-class RoleBindingInputSerializerMixin:
+class RoleBindingInputSerializerMixin(DottedQueryParamSerializerMixin):
     """Shared validation methods for role binding input serializers."""
-
-    DOTTED_PARAM_MAP: dict[str, str] = {}
-
-    def to_internal_value(self, data):
-        """Remap dotted query param keys and sanitize NUL bytes."""
-        remapped = {key: data[key] for key in data}
-        for dotted, underscored in self.DOTTED_PARAM_MAP.items():
-            if dotted in remapped:
-                remapped[underscored] = remapped.pop(dotted)
-        sanitized = {
-            key: value.replace("\x00", "") if isinstance(value, str) else value for key, value in remapped.items()
-        }
-        return super().to_internal_value(sanitized)
 
     def validate_fields(self, value):
         """Parse and validate fields parameter into RoleBindingFieldSelection object."""
@@ -214,13 +197,13 @@ class RoleBindingListInputSerializer(RoleBindingInputSerializerMixin, serializer
         """Return None for empty values, validate UUID format otherwise."""
         return _normalize_uuid_or_none(value)
 
-    validate_resource_id = staticmethod(_normalize_blank_or_none)
-    validate_resource_type = staticmethod(_normalize_blank_or_none)
-    validate_resource_tenant_org_id = staticmethod(_normalize_blank_or_none)
-    validate_subject_type = staticmethod(_normalize_blank_or_none)
-    validate_granted_subject_type = staticmethod(_normalize_blank_or_none)
-    validate_granted_subject_id = staticmethod(_normalize_blank_or_none)
-    validate_granted_subject_principal_user_id = staticmethod(_normalize_blank_or_none)
+    validate_resource_id = staticmethod(normalize_blank_or_none)
+    validate_resource_type = staticmethod(normalize_blank_or_none)
+    validate_resource_tenant_org_id = staticmethod(normalize_blank_or_none)
+    validate_subject_type = staticmethod(normalize_blank_or_none)
+    validate_granted_subject_type = staticmethod(normalize_blank_or_none)
+    validate_granted_subject_id = staticmethod(normalize_blank_or_none)
+    validate_granted_subject_principal_user_id = staticmethod(normalize_blank_or_none)
 
     def validate_exclude_sources(self, value):
         """Map empty string to the default (none = show all)."""
@@ -333,11 +316,11 @@ class RoleBindingInputSerializer(RoleBindingInputSerializerMixin, serializers.Se
         help_text="Exclude bindings: 'none' (default) shows all, 'indirect' hides inherited, 'direct' hides direct",
     )
 
-    validate_resource_id = staticmethod(_normalize_blank_or_none)
-    validate_resource_type = staticmethod(_normalize_blank_or_none)
-    validate_resource_tenant_org_id = staticmethod(_normalize_blank_or_none)
-    validate_subject_type = staticmethod(_normalize_blank_or_none)
-    validate_subject_id = staticmethod(_normalize_blank_or_none)
+    validate_resource_id = staticmethod(normalize_blank_or_none)
+    validate_resource_type = staticmethod(normalize_blank_or_none)
+    validate_resource_tenant_org_id = staticmethod(normalize_blank_or_none)
+    validate_subject_type = staticmethod(normalize_blank_or_none)
+    validate_subject_id = staticmethod(normalize_blank_or_none)
 
     def validate(self, attrs):
         """Cross-field validation for resource params."""
@@ -1130,9 +1113,9 @@ class UpdateRoleBindingRequestSerializer(RoleBindingInputSerializerMixin, serial
     # Request body
     roles = RoleIdSerializer(many=True, required=True, help_text="Roles to assign")
 
-    validate_resource_id = staticmethod(_normalize_blank_or_none)
-    validate_resource_type = staticmethod(_normalize_blank_or_none)
-    validate_resource_tenant_org_id = staticmethod(_normalize_blank_or_none)
+    validate_resource_id = staticmethod(normalize_blank_or_none)
+    validate_resource_type = staticmethod(normalize_blank_or_none)
+    validate_resource_tenant_org_id = staticmethod(normalize_blank_or_none)
 
     def validate_fields(self, value):
         """Parse and validate fields parameter using by-subject selection."""

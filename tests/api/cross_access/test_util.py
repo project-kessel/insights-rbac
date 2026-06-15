@@ -55,7 +55,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         super().setUp()
 
         self.another_tenant_data = {
-            "target_account": self.another_account,
             "target_org": self.another_org_id,
             "start_date": self.format_date(self.ref_time),
             "end_date": self.format_date(self.ref_time + timedelta(90)),
@@ -63,8 +62,8 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         }
 
         self.another_tenant = Tenant.objects.create(
-            tenant_name=f"acct{self.another_tenant_data['target_account']}",
-            account_id=self.another_tenant_data["target_account"],
+            tenant_name=f"acct{self.another_account}",
+            account_id=self.another_account,
             org_id=self.another_tenant_data["target_org"],
         )
         self.another_tenant.ready = True
@@ -139,7 +138,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         # Add one of the same roles to another request for the same user and target org and approve
         # but this one expires later
         additional_request = CrossAccountRequest.objects.create(
-            target_account=self.request_4.target_account,
             target_org=self.request_4.target_org,
             user_id="2222222",
             end_date=self.request_4.end_date + timedelta(days=10),
@@ -204,7 +202,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         # Add one of the same roles to another request for the same user and target org and approve
         # but this one expires later
         additional_request = CrossAccountRequest.objects.create(
-            target_account=self.request_4.target_account,
             target_org=self.request_4.target_org,
             user_id="2222222",
             end_date=self.request_4.end_date + timedelta(days=10),
