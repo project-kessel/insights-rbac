@@ -550,6 +550,8 @@ class DualWriteTestCase(TestCase):
         )
 
         self.assertIn(group_id, mapping.mappings["groups"])
+        self.assertIsNotNone(mapping.v2_role, "BindingMapping should have v2_role set during dual-write")
+        self.assertEqual(str(mapping.v2_role.uuid), v2_role_id)
 
         binding = RoleBinding.objects.get(
             resource_type=target.resource_type[1],

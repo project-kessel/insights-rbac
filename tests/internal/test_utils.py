@@ -805,6 +805,7 @@ class RemoveOrphanBindingMappingsTest(DualWriteTestCase):
                 users={},
             ),
             role,
+            v2_role=None,
         )
 
         for tuple in binding.as_tuples():
