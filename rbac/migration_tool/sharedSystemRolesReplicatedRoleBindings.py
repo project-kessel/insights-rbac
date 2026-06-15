@@ -301,6 +301,7 @@ def _get_or_create_binding(
         existing_mapping.update_mappings_from_role_binding(
             role_binding.as_migration_value(force_group_uuids=group_uuids)
         )
+        existing_mapping.v2_role = v2_role
 
         return existing_mapping, role_binding
     else:
@@ -315,6 +316,7 @@ def _get_or_create_binding(
         new_mapping = BindingMapping.for_role_binding(
             role_binding=role_binding.as_migration_value(force_group_uuids=group_uuids),
             v1_role=v1_role,
+            v2_role=v2_role,
         )
 
         return new_mapping, role_binding

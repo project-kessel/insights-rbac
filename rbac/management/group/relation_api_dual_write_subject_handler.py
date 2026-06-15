@@ -228,7 +228,8 @@ class RelationApiDualWriteSubjectHandler:
             resource,
             **subject,
         )
-        mapping = BindingMapping.for_role_binding(binding, system_role)
+        v2_role = SeededRoleV2.objects.filter(uuid=system_role.uuid).first()
+        mapping = BindingMapping.for_role_binding(binding, system_role, v2_role=v2_role)
         self.relations_to_add.extend(mapping.as_tuples())
         return mapping
 

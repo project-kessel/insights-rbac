@@ -18,7 +18,7 @@
 """Model for role management."""
 
 import logging
-from typing import Optional, Union
+from typing import Optional, TYPE_CHECKING, Union
 from uuid import uuid4
 
 from django.conf import settings
@@ -40,6 +40,9 @@ from migration_tool.models import (
 )
 
 from api.models import FilterQuerySet, TenantAwareModel
+
+if TYPE_CHECKING:
+    from management.role.v2_model import RoleV2
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -153,9 +156,30 @@ class BindingMapping(models.Model):
     # JSON encoding of migration_tool.models.V2rolebinding
     mappings = models.JSONField(default=dict)
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="binding_mappings")
+    v2_role = models.ForeignKey(
+        "management.RoleV2",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="binding_mappings",
+    )
     resource_type_namespace = models.CharField(max_length=256, null=False)
     resource_type_name = models.CharField(max_length=256, null=False)
     resource_id = models.CharField(max_length=256, null=False)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["role", "resource_type_namespace", "resource_type_name", "resource_id"],
+                name="bm_role_resource_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["v2_role", "resource_type_namespace", "resource_type_name", "resource_id"],
+                name="unique_bindingmapping_v2role_resource",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         """Validate and save this BindingMapping."""
@@ -167,7 +191,7 @@ class BindingMapping(models.Model):
         super().save(*args, **kwargs)
 
     @classmethod
-    def for_role_binding(cls, role_binding: V2rolebinding, v1_role: Union[Role, str]):
+    def for_role_binding(cls, role_binding: V2rolebinding, v1_role: Union[Role, str], v2_role: Optional["RoleV2"]):
         """Create a new BindingMapping for a V2rolebinding."""
         mappings = role_binding.as_minimal_dict()
         resource = role_binding.resource
@@ -180,6 +204,7 @@ class BindingMapping(models.Model):
         return cls(
             mappings=mappings,
             **role_arg,
+            v2_role=v2_role,
             resource_type_namespace=resource_type_namespace,
             resource_type_name=resource_type_name,
             resource_id=resource_id,
