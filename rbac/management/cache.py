@@ -545,6 +545,8 @@ class WorkspaceCache(BasicCache):
 
         :param org_id: The tenant's org_id.
         """
+        if self._redis_mocked:
+            return
         err_msg = f"Error deleting workspace cache for tenant {org_id}"
         with self.delete_handler(err_msg):
             logger.info(f"Deleting entire workspace cache for tenant {org_id}")
