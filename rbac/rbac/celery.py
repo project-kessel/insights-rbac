@@ -28,7 +28,6 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_ready
 from django.conf import settings
-from feature_flags import FEATURE_FLAGS
 from prometheus_client import CollectorRegistry, multiprocess, start_http_server
 
 logger = logging.getLogger("__name__")
@@ -58,23 +57,15 @@ app.conf.beat_schedule = {
 }
 
 # Determine which principal cleanup method to use
-# Priority: Unleash flag (if both enabled) > UMB > Kafka > BOP fallback
+# If both UMB and Kafka are enabled, schedule a dispatcher task that checks Unleash flag at runtime
+# Otherwise, schedule the appropriate cleanup method directly
 if settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB and settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA:
-    # Both are enabled - use Unleash flag to decide
-    if FEATURE_FLAGS.is_kafka_principal_cleanup_enabled():
-        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-            app.conf.beat_schedule["principal-cleanup-every-minute"] = {
-                "task": "management.tasks.principal_cleanup_via_kafka",
-                "schedule": 60,  # Every 60 seconds
-                "args": [],
-            }
-    else:
-        if settings.UMB_JOB_ENABLED:
-            app.conf.beat_schedule["principal-cleanup-every-minute"] = {
-                "task": "management.tasks.principal_cleanup_via_umb",
-                "schedule": 60,  # Every 60 seconds
-                "args": [],
-            }
+    # Both are enabled - schedule dispatcher task that will check Unleash flag at runtime
+    app.conf.beat_schedule["principal-cleanup-every-minute"] = {
+        "task": "management.tasks.principal_cleanup_via_message_bus",
+        "schedule": 60,  # Every 60 seconds
+        "args": [],
+    }
 elif settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB:
     if settings.UMB_JOB_ENABLED:  # TODO: This is temp flag, remove it after populating user_id
         app.conf.beat_schedule["principal-cleanup-every-minute"] = {
