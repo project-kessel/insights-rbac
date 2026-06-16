@@ -211,6 +211,8 @@ objects:
             value: ${KAFKA_ENABLED}
           - name: DR_RECONCILE_ENABLED
             value: ${DR_RECONCILE_ENABLED}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -537,6 +539,8 @@ objects:
             value: ${KAFKA_ENABLED}
           - name: DR_RECONCILE_ENABLED
             value: ${DR_RECONCILE_ENABLED}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -1562,6 +1566,10 @@ parameters:
   displayName: Memory Limit
   name: CELERY_WORKER_MEMORY_LIMIT
   value: 512Mi
+- description: Number of concurrent Celery worker processes. 0 uses Celery default (CPU count).
+  displayName: Celery Worker Concurrency
+  name: CELERY_WORKER_CONCURRENCY
+  value: "0"
 - description: Initial amount of CPU the init worker container will request.
   displayName: RBAC worker init container CPU Resource Request
   name: INIT_WORKER_CPU_REQUEST

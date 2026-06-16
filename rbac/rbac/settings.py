@@ -240,7 +240,24 @@ CW_CREATE_LOG_GROUP = ENVIRONMENT.bool("CW_CREATE_LOG_GROUP", default=False)
 LOGGING_FORMATTER = os.getenv("DJANGO_LOG_FORMATTER", "simple")
 DJANGO_LOGGING_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO")
 RBAC_LOGGING_LEVEL = os.getenv("RBAC_LOG_LEVEL", "INFO")
-LOGGING_HANDLERS = os.getenv("DJANGO_LOG_HANDLERS", "console").split(",")
+
+
+def _parse_logging_handlers(raw_value):
+    """Parse comma-separated handler names, strip whitespace, and deduplicate.
+
+    'console' and 'ecs' both write to stderr.  Having both produces duplicate
+    log lines for every event.  When both are specified, keep only 'ecs'
+    (structured JSON for CloudWatch / log aggregation).
+    Use DJANGO_LOG_HANDLERS=console for plain-text development output.
+    """
+    handlers = [h.strip() for h in raw_value.split(",") if h.strip()]
+    if "console" in handlers and "ecs" in handlers:
+        handlers = [h for h in handlers if h != "console"]
+    return handlers
+
+
+LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "console"))
+
 ENV_NAME = os.getenv("ENV_NAME", "stage")
 VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
 
@@ -413,6 +430,9 @@ else:
     CACHES = {"default": _cache_config}
 
 CELERY_BROKER_URL = ENVIRONMENT.get_value("CELERY_BROKER_URL", default=DEFAULT_REDIS_URL)
+_celery_concurrency = ENVIRONMENT.int("CELERY_WORKER_CONCURRENCY", default=0)
+if _celery_concurrency > 0:
+    CELERY_WORKER_CONCURRENCY = _celery_concurrency
 
 if REDIS_SSL:
     _celery_ssl_conf = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
@@ -470,6 +490,7 @@ except ValueError as e:
 
 KAFKA_ENABLED = ENVIRONMENT.get_value("KAFKA_ENABLED", default=False)
 MOCK_KAFKA = ENVIRONMENT.get_value("MOCK_KAFKA", default=False)
+MOCK_REDIS = ENVIRONMENT.get_value("MOCK_REDIS", default=False)
 
 NOTIFICATIONS_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_ENABLED", default=False)
 NOTIFICATIONS_RH_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_RH_ENABLED", default=False)
@@ -691,6 +712,7 @@ MCP_TOOL_MAX_WORKERS = ENVIRONMENT.int("MCP_TOOL_MAX_WORKERS", default=10)
 MCP_WRITE_ENABLED = ENVIRONMENT.bool("MCP_WRITE_ENABLED", default=False)
 MCP_WRITE_CONFIRMATION = ENVIRONMENT.bool("MCP_WRITE_CONFIRMATION", default=True)
 MCP_WRITE_CONFIRMATION_TTL = ENVIRONMENT.int("MCP_WRITE_CONFIRMATION_TTL", default=300)
+MCP_PII_REDACTION_ENABLED = ENVIRONMENT.bool("MCP_PII_REDACTION_ENABLED", default=True)
 
 # Manipulation of response to include ungrouped hosts id
 ADD_UNGROUPED_HOSTS_ID = ENVIRONMENT.bool("ADD_UNGROUPED_HOSTS_ID", default=False)

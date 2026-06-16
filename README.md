@@ -93,6 +93,7 @@ Direct access: `psql postgres -U postgres -h localhost -p 15432`
 - V1 API specs: [docs/source/specs/](docs/source/specs/)
 - V2 OpenAPI spec: [docs/source/specs/v2/openapi.yaml](docs/source/specs/v2/openapi.yaml)
 - V2 TypeSpec source: [docs/source/specs/typespec/main.tsp](docs/source/specs/typespec/main.tsp)
+- MCP endpoint (AI agent interface): [docs/MCP.md](docs/MCP.md)
 
 Regenerate the v2 spec from TypeSpec:
 
@@ -114,6 +115,8 @@ Key environment variables (see [docker-compose.yml](docker-compose.yml) for a fu
 | `V2_APIS_ENABLED` | Enable v2 API routes | `False` |
 | `KAFKA_ENABLED` | Enable Kafka producer/consumer | `False` |
 | `DEVELOPMENT` | Development mode flag | `False` |
+| `MCP_ENABLED` | Enable MCP endpoint (`/_private/_a2s/mcp/`) | `True` |
+| `MCP_WRITE_ENABLED` | Enable MCP write operations | `False` |
 
 ## Project Structure
 
@@ -141,6 +144,8 @@ docs/             # Architecture and domain guideline docs
 - [docs/performance-guidelines.md](docs/performance-guidelines.md) -- Caching, query optimization
 - [docs/error-handling-guidelines.md](docs/error-handling-guidelines.md) -- Error formats and exceptions
 - [docs/testing-guidelines.md](docs/testing-guidelines.md) -- Test runner, base classes, patterns
+- [docs/MCP.md](docs/MCP.md) -- MCP endpoint developer guide (protocol, tools, adding tools)
+- [docs/MCP-operator-guide.md](docs/MCP-operator-guide.md) -- MCP endpoint operator guide (deployment, config, security)
 
 ## License
 

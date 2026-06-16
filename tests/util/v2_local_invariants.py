@@ -28,6 +28,14 @@ def _assert_binding_mapping_consistent(test: TestCase, binding: RoleBinding, map
     test.assertEqual(binding.resource_id, mapping.resource_id)
     test.assertEqual(str(binding.role.uuid), mapping.mappings["role"]["id"])
 
+    test.assertIsNotNone(mapping.v2_role, f"BindingMapping {mapping.id} should have v2_role set")
+    test.assertEqual(mapping.v2_role_id, binding.role_id, "v2_role FK should match RoleBinding's role")
+    test.assertEqual(
+        str(mapping.v2_role.uuid),
+        mapping.mappings["role"]["id"],
+        "v2_role UUID should match mappings JSON role id",
+    )
+
     v1_groups = set(mapping.mappings["groups"])
     v2_groups = set(str(g.uuid) for g in binding.bound_groups())
 
@@ -67,7 +75,8 @@ def _assert_role_mappings_consistent(test: TestCase, role: CustomRoleV2, mapping
 
 def _assert_v1_v2_system_roles_locally_consistent(test: TestCase):
     binding_mappings_by_uuid = {
-        str(m.mappings["id"]): m for m in BindingMapping.objects.filter(role__system=True).prefetch_related("role")
+        str(m.mappings["id"]): m
+        for m in BindingMapping.objects.filter(role__system=True).prefetch_related("role").select_related("v2_role")
     }
 
     role_bindings_by_uuid = {str(b.uuid): b for b in RoleBinding.objects.filter(role__type=RoleV2.Types.SEEDED)}
@@ -81,7 +90,8 @@ def _assert_v1_v2_system_roles_locally_consistent(test: TestCase):
 
 def _assert_v1_v2_custom_roles_locally_consistent(test: TestCase):
     binding_mappings_by_uuid = {
-        str(m.mappings["id"]): m for m in BindingMapping.objects.filter(role__system=False).prefetch_related("role")
+        str(m.mappings["id"]): m
+        for m in BindingMapping.objects.filter(role__system=False).prefetch_related("role").select_related("v2_role")
     }
 
     role_bindings_by_uuid = {str(b.uuid): b for b in RoleBinding.objects.filter(role__type=RoleV2.Types.CUSTOM)}

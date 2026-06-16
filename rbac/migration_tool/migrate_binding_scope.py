@@ -54,7 +54,9 @@ def migrate_custom_role_bindings(raw_role: Role, replicator: RelationReplicator)
 
     Returns: Number of bindings migrated (1 if migrated, 0 if no change)
     """
-    role: Optional[Role] = Role.objects.select_for_update().select_related("tenant").filter(pk=raw_role.pk).first()
+    role: Optional[Role] = (
+        Role.objects.select_for_update(of=["self"]).select_related("tenant").filter(pk=raw_role.pk).first()
+    )
 
     if role is None:
         logger.warning(f"Role vanished before it could be migrated: pk={raw_role.pk!r}")
@@ -101,7 +103,9 @@ def migrate_system_role_bindings_for_group(raw_group: Group, replicator: Relatio
 
     Returns: Number of bindings cleaned up
     """
-    group: Optional[Group] = Group.objects.select_for_update().select_related("tenant").filter(pk=raw_group.pk).first()
+    group: Optional[Group] = (
+        Group.objects.select_for_update(of=["self"]).select_related("tenant").filter(pk=raw_group.pk).first()
+    )
 
     if group is None:
         logger.warning(f"Group vanished before it could be migrated: pk={raw_group.pk!r}")

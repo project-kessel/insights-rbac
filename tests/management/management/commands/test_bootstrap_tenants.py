@@ -192,7 +192,7 @@ class TestBootstrapTenants(DualWriteTestCase):
         # the default workspace scope.
         #
         # [0] https://issues.redhat.com/browse/RHCLOUD-42333
-        # [1] https://github.com/RedHatInsights/insights-rbac/pull/1982
+        # [1] https://github.com/project-kessel/insights-rbac/pull/1982
 
         self._remove_tuples(
             all_of(

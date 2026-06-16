@@ -26,7 +26,7 @@ Development
 
 To get started developing against Insights-rbac first clone a local copy of the git repository. ::
 
-    git clone https://github.com/RedHatInsights/insights-rbac.git
+    git clone https://github.com/project-kessel/insights-rbac.git
 
 Developing inside a virtual environment is recommended. A Pipfile is provided. Pipenv is recommended for combining virtual environment (virtualenv) and dependency management (pip). To install pipenv, use pip ::
 
@@ -261,7 +261,7 @@ Service to Service Requests
 
 RBAC also allows for service-to-service requests. These requests require a preshared-key (PSK) or a JSON Web Token (JWT), and some additional headers in order to authorize the request as an "admin". To test PSK auth locally, do the following:
 
-First disable the local setting of the identity header in `dev_middleware.py` by [commenting this line out](https://github.com/RedHatInsights/insights-rbac/blob/b207668440faf8f951dec75ffef8891343b4131b/rbac/rbac/dev_middleware.py#L72)
+First disable the local setting of the identity header in `dev_middleware.py` by [commenting this line out](https://github.com/project-kessel/insights-rbac/blob/b207668440faf8f951dec75ffef8891343b4131b/rbac/rbac/dev_middleware.py#L72)
 
 Next, start the server with: ::
 
@@ -407,10 +407,10 @@ For additional information please refer to Contributing_.
 .. _Contributing: https://insights-rbac.readthedocs.io/en/latest/CONTRIBUTING.html
 .. _insights-service-deployer: https://github.com/project-kessel/insights-service-deployer
 
-.. |license| image:: https://img.shields.io/github/license/RedHatInsights/insights-rbac.svg
-   :target: https://github.com/RedHatInsights/insights-rbac/blob/master/LICENSE
+.. |license| image:: https://img.shields.io/github/license/project-kessel/insights-rbac.svg
+   :target: https://github.com/project-kessel/insights-rbac/blob/master/LICENSE
 .. |Build Status| image:: https://ci.ext.devshift.net/buildStatus/icon?job=RedHatInsights-insights-rbac-gh-build-master
    :target: https://ci.ext.devshift.net/job/RedHatInsights-insights-rbac-gh-build-master/
 .. |Docs| image:: https://readthedocs.org/projects/insights-rbac/badge/
    :target: https://insights-rbac.readthedocs.io/en/latest/
-.. _`RBAC config repo`: https://github.com/RedHatInsights/rbac-config.git
+.. _`RBAC config repo`: https://github.com/project-kessel/rbac-config.git

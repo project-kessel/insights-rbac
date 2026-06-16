@@ -2,6 +2,8 @@
 
 This document describes the Model Context Protocol (MCP) endpoint for the RBAC service, which enables AI agents to discover and invoke RBAC operations via the standard MCP JSON-RPC 2.0 protocol.
 
+For operator-facing documentation (deployment, configuration, security, all environment variables), see [MCP-operator-guide.md](MCP-operator-guide.md).
+
 ## Table of Contents
 
 - [Overview](#overview)

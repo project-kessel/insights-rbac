@@ -21,7 +21,7 @@ from unittest import skipIf
 from unittest.mock import call, patch
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from management.cache import TenantCache
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role
 from redis import exceptions
@@ -31,6 +31,7 @@ from rbac.settings import ACCESS_CACHE_ENABLED
 
 
 @skipIf(not ACCESS_CACHE_ENABLED, "Caching is disabled.")
+@override_settings(MOCK_REDIS=False)
 class AccessCacheTest(TestCase):
     @classmethod
     def setUpClass(self):
@@ -248,6 +249,7 @@ class AccessCacheTest(TestCase):
         cache.assert_called_once_with(self.principal_a.uuid)
 
 
+@override_settings(MOCK_REDIS=False)
 class TenantCacheTest(TestCase):
     @classmethod
     def setUpClass(self):
@@ -306,6 +308,7 @@ class TenantCacheTest(TestCase):
         self.assertNotEqual(tenant, self.tenant)
 
 
+@override_settings(MOCK_REDIS=False)
 class JWTCacheTest(TestCase):
     """Test JWT token caching."""
 
@@ -372,6 +375,7 @@ class JWTCacheTest(TestCase):
         self.assertEqual(retrieved_token, test_token)
 
 
+@override_settings(MOCK_REDIS=False)
 class JWTCacheOptimizedTest(TestCase):
     """Test optimized JWT token caching for Kafka consumer."""
 
@@ -427,3 +431,73 @@ class JWTCacheOptimizedTest(TestCase):
 
         self.assertIsNone(token)
         redis_connection.get.assert_not_called()
+
+
+@override_settings(MOCK_REDIS=True)
+class MockRedisTest(TestCase):
+    """Test that MOCK_REDIS=True makes all cache operations no-ops."""
+
+    def test_basic_cache_use_caching_disabled(self):
+        """BasicCache.use_caching is False when MOCK_REDIS=True."""
+        from management.cache import BasicCache
+
+        cache = BasicCache()
+        self.assertFalse(cache.use_caching)
+
+    def test_redis_health_check_returns_false(self):
+        """redis_health_check returns False without connecting."""
+        from management.cache import BasicCache
+
+        cache = BasicCache()
+        result = cache.redis_health_check()
+        self.assertFalse(result)
+
+    def test_get_cached_returns_none(self):
+        """get_cached returns None without connecting."""
+        from management.cache import TenantCache
+
+        cache = TenantCache()
+        result = cache.get_tenant("test_org")
+        self.assertIsNone(result)
+
+    def test_save_is_noop(self):
+        """save does not attempt Redis connection."""
+        from management.cache import TenantCache
+
+        from api.models import Tenant
+
+        tenant = Tenant(tenant_name="mock_test", org_id="mock_org")
+        cache = TenantCache()
+        # Should not raise — no Redis connection attempted
+        cache.save_tenant(tenant)
+
+    def test_delete_cached_is_noop(self):
+        """delete_cached does not attempt Redis connection."""
+        from management.cache import TenantCache
+
+        cache = TenantCache()
+        # Should not raise — no Redis connection attempted
+        cache.delete_tenant("mock_org")
+
+    def test_connection_property_returns_none_when_mock(self):
+        """Accessing connection returns None when MOCK_REDIS=True."""
+        from management.cache import BasicCache
+
+        cache = BasicCache()
+        self.assertIsNone(cache.connection)
+
+    def test_access_cache_delete_all_is_noop(self):
+        """delete_all_policies_for_tenant is no-op when MOCK_REDIS=True."""
+        from management.cache import AccessCache
+
+        cache = AccessCache("test_tenant")
+        # Should not raise — no Redis connection attempted
+        cache.delete_all_policies_for_tenant()
+
+    def test_principal_cache_delete_all_is_noop(self):
+        """delete_all_principals_for_tenant is no-op when MOCK_REDIS=True."""
+        from management.cache import PrincipalCache
+
+        cache = PrincipalCache()
+        # Should not raise — no Redis connection attempted
+        cache.delete_all_principals_for_tenant("mock_org")

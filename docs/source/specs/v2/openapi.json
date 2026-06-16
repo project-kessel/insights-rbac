@@ -239,6 +239,16 @@
               }
             }
           },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Access is unauthorized.",
             "content": {
@@ -549,6 +559,16 @@
                       ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
                 }
               }
             }
@@ -1214,6 +1234,16 @@
               }
             }
           },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Access is unauthorized.",
             "content": {
@@ -1513,6 +1543,16 @@
                       "last_modified": "2024-08-04T12:00:00Z"
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
                 }
               }
             }
@@ -2046,6 +2086,16 @@
               }
             }
           },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Access is unauthorized.",
             "content": {
@@ -2321,6 +2371,16 @@
               }
             }
           },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Access is unauthorized.",
             "content": {
@@ -2449,28 +2509,35 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
                     },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        400
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "$ref": "#/components/schemas/Problems.ProblemType"
+                        },
+                        "status": {
+                          "type": "number",
+                          "enum": [
+                            400
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "type": "string"
+                        },
+                        "instance": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      }
                     }
-                  }
+                  ]
                 }
               }
             }
@@ -2606,28 +2673,35 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
                     },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        400
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "$ref": "#/components/schemas/Problems.ProblemType"
+                        },
+                        "status": {
+                          "type": "number",
+                          "enum": [
+                            400
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "type": "string"
+                        },
+                        "instance": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      }
                     }
-                  }
+                  ]
                 }
               }
             }
@@ -2747,7 +2821,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty"
+                    }
+                  ]
                 }
               }
             }

@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1780378819 AS base
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1781496742 AS base
 
 USER root
 
@@ -33,7 +33,7 @@ LABEL summary="$SUMMARY" \
       maintainer="Red Hat Insights" \
       distribution-scope="private" \
       release="1" \
-      url="https://github.com/RedHatInsights/insights-rbac" \
+      url="https://github.com/project-kessel/insights-rbac" \
       vendor="Red Hat, Inc."
 
 
