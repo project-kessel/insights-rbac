@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import ssl
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import xmltodict
 from core.kafka import RBACProducer
@@ -341,7 +341,22 @@ def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstr
     return True
 
 
-def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dlq_producer=None) -> tuple[bool, bool]:
+class MessageProcessingResult(NamedTuple):
+    """
+    Result of processing a Kafka message.
+
+    Attributes:
+        should_continue: False if another listener is running (lock contention), True otherwise
+        success: True if message was processed successfully, False if it failed
+    """
+
+    should_continue: bool
+    success: bool
+
+
+def process_kafka_message(
+    message, bootstrap_service: TenantBootstrapService, dlq_producer=None
+) -> MessageProcessingResult:
     """
     Process each Kafka message.
 
@@ -351,7 +366,7 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dl
         dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
 
     Returns:
-        tuple[bool, bool]: (should_continue, success)
+        MessageProcessingResult with:
         - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
@@ -360,7 +375,7 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dl
         if not _lock_listener():
             # If there is another listener, let it run and abort this one.
             logger.info("process_kafka_message: Another listener is running. Aborting.")
-            return (False, False)
+            return MessageProcessingResult(should_continue=False, success=False)
 
         try:
             # Parse JSON message
@@ -375,7 +390,7 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dl
                 bootstrap_service.update_user(user, ready_tenant=False)
 
             kafka_messages_success_total.inc()
-            return (True, True)  # Continue processing, message succeeded
+            return MessageProcessingResult(should_continue=True, success=True)
         except Exception as e:
             logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
             capture_exception(e)
@@ -406,7 +421,7 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dl
                             message.offset,
                         )
                         # Return success=True so offset gets committed (message moved to DLQ)
-                        return (True, True)
+                        return MessageProcessingResult(should_continue=True, success=True)
                     except Exception as dlq_error:
                         logger.error(
                             "process_kafka_message: Failed to send message to DLQ: %s. "
@@ -415,14 +430,14 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dl
                         )
                         capture_exception(dlq_error)
                         # DLQ send failed, so don't commit offset (will retry message)
-                        return (True, False)
+                        return MessageProcessingResult(should_continue=True, success=False)
 
             # No DLQ configured - don't commit offset, will retry on restart
             logger.warning(
                 "process_kafka_message: No DLQ configured. Failed message at offset %d will be retried on restart.",
                 message.offset,
             )
-            return (True, False)  # Continue processing, message failed
+            return MessageProcessingResult(should_continue=True, success=False)
 
 
 def process_principal_events_from_umb(bootstrap_service: Optional[TenantBootstrapService] = None):
@@ -512,13 +527,13 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
                 message.partition,
                 message.offset,
             )
-            should_continue, success = process_kafka_message(message, bootstrap_service, dlq_producer)
-            if not should_continue:
+            result = process_kafka_message(message, bootstrap_service, dlq_producer)
+            if not result.should_continue:
                 # Lock contention - another listener is running, abort this consumer
                 logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
                 break
 
-            if not success:
+            if not result.success:
                 logger.warning(
                     "process_principal_events_from_kafka: Message processing failed at offset %d. "
                     "Stopping consumer to preserve at-least-once semantics. "
