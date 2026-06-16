@@ -413,6 +413,15 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     logger.info("process_principal_events_from_kafka: Start processing principal events from Kafka.")
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
 
+    # Validate required configuration
+    topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
+    if not topic:
+        logger.error(
+            "process_principal_events_from_kafka: KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
+            "Cannot process principal events from Kafka."
+        )
+        return
+
     # Build Kafka consumer configuration
     # NOTE: This consumer runs periodically via Celery beat (every 60s) and consumes for 15s,
     # creating a 45-second gap between consumption periods. This matches the UMB behavior
@@ -432,9 +441,6 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     kafka_auth = getattr(settings, "KAFKA_AUTH", None)
     if kafka_auth:
         kafka_config.update(kafka_auth)
-
-    # Get topic name from settings
-    topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
 
     # Initialize consumer to None to avoid UnboundLocalError in finally block
     consumer = None

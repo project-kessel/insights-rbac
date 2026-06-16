@@ -42,6 +42,7 @@ services:
         - PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA=False
         - PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=False
         - KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True
+        - KAFKA_PRINCIPAL_CLEANUP_TOPIC=rbac.principal-cleanup
         - RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.relations-replication-event
         - RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group
         - REPLICATION_TO_RELATION_ENABLED=true
