@@ -430,6 +430,9 @@ else:
     CACHES = {"default": _cache_config}
 
 CELERY_BROKER_URL = ENVIRONMENT.get_value("CELERY_BROKER_URL", default=DEFAULT_REDIS_URL)
+_celery_concurrency = ENVIRONMENT.int("CELERY_WORKER_CONCURRENCY", default=0)
+if _celery_concurrency > 0:
+    CELERY_WORKER_CONCURRENCY = _celery_concurrency
 
 if REDIS_SSL:
     _celery_ssl_conf = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
