@@ -803,6 +803,8 @@ objects:
             value: ${RBAC_KAFKA_CUSTOM_CONSUMER_BROKER}
           - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
             value: ${KAFKA_PRINCIPAL_CLEANUP_TOPIC}
+          - name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
           - name: EPH_ENV
@@ -1986,6 +1988,9 @@ parameters:
   value: ''
 - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
   description: Kafka topic name for principal cleanup events (required when PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is true)
+  value: ''
+- name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+  description: Kafka Dead Letter Queue topic for failed principal cleanup messages (optional, prevents infinite retry loops)
   value: ''
 - name: ROOT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to root workspace scope (supports wildcards like rbac:*:read)
