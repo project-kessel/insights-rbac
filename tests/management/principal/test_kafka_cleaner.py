@@ -323,6 +323,7 @@ class PrincipalKafkaTests(IdentityRequest):
         self.group.save()
 
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_cleanup_none(self, consumer_mock):
         """Test that we can run a principal clean up with no messages."""
         before = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
@@ -347,6 +348,7 @@ class PrincipalKafkaTests(IdentityRequest):
     )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test that we can run a principal clean up on a tenant with a principal in a group."""
         principal_name = "principal-test"
@@ -390,6 +392,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_does_not_exist(self, consumer_mock, proxy_mock):
         """Test that can run a principal clean up with a principal does not exist."""
         principal_name = "principal-keep"
@@ -426,6 +429,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
     def test_principal_creation_event_updates_existing_principal(self, consumer_mock, proxy_mock):
         """Test that we can run principal creation event."""
@@ -447,6 +451,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
     @patch("management.principal.cleaner.retrieve_user_info_kafka")
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_failure_processing_message(self, consumer_mock, retrieve_user_mock):
         """Test failure handling when processing message."""
         principal_name = "principal-test"
@@ -492,6 +497,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_same_principal_name_in_multiple_tenants(self, consumer_mock, proxy_mock):
         """Test that can run a principal clean up with a principal that have multiple tenants."""
         another_tenant = Tenant.objects.create(
@@ -517,6 +523,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_does_not_exist_no_tenant(self, consumer_mock, proxy_mock):
         """Test cleanup when principal exists but tenant doesn't match."""
         principal_name = "principal-keep"
@@ -555,6 +562,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_bootstraps_new_tenant(self, consumer_mock, proxy_mock):
         """Test that principal creation event creates and bootstraps a new tenant."""
         Tenant.objects.get(org_id="17685860").delete()
@@ -593,6 +601,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_bootstraps_existing_tenants(self, consumer_mock, proxy_mock):
         """Test that principal creation event bootstraps existing tenant."""
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
@@ -628,6 +637,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_bootstrap_already_bootstraped_tenant(self, consumer_mock, proxy_mock):
         """Test that already bootstrapped tenant stays ready."""
         tenant = Tenant.objects.get(org_id="17685860")
@@ -664,6 +674,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_create_principal(self, consumer_mock, proxy_mock):
         """Test that principal creation event creates tenant but does not create principal (upsert=False)."""
         Tenant.objects.get(org_id="17685860").delete()
@@ -681,6 +692,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 500})
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_create_principal_nor_tenant(self, consumer_mock, proxy_mock):
         """Test that nothing is created when proxy returns error."""
         Tenant.objects.filter(org_id="17685860").delete()
@@ -716,6 +728,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         },
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=False)
     def test_principal_creation_event_disabled(self, consumer_mock, proxy_mock):
         """Test that when update setting is disabled we do not add tenants for new, active users."""
@@ -738,6 +751,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_disable_principal_which_is_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test deleting a principal that is in a group when inactive."""
         principal_name = "principal-test"
@@ -766,6 +780,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_disable_principal_without_user_id_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test deleting a principal without user_id that is in a group when inactive."""
         principal_name = "principal-test"
@@ -795,6 +810,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_same_tenant_keeps_ready(self, consumer_mock, proxy_mock):
         """Test that ready tenant stays ready after principal event."""
         tenant = Tenant.objects.get(org_id="17685860")
@@ -816,6 +832,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_same_tenant_keeps_unready(self, consumer_mock, proxy_mock):
         """Test that unready tenant stays unready after update event."""
         tenant = Tenant.objects.get(org_id="17685860")
@@ -838,6 +855,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(V2_BOOTSTRAP_TENANT=False)
     def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
         self, consumer_mock, proxy_mock
