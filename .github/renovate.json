@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "baseBranches": [
+  "baseBranchPatterns": [
     "master"
   ],
   "lockFileMaintenance": {
@@ -8,8 +8,12 @@
   },
   "packageRules": [
     {
-      "matchPackageNames": ["boto3"],
-      "matchUpdateTypes": ["patch"],
+      "matchPackageNames": [
+        "boto3"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "enabled": false,
       "description": "Skip patch updates for boto3 (e.g., 1.1.1 → 1.1.2)"
     }

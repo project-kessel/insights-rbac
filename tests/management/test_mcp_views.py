@@ -386,7 +386,8 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(tool_output["meta"]["count"], 1)
         self.assertIn("links", tool_output)
         self.assertEqual(len(tool_output["data"]), 1)
-        self.assertEqual(tool_output["data"][0]["username"], "test_user")
+        self.assertNotIn("email", tool_output["data"][0])
+        self.assertNotIn("last_name", tool_output["data"][0])
 
         self.assertEqual(len(result["content"]), 2)
         self.assertIn("IMPORTANT", result["content"][1]["text"])
@@ -416,7 +417,7 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         result = data["result"]
         self.assertFalse(result["isError"])
         tool_output = json.loads(result["content"][0]["text"])
-        self.assertEqual(tool_output["data"][0]["username"], "plain_user")
+        self.assertIn("username", tool_output["data"][0])
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -512,7 +513,8 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["meta"]["count"], 1)
         self.assertEqual(len(tool_output["data"]), 1)
-        self.assertEqual(tool_output["data"][0]["username"], "rbac_user")
+        self.assertNotIn("email", tool_output["data"][0])
+        self.assertNotIn("last_name", tool_output["data"][0])
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -534,9 +536,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["meta"]["count"], 2)
         self.assertEqual(len(tool_output["data"]), 2)
-        usernames = [u["username"] for u in tool_output["data"]]
-        self.assertIn("jsmith", usernames)
-        self.assertIn("asmith", usernames)
+        for user in tool_output["data"]:
+            self.assertNotIn("email", user)
+            self.assertNotIn("last_name", user)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -557,7 +559,8 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["meta"]["count"], 1)
         self.assertEqual(len(tool_output["data"]), 1)
-        self.assertEqual(tool_output["data"][0]["username"], "jsmith")
+        self.assertNotIn("email", tool_output["data"][0])
+        self.assertNotIn("last_name", tool_output["data"][0])
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -598,10 +601,8 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(tool_output["meta"]["count"], 2)
         self.assertEqual(len(tool_output["data"]), 2)
         for user in tool_output["data"]:
-            self.assertEqual(list(user.keys()), ["username"])
-        usernames = [u["username"] for u in tool_output["data"]]
-        self.assertIn("jsmith", usernames)
-        self.assertIn("asmith", usernames)
+            self.assertIn("username", user)
+            self.assertNotIn("email", user)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -690,6 +691,26 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
         self.assertNotIn("hint", tool_output)
+
+    @override_settings(MCP_PII_REDACTION_ENABLED=False)
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {"username": "test_user", "email": "test@example.com", "first_name": "Test", "last_name": "User"}
+            ],
+            "userCount": 1,
+        },
+    )
+    def test_list_principals_pii_visible_when_redaction_disabled(self, mock_request):
+        """Positive: PII fields are returned when PII redaction is disabled via env var."""
+        response = self._call_tool("list_principals", {"limit": 10})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["data"][0]["username"], "test_user")
+        self.assertEqual(tool_output["data"][0]["email"], "test@example.com")
 
     def test_tools_call_unknown_tool_returns_error(self):
         """Negative: Calling an unknown tool returns error."""
@@ -2962,8 +2983,9 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         self.assertFalse(data["result"]["isError"])
         tool_output = self._get_tool_output(response)
 
-        # Verify basic structure
-        self.assertEqual(tool_output["username"], self.test_username)
+        # Verify basic structure — PII redacted, uuid present
+        self.assertNotIn("username", tool_output)
+        self.assertEqual(tool_output["uuid"], str(self.principal.uuid))
         self.assertEqual(tool_output["org_version"], "v1")
         self.assertIn("groups", tool_output)
         self.assertIn("access", tool_output)
@@ -3049,7 +3071,8 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
 
         self.assertNotIn("error", tool_output)
-        self.assertEqual(tool_output["username"], self.test_username)
+        self.assertNotIn("username", tool_output)
+        self.assertEqual(tool_output["uuid"], str(self.principal.uuid))
         self.assertIn("groups", tool_output)
 
     @patch("management.mcp_views._list_principals_by_name")
@@ -3150,6 +3173,16 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("view_audit_details", tool_output["hints"])
         self.assertIn("trace_role_permissions", tool_output["hints"])
 
+    @override_settings(MCP_PII_REDACTION_ENABLED=False)
+    def test_get_user_state_pii_visible_when_redaction_disabled(self):
+        """Positive: get_user_state returns username instead of uuid when redaction is disabled via env var."""
+        response = self._call_tool("get_user_state", {"username": self.test_username})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("username", tool_output)
+        self.assertEqual(tool_output["username"], self.test_username)
+        self.assertNotIn("uuid", tool_output)
+
     def test_get_user_state_description_contains_offboarding_keywords(self):
         """Positive: get_user_state tool description contains offboarding trigger keywords."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
@@ -3229,7 +3262,7 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
         output_person = self._get_tool_output(response_person)
         output_state = self._get_tool_output(response_state)
 
-        self.assertEqual(output_person["username"], output_state["username"])
+        self.assertEqual(output_person["uuid"], output_state["uuid"])
         self.assertEqual(output_person["org_version"], output_state["org_version"])
         self.assertEqual(output_person["summary"]["group_count"], output_state["summary"]["group_count"])
         self.assertEqual(output_person["summary"]["permission_count"], output_state["summary"]["permission_count"])
@@ -3241,7 +3274,7 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
 
-        self.assertEqual(tool_output["username"], self.test_username)
+        self.assertEqual(tool_output["uuid"], str(self.principal.uuid))
         self.assertIn("groups", tool_output)
         self.assertIn("access", tool_output)
         self.assertIn("summary", tool_output)
@@ -3883,9 +3916,10 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["active_access"]), 2)
 
-        # Check first user
-        user1 = next(u for u in tool_output["active_access"] if "User1" in u["user_info"]["name"])
-        self.assertEqual(user1["user_info"]["email"], "user1@example.com")
+        # PII is redacted — user_info contains only user_id
+        user1 = next(u for u in tool_output["active_access"] if u["user_info"]["user_id"] == "10001")
+        self.assertNotIn("name", user1["user_info"])
+        self.assertNotIn("email", user1["user_info"])
         self.assertIn("Test role 1", [r["name"] for r in user1["roles"]])
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
@@ -4050,6 +4084,31 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["summary"]["audit_period_days"], 7)
+
+    @override_settings(MCP_PII_REDACTION_ENABLED=False)
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    def test_audit_redhat_access_pii_visible_when_redaction_disabled(self, mock_proxy):
+        """Positive: audit_redhat_access returns full user_info when redaction is disabled via env var."""
+        mock_proxy.return_value = {
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": "10001",
+                    "first_name": "Test",
+                    "last_name": "User1",
+                    "email": "user1@example.com",
+                    "username": "testuser1",
+                },
+            ],
+        }
+
+        response = self._call_tool("audit_redhat_access")
+
+        tool_output = self._get_tool_output(response)
+        user1 = next(u for u in tool_output["active_access"] if u["user_info"]["user_id"] == "10001")
+        self.assertIn("name", user1["user_info"])
+        self.assertIn("email", user1["user_info"])
+        self.assertEqual(user1["user_info"]["email"], "user1@example.com")
 
 
 class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
@@ -4764,11 +4823,11 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
-        # Users 1, 2, 3 are only in Legacy Ops + platform default - they're stranded
+        # Users 1, 2, 3 are only in Legacy Ops + platform default - they're stranded (identified by UUID)
         self.assertEqual(analysis["stranded_user_count"], 3)
-        self.assertIn("jen.park", analysis["stranded_users"])
-        self.assertIn("tomas.rivera", analysis["stranded_users"])
-        self.assertIn("priya.shah", analysis["stranded_users"])
+        self.assertIn(str(self.user1.uuid), analysis["stranded_users"])
+        self.assertIn(str(self.user2.uuid), analysis["stranded_users"])
+        self.assertIn(str(self.user3.uuid), analysis["stranded_users"])
 
     def test_audit_group_for_dissolution_identifies_stranded_service_accounts(self):
         """Positive: identifies service accounts that would lose all access."""
@@ -4776,10 +4835,10 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
-        # Both service accounts are only in Legacy Ops - they're stranded
+        # Both service accounts are only in Legacy Ops - they're stranded (identified by UUID)
         self.assertEqual(analysis["stranded_service_account_count"], 2)
-        self.assertIn("svc-legacy-patcher", analysis["stranded_service_accounts"])
-        self.assertIn("svc-legacy-remediation", analysis["stranded_service_accounts"])
+        self.assertIn(str(self.svc1.uuid), analysis["stranded_service_accounts"])
+        self.assertIn(str(self.svc2.uuid), analysis["stranded_service_accounts"])
 
     def test_audit_group_for_dissolution_identifies_members_with_overlapping_access(self):
         """Positive: identifies members who have overlapping access via other groups."""
@@ -4787,8 +4846,8 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
-        # User4 (alex.chen) is also in Engineering group
-        self.assertIn("alex.chen", analysis["members_with_overlapping_access"])
+        # User4 (alex.chen) is also in Engineering group — identified by UUID
+        self.assertIn(str(self.user4.uuid), analysis["members_with_overlapping_access"])
         self.assertEqual(analysis["members_with_overlapping_count"], 1)
 
     def test_audit_group_for_dissolution_shows_roles_and_permissions(self):
@@ -4817,14 +4876,15 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         members = tool_output["members"]
         self.assertEqual(len(members), 6)
 
-        # Find alex.chen who has overlapping access
-        alex = next(m for m in members if m["username"] == "alex.chen")
+        # Find alex.chen by UUID (PII redacted from responses)
+        alex = next(m for m in members if m["uuid"] == str(self.user4.uuid))
+        self.assertNotIn("username", alex)
         self.assertFalse(alex["is_stranded"])
         self.assertEqual(alex["non_default_group_count"], 1)
         self.assertIn("partial", alex["access_impact"])
 
-        # Find svc-legacy-patcher (service account)
-        svc = next(m for m in members if m["username"] == "svc-legacy-patcher")
+        # Find svc-legacy-patcher (service account) by UUID
+        svc = next(m for m in members if m["uuid"] == str(self.svc1.uuid))
         self.assertTrue(svc["is_stranded"])
         self.assertEqual(svc["type"], "service-account")
         self.assertEqual(svc["service_account_id"], "sa-12345")
@@ -4873,6 +4933,20 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         # Check for service account warning
         svc_warning = next(w for w in warnings if "service account" in w.lower())
         self.assertIn("403", svc_warning)
+
+    @override_settings(MCP_PII_REDACTION_ENABLED=False)
+    def test_audit_group_for_dissolution_pii_visible_when_redaction_disabled(self):
+        """Positive: audit_group_for_dissolution returns usernames when redaction is disabled via env var."""
+        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        tool_output = self._get_tool_output(response)
+
+        members = tool_output["members"]
+        alex = next(m for m in members if m["uuid"] == str(self.user4.uuid))
+        self.assertIn("username", alex)
+        self.assertEqual(alex["username"], "alex.chen")
+
+        analysis = tool_output["analysis"]
+        self.assertIn("jen.park", analysis["stranded_users"])
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True)
@@ -7373,11 +7447,12 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
     # --- ToolConfig ---
 
     def test_tool_config_has_permission_fields(self):
-        """ToolConfig includes required_relation, required_resource_type, and v1_permission."""
+        """ToolConfig includes required_relation, required_resource_type, v1_permission, and redacted_fields."""
         config = ToolConfig(fn=lambda: "")
         self.assertIsNone(config.required_relation)
         self.assertEqual(config.required_resource_type, "tenant")
         self.assertIsNone(config.v1_permission)
+        self.assertEqual(config.redacted_fields, ())
 
     def test_tool_config_with_permission_fields(self):
         """ToolConfig accepts all permission fields."""
@@ -7441,6 +7516,26 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
                 expected_perm,
                 f"Tool '{tool_name}' has wrong v1_permission: {config.v1_permission}",
             )
+
+    def test_principal_tools_have_redacted_fields(self):
+        """Tools handling principal data declare redacted_fields."""
+        expected_redacted = [
+            "list_principals",
+            "list_group_principals",
+            "investigate_tam_access",
+            "audit_redhat_access",
+            "audit_group_for_dissolution",
+            "get_user_state",
+        ]
+        for tool_name in expected_redacted:
+            config = _TOOL_CONFIG.get(tool_name)
+            self.assertIsNotNone(config, f"Tool '{tool_name}' not found in _TOOL_CONFIG")
+            self.assertTrue(
+                len(config.redacted_fields) > 0,
+                f"Tool '{tool_name}' should declare redacted_fields",
+            )
+            self.assertIn("email", config.redacted_fields, f"Tool '{tool_name}' should redact email")
+            self.assertIn("last_name", config.redacted_fields, f"Tool '{tool_name}' should redact last_name")
 
     def test_unprotected_tools_have_no_required_relation(self):
         """View-delegated tools do not have required_relation set."""
