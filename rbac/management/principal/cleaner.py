@@ -24,6 +24,7 @@ import ssl
 from typing import Optional
 
 import xmltodict
+from core.kafka import RBACProducer
 from django.conf import settings
 from django.db import connection, transaction
 from kafka import KafkaConsumer
@@ -340,13 +341,14 @@ def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstr
     return True
 
 
-def process_kafka_message(message, bootstrap_service: TenantBootstrapService) -> tuple[bool, bool]:
+def process_kafka_message(message, bootstrap_service: TenantBootstrapService, dlq_producer=None) -> tuple[bool, bool]:
     """
     Process each Kafka message.
 
     Args:
         message: Kafka message containing user event data
         bootstrap_service: Service for updating user/tenant state
+        dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
 
     Returns:
         tuple[bool, bool]: (should_continue, success)
@@ -378,8 +380,48 @@ def process_kafka_message(message, bootstrap_service: TenantBootstrapService) ->
             logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
             capture_exception(e)
             kafka_messages_failure_total.inc()
-            # Continue processing next message, but mark this one as failed
-            # Failed message offset will not be committed, so it can be retried on restart
+
+            # Send to DLQ if configured, similar to UMB's nack behavior
+            # This prevents infinite retry loops for malformed or permanently unprocessable messages
+            if dlq_producer and hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
+                dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+                if dlq_topic:
+                    try:
+                        # Build DLQ message with error context
+                        dlq_message = {
+                            "original_message": (
+                                message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
+                            ),
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                            "partition": message.partition,
+                            "offset": message.offset,
+                            "timestamp": message.timestamp,
+                        }
+                        dlq_producer.send_kafka_message(dlq_topic, dlq_message)
+                        logger.info(
+                            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+                            dlq_topic,
+                            message.partition,
+                            message.offset,
+                        )
+                        # Return success=True so offset gets committed (message moved to DLQ)
+                        return (True, True)
+                    except Exception as dlq_error:
+                        logger.error(
+                            "process_kafka_message: Failed to send message to DLQ: %s. "
+                            "Message will be retried on restart.",
+                            str(dlq_error),
+                        )
+                        capture_exception(dlq_error)
+                        # DLQ send failed, so don't commit offset (will retry message)
+                        return (True, False)
+
+            # No DLQ configured - don't commit offset, will retry on restart
+            logger.warning(
+                "process_kafka_message: No DLQ configured. Failed message at offset %d will be retried on restart.",
+                message.offset,
+            )
             return (True, False)  # Continue processing, message failed
 
 
@@ -445,6 +487,20 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
     # Initialize consumer to None to avoid UnboundLocalError in finally block
     consumer = None
 
+    # Initialize DLQ producer if DLQ topic is configured
+    dlq_topic = getattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", None)
+    dlq_producer = None
+    if dlq_topic:
+        try:
+            dlq_producer = RBACProducer()
+            logger.info("process_principal_events_from_kafka: DLQ producer initialized for topic: %s", dlq_topic)
+        except Exception as e:
+            logger.warning(
+                "process_principal_events_from_kafka: Failed to initialize DLQ producer: %s. "
+                "Failed messages will be retried instead of sent to DLQ.",
+                str(e),
+            )
+
     try:
         consumer = KafkaConsumer(topic, **kafka_config)
         logger.info("process_principal_events_from_kafka: Connected to Kafka, subscribed to topic: %s", topic)
@@ -456,7 +512,7 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
                 message.partition,
                 message.offset,
             )
-            should_continue, success = process_kafka_message(message, bootstrap_service)
+            should_continue, success = process_kafka_message(message, bootstrap_service, dlq_producer)
             if not should_continue:
                 # Lock contention - another listener is running, abort this consumer
                 logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
