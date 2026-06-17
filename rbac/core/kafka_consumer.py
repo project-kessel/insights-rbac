@@ -17,6 +17,7 @@
 
 """RBAC Kafka consumer for processing Debezium and replication messages."""
 
+import enum
 import json
 import logging
 import random
@@ -28,8 +29,9 @@ from typing import Any, Dict, List, Optional
 
 import grpc
 from django.conf import settings
-from django.db import connection
+from django.db import OperationalError, connection, transaction
 from google.protobuf import json_format
+from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from kafka.errors import KafkaError
@@ -39,7 +41,6 @@ from management.relation_replicator.relations_api_replicator import (
     RelationsApiReplicator,
 )
 from prometheus_client import Counter, Gauge, Histogram
-from psycopg2 import sql
 
 from api.models import Tenant
 
@@ -68,7 +69,14 @@ messages_processed_total = Counter(
 message_processing_duration = Histogram(
     "rbac_kafka_consumer_message_processing_duration_seconds",
     "Time spent processing messages",
-    ["message_type"],
+    ["message_type", "event_type"],
+)
+
+kessel_write_duration = Histogram(
+    "rbac_kessel_write_duration_seconds",
+    "Time spent on Kessel Relations API write and delete calls",
+    ["operation", "event_type"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
 
 validation_errors_total = Counter(
@@ -136,6 +144,12 @@ replication_event_latency = Histogram(
     "End-to-end latency from event creation to successful processing in seconds",
     ["event_type"],
     buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+
+consistency_token_save_total = Counter(
+    "rbac_kafka_consumer_consistency_token_save_total",
+    "Consistency token save attempts and outcomes",
+    ["status"],  # success, lock_timeout, error
 )
 
 
@@ -707,6 +721,67 @@ class RebalanceListener(ConsumerRebalanceListener):
             logger.warning("on_partitions_assigned called with empty partition list")
 
 
+def _send_pg_notify_best_effort(channel: str, payload: str, description: str) -> None:
+    """Send PostgreSQL NOTIFY after successful side effects. Errors are logged only; they do not fail replication."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_notify(%s, %s)", [channel, payload])
+        logger.info("Sent NOTIFY on channel '%s' (%s)", channel, description)
+    except Exception as e:
+        logger.error("Failed NOTIFY on channel '%s' (%s): %s", channel, description, e)
+
+
+_CONSISTENCY_TOKEN_LOCK_TIMEOUT_MS = 2_000
+
+
+class _TokenSaveStatus(enum.Enum):
+    SUCCESS = "success"
+    LOCK_TIMEOUT = "lock_timeout"
+    ERROR = "error"
+
+
+def _save_consistency_token_best_effort(org_id: str, token: str, aggregateid: str) -> None:
+    """Persist the latest relations consistency token on the tenant row.
+
+    This is a best-effort operation: if the row is locked by a long-running
+    transaction (e.g. migrate_binding_scope, bootstrap_tenants), we fail fast
+    with a short lock_timeout instead of blocking for the session-wide 60s.
+    A future message for the same org will overwrite the token anyway, so
+    skipping one save is harmless.
+    """
+    token_save_status = _TokenSaveStatus.SUCCESS
+    try:
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = %s", [f"{_CONSISTENCY_TOKEN_LOCK_TIMEOUT_MS}ms"])
+            rows = Tenant.objects.filter(org_id=org_id).update(relations_consistency_token=token)
+        if rows == 0:
+            logger.warning("Tenant not found for org_id: %s. Unable to save consistency token.", org_id)
+    except OperationalError as e:
+        error_str = str(e).lower()
+        is_lock_timeout = (
+            "lock timeout" in error_str
+            or "lock_timeout" in error_str
+            or "canceling statement due to lock" in error_str
+        )
+        if is_lock_timeout:
+            token_save_status = _TokenSaveStatus.LOCK_TIMEOUT
+            logger.warning(
+                "Consistency token save skipped (lock contention) for org_id=%s, "
+                "aggregateid=%s. A later message will update the token.",
+                org_id,
+                aggregateid,
+            )
+        else:
+            token_save_status = _TokenSaveStatus.ERROR
+            logger.error("Consistency token save failed for org_id=%s: %s", org_id, e)
+    except Exception as e:
+        token_save_status = _TokenSaveStatus.ERROR
+        logger.error("Consistency token save failed for org_id=%s: %s", org_id, e)
+    finally:
+        consistency_token_save_total.labels(status=token_save_status.value).inc()
+
+
 class RBACKafkaConsumer:
     """RBAC Kafka consumer for processing Debezium and replication messages."""
 
@@ -1008,7 +1083,7 @@ class RBACKafkaConsumer:
         parsed_message = self._parse_debezium_message(message_value)
 
         # Process the message (may raise ValidationError or other exceptions)
-        return self._process_debezium_message(parsed_message)
+        return self._process_debezium_message(parsed_message, message_partition, message_offset)
 
     def _parse_debezium_message(self, message_value: Dict[str, Any]) -> Dict[str, Any]:
         """Parse standard Debezium message format with schema/payload wrapper.
@@ -1155,7 +1230,6 @@ class RBACKafkaConsumer:
             # IMPORTANT: We do NOT commit offsets during retries
             # Offsets are only committed after successful processing
             retry_helper.run(process_wrapper)
-            logger.info(f"Message processed successfully (partition: {message_partition}, offset: {message_offset})")
             return True
 
         except InterruptedError:
@@ -1200,35 +1274,43 @@ class RBACKafkaConsumer:
             messages_processed_total.labels(message_type="unknown", status="error_handler_skip").inc()
             raise
 
-    def _process_debezium_message(self, message_value: Dict[str, Any]) -> bool:
+    def _process_debezium_message(
+        self, message_value: Dict[str, Any], message_partition: int, message_offset: int
+    ) -> bool:
         """Process a Debezium message."""
-        with message_processing_duration.labels(message_type="debezium").time():
-            try:
-                # Create structured message
-                # Note: message structure is already validated by _parse_debezium_message
-                debezium_msg = DebeziumMessage.from_kafka_message(message_value)
+        try:
+            # Create structured message
+            # Note: message structure is already validated by _parse_debezium_message
+            debezium_msg = DebeziumMessage.from_kafka_message(message_value)
 
-                # Process all messages with relations - no strict aggregate type checking
-                return self._process_relations_message(debezium_msg)
+            # Process all messages with relations - no strict aggregate type checking
+            return self._process_relations_message(debezium_msg, message_partition, message_offset)
 
-            except ValidationError:
-                # Re-raise ValidationError - will NOT be retried (non-retryable)
-                raise
-            except Exception as e:
-                logger.error(f"Error processing Debezium message: {e}")
-                messages_processed_total.labels(message_type="debezium", status="error").inc()
-                # Re-raise to allow retry logic to handle
-                raise
+        except ValidationError:
+            # Re-raise ValidationError - will NOT be retried (non-retryable)
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error processing Debezium message (partition: {message_partition}, offset: {message_offset}): {e}"
+            )
+            messages_processed_total.labels(message_type="debezium", status="error").inc()
+            # Re-raise to allow retry logic to handle
+            raise
 
-    def _process_relations_message(self, debezium_msg: DebeziumMessage) -> bool:
+    def _process_relations_message(
+        self, debezium_msg: DebeziumMessage, message_partition: int, message_offset: int
+    ) -> bool:
         """Process a relations Debezium message."""
+        processing_start = time.time()
         try:
             # Validate replication payload
             if not self.validator.validate_replication_message(debezium_msg.payload):
-                logger.error(f"Replication message validation failed. Payload content: {debezium_msg.payload}")
+                logger.error(
+                    f"Replication message validation failed "
+                    f"(partition: {message_partition}, offset: {message_offset}). "
+                    f"Payload content: {debezium_msg.payload}"
+                )
                 messages_processed_total.labels(message_type="relations", status="validation_failed").inc()
-                # Raise ValidationError instead of returning False
-                # This signals a permanent validation failure that shouldn't be retried
                 raise ValidationError(
                     f"Replication message validation failed for aggregateid: {debezium_msg.aggregateid}"
                 )
@@ -1248,7 +1330,8 @@ class RBACKafkaConsumer:
             else:
                 logger.debug(
                     f"No resource_context found, skipping org_id and event_type extraction. "
-                    f"aggregateid: {debezium_msg.aggregateid}"
+                    f"aggregateid: {debezium_msg.aggregateid}, "
+                    f"partition: {message_partition}, offset: {message_offset}"
                 )
 
             # Create structured replication message
@@ -1258,7 +1341,8 @@ class RBACKafkaConsumer:
                 f"Processing relations message - org_id: {org_id}, "
                 f"event_type: {event_type}, "
                 f"relations_to_add: {len(replication_msg.relations_to_add)}, "
-                f"relations_to_remove: {len(replication_msg.relations_to_remove)}"
+                f"relations_to_remove: {len(replication_msg.relations_to_remove)}, "
+                f"partition: {message_partition}, offset: {message_offset}"
             )
 
             # Convert JSON dictionaries to protobuf objects
@@ -1299,14 +1383,18 @@ class RBACKafkaConsumer:
                     raise RuntimeError(error_msg)
 
             # Do tuple deletes for relationships with fencing check
+            delete_start = time.time()
             replication_delete_response = relations_api_replication.delete_relationships(
                 relationships=relations_to_remove_pb, fencing_check=fencing_check
             )
+            delete_duration = time.time() - delete_start
 
             # Do tuple writes for relationships with fencing check
+            add_start = time.time()
             replication_add_response = relations_api_replication.write_relationships(
                 relationships=relations_to_add_pb, fencing_check=fencing_check
             )
+            add_duration = time.time() - add_start
 
             # Extract consistency token from responses
             token = getattr(replication_add_response.consistency_token, "token", None) or getattr(
@@ -1314,14 +1402,7 @@ class RBACKafkaConsumer:
             )
 
             if token and org_id:
-                try:
-                    tenant = Tenant.objects.get(org_id=org_id)
-                    tenant.relations_consistency_token = token
-                    tenant.save()
-                except Tenant.DoesNotExist:
-                    logger.warning(
-                        f"Tenant not found for org_id: {org_id}. " f"Unable to save consistency token: {token}"
-                    )
+                _save_consistency_token_best_effort(org_id, token, debezium_msg.aggregateid)
             else:
                 logger.warning(
                     f"No consistency token in either write or delete response - "
@@ -1331,46 +1412,59 @@ class RBACKafkaConsumer:
 
             # Send NOTIFY for workspace creation events (Read-Your-Writes support)
             if event_type == "create_workspace" and resource_id:
-                try:
-                    notify_channel = settings.READ_YOUR_WRITES_CHANNEL
-                    notify_sql = sql.SQL("NOTIFY {}, %s").format(sql.Identifier(notify_channel))
-                    with connection.cursor() as cursor:
-                        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
-                        # Safe: Using psycopg2.sql.SQL with sql.Identifier for channel name
-                        # and parameterized query (%s) for resource_id
-                        cursor.execute(notify_sql, [resource_id])
-                    logger.info(
-                        f"Sent NOTIFY on channel '{notify_channel}' for workspace_id '{resource_id}' "
-                        f"after successful replication"
-                    )
-                except Exception as e:
-                    # Log error but don't fail the processing - NOTIFY is best-effort
-                    logger.error(
-                        f"Failed to send NOTIFY for workspace_id '{resource_id}' on channel '{notify_channel}': {e}"
-                    )
+                logger.info(
+                    "Workspace create event processed - org_id=%s, workspace_id=%s, consistency_token=%s",
+                    org_id,
+                    resource_id,
+                    token,
+                )
+                _send_pg_notify_best_effort(
+                    settings.READ_YOUR_WRITES_CHANNEL,
+                    resource_id,
+                    f"read-your-writes after workspace create (workspace_id={resource_id})",
+                )
+
+            notify_migration_batch_completion(
+                event_type,
+                resource_context,
+                lambda channel, payload, context: _send_pg_notify_best_effort(channel, payload, context),
+            )
+
+            # Calculate processing duration and replication latency
+            processing_duration_seconds = time.time() - processing_start
+            latency_event_type = event_type or "unknown"
+
+            # Record Kessel write duration metrics
+            kessel_write_duration.labels(operation="delete", event_type=latency_event_type).observe(delete_duration)
+            kessel_write_duration.labels(operation="add", event_type=latency_event_type).observe(add_duration)
+
+            # Record processing duration metric with event_type label
+            message_processing_duration.labels(message_type="debezium", event_type=latency_event_type).observe(
+                processing_duration_seconds
+            )
 
             # Calculate and emit replication latency metric
+            latency_seconds = None
             if created_at is not None:
                 try:
                     latency_seconds = time.time() - float(created_at)
-                    latency_event_type = event_type or "unknown"
                     replication_event_latency.labels(event_type=latency_event_type).observe(latency_seconds)
-                    # Log per-event latency at DEBUG level to avoid excessive log volume at scale
-                    logger.debug(
-                        "Replication event latency: %.3fs for event_type=%s, aggregateid=%s",
-                        latency_seconds,
-                        latency_event_type,
-                        debezium_msg.aggregateid,
-                    )
                 except (ValueError, TypeError) as e:
                     logger.warning(
-                        f"Could not calculate replication latency: invalid created_at value '{created_at}': {e}"
+                        f"Could not calculate replication latency: invalid created_at value "
+                        f"'{created_at}': {e} "
+                        f"(partition: {message_partition}, offset: {message_offset})"
                     )
-            else:
-                logger.debug(
-                    f"No created_at timestamp in resource_context, skipping latency metric. "
-                    f"aggregateid: {debezium_msg.aggregateid}"
-                )
+
+            logger.info(
+                f"Message processed successfully "
+                f"(partition: {message_partition}, offset: {message_offset}, "
+                f"event_type: {latency_event_type}, "
+                f"kessel_delete_duration: {delete_duration:.3f}s, "
+                f"kessel_add_duration: {add_duration:.3f}s, "
+                f"processing_duration: {processing_duration_seconds:.3f}s, "
+                f"replication_event_latency: {f'{latency_seconds:.3f}s' if latency_seconds is not None else 'N/A'})"
+            )
 
             messages_processed_total.labels(message_type="relations", status="success").inc()
             return True
@@ -1381,24 +1475,27 @@ class RBACKafkaConsumer:
         except grpc.RpcError as e:
             # Handle gRPC errors specially to check for invalid fencing tokens
             if e.code() == grpc.StatusCode.FAILED_PRECONDITION:
-                # Invalid fencing token - partition was reassigned to another consumer
                 error_msg = (
                     f"Fencing token validation failed - partition reassigned. "
                     f"Lock ID: {self.lock_id}, Token: {self.lock_token}. "
-                    f"Consumer will stop processing to prevent stale updates."
+                    f"Consumer will stop processing to prevent stale updates. "
+                    f"(partition: {message_partition}, offset: {message_offset})"
                 )
                 logger.error(error_msg)
                 messages_processed_total.labels(message_type="relations", status="fencing_failed").inc()
-                # Raise a RuntimeError to stop the consumer - this is a fatal error
-                # The partition has been reassigned, so we should not continue processing
                 raise RuntimeError(error_msg) from e
             else:
-                # Other gRPC errors - log and re-raise to trigger retry
-                logger.error(f"gRPC error processing relations message: {e.code()}: {e.details()}")
+                logger.error(
+                    f"gRPC error processing relations message: {e.code()}: {e.details()} "
+                    f"(partition: {message_partition}, offset: {message_offset})"
+                )
                 messages_processed_total.labels(message_type="relations", status="grpc_error").inc()
                 raise
         except Exception as e:
-            logger.error(f"Error processing relations message: {e}")
+            logger.error(
+                f"Error processing relations message: {e} "
+                f"(partition: {message_partition}, offset: {message_offset})"
+            )
             messages_processed_total.labels(message_type="relations", status="error").inc()
             # Re-raise to trigger retry logic
             raise

@@ -2,6 +2,7 @@
 **
 
 # ... except for dependencies and source
+!LICENSE
 !Pipfile
 !Pipfile.lock
 !tox.ini

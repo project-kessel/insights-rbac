@@ -18,10 +18,11 @@
 """RelationReplicator which writes to the outbox table."""
 
 import logging
-from typing import Any, Dict, List, NotRequired, Optional, Protocol, TypedDict
+from typing import Any, Dict, List, NotRequired, Optional, Protocol, TypedDict, Union
 
 from django.db import transaction
 from google.protobuf import json_format
+from kessel.relations.v1beta1 import common_pb2
 from management.models import Outbox
 from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
 from management.relation_replicator.relation_replicator import (
@@ -30,7 +31,9 @@ from management.relation_replicator.relation_replicator import (
     ReplicationEvent,
     ReplicationEventType,
     WorkspaceEvent,
+    WorkspaceEventStream,
 )
+from management.relation_replicator.types import RelationTuple
 from prometheus_client import Counter
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -105,7 +108,7 @@ class OutboxReplicator(RelationReplicator):
                 f"Total relationships: {len(relationships)}, Duplicates: {len(duplicates)}"
             )
 
-    def replicate_workspace(self, event: WorkspaceEvent):
+    def replicate_workspace(self, event: WorkspaceEvent, event_stream: WorkspaceEventStream):
         """Replicate the event of workspace."""
         payload = WorkspaceEventPayload(
             org_id=event.org_id,
@@ -113,20 +116,28 @@ class OutboxReplicator(RelationReplicator):
             workspace=event.workspace,
             operation=OPERATION_MAPPING[event.event_type],
         )
-        self._save_workspace_event(payload, event.event_type, str(event.partition_key))
+
+        self._save_workspace_event(
+            payload=payload,
+            event_type=event.event_type,
+            aggregatetype=event_stream.aggregate_type(),
+            aggregateid=str(event.partition_key),
+        )
+
+    @staticmethod
+    def _relation_to_dict(rel: Union[RelationTuple, common_pb2.Relationship]) -> dict[str, Any]:
+        """Serialize a RelationTuple or protobuf Relationship to a dict."""
+        if isinstance(rel, RelationTuple):
+            return rel.to_dict()
+        return json_format.MessageToDict(rel)
 
     def _build_replication_event(self, event: ReplicationEvent) -> ReplicationEventPayload:
         """Build replication event."""
         # Check for duplicates in relationships to add (will raise error if found)
         self._check_for_duplicate_relationships(event.add)
 
-        add_json: list[dict[str, Any]] = []
-        for relation in event.add:
-            add_json.append(json_format.MessageToDict(relation))
-
-        remove_json: list[dict[str, Any]] = []
-        for relation in event.remove:
-            remove_json.append(json_format.MessageToDict(relation))
+        add_json: list[dict[str, Any]] = [self._relation_to_dict(rel) for rel in event.add]
+        remove_json: list[dict[str, Any]] = [self._relation_to_dict(rel) for rel in event.remove]
 
         payload: ReplicationEventPayload = {
             "relations_to_add": add_json,
@@ -185,13 +196,14 @@ class OutboxReplicator(RelationReplicator):
         self,
         payload: WorkspaceEventPayload,
         event_type: ReplicationEventType,
+        aggregatetype: AggregateTypes,
         aggregateid: str,
     ):
         """Save replication event."""
         transaction.on_commit(workspace_replication_event_total.inc)
 
         outbox = Outbox(
-            aggregatetype=AggregateTypes.WORKSPACE,
+            aggregatetype=aggregatetype.value,
             aggregateid=aggregateid,
             event_type=event_type,
             payload=payload,

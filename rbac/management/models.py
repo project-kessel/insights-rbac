@@ -34,8 +34,11 @@ from management.role.v2_model import (
     CustomRoleV2,
     SeededRoleV2,
     PlatformRoleV2,
+)
+from management.role_binding.model import (
     RoleBinding,
     RoleBindingGroup,
+    RoleBindingPrincipal,
 )
 from management.policy.model import Policy
 from management.audit_log.model import AuditLog

@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7-1769056855 AS base
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1781496742 AS base
 
 USER root
 
@@ -33,7 +33,7 @@ LABEL summary="$SUMMARY" \
       maintainer="Red Hat Insights" \
       distribution-scope="private" \
       release="1" \
-      url="https://github.com/RedHatInsights/insights-rbac" \
+      url="https://github.com/project-kessel/insights-rbac" \
       vendor="Red Hat, Inc."
 
 
@@ -60,8 +60,7 @@ RUN python3.12 -m venv /pipenv-venv
 ENV PATH="/pipenv-venv/bin:$PATH"
 # Install pipenv into the virtual env
 RUN \
-    pip install --upgrade "pip>=23.3" && \
-    pip install --upgrade --force-reinstall "wheel>=0.46.2" && \
+    pip install --upgrade "pip>=26.0" && \
     pip install pipenv
 
 WORKDIR ${APP_ROOT}
@@ -73,13 +72,8 @@ COPY Pipfile.lock .
 RUN \
     # install the dependencies into the working dir (i.e. ${APP_ROOT}/.venv)
     pipenv install --deploy && \
-    # force reinstall wheel to fix CVE GHSA-8rrh-rw8j-w5fx
-    pipenv run pip install --upgrade --force-reinstall "wheel>=0.46.2" && \
     # delete the pipenv cache
-    pipenv --clear && \
-    # remove all vulnerable wheel files (CVE GHSA-8rrh-rw8j-w5fx)
-    find / -type f -name "wheel-0.45*.whl" -delete 2>/dev/null || true && \
-    find / -type d -name "wheel-0.45*" -exec rm -rf {} + 2>/dev/null || true
+    pipenv --clear
 
 
 # Runtime env variables:
@@ -93,6 +87,9 @@ ENV \
 
 # copy the src files into the workdir
 COPY . .
+
+# Copy license to /licenses for Red Hat certification
+RUN mkdir -p /licenses && cp LICENSE /licenses/
 
 # unleash cache dir
 RUN mkdir -p /tmp/unleash_cache && chmod -R 777 /tmp/unleash_cache

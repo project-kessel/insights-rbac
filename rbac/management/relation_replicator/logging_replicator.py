@@ -18,9 +18,11 @@
 """RelationReplicator which just logs added tuples."""
 
 import logging
+from typing import Union
 
 from kessel.relations.v1beta1 import common_pb2
 from management.relation_replicator.relation_replicator import RelationReplicator, ReplicationEvent
+from management.relation_replicator.types import RelationTuple
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -34,8 +36,12 @@ class LoggingReplicator(RelationReplicator):
             logger.info(stringify_spicedb_relationship(rel))
 
 
-def stringify_spicedb_relationship(rel: common_pb2.Relationship):
-    """Stringify a relationship for logging."""
+def stringify_spicedb_relationship(rel: Union[RelationTuple, common_pb2.Relationship]):
+    """Stringify a relationship for logging.
+
+    Works with both RelationTuple and protobuf Relationship since they
+    share the same nested field structure (resource.type.name, etc.).
+    """
     return (
         f"{rel.resource.type.name}:{rel.resource.id}#{rel.relation}@{rel.subject.subject.type.name}:"
         f"{rel.subject.subject.id}"

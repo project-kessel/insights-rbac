@@ -22,7 +22,7 @@ from typing import Callable, Optional
 from uuid import uuid4
 
 from django.conf import settings
-from management.models import BindingMapping, Group, Role, RoleBinding, Workspace
+from management.models import BindingMapping, Role, RoleBinding, Workspace
 from management.permission.scope_service import Scope, bound_model_for_scope
 from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
 from management.relation_replicator.outbox_replicator import OutboxReplicator
@@ -32,6 +32,8 @@ from management.relation_replicator.relation_replicator import (
     ReplicationEventType,
 )
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.role.v2_model import SeededRoleV2
+from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from migration_tool.models import V2boundresource, V2role, V2rolebinding
 
 from api.models import Tenant
@@ -39,8 +41,20 @@ from api.models import Tenant
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-def _update_binding_for_custom_role(
-    binding_mapping: BindingMapping, role_binding: RoleBinding, update_mapping: Callable[[BindingMapping], None]
+def _sync_binding_mapping_to_role_binding(binding_mapping: BindingMapping, role_binding: RoleBinding):
+    assert role_binding.role.v1_source == binding_mapping.role
+    assert role_binding.resource_type == binding_mapping.resource_type_name
+    assert role_binding.resource_id == binding_mapping.resource_id
+
+    role_binding.update_groups_by_uuid(binding_mapping.mappings["groups"])
+    role_binding.update_principals_by_user_id(binding_mapping.mappings["users"].items())
+    role_binding.save()
+
+
+def _update_role_binding(
+    binding_mapping: BindingMapping,
+    role_binding: Optional[RoleBinding],
+    update_mapping: Callable[[BindingMapping], None],
 ):
     def _key_attrs_for(mapping: BindingMapping):
         return (
@@ -57,15 +71,44 @@ def _update_binding_for_custom_role(
     if _key_attrs_for(binding_mapping) != prior_key:
         raise ValueError("Expected ID, role, and resource of role binding not to be updated.")
 
+    if not binding_mapping.role.system:
+        if len(binding_mapping.mappings["users"]) > 0:
+            raise ValueError("Principal bindings are not supported for custom roles.")
+
     binding_mapping.save(force_update=True)
 
-    new_groups = Group.objects.filter(uuid__in=binding_mapping.mappings["groups"])
-    missing_groups = set(binding_mapping.mappings["groups"]).difference(str(g.uuid) for g in new_groups)
+    if role_binding is not None:
+        _sync_binding_mapping_to_role_binding(binding_mapping, role_binding)
 
-    if missing_groups:
-        raise ValueError(f"Not all expected groups could be found. Missing UUIDs: {missing_groups}")
 
-    role_binding.update_groups(new_groups)
+def _get_or_migrate_binding_for_system_role(tenant: Tenant, binding_mapping: BindingMapping) -> RoleBinding:
+    """
+    Get or create a RoleBinding with values corresponding to the provided BindingMapping.
+
+    The role of the BindingMapping must be a system role. It is assumed that the V2 equivalent of the system role
+    already exists.
+
+    If the RoleBinding does not already exist, it is created with the appropriate values from the BindingMapping.
+    """
+    v1_role: Role = binding_mapping.role
+
+    if not v1_role.system:
+        raise ValueError(f"BindingMapping's role must be a system role, but got role {v1_role.id} ({v1_role.name!r})")
+
+    v2_role: SeededRoleV2 = SeededRoleV2.objects.filter(v1_source=v1_role).get()
+
+    role_binding, created = RoleBinding.objects.select_for_update().get_or_create(
+        tenant=tenant,
+        uuid=binding_mapping.mappings["id"],
+        role=v2_role,
+        resource_type=binding_mapping.resource_type_name,
+        resource_id=binding_mapping.resource_id,
+    )
+
+    if created:
+        _sync_binding_mapping_to_role_binding(binding_mapping, role_binding)
+
+    return role_binding
 
 
 class RelationApiDualWriteSubjectHandler:
@@ -103,6 +146,8 @@ class RelationApiDualWriteSubjectHandler:
 
             self.event_type = event_type
             self._replicator = replicator if replicator else OutboxReplicator()
+
+            self._tenant_version = lock_tenant_version(self.tenant)
         except Exception as e:
             logger.error(f"Initialization of RelationApiDualWriteSubjectHandler failed: {e}")
             raise DualWriteException(e)
@@ -163,6 +208,10 @@ class RelationApiDualWriteSubjectHandler:
 
         return deduplicated
 
+    def _expect_v1_tenant(self):
+        if self._tenant_version != TenantVersion.VERSION_1:
+            raise RuntimeError("This operation is only supported for V1 tenants.")
+
     def _create_default_mapping_for_system_role(
         self,
         system_role: Role,
@@ -179,7 +228,8 @@ class RelationApiDualWriteSubjectHandler:
             resource,
             **subject,
         )
-        mapping = BindingMapping.for_role_binding(binding, system_role)
+        v2_role = SeededRoleV2.objects.filter(uuid=system_role.uuid).first()
+        mapping = BindingMapping.for_role_binding(binding, system_role, v2_role=v2_role)
         self.relations_to_add.extend(mapping.as_tuples())
         return mapping
 
@@ -227,8 +277,12 @@ class RelationApiDualWriteSubjectHandler:
         scope: Scope,
         update_mapping: Callable[[BindingMapping], None],
         create_default_mapping_for_system_role: Optional[Callable[[V2boundresource], BindingMapping]],
+        *,
         resource_locked: bool = False,
+        suppress_migration: bool = False,
     ):
+        self._expect_v1_tenant()
+
         if role.system is False:
             raise DualWriteException("Expected system role.")
 
@@ -257,13 +311,46 @@ class RelationApiDualWriteSubjectHandler:
                 .get()
             )
 
-            update_mapping(mapping)
+            # If suppress_migration is set, we will not migrate the BindingMapping to a RoleBinding if the
+            # RoleBinding does not already exist. There are *very* few situations where this should be done.
+            #
+            # The particular reason this was added was to support a script that removes cross-account requests for
+            # principals that no longer exist. In general, this should probably never be done except when explicitly
+            # attempting to resolve an inconsistency.
+            if not suppress_migration:
+                role_binding = _get_or_migrate_binding_for_system_role(self.tenant, mapping)
+
+                if role_binding is None:
+                    raise AssertionError("Should always have RoleBinding after migrating.")
+            else:
+                role_binding = (
+                    RoleBinding.objects.filter(uuid=mapping.mappings["id"])
+                    .select_related("role")
+                    .select_for_update(of=["self"])
+                    .first()
+                )
+
+                if role_binding is not None:
+                    v1_state = (mapping.resource_type_name, mapping.resource_id, mapping.role_id)
+                    v2_state = (role_binding.resource_type, role_binding.resource_id, role_binding.role.v1_source_id)
+
+                    if v1_state != v2_state:
+                        raise AssertionError(
+                            f"Found mismatch between V1 and V2 state for role binding: "
+                            f"v1_state={v1_state!r}, v2_state={v2_state!r}"
+                        )
+
+            _update_role_binding(binding_mapping=mapping, role_binding=role_binding, update_mapping=update_mapping)
 
             if mapping.is_unassigned():
                 self.relations_to_remove.extend(mapping.as_tuples())
                 mapping.delete()
-            else:
-                mapping.save(force_update=True)
+
+                if role_binding is not None:
+                    assert not role_binding.group_entries.exists()
+                    assert not role_binding.principal_entries.exists()
+
+                    role_binding.delete()
         except BindingMapping.DoesNotExist:
             # create_default_mapping_for_system_role is None if e.g. the role is being removed.
             if create_default_mapping_for_system_role is not None:
@@ -289,9 +376,13 @@ class RelationApiDualWriteSubjectHandler:
                     mapping = create_default_mapping_for_system_role(v2_resource)
                     mapping.save(force_insert=True)
 
+                    _get_or_migrate_binding_for_system_role(self.tenant, mapping)
+
     def _update_mappings_for_custom_role(
         self, role: Role, update_mapping: Callable[[BindingMapping], None], migrated: bool = False
     ):
+        self._expect_v1_tenant()
+
         # NOTE: The custom Role MUST be locked before this point in Read Committed isolation.
         # There is a risk of write skew here otherwise, in the case that permissions are added
         # to a custom role that currently has no permissions.
@@ -303,7 +394,7 @@ class RelationApiDualWriteSubjectHandler:
         # If this assumption is ever changed, then we must be sure to explicitly lock the role below when migrating it.
         mappings: list[BindingMapping] = list(role.binding_mappings.all())
         bindings_by_id: dict[str, RoleBinding] = {
-            str(b.uuid): b for b in RoleBinding.objects.filter(role__v1_source=role)
+            str(b.uuid): b for b in RoleBinding.objects.select_for_update().filter(role__v1_source=role)
         }
 
         if not mappings:
@@ -344,7 +435,7 @@ class RelationApiDualWriteSubjectHandler:
             )
 
         for mapping in mappings:
-            _update_binding_for_custom_role(
+            _update_role_binding(
                 binding_mapping=mapping,
                 role_binding=bindings_by_id[mapping.mappings["id"]],
                 update_mapping=update_mapping,

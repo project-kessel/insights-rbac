@@ -27,10 +27,10 @@ from django.db.models import signals
 from django.utils import timezone
 from internal.integration import chrome_handlers
 from internal.integration import sync_handlers
-from kessel.relations.v1beta1.common_pb2 import Relationship
 from management.cache import AccessCache, skip_purging_cache_for_public_tenant
 from management.principal.model import Principal
 from management.rbac_fields import AutoDateTimeField
+from management.relation_replicator.types import RelationTuple
 from management.role.model import Role
 from migration_tool.utils import create_relationship
 
@@ -56,7 +56,7 @@ class Group(TenantAwareModel):
     @staticmethod
     def relationship_to_principal_for_group(
         group: "Group", principal: Union[Principal, User]
-    ) -> Optional[Relationship]:
+    ) -> Optional[RelationTuple]:
         """Create a relationship between a group and a principal given a Principal or User."""
         if isinstance(principal, Principal):
             id = principal.principal_resource_id()
@@ -69,12 +69,12 @@ class Group(TenantAwareModel):
         return create_relationship(("rbac", "group"), str(group.uuid), ("rbac", "principal"), id, "member")
 
     @staticmethod
-    def relationship_to_user_id_for_group(group_uuid: str, user_id: str) -> Relationship:
+    def relationship_to_user_id_for_group(group_uuid: str, user_id: str) -> RelationTuple:
         """Create a relationship between a group and a user ID."""
         id = Principal.user_id_to_principal_resource_id(user_id)
         return create_relationship(("rbac", "group"), group_uuid, ("rbac", "principal"), id, "member")
 
-    def relationship_to_principal(self, principal: Union[Principal, User]) -> Optional[Relationship]:
+    def relationship_to_principal(self, principal: Union[Principal, User]) -> Optional[RelationTuple]:
         """Create a relationship between a group and a principal given a Principal or User."""
         return Group.relationship_to_principal_for_group(self, principal)
 

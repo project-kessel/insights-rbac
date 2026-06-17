@@ -99,14 +99,15 @@ urlpatterns = [
     path("api/utils/principal/", views.principal_removal),
     path("api/utils/user_lookup/", views.user_lookup),
     path("api/relations/lookup_resource/", views.lookup_resource),
+    path("api/relations/lookup_subjects/", views.lookup_subjects),
     path("api/relations/check_relation/", views.check_relation),
     path("api/relations/read_tuples/", views.read_tuples),
     path("api/inventory/bootstrap_tenants/<org_id>/", views.check_bootstrapped_tenants),
     path("api/inventory/group_assignments/<group_uuid>/", views.group_assignments),
     path("api/inventory/check_workspace/<workspace_uuid>/", views.check_workspace_relation),
     path("api/inventory/check_role/<role_uuid>/", views.check_role),
+    path("api/inventory/check_cross_account_request/<request_id>/", views.check_cross_account_request),
     path("api/inventory/check/", views.check_inventory),
-    path("api/utils/workspace/", views.workspace_removal),
     path("api/utils/kafka_test_message/", views.send_kafka_test_message),
     path("api/utils/migrate_binding_scope/", views.migrate_binding_scope),
     path("api/utils/fix_missing_binding_base_tuples/", views.fix_missing_binding_base_tuples),
@@ -114,7 +115,25 @@ urlpatterns = [
         "api/utils/clean_invalid_workspace_resource_definitions/", views.clean_invalid_workspace_resource_definitions
     ),
     path("api/utils/cleanup_tenant_orphan_bindings/<str:org_id>/", views.cleanup_tenant_orphan_bindings),
+    path("api/utils/bulk_cleanup_orphan_bindings/", views.bulk_cleanup_orphan_bindings),
     path("api/utils/rebuild_tenant_workspace_relations/<str:org_id>/", views.rebuild_tenant_workspace_relations),
+    path("api/utils/remove_unassigned_system_binding_mappings/", views.remove_unassigned_system_binding_mappings),
+    path("api/utils/expire_orphaned_cross_account_requests/", views.expire_orphaned_cross_account_requests),
+    path("api/utils/remove_deleted_workspace_bindings/", views.remove_deleted_workspace_bindings),
+    path(
+        "api/utils/migrate_custom_v2_roles_to_tenant/",
+        views.migrate_custom_v2_roles_to_tenant,
+    ),
+    path("api/utils/mcp_tool_descriptions/", views.mcp_tool_descriptions, name="mcp-tool-descriptions-list"),
+    path(
+        "api/utils/mcp_tool_descriptions/<str:tool_name>/",
+        views.mcp_tool_descriptions,
+        name="mcp-tool-descriptions-detail",
+    ),
+    path("api/utils/replicate_default_workspaces/", views.replicate_default_workspaces),
+    path("api/utils/recompute_tenant_role_bindings/<str:org_id>/", views.recompute_tenant_role_bindings),
+    path("api/disaster_recovery/workspaces/", views.recover_workspace_events),
+    path("api/disaster_recovery/reconcile/", views.disaster_recovery_reconcile),
 ]
 
 urlpatterns.extend(integration_urlpatterns)

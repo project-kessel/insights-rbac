@@ -1,28 +1,8 @@
 """Utilities for working with the relation API server."""
 
-import logging
 from typing import Optional, Tuple
 
-from kessel.relations.v1beta1 import common_pb2
-from migration_tool.in_memory_tuples import RelationTuple
-from protoc_gen_validate.validator import ValidationFailed, validate_all
-
-logger = logging.getLogger(__name__)
-
-
-def validate_and_create_obj_ref(obj_name: Tuple[str, str], obj_id):
-    """Validate and create a resource."""
-    object_type = common_pb2.ObjectType(name=obj_name[1], namespace=obj_name[0])
-    try:
-        validate_all(object_type)
-    except ValidationFailed as err:
-        logger.error(err)
-    obj_ref = common_pb2.ObjectReference(type=object_type, id=obj_id)
-    try:
-        validate_all(obj_ref)
-    except ValidationFailed as err:
-        logger.error(err)
-    return obj_ref
+from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 
 
 def create_relationship(
@@ -32,15 +12,22 @@ def create_relationship(
     subject_id: str,
     relation: str,
     subject_relation: Optional[str] = None,
-):
-    """Create a relationship between a resource and a subject."""
-    message = common_pb2.Relationship(
-        resource=validate_and_create_obj_ref(resource_name, resource_id),
+) -> RelationTuple:
+    """Create a relationship between a resource and a subject.
+
+    Validation is handled by the self-validating nested dataclasses.
+    """
+    return RelationTuple(
+        resource=ObjectReference(
+            type=ObjectType(namespace=resource_name[0], name=resource_name[1]),
+            id=resource_id,
+        ),
         relation=relation,
-        subject=common_pb2.SubjectReference(
-            subject=validate_and_create_obj_ref(subject_name, subject_id), relation=subject_relation
+        subject=SubjectReference(
+            subject=ObjectReference(
+                type=ObjectType(namespace=subject_name[0], name=subject_name[1]),
+                id=subject_id,
+            ),
+            relation=subject_relation,
         ),
     )
-
-    RelationTuple.validate_message(message)
-    return message

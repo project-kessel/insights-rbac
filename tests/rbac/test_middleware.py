@@ -573,6 +573,8 @@ class NoIdentityHeaderMiddleware(IdentityRequest):
             /api/rbac/v1/status/
             /api/rbac/v1/openapi.json
             /metrics
+
+        Note: /api/rbac/v1/ready/ is not included - it returns 503 when seeding is incomplete.
         """
         urls = [
             reverse("v1_api:server-status"),

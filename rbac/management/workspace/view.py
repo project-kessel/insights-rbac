@@ -23,7 +23,10 @@ import pgtransaction
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, transaction
 from django_filters import rest_framework as filters
+from management.atomic_transactions import atomic_with_retry
+from management.audit_log.model import AuditLog
 from management.base_viewsets import BaseV2ViewSet
+from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
 from management.utils import validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
@@ -31,14 +34,13 @@ from management.workspace.service import WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
 from rest_framework import serializers, status
 from rest_framework.decorators import action
-from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from api.common.pagination import V2ResultsSetPagination
 from .model import Workspace
-from .serializer import WorkspaceSerializer, WorkspaceWithAncestrySerializer
+from .serializer import WorkspaceListInputSerializer, WorkspaceSerializer, WorkspaceWithAncestrySerializer
 from ..utils import flatten_validation_error, validate_uuid
 
 INCLUDE_ANCESTRY_KEY = "include_ancestry"
@@ -69,10 +71,10 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
     queryset = Workspace.objects.annotate()
     serializer_class = WorkspaceSerializer
     pagination_class = WorkspacePagination
-    ordering_fields = ("name",)
+    ordering_fields = ("name", "created", "modified", "type")
     ordering = ("name",)
     # WorkspaceAccessFilterBackend must be first to filter by access before other filters
-    filter_backends = (WorkspaceAccessFilterBackend, filters.DjangoFilterBackend, OrderingFilter)
+    filter_backends = (WorkspaceAccessFilterBackend, filters.DjangoFilterBackend, ValidatedOrderingFilter)
 
     def __init__(self, **kwargs):
         """Init viewset."""
@@ -94,6 +96,17 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         if self.request.method not in SAFE_METHODS:
             return super().get_queryset().select_for_update()
         return super().get_queryset()
+
+    def _log_audit(self, request, action, workspace, description):
+        """Create an audit log entry for a workspace operation."""
+        audit_log = AuditLog()
+        audit_log.log_v2(
+            request=request,
+            resource_type=AuditLog.WORKSPACE,
+            action=action,
+            resource_uuid=workspace.id,
+            description=description,
+        )
 
     def get_object(self):
         """Get the object, validating the UUID first."""
@@ -124,6 +137,12 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 )
         return super().create(request=request, args=args, kwargs=kwargs)
 
+    def perform_create(self, serializer):
+        """Create workspace and log audit entry."""
+        super().perform_create(serializer)
+        workspace = serializer.instance
+        self._log_audit(self.request, AuditLog.CREATE, workspace, f"Created workspace: {workspace.name}")
+
     def create(self, request, *args, **kwargs):
         """Create a Workspace."""
         try:
@@ -135,19 +154,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         except OperationalError as e:
-            # Django wraps psycopg2 errors in OperationalError
-            if hasattr(e, "__cause__"):
-                if isinstance(e.__cause__, SerializationFailure):
-                    logger.exception("SerializationFailure in workspace creation operation")
-                    return Response(
-                        {"detail": "Too many concurrent updates. Please retry."}, status=status.HTTP_409_CONFLICT
-                    )
-                elif isinstance(e.__cause__, DeadlockDetected):
-                    logger.exception("DeadlockDetected in workspace creation operation")
-                    return Response(
-                        {"detail": "Internal server error in concurrent updates. Please try again later."},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
+            response = self._handle_operational_error(e, "creation")
+            if response is not None:
+                return response
             raise
         except ValidationError as e:
             message = ""
@@ -170,33 +179,22 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         """Get a list of workspaces.
 
         Access filtering is handled by WorkspaceAccessFilterBackend.
-        This method only handles additional query parameter filtering.
+        Ordering is handled by OrderingFilter (supports ?order_by=name or ?order_by=-name).
+        Domain filters (type, name, parent_id, ids) are validated by
+        WorkspaceListInputSerializer and applied by WorkspaceService.list().
         """
-        all_types = "all"
-        # Use filter_queryset to apply all filter backends (including access filtering)
+        input_serializer = WorkspaceListInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        validated_params = input_serializer.validated_data
+
         queryset = self.filter_queryset(self.get_queryset())
-
-        type_values = Workspace.Types.values + [all_types]
-        type_field = validate_and_get_key(request.query_params, "type", type_values, all_types)
-        name = request.query_params.get("name")
-
-        # Validate name parameter: treat empty strings as "return all", reject NUL characters
-        if name is not None:
-            if not name.strip():
-                name = None  # Treat empty name as unset, returning all results
-            elif "\x00" in name:
-                raise serializers.ValidationError({"name": "The 'name' query parameter contains invalid characters."})
-
-        if type_field != all_types:
-            queryset = queryset.filter(type=type_field)
-        if name:
-            queryset = queryset.filter(name__iexact=name.lower())
+        queryset = self._service.list(queryset, validated_params)
 
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
-    @transaction.atomic()
+    @atomic_with_retry(retries=3)
     def destroy(self, request, *args, **kwargs):
         """
         Destroy the instance.
@@ -206,8 +204,19 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         return super().destroy(request, *args, **kwargs)
 
     def perform_destroy(self, instance):
-        """Delegate to service for destroy logic."""
+        """Delegate to service for destroy logic and log audit entry."""
         self._service.destroy(instance)
+        self._log_audit(self.request, AuditLog.DELETE, instance, f"Deleted workspace: {instance.name}")
+
+    def perform_update(self, serializer):
+        """Update workspace and log audit entry."""
+        instance = serializer.instance
+        audit_log = AuditLog()
+        description = audit_log.find_edited_field(
+            AuditLog.WORKSPACE, f"workspace {instance.name}", self.request, instance
+        )
+        super().perform_update(serializer)
+        self._log_audit(self.request, AuditLog.EDIT, instance, description)
 
     @transaction.atomic()
     def update(self, request, *args, **kwargs):
@@ -232,7 +241,14 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         target_workspace_id = self._parent_id_query_param_validation(request)
         workspace = self.get_object()
         serializer = self.get_serializer(workspace)
-        return serializer.move(workspace, target_workspace_id)
+        result = serializer.move(workspace, target_workspace_id)
+        self._log_audit(
+            request,
+            AuditLog.EDIT,
+            workspace,
+            f"Moved workspace: {workspace.name} to parent {workspace.parent.name}",
+        )
+        return result
 
     @action(detail=True, methods=["post"], url_path="move")
     def move(self, request, *args, **kwargs):
@@ -241,21 +257,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             response_data = self._move_atomic(request)
             return Response(response_data, status=status.HTTP_200_OK)
         except OperationalError as e:
-            # Django wraps psycopg2 errors in OperationalError
-            if hasattr(e, "__cause__"):
-                if isinstance(e.__cause__, SerializationFailure):
-                    logger.exception(
-                        "SerializationFailure in workspace movement operation, ws id: %s", kwargs.get("pk")
-                    )
-                    return Response(
-                        {"detail": "Too many concurrent updates. Please retry."}, status=status.HTTP_409_CONFLICT
-                    )
-                elif isinstance(e.__cause__, DeadlockDetected):
-                    logger.exception("DeadlockDetected in workspace movement operation, ws id: %s", kwargs.get("pk"))
-                    return Response(
-                        {"detail": "Internal server error in concurrent updates. Please try again later."},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
+            response = self._handle_operational_error(e, "movement", ws_id=kwargs.get("pk"))
+            if response is not None:
+                return response
             raise
         except Workspace.DoesNotExist:
             logger.exception("Target Workspace not found during operation, ws id: %s", kwargs.get("pk"))
@@ -273,6 +277,47 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                     message = error_message
                     break
             raise serializers.ValidationError(message)
+
+    def _handle_operational_error(
+        self, error: OperationalError, operation: str, ws_id: str | None = None
+    ) -> Response | None:
+        """Handle OperationalError from pgtransaction after retries are exhausted.
+
+        When this method is called, pgtransaction has already retried the transaction
+        up to 3 times. This is the final error handler for serialization conflicts
+        and deadlocks that persist despite retries.
+
+        Returns a Response for known error types, or None if the error is unrecognized
+        (caller should re-raise with bare ``raise`` to preserve the original traceback).
+        """
+        ws_context = f", ws_id='{ws_id}'" if ws_id else ""
+        if hasattr(error, "__cause__"):
+            if isinstance(error.__cause__, SerializationFailure):
+                logger.error(
+                    "SerializationFailure in workspace %s operation after all retries exhausted%s",
+                    operation,
+                    ws_context,
+                )
+                response = Response(
+                    {
+                        "detail": "The server is temporarily unable to handle this request due to concurrent updates. "
+                        "Please try again shortly."
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+                response["Retry-After"] = "1"
+                return response
+            elif isinstance(error.__cause__, DeadlockDetected):
+                logger.error(
+                    "DeadlockDetected in workspace %s operation after all retries exhausted%s",
+                    operation,
+                    ws_context,
+                )
+                return Response(
+                    {"detail": "Internal server error in concurrent updates. Please try again later."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        return None
 
     @staticmethod
     def _parent_id_query_param_validation(request: Request) -> uuid.UUID:

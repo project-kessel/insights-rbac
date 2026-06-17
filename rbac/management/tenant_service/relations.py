@@ -19,9 +19,9 @@
 import logging
 from typing import Iterable, Optional
 
-from kessel.relations.v1beta1.common_pb2 import Relationship
 from management.group.platform import GlobalPolicyIdService
 from management.permission.scope_service import Scope, TenantScopeResources
+from management.relation_replicator.types import RelationTuple
 from management.role.platform import platform_v2_role_uuid_for
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from migration_tool.utils import create_relationship
@@ -36,7 +36,7 @@ def default_role_binding_tuples(
     policy_service: GlobalPolicyIdService,
     resource_binding_only: bool = False,
     target_scopes: Optional[Iterable[Scope]] = None,
-) -> list[Relationship]:
+) -> list[RelationTuple]:
     """
     Create the tuples used to bootstrap default access for a Workspace.
 
@@ -50,7 +50,7 @@ def default_role_binding_tuples(
 
     default_group_uuid = str(tenant_mapping.group_uuid_for(access_type))
 
-    relationships: list[Relationship] = []
+    relationships: list[RelationTuple] = []
 
     for scope in target_scopes:
         # Always add the relationship from the role binding to the target resource.

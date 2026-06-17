@@ -20,15 +20,20 @@
 import json
 import logging
 import os
+from contextvars import ContextVar
 from datetime import datetime
 from uuid import uuid4
 
 from core.kafka import RBACProducer
 from django.conf import settings
+from management.role.v2_model import RoleV2
 
 from api.models import Tenant
 
 EVENT_TYPE_RH_TAM_REQUEST_CREATED = "rh-new-tam-request-created"
+
+# When set to True, suppresses RH system notifications (e.g. during seeding runs).
+skip_rh_notifications: ContextVar[bool] = ContextVar("skip_rh_notifications", default=False)
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 noto_producer = RBACProducer()
@@ -63,9 +68,14 @@ def notify_all(event_type, payload):
         notify(event_type, payload, tenant.org_id)
 
 
+def _rh_notifications_suppressed() -> bool:
+    """Return True if RH system notifications should not be sent."""
+    return not settings.NOTIFICATIONS_RH_ENABLED or skip_rh_notifications.get()
+
+
 def handle_system_role_change_notification(role_obj, operation):
     """Signal handler for sending notification message when system Role object changes."""
-    if not settings.NOTIFICATIONS_RH_ENABLED:
+    if _rh_notifications_suppressed():
         return
 
     payload = payload_builder("Red Hat", role_obj)
@@ -108,6 +118,29 @@ def role_obj_change_notification_handler(role_obj, operation, user=None):
     notify(event_type, payload, org_id)
 
 
+def custom_v2_role_obj_change_notification_handler(role_obj: RoleV2, operation: str, user):
+    """Signal handler for setting notification message when RoleV2 object changes."""
+    if not settings.NOTIFICATIONS_ENABLED:
+        return
+
+    if role_obj.type != RoleV2.Types.CUSTOM:
+        raise ValueError("Notifications are supported only for custom V2 roles")
+
+    org_id = user.org_id
+    payload = payload_builder(user.username, role_obj)
+
+    event_type = {
+        "created": "custom-v2-role-created",
+        "deleted": "custom-v2-role-deleted",
+        "updated": "custom-v2-role-updated",
+    }.get(operation)
+
+    if event_type is None:
+        raise ValueError(f"Invalid operation: {operation!r}")
+
+    notify(event_type, payload, org_id)
+
+
 def group_obj_change_notification_handler(user, group_obj, operation):
     """Signal handler for sending notification message when Group object changes."""
     if not settings.NOTIFICATIONS_ENABLED:
@@ -130,7 +163,7 @@ def group_obj_change_notification_handler(user, group_obj, operation):
 
 def handle_platform_group_role_change_notification(group_obj, role_obj, operation):
     """Signal handler for sending notification message when roles of platform group changes."""
-    if not settings.NOTIFICATIONS_RH_ENABLED:
+    if _rh_notifications_suppressed():
         return
     payload = payload_builder("Red Hat", group_obj, extra_info=("role", role_obj))
 

@@ -31,19 +31,22 @@ from django.db.models.aggregates import Count
 from django.http import Http404
 from django.utils.translation import gettext as _
 from django_filters import rest_framework as filters
-from internal.utils import get_workspace_ids_from_resource_definition, is_resource_a_workspace
+from internal.utils import get_workspace_ids_from_resource_definition
 from management.filters import CommonFilters
 from management.models import AuditLog, Permission
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permissions import RoleAccessPermission
+from management.permissions.v2_edit_api_access import V1WriteBlockedWhenWorkspacesEnabled
 from management.querysets import get_role_queryset, user_has_perm
 from management.relation_replicator.relation_replicator import DualWriteException, ReplicationEventType
 from management.role.relation_api_dual_write_handler import (
     RelationApiDualWriteHandler,
 )
 from management.role.serializer import AccessSerializer, RoleDynamicSerializer, RolePatchSerializer
+from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
 from management.utils import validate_uuid
 from management.workspace.model import Workspace
+from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
@@ -138,7 +141,7 @@ class RoleViewSet(
 
     queryset = Role.objects.annotate(policyCount=Count("policies", distinct=True))
     serializer_class = RoleSerializer
-    permission_classes = (RoleAccessPermission,)
+    permission_classes = (RoleAccessPermission, V1WriteBlockedWhenWorkspacesEnabled)
     lookup_field = "uuid"
     filter_backends = (filters.DjangoFilterBackend, OrderingFilter)
     filterset_class = RoleFilter
@@ -273,8 +276,14 @@ class RoleViewSet(
         """
         try:
             with transaction.atomic():
+                assert_v1_write_allowed(request.tenant)
                 self.validate_role(request)
                 return super().create(request=request, args=args, kwargs=kwargs)
+        except V1WriteBlockedError:
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
+            )
         except IntegrityError as e:
             if DUPLICATE_KEY_ERROR_MSG in e.args[0]:
                 raise serializers.ValidationError(
@@ -390,7 +399,13 @@ class RoleViewSet(
 
         try:
             with transaction.atomic():
+                assert_v1_write_allowed(request.tenant)
                 return super().destroy(request=request, args=args, kwargs=kwargs)
+        except V1WriteBlockedError:
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
+            )
         except DualWriteException as e:
             return self.dual_write_exception_response(e)
 
@@ -407,7 +422,13 @@ class RoleViewSet(
 
         try:
             with transaction.atomic():
+                assert_v1_write_allowed(request.tenant)
                 return super().update(request=request, args=args, kwargs=kwargs)
+        except V1WriteBlockedError:
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
+            )
         except DualWriteException as e:
             return self.dual_write_exception_response(e)
 
@@ -472,8 +493,14 @@ class RoleViewSet(
         validate_uuid(kwargs.get("uuid"), "role uuid validation")
         try:
             with transaction.atomic():
+                assert_v1_write_allowed(request.tenant)
                 self.validate_role(request)
                 return super().update(request=request, args=args, kwargs=kwargs)
+        except V1WriteBlockedError:
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": V1WriteBlockedWhenWorkspacesEnabled.message}]},
+            )
         except DualWriteException as e:
             return self.dual_write_exception_response(e)
 
@@ -578,7 +605,7 @@ class RoleViewSet(
         except (Role.DoesNotExist, ValidationError):
             raise Http404()
 
-        access = AccessSerializer(role.access, many=True).data
+        access = AccessSerializer(role.access, many=True, context={"request": request}).data
         page = self.paginate_queryset(access)
         return self.get_paginated_response(page)
 
@@ -648,7 +675,12 @@ class RoleViewSet(
                 resourceDefinitions = perm.get("resourceDefinitions", [])
                 for resourceDefinition in resourceDefinitions:
                     attributeFilter = resourceDefinition.get("attributeFilter")
-                    if is_resource_a_workspace(app, resource_type, attributeFilter):
+                    filter_key = attributeFilter.get("key")
+
+                    if filter_key is not None and attribute_key_to_v2_related_resource_type(filter_key) == (
+                        "rbac",
+                        "workspace",
+                    ):
                         workspace_ids = get_workspace_ids_from_resource_definition(attributeFilter)
                         if len(workspace_ids) >= 1:
                             unique_workspace_ids = set(workspace_ids)

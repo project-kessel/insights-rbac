@@ -67,6 +67,11 @@ class WorkspaceManager(models.Manager):
         tenant_id = self._get_tenant_id(tenant=tenant, tenant_id=tenant_id)
         return self.get_queryset().standard(tenant_id)
 
+    def exists_for_tenant(self, workspace_id, tenant=None, tenant_id=None):
+        """Check if a workspace exists for a tenant."""
+        tenant_id = self._get_tenant_id(tenant=tenant, tenant_id=tenant_id)
+        return self.filter(id=workspace_id, tenant_id=tenant_id).exists()
+
     def descendant_ids_with_parents(self, ids, tenant_id):
         """Return the descendant and root workspace IDs based on roots supplied."""
         with connection.cursor() as cursor:

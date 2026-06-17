@@ -118,7 +118,7 @@ services:
 
   db:
     container_name: rbac_db
-    image: postgres:14.5
+    image: postgres:16
     environment:
     - POSTGRES_DB=postgres
     - POSTGRES_USER=postgres

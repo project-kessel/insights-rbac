@@ -43,6 +43,7 @@ from management.tenant_mapping.model import TenantMapping
 from management.tenant_service import get_tenant_bootstrap_service
 from management.workspace.model import Workspace
 from api.models import Tenant, User
+from management.relation_replicator.types import ObjectReference, ObjectType, SubjectReference
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
@@ -805,14 +806,17 @@ class PrincipalUMBTestsWithV2TenantBootstrap(PrincipalUMBTests):
                 all_tuples,
                 [
                     RelationTuple(
-                        resource_type_namespace="rbac",
-                        resource_type_name="group",
-                        resource_id=str(mapping.default_group_uuid),
+                        resource=ObjectReference(
+                            type=ObjectType(namespace="rbac", name="group"),
+                            id=str(mapping.default_group_uuid),
+                        ),
                         relation="member",
-                        subject_type_namespace="rbac",
-                        subject_type_name="principal",
-                        subject_id=f"redhat/{self.principal_user_id}",
-                        subject_relation=None,
+                        subject=SubjectReference(
+                            subject=ObjectReference(
+                                type=ObjectType(namespace="rbac", name="principal"),
+                                id=f"redhat/{self.principal_user_id}",
+                            ),
+                        ),
                     )
                 ],
             )

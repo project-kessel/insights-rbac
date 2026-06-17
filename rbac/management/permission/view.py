@@ -25,6 +25,8 @@ from management.filters import CommonFilters
 from management.models import Access, Permission, Role
 from management.permission.serializer import PermissionSerializer
 from management.permissions.permission_access import PermissionAccessPermission
+from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
+from management.role.v2_role_scope import v2_role_excluded_applications
 from management.utils import (
     api_path_prefix,
     validate_and_get_key,
@@ -101,17 +103,18 @@ class PermissionViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     ordering = ("permission_collate",)
 
     def get_queryset(self):
-        """Override to filter out blocked permissions for v1 API."""
+        """Override to filter out blocked permissions for v1 API and scope for v2 tenants."""
         queryset = super().get_queryset()
 
-        # Check if this is a v1 request and filter blocked permissions
-        # This hides permissions from v1 that are only meant for v2
         if self.request.path.startswith(f"/{api_path_prefix()}v1/"):
             blocked_permissions = settings.V1_ROLE_PERMISSION_BLOCK_LIST
-
             if blocked_permissions:
-                # Filter using exact string matches at the database level
                 queryset = queryset.exclude(permission__in=blocked_permissions)
+
+        if is_v2_edit_enabled_for_request(self.request):
+            excluded_apps = v2_role_excluded_applications()
+            if excluded_apps:
+                queryset = queryset.exclude(application__in=list(excluded_apps))
 
         return queryset
 

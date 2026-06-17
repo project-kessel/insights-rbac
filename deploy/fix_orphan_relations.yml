@@ -1,0 +1,19 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: fix-orphan-relations
+objects:
+  - apiVersion: cloud.redhat.com/v1alpha1
+    kind: ClowdJobInvocation
+    metadata:
+      labels:
+        app: rbac
+      name: fix-orphan-relations-${RUN_NUMBER}
+    spec:
+      appName: rbac
+      jobs:
+        - fix-orphan-relations
+parameters:
+  - name: RUN_NUMBER
+    description: Used to track and re-run the job
+    value: '1'

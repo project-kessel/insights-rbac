@@ -23,6 +23,7 @@ from management.models import Access, Group, Permission, Principal, Policy, Role
 from management.principal.view import VALID_PRINCIPAL_TYPE_VALUE
 from management.utils import (
     access_for_principal,
+    get_principal_for_auth,
     get_principal_from_request,
     groups_for_principal,
     policies_for_principal,
@@ -30,6 +31,7 @@ from management.utils import (
     account_id_for_tenant,
     get_principal,
     validate_and_get_key,
+    validate_and_get_key_multi,
     is_valid_uuid,
     value_to_list,
     build_system_user_from_token,
@@ -413,6 +415,104 @@ class UtilsTests(IdentityRequest):
         self.assertEqual(created_principal.type, "user")
         self.assertEqual(created_principal.username, username)
 
+    @mock.patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "org_id": "100001",
+                    "is_org_admin": False,
+                    "is_internal": False,
+                    "id": 52567473,
+                    "username": "other_user",
+                    "account_number": "1111111",
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_get_principal_from_request_ignore_username_query_param(self, mock_request_principals):
+        """Test that ignore_username_query_param=True ignores the username query parameter."""
+        Principal.objects.create(username="other_user", tenant=self.tenant, user_id="other-uid")
+        self.principal.user_id = "principal-a-uid"
+        self.principal.save()
+
+        request = mock.Mock()
+        request.tenant = self.tenant
+        request.user = User()
+        request.user.username = self.principal.username
+        request.query_params = {"username": "other_user"}
+
+        result = get_principal_from_request(request=request, ignore_username_query_param=True)
+        self.assertEqual(result.username, self.principal.username)
+        mock_request_principals.assert_not_called()
+
+    @mock.patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "org_id": "100001",
+                    "is_org_admin": False,
+                    "is_internal": False,
+                    "id": 52567473,
+                    "username": "other_user",
+                    "account_number": "1111111",
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_get_principal_for_auth_helper(self, mock_request_principals):
+        """Test that get_principal_for_auth helper ignores the username query parameter."""
+        Principal.objects.create(username="other_user", tenant=self.tenant, user_id="other-uid")
+        self.principal.user_id = "principal-a-uid"
+        self.principal.save()
+
+        request = mock.Mock()
+        request.tenant = self.tenant
+        request.user = User()
+        request.user.username = self.principal.username
+        request.query_params = {"username": "other_user"}
+
+        result = get_principal_for_auth(request)
+        self.assertEqual(result.username, self.principal.username)
+        mock_request_principals.assert_not_called()
+
+    @mock.patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "org_id": "100001",
+                    "is_org_admin": False,
+                    "is_internal": False,
+                    "id": 52567473,
+                    "username": "other_user",
+                    "account_number": "1111111",
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_get_principal_from_request_default_uses_query_param(self, mock_request_principals):
+        """Test that default behavior still uses the username query parameter."""
+        Principal.objects.create(username="other_user", tenant=self.tenant, user_id="other-uid")
+
+        request = mock.Mock()
+        request.tenant = self.tenant
+        request.user = User()
+        request.user.username = self.principal.username
+        request.user.admin = True
+        request.query_params = {"username": "other_user"}
+
+        result = get_principal_from_request(request=request)
+        mock_request_principals.assert_called_once()
+        self.assertEqual(result.username, "other_user")
+
     def test_validate_and_get_key_success(self):
         """Test we can validate the query param value."""
         query_key = "type"
@@ -510,6 +610,44 @@ class UtilsTests(IdentityRequest):
             f"type query parameter value 'foo' is invalid. {[str(v) for v in valid_values]} are valid inputs."
         )
         self.assertEqual(assertion.exception.detail.get("detail"), expected_err)
+
+    def test_validate_and_get_key_multi_success(self):
+        """Test we can validate comma-separated query param values."""
+        params = {"type": "standard,ungrouped-hosts"}
+        valid_values = ["standard", "ungrouped-hosts", "root", "default", "all"]
+        result = validate_and_get_key_multi(params, "type", valid_values, default_value="all")
+        self.assertEqual(result, ["standard", "ungrouped-hosts"])
+
+    def test_validate_and_get_key_multi_single_value(self):
+        """Test multi-value validator works with a single value."""
+        params = {"type": "standard"}
+        valid_values = ["standard", "ungrouped-hosts", "all"]
+        result = validate_and_get_key_multi(params, "type", valid_values, default_value="all")
+        self.assertEqual(result, ["standard"])
+
+    def test_validate_and_get_key_multi_whitespace_and_case(self):
+        """Test multi-value validator strips whitespace and lowercases."""
+        params = {"type": " Standard , UNGROUPED-HOSTS "}
+        valid_values = ["standard", "ungrouped-hosts", "all"]
+        result = validate_and_get_key_multi(params, "type", valid_values, default_value="all")
+        self.assertEqual(result, ["standard", "ungrouped-hosts"])
+
+    def test_validate_and_get_key_multi_invalid(self):
+        """Test multi-value validator raises on invalid value."""
+        params = {"type": "standard,invalid"}
+        valid_values = ["standard", "ungrouped-hosts", "all"]
+        with self.assertRaises(serializers.ValidationError) as assertion:
+            validate_and_get_key_multi(params, "type", valid_values, default_value="all")
+        message = str(assertion.exception.detail.get("detail"))
+        self.assertIn("invalid", message)
+        self.assertIn("Allowed values", message)
+
+    def test_validate_and_get_key_multi_default(self):
+        """Test multi-value validator returns default when param is absent."""
+        params = {}
+        valid_values = ["standard", "ungrouped-hosts", "all"]
+        result = validate_and_get_key_multi(params, "type", valid_values, default_value="all")
+        self.assertEqual(result, ["all"])
 
     def test_is_valid_uuid(self):
         """Test boolean UUID method check"""

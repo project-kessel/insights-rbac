@@ -20,6 +20,7 @@
 import logging
 from typing import Optional
 
+from django.db import OperationalError
 from management.models import Workspace
 from management.relation_replicator.relation_replicator import (
     DualWriteException,
@@ -27,9 +28,10 @@ from management.relation_replicator.relation_replicator import (
     RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
-    WorkspaceEvent,
+    WorkspaceEventStream,
 )
 from management.role.relation_api_dual_write_handler import BaseRelationApiDualWriteHandler
+from management.workspace.utils.event import make_workspace_event
 from migration_tool.utils import create_relationship
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -66,27 +68,41 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
         self.generate_relations_to_add_workspace()
         self._replicate()
 
-    def replicate_updated_workspace(self, previous_parent, skip_ws_events: bool = False):
-        """Replicate updated principals into group."""
+    def replicate_updated_workspace(
+        self, previous_parent, *, skip_ws_events: bool = False, force_create: bool = False
+    ):
+        """
+        Replicate updated principals into group.
+
+        skip_ws_events can be used for events that are known to not need replication (e.g. moves, since the
+        replication event doesn't include parent information).
+
+        force_create should be used for workspaces that have not necessarily had a create event sent before being
+        updated.
+        """
         if not self.replication_enabled():
             return
         self.generate_relations_to_update_workspace(previous_parent)
-        self._replicate(skip_ws_events=skip_ws_events)
+        self._replicate(skip_ws_events=skip_ws_events, force_create=force_create)
 
-    def replicate_deleted_workspace(self, skip_ws_events: bool = False):
+    def replicate_deleted_workspace(self):
         """Replicate deleted principals into group."""
         if not self.replication_enabled():
             return
         self.generate_relations_to_remove_workspace()
-        self._replicate(skip_ws_events=skip_ws_events)
+        self._replicate()
 
-    def _replicate(self, skip_ws_events: bool = False):
-        # To avoid Circular Dependency
-        from management.workspace.serializer import WorkspaceEventSerializer
-
+    def _replicate(self, skip_ws_events: bool = False, force_create: bool = False) -> None:
         if not self.replication_enabled():
             return
         try:
+            if force_create:
+                if skip_ws_events:
+                    raise ValueError("Cannot have skip_ws_events and force_create both be set")
+
+                if self.event_type != ReplicationEventType.UPDATE_WORKSPACE:
+                    raise ValueError("Expected force_create to be true only for UPDATE_WORKSPACE events")
+
             if self.relations_to_remove or self.relations_to_add:
                 self._replicator.replicate(
                     ReplicationEvent(
@@ -98,15 +114,35 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
                     ),
                 )
             if not skip_ws_events:
-                self._replicator.replicate_workspace(
-                    WorkspaceEvent(
-                        account_number=self.workspace.tenant.account_id,
-                        org_id=str(self.workspace.tenant.org_id),
-                        workspace=WorkspaceEventSerializer(self.workspace).data,
-                        event_type=self.event_type,
-                        partition_key=PartitionKey.byEnvironment(),
+                if force_create:
+                    # If force_create is set, we may not have previously sent a creation event for this workspace,
+                    # which we must do before updating it. If we *have* previously sent a creation event for this
+                    # workspace, the HBI consumer will just ignore it.
+                    self._replicator.replicate_workspace(
+                        make_workspace_event(
+                            workspace=self.workspace,
+                            event_type=ReplicationEventType.CREATE_WORKSPACE,
+                        ),
+                        WorkspaceEventStream.STANDARD,
                     )
+
+                self._replicator.replicate_workspace(
+                    make_workspace_event(
+                        workspace=self.workspace,
+                        event_type=self.event_type,
+                    ),
+                    WorkspaceEventStream.STANDARD,
                 )
+        except OperationalError:
+            logger.warning(
+                "Database operational error during workspace dual write replication, "
+                "workspace_id='%s' event_type='%s'. "
+                "The transaction may be retried by pgtransaction.",
+                self.workspace.id,
+                self.event_type,
+                exc_info=True,
+            )
+            raise
         except Exception as e:
             raise DualWriteException(e)
 
@@ -143,10 +179,3 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
             return
         # Remove parent relationship
         self.relations_to_remove.append(self._get_workspace_relationship(self.workspace, self.workspace.parent))
-
-    def replicate(self):
-        """Replicate generated relations."""
-        if not self.replication_enabled():
-            return
-
-        self._replicate()

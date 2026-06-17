@@ -17,29 +17,41 @@
 
 """Model for role V2 management."""
 
+from __future__ import annotations
+
+import logging
 from typing import Iterable, Optional
 
-import uuid_utils.compat as uuid
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
-from django.db.models import QuerySet, signals
+from django.db.models import signals
 from django.utils import timezone
-from management.models import Group, Permission, Role
+from management.exceptions import RequiredFieldError
+from management.models import Permission, Role
 from management.rbac_fields import AutoDateTimeField
-from migration_tool.models import V2boundresource, V2role, V2rolebinding
+from management.relation_replicator.types import RelationTuple
+from management.role.queryset import RoleV2QuerySet
+from management.role.relations import role_owner_relationship
+from migration_tool.models import V2role, role_permission_tuple
 from rest_framework import serializers
+from uuid_utils.compat import uuid7
 
-from api.models import TenantAwareModel
+from api.models import Tenant, TenantAwareModel
+
+logger = logging.getLogger(__name__)
 
 
 class RoleV2(TenantAwareModel):
     """V2 Role model."""
+
+    objects = RoleV2QuerySet.as_manager()
 
     class Types(models.TextChoices):
         CUSTOM = "custom"
         SEEDED = "seeded"
         PLATFORM = "platform"
 
-    uuid = models.UUIDField(default=uuid.uuid7, editable=False, unique=True, null=False)
+    uuid = models.UUIDField(default=uuid7, editable=False, unique=True, null=False)
     name = models.CharField(max_length=175, null=False, blank=False)
     description = models.TextField(null=True, blank=True)
     type = models.CharField(
@@ -56,11 +68,30 @@ class RoleV2(TenantAwareModel):
         constraints = [
             models.UniqueConstraint(fields=["name", "tenant"], name="unique role v2 name per tenant"),
         ]
+        indexes = [
+            GinIndex(fields=["name"], name="rolev2_name_trgm_idx", opclasses=["gin_trgm_ops"]),
+        ]
+
+    def clean(self):
+        """Validate required fields with domain exceptions."""
+        super().clean()
+        if not self.name or not self.name.strip():
+            raise RequiredFieldError("name")
 
     def save(self, *args, **kwargs):
         """Save the model and run all validations from the model."""
         self.full_clean()
         super().save(*args, **kwargs)
+
+    @property
+    def org_id(self) -> Optional[str]:
+        """Return the org_id for this role. None for seeded roles (public tenant)."""
+        if self.tenant.tenant_name == Tenant.PUBLIC_TENANT_NAME:
+            return None
+        if self.tenant.org_id is None:
+            logger.error("Non-public tenant %s has no org_id", self.tenant_id)
+            return None
+        return str(self.tenant.org_id)
 
     def as_migration_value(self) -> V2role:
         """Get the V2role representing to this role's daya."""
@@ -78,6 +109,95 @@ class RoleV2(TenantAwareModel):
             )
 
         raise ValueError(f"Unexpected type of role: {self.type} for {self}")
+
+    def v2_permissions(self) -> set[str]:
+        """Get the set of V2 strings for the permissions of this role."""
+        return set(p.v2_string() for p in self.permissions.all())
+
+    @staticmethod
+    def _permission_tuple(role: "RoleV2", permission: Permission) -> RelationTuple:
+        return role_permission_tuple(role_id=str(role.uuid), permission=permission.v2_string())
+
+    @staticmethod
+    def _permission_and_owner_tuples(role: "RoleV2", cached_permissions: Optional[Iterable[Permission]]):
+        tenant_resource_id = role.tenant.tenant_resource_id()
+
+        if role.type == RoleV2.Types.CUSTOM:
+            if tenant_resource_id is None:
+                raise RuntimeError(
+                    f"Expected custom roles to be created in a tenant with a valid resource ID; "
+                    f"got tenant pk={role.tenant.pk!r}"
+                )
+        else:
+            if tenant_resource_id is not None:
+                raise RuntimeError(
+                    f"Expected non-custom roles to be created in the public tenant "
+                    f"(which doesn't have a valid resource ID); "
+                    f"got tenant pk={role.tenant.pk!r}"
+                )
+
+        if cached_permissions is None:
+            cached_permissions = role.permissions.all()
+
+        tuples = list({RoleV2._permission_tuple(role, p) for p in cached_permissions})
+
+        if tenant_resource_id is not None:
+            tuples.append(role_owner_relationship(role_uuid=str(role.uuid), tenant_resource_id=tenant_resource_id))
+
+        return tuples
+
+    @staticmethod
+    def tuples_for_update(
+        role: "RoleV2",
+        *,
+        old_permissions: Iterable[Permission],
+        new_permissions: Iterable[Permission],
+    ) -> tuple[list[RelationTuple], list[RelationTuple]]:
+        """Get the tuples that should be added and removed when updating a role.
+
+        Args:
+            role: The role being created, updated, or deleted.
+            old_permissions: Permissions before mutation (empty for create).
+            new_permissions: Permissions after mutation (empty for delete).
+
+        Returns:
+            ``(tuples_to_add, tuples_to_remove)`` ready for replication.
+        """
+        old_set = set(old_permissions)
+        new_set = set(new_permissions)
+
+        tuples_to_add = [RoleV2._permission_tuple(role, p) for p in new_set - old_set]
+        tuples_to_remove = [RoleV2._permission_tuple(role, p) for p in old_set - new_set]
+
+        return tuples_to_add, tuples_to_remove
+
+    # Although create and delete happen to use the same tuples currently, they are semantically different operations.
+    # We use separate functions for them in order to be clearer at the call site and to ensure they can diverge in
+    # the future without having to update every call site.
+
+    @staticmethod
+    def tuples_for_create(
+        role: "RoleV2", cached_permissions: Optional[Iterable[Permission]] = None
+    ) -> list[RelationTuple]:
+        """
+        Get the tuples that should be added when creating a role.
+
+        The role's tenant will be loaded (and thus should be preloaded for bulk operations).
+        If cached_permissions is not provided, the permissions from the role are loaded.
+        """
+        return RoleV2._permission_and_owner_tuples(role=role, cached_permissions=cached_permissions)
+
+    @staticmethod
+    def tuples_for_delete(
+        role: "RoleV2", cached_permissions: Optional[Iterable[Permission]] = None
+    ) -> list[RelationTuple]:
+        """
+        Get the tuples that should be removed when deleting a role.
+
+        The role's tenant will be loaded (and thus should be preloaded for bulk operations).
+        If cached_permissions is not provided, the permissions from the role are loaded.
+        """
+        return RoleV2._permission_and_owner_tuples(role=role, cached_permissions=cached_permissions)
 
 
 class TypedRoleV2Manager(models.Manager):
@@ -144,6 +264,11 @@ class CustomRoleV2(TypeValidatedRoleV2Mixin, RoleV2):
     _expected_type = RoleV2.Types.CUSTOM
     objects = TypedRoleV2Manager(role_type=_expected_type)
 
+    def update(self, name: str, description: str):
+        """Update the role's mutable attributes."""
+        self.name = name
+        self.description = description
+
 
 class SeededRoleV2(TypeValidatedRoleV2Mixin, RoleV2):
     """V2 Seeded role model."""
@@ -154,6 +279,36 @@ class SeededRoleV2(TypeValidatedRoleV2Mixin, RoleV2):
     _expected_type = RoleV2.Types.SEEDED
     objects = TypedRoleV2Manager(role_type=_expected_type)
 
+    @classmethod
+    def for_v1_roles(cls, roles: Iterable[Role]) -> set[SeededRoleV2]:
+        """
+        Retrieve the V2 equivalents of the provided V1 system roles.
+
+        Fails if a custom role is provided or if a role cannot be found.
+        """
+        roles = set(roles)
+        non_system_roles = {r for r in roles if not r.system}
+
+        if non_system_roles:
+            raise ValueError(
+                f"Only system V1 roles have seeded V2 equivalents; found non-system roles: "
+                f"{', '.join(f'pk={r.pk}' for r in non_system_roles)}"
+            )
+
+        v2_roles = set(cls.objects.filter(v1_source__in=roles).distinct())
+
+        if len(roles) != len(v2_roles):
+            missing = roles - {r.v1_source for r in v2_roles}
+
+            if len(missing) == 0:
+                raise AssertionError("Unable to determine missing V1 roles.")
+
+            raise ValueError(
+                f"Unable to find V2 roles for the following V1 roles: " f"{', '.join(f'pk={r.pk}' for r in missing)}"
+            )
+
+        return v2_roles
+
 
 class PlatformRoleV2(TypeValidatedRoleV2Mixin, RoleV2):
     """V2 Platform role model."""
@@ -163,67 +318,6 @@ class PlatformRoleV2(TypeValidatedRoleV2Mixin, RoleV2):
 
     _expected_type = RoleV2.Types.PLATFORM
     objects = TypedRoleV2Manager(role_type=_expected_type)
-
-
-class RoleBinding(TenantAwareModel):
-    """A role binding."""
-
-    uuid = models.UUIDField(default=uuid.uuid7, editable=False, unique=True, null=False)
-    role = models.ForeignKey(RoleV2, on_delete=models.CASCADE, related_name="bindings")
-
-    resource_type = models.CharField(max_length=256, null=False)
-    resource_id = models.CharField(max_length=256, null=False)
-
-    def bound_groups(self) -> QuerySet:
-        """Get a QuerySet for all groups bound to this RoleBinding."""
-        return Group.objects.filter(role_binding_entries__in=self.group_entries.all())
-
-    def update_groups(self, groups: Iterable[Group]):
-        """Update the groups bound to this RoleBinding."""
-        self.group_entries.all().delete()
-        RoleBindingGroup.objects.bulk_create([RoleBindingGroup(binding=self, group=g) for g in set(groups)])
-
-    def as_migration_value(self, force_group_uuids: Optional[list[str]] = None) -> V2rolebinding:
-        """
-        Return the V2rolebinding equivalent of this role binding.
-
-        group_uuids is provided in the case where
-        """
-        if force_group_uuids is None:
-            force_group_uuids = [str(u) for u in self.bound_groups().values_list("uuid", flat=True)]
-
-        return V2rolebinding(
-            id=str(self.uuid),
-            role=self.role.as_migration_value(),
-            resource=V2boundresource(
-                # TODO: we currently assume all resources types are in namespace "rbac". This is currently true for
-                #  all the types we care about, but is not necessarily true in general. The semantics of the
-                #  Inventory API (which we will eventually have to migrate to) are different and do not have a
-                #  resource type namespace, per se.
-                resource_type=("rbac", self.resource_type),
-                resource_id=self.resource_id,
-            ),
-            groups=force_group_uuids,
-            users={},
-        )
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["role", "resource_type", "resource_id", "tenant"],
-                name="unique role binding per role resource pair per tenant",
-            ),
-        ]
-
-
-class RoleBindingGroup(models.Model):
-    """The relationship between a RoleBinding and one of its group subjects."""
-
-    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="role_binding_entries")
-    binding = models.ForeignKey(RoleBinding, on_delete=models.CASCADE, related_name="group_entries")
-
-    class Meta:
-        constraints = [models.UniqueConstraint(fields=["group", "binding"], name="unique group binding pair")]
 
 
 def validate_role_children_on_m2m_change(sender, instance, action, pk_set, **kwargs):

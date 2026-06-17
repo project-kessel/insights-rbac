@@ -17,11 +17,14 @@
 
 """View for Audit Logs."""
 
+from django_filters import rest_framework as filters
+from management.audit_log.filters import AuditLogFilter
 from management.models import AuditLog
 from management.permissions import AuditLogAccessPermission
 from management.serializers import AuditLogSerializer
 from management.utils import filter_queryset_by_tenant
 from rest_framework import mixins, viewsets
+from rest_framework.filters import OrderingFilter
 
 
 class AuditLogViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -33,14 +36,12 @@ class AuditLogViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
     permission_classes = (AuditLogAccessPermission,)
-
-    def order_by_id(self, queryset):
-        """Order queryset by id."""
-        return queryset.order_by("-id").values()
+    filter_backends = (filters.DjangoFilterBackend, OrderingFilter)
+    filterset_class = AuditLogFilter
+    ordering_fields = ("created", "principal_username", "resource_type", "action")
+    ordering = ("-created",)
 
     def list(self, request, *args, **kwargs):
         """List all of the audit logs within database by tenant."""
         self.queryset = filter_queryset_by_tenant(AuditLog.objects.all(), request.tenant)
-        if request.query_params.get("order_by") is not None:
-            self.queryset = self.order_by_id(self.queryset)
         return super().list(request=request, args=args, kwargs=kwargs)

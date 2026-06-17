@@ -19,11 +19,48 @@
 
 from management.group.model import Group
 from management.notifications.notification_handlers import group_obj_change_notification_handler
+from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
 from management.principal.proxy import PrincipalProxy
 from management.principal.serializer import PrincipalInputSerializer, PrincipalSerializer
 from management.role.serializer import RoleMinimumSerializer
 from management.serializer_override_mixin import SerializerCreateOverrideMixin
 from rest_framework import serializers, status
+
+# V2 description overrides to temporary shim while tenants are split between v1/v2.
+# Remove these (and _v2_description_override/to_representation) once all tenants
+# are migrated to v2 and group descriptions have been updated in RBAC config.
+_V2_GROUP_DESCRIPTION = (
+    "This group contains all users in your organization. "
+    "It can be bound to roles at any workspace level to grant permissions to all users."
+)
+
+_V2_ADMIN_GROUP_DESCRIPTION = (
+    "This group contains all org admin users in your organization. "
+    "It can be bound to roles at any workspace level to grant permissions to all org admins."
+)
+
+
+_V2_DESCRIPTIONS = {
+    "platform_default": _V2_GROUP_DESCRIPTION,
+    "admin_default": _V2_ADMIN_GROUP_DESCRIPTION,
+}
+
+
+def _is_v2_org(request):
+    """Check/set whether or not the requesting org has moved to v2."""
+    if not hasattr(request, "_is_v2_org"):
+        request._is_v2_org = is_v2_edit_enabled_for_request(request)
+    return request._is_v2_org
+
+
+def _v2_description_override(data, request):
+    """Conditionally override the default group descriptions for v2 orgs."""
+    if request is None:
+        return
+    for flag, description in _V2_DESCRIPTIONS.items():
+        if data.get(flag) and _is_v2_org(request):
+            data["description"] = description
+            return
 
 
 class GroupInputSerializer(SerializerCreateOverrideMixin, serializers.ModelSerializer):
@@ -43,6 +80,12 @@ class GroupInputSerializer(SerializerCreateOverrideMixin, serializers.ModelSeria
     def get_roleCount(self, obj):
         """Role count for the serializer."""
         return obj.role_count()
+
+    def to_representation(self, obj):
+        """Override representation to update description for v2 tenants."""
+        data = super().to_representation(obj)
+        _v2_description_override(data, self.context.get("request"))
+        return data
 
     class Meta:
         """Metadata for the serializer."""
@@ -117,6 +160,7 @@ class GroupSerializer(SerializerCreateOverrideMixin, serializers.ModelSerializer
         if resp.get("status_code") == status.HTTP_200_OK:
             principals = resp.get("data")
         formatted["principals"] = principals
+        _v2_description_override(formatted, self.context.get("request"))
         return formatted
 
     def get_roleCount(self, obj):

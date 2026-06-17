@@ -32,6 +32,7 @@ from management.utils import build_system_user_from_token, build_user_from_psk
 from api.common import RH_IDENTITY_HEADER
 from api.models import Tenant
 from api.serializers import extract_header
+from rbac.a2s import is_a2s_path
 from .utils import build_internal_user
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,10 @@ class InternalIdentityHeaderMiddleware(MiddlewareMixin):
         """Process request for internal identity middleware."""
         if not any([request.path.startswith(prefix) for prefix in settings.INTERNAL_API_PATH_PREFIXES]):
             # We are not in an internal API section
+            return
+
+        if is_a2s_path(request):
+            # A2S (agent-to-service) paths use public IdentityHeaderMiddleware auth
             return
 
         user = None

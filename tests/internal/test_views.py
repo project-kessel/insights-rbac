@@ -24,7 +24,9 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from django.test import override_settings
 from django.urls import reverse
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+
+from django.utils import timezone
 from unittest.mock import MagicMock
 from unittest.mock import patch
 from kessel.relations.v1beta1 import common_pb2
@@ -40,6 +42,7 @@ from api.models import User, Tenant
 from api.utils import reset_imported_tenants
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
+from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.models import BindingMapping, Group, Permission, Policy, Role, Workspace
 from management.principal.model import Principal
 from management.relation_replicator.noop_replicator import NoopReplicator
@@ -75,6 +78,7 @@ from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
 from tests.identity_request import IdentityRequest
 from tests.management.role.test_dual_write import RbacFixture
 from tests.rbac.test_middleware import EnvironmentVarGuard
+from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
 
 class BaseInternalViewsetTests(IdentityRequest):
@@ -117,14 +121,13 @@ class BaseInternalViewsetTests(IdentityRequest):
     @abstractmethod
     def tearDown(self):
         """Tear down base internal viewset tests."""
-        Group.objects.all().delete()
-        Role.objects.all().delete()
-        Policy.objects.all().delete()
         logging.disable(self._prior_logging_disable_level)
         # Clear the principal cache to avoid test isolation issues
         from management.utils import PRINCIPAL_CACHE
 
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
+
+        super().tearDown()
 
 
 @override_settings(
@@ -142,10 +145,10 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     """Test the internal viewset."""
 
     def valid_destructive_time():
-        return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) + timedelta(hours=1)
+        return timezone.now() + timedelta(hours=1)
 
     def invalid_destructive_time():
-        return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) - timedelta(hours=1)
+        return timezone.now() - timedelta(hours=1)
 
     def test_delete_tenant_disallowed(self):
         """Test that we cannot delete a tenant when disallowed."""
@@ -362,7 +365,27 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         seed_mock.assert_not_called()
         self.assertEqual(
             response.content.decode(),
-            "Valid query parameters: ['seed_types', 'force_create_relationships', 'force_update_relationships'].",
+            "Valid query parameters: ['seed_types', 'force_create_relationships', 'force_update_relationships', 'skip_notifications'].",
+        )
+
+    @patch("management.tasks.run_seeds_in_worker.delay")
+    def test_run_seeds_with_skip_notifications(self, seed_mock):
+        """Test that we can trigger seeds with skip_notifications=true."""
+        response = self.client.post(
+            f"/_private/api/seeds/run/?seed_types=roles&skip_notifications=true", **self.request.META
+        )
+        seed_mock.assert_called_once_with({"roles": True, "skip_notifications": True})
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+
+    @patch("management.tasks.run_seeds_in_worker.delay")
+    def test_run_seeds_with_invalid_skip_notifications(self, seed_mock):
+        """Test that we get a 400 when an invalid skip_notifications value is supplied."""
+        response = self.client.post(f"/_private/api/seeds/run/?skip_notifications=yes", **self.request.META)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        seed_mock.assert_not_called()
+        self.assertEqual(
+            response.content.decode(),
+            "Valid options for \"skip_notifications\": ['true', 'false'].",
         )
 
     @patch("api.tasks.populate_tenant_account_id_in_worker.delay")
@@ -808,12 +831,16 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         dual_write_handler = SeedingRelationApiDualWriteHandler(role_system, replicator=replicator)
         dual_write_handler.replicate_new_system_role()
 
+        ws_2 = Workspace.objects.create(
+            tenant=self.tenant, parent=Workspace.objects.default(tenant=self.tenant), name="ws_2"
+        )
+
         role_custom = fixture.new_custom_role(
             name="custom_role",
             tenant=self.tenant,
             resource_access=fixture.workspace_access(
                 permissions,
-                ws_2=["app1:hosts:read", "inventory:hosts:write"],
+                **{str(ws_2.id): ["app1:hosts:read", "inventory:hosts:write"]},
             ),
         )
         dual_write = RelationApiDualWriteHandler(
@@ -973,7 +1000,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             **self.request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id})
+        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id, "v2_role": None})
         self.assertEqual(json.loads(response.content.decode()), [binding_attrs])
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
@@ -1329,8 +1356,12 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         admin_group_uuid = str(tenant_mapping.default_admin_group_uuid)
         found_admin_binding = False
         for t in tuples:
-            # RelationTuple has: relation, subject_type_name, subject_id
-            if t.relation == "subject" and t.subject_type_name == "group" and admin_group_uuid in t.subject_id:
+            # RelationTuple has: relation, subject.subject.type.name, subject.subject.id
+            if (
+                t.relation == "subject"
+                and t.subject.subject.type.name == "group"
+                and admin_group_uuid in t.subject.subject.id
+            ):
                 found_admin_binding = True
                 break
         self.assertTrue(found_admin_binding, f"No admin binding found for group {admin_group_uuid}")
@@ -2137,8 +2168,8 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         car = CrossAccountRequest.objects.create(
             target_org="123456",
             user_id="1111111",
-            start_date=datetime.now(),
-            end_date=datetime.now() + timedelta(10),
+            start_date=timezone.now(),
+            end_date=timezone.now() + timedelta(10),
             status="approved",
         )
         car.roles.add(*(system_role, custom_role))
@@ -2719,6 +2750,7 @@ class InternalViewsetUserLookupTests(BaseInternalViewsetTests):
         self.assertEqual(resp_groups[0]["name"], "test_group_platform_default")
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
     """Test the fix_missing_binding_base_tuples internal API endpoint."""
 
@@ -2728,7 +2760,7 @@ class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
         self.url = "/_private/api/utils/fix_missing_binding_base_tuples/"
         self._tuples = InMemoryTuples()
 
-    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=True, ROOT_SCOPE_PERMISSIONS="test:resource:read")
     @patch("management.tasks.fix_missing_binding_base_tuples_in_worker.delay")
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_fix_missing_base_tuples(self, mock_replicate, mock_worker):
@@ -2754,27 +2786,19 @@ class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
         )
         Access.objects.create(role=role, permission=perm, tenant=self.public_tenant)
 
-        # Get or create workspace hierarchy
-        root_ws, _ = Workspace.objects.get_or_create(
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-            defaults={"name": "Root Workspace for Fix Test"},
-        )
+        seed_v2_role_from_v1(role)
+
+        # Bootstrap the tenant to create workspace hierarchy (without replicating, since we don't need the tuples).
+        bootstrap_tenant_for_v2_test(self.tenant)
 
         # Create binding WITHOUT replication (simulating pre-V2 state - missing base tuples)
-        binding = BindingMapping.objects.create(
-            role=role,
-            mappings={
-                "id": "test-binding-no-base-tuples",
-                "groups": [str(self.group.uuid)],
-                "users": {},
-                "role": {"id": str(role.uuid), "is_system": True, "permissions": []},
-            },
-            resource_type_namespace="rbac",
-            resource_type_name="workspace",
-            resource_id=str(root_ws.id),
-        )
+        RelationApiDualWriteGroupHandler(
+            group=self.group, event_type=ReplicationEventType.ASSIGN_ROLE, replicator=NoopReplicator()
+        ).generate_relations_reset_roles([role])
 
+        root_ws = Workspace.objects.root(tenant=self.tenant)
+
+        binding = BindingMapping.objects.get(role=role)
         binding_id = binding.mappings["id"]
 
         # BEFORE FIX: Verify NO tuples exist (simulating missing Kessel relationships)
@@ -2786,17 +2810,17 @@ class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
         mock_worker.side_effect = lambda **kwargs: fix_missing_binding_base_tuples_in_worker(**kwargs)
 
         # CALL THE FIX API
-        response = self.client.post(f"{self.url}?binding_ids={binding.id}", **self.request.META)
+        response = self.client.post(f"{self.url}?binding_uuids={binding_id}", **self.request.META)
         self.assertEqual(response.status_code, 202)  # Now returns 202 (Accepted) since it's async
 
         data = response.json()
         self.assertIn("message", data)
-        self.assertEqual(data["binding_ids"], [binding.id])
+        self.assertEqual(data["binding_uuids"], [binding_id])
 
         # Verify worker was called
-        mock_worker.assert_called_once_with(binding_ids=[binding.id])
+        mock_worker.assert_called_once_with(binding_uuids=[binding_id])
 
-        # AFTER FIX: Verify ALL tuples now exist (API replicates all tuples via binding.as_tuples())
+        # AFTER FIX: Verify ALL tuples now exist.
 
         # Verify t_role tuple was created
         t_role_after = self._tuples.find_tuples(
@@ -2840,6 +2864,8 @@ class CleanInvalidWorkspaceResourceDefinitionsTests(BaseInternalViewsetTests):
         """Set up test data."""
         super().setUp()
         self.url = "/_private/api/utils/clean_invalid_workspace_resource_definitions/"
+
+        bootstrap_tenant_for_v2_test(self.tenant)
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
     @patch("management.tasks.clean_invalid_workspace_resource_definitions_in_worker.delay")
@@ -2956,6 +2982,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
     def setUp(self):
         """Set up the access view tests."""
         super().setUp()
+        bootstrap_tenant_for_v2_test(self.tenant)
         self.client = APIClient()
         self.customer = self.customer_data
         self.internal_request_context = self._create_request_context(self.customer, self.user_data, is_internal=True)
@@ -3014,27 +3041,16 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.group.save()
         self.permission = Permission.objects.create(permission="app:*:*", tenant=self.tenant)
         Permission.objects.create(permission="app:foo:bar", tenant=self.tenant)
-        tenant_root_workspace = Workspace.objects.create(
-            name="root",
-            description="Root workspace",
+        tenant_root_workspace, _ = Workspace.objects.get_or_create(
             tenant=self.tenant,
             type=Workspace.Types.ROOT,
+            defaults={"name": "root", "description": "Root workspace"},
         )
-        Workspace.objects.create(
-            name="Tenant Default Workspace",
-            type=Workspace.Types.DEFAULT,
-            parent=tenant_root_workspace,
+        Workspace.objects.get_or_create(
             tenant=self.tenant,
+            type=Workspace.Types.DEFAULT,
+            defaults={"name": "Tenant Default Workspace", "parent": tenant_root_workspace},
         )
-
-    def tearDown(self):
-        """Tear down access view tests."""
-        Group.objects.all().delete()
-        Principal.objects.all().delete()
-        Role.objects.all().delete()
-        Policy.objects.all().delete()
-        Workspace.objects.filter(parent__isnull=False).delete()
-        Workspace.objects.filter(parent__isnull=True).delete()
 
     def create_role(self, role_name, headers, in_access_data=None):
         """Create a role."""
@@ -3611,8 +3627,9 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
             **self.internal_request.META,
         )
 
+        # self.tenant is bootstrapped in setUp; only test_tenant and tenant are pending
         expected_json = {
-            "org_ids": sorted([str(self.tenant.org_id), str(self.test_tenant.org_id), str(tenant.org_id)]),
+            "org_ids": sorted([str(self.test_tenant.org_id), str(tenant.org_id)]),
         }
 
         response_json = json.loads(response.content)
@@ -3730,254 +3747,11 @@ class InternalS2SViewsetTests(IdentityRequest):
 
 
 def valid_destructive_time():
-    return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) + timedelta(hours=1)
+    return timezone.now() + timedelta(hours=1)
 
 
 def invalid_destructive_time():
-    return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) - timedelta(hours=1)
-
-
-class WorkspaceViewsetTests(BaseInternalViewsetTests):
-    """Test the /api/utils/workspace/ endpoint from internal viewset"""
-
-    def setUp(self):
-        """Set up the Workspace view tests."""
-        super().setUp()
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-        self.standard_workspace = Workspace.objects.create(
-            name="Standard Workspace",
-            description="Standard Workspace - description",
-            tenant=self.tenant,
-            parent=self.default_workspace,
-            type=Workspace.Types.STANDARD,
-        )
-        self.ungrouped_workspace = Workspace.objects.create(
-            name="Ungrouped Hosts Workspace",
-            description="Ungrouped Hosts Workspace - description",
-            tenant=self.tenant,
-            parent=self.default_workspace,
-            type=Workspace.Types.UNGROUPED_HOSTS,
-        )
-
-    def tearDown(self):
-        """Tear down the Workspace view tests."""
-        super().tearDown()
-
-    def create_workspace_tree(self, parent=None, depth=1, branching=1):
-        """
-        Recursively create a tree of standard workspaces.
-
-        Each workspace will have 'branching' number of children and the
-        structure will be 'depth' levels deep.
-
-        :param parent: The parent workspace instance (default to self.default_workspace).
-        :param depth: How many levels deep the tree should be.
-        :param branching: How many child workspaces each workspace should have.
-        """
-        if not parent:
-            parent = self.default_workspace
-
-        def create_level(current_parent, current_depth):
-            if current_depth == 0:
-                return
-            for i in range(branching):
-                ws = Workspace.objects.create(
-                    name=f"Standard WS D{depth - current_depth + 1} #{i}",
-                    description=f"Workspace at depth {depth - current_depth + 1}",
-                    tenant=self.tenant,
-                    parent=current_parent,
-                    type=Workspace.Types.STANDARD,
-                )
-                create_level(ws, current_depth - 1)
-
-        create_level(parent, depth)
-
-    def test_workspace_get_count(self):
-        """Test that we can get a number of standard workspaces."""
-        url = "/_private/api/utils/workspace/"
-        response = self.client.get(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.content, b"1 standard workspace(s) eligible for removal.")
-
-    def test_workspace_get_detail(self):
-        """Test that we can list standard workspaces."""
-        url = "/_private/api/utils/workspace/" + "?detail=true"
-        response = self.client.get(url, **self.request.META)
-
-        standard_ws_from_db = Workspace.objects.filter(type=Workspace.Types.STANDARD).first()
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        payload = response.json()
-        count = payload.get("count")
-        ws_list = payload.get("data")
-        self.assertEqual(count, 1)
-        self.assertEqual(ws_list[0].get("id"), str(standard_ws_from_db.id))
-        self.assertIn("tenant_id", ws_list[0].keys())
-        self.assertEqual(ws_list[0].get("tenant_id"), standard_ws_from_db.tenant_id)
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=invalid_destructive_time())
-    def test_workspace_delete_destructive_operations_not_allowed(self):
-        """Test the destructive operations must be allowed for workspace removal."""
-        url = "/_private/api/utils/workspace/"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(response.content, b"Destructive operations disallowed.")
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
-    def test_workspace_delete_all(self, replicate, replicate_workspace):
-        """Test we can remove all standard workspaces."""
-        standard_ws = Workspace.objects.filter(type=Workspace.Types.STANDARD)
-        self.assertEqual(standard_ws.count(), 1)
-
-        url = "/_private/api/utils/workspace/"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.content, b"1 workspace(s) deleted.")
-        standard_ws = Workspace.objects.filter(type=Workspace.Types.STANDARD)
-        self.assertEqual(standard_ws.count(), 0)
-        replicate.assert_called_once()
-        replicate_workspace.assert_not_called()
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    def test_workspace_delete_all_with_3_children(self):
-        """Test we can remove all standard workspaces with child workspaces."""
-        depth = 3
-        branching = 3
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-        standard_ws_count = Workspace.objects.filter(type=Workspace.Types.STANDARD).count()
-
-        # Ensure the db contains workspaces with children
-        standard_ws_with_children = Workspace.objects.annotate(num_children=Count("children")).filter(
-            type=Workspace.Types.STANDARD, num_children__gt=0
-        )
-        self.assertEqual(standard_ws_with_children.count(), 12)
-
-        url = "/_private/api/utils/workspace/"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.content.decode(), f"{standard_ws_count} workspace(s) deleted.")
-        standard_ws = Workspace.objects.filter(type=Workspace.Types.STANDARD)
-        self.assertEqual(standard_ws.count(), 0)
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    def test_workspace_delete_workspace_by_id_without_children(self):
-        """Test we can remove a standard workspace without child workspace."""
-        depth = 2
-        branching = 2
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-
-        # Find 1 workspace without children
-        ws_without_children = Workspace.objects.filter(type=Workspace.Types.STANDARD, children__isnull=True).first()
-
-        url = "/_private/api/utils/workspace/" + f"?id={ws_without_children.id}"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.content.decode(), f"Workspace with id='{ws_without_children.id}' deleted.")
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    def test_workspace_delete_workspace_by_id_with_children(self):
-        """Test we cannot remove a standard workspace with child workspace."""
-        depth = 2
-        branching = 2
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-
-        # Find 1 workspace with children
-        ws_with_children = (
-            Workspace.objects.annotate(num_children=Count("children"))
-            .filter(type=Workspace.Types.STANDARD, num_children__gt=0)
-            .first()
-        )
-
-        url = "/_private/api/utils/workspace/" + f"?id={ws_with_children.id}"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(
-            response.content.decode(),
-            f"Workspace with id='{ws_with_children.id}' cannot be removed because it has child workspace.",
-        )
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    def test_workspace_delete_workspace_by_invalid_id(self):
-        """Test we cannot remove a standard workspace with invalid id."""
-        depth = 2
-        branching = 2
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-
-        # Test with random valid uuid, and id of default, root and ungrouped workspace
-        for ws_id in uuid.uuid4(), self.default_workspace.id, self.root_workspace.id, self.ungrouped_workspace.id:
-            url = "/_private/api/utils/workspace/" + f"?id={ws_id}"
-            response = self.client.delete(url, **self.request.META)
-
-            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-            self.assertEqual(response.content.decode(), f"Standard workspace with id='{ws_id}' not found.")
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    def test_workspace_delete_workspace_by_invalid_id_format(self):
-        """Test we cannot remove a standard workspace with invalid id format."""
-        depth = 2
-        branching = 2
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-
-        ws_id = "invalid_uuid"
-        url = "/_private/api/utils/workspace/" + f"?id={ws_id}"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.content.decode(), "Invalid workspace id format.")
-
-    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
-    def test_workspace_delete_workspace_only_without_children(self, replicate, replicate_workspace):
-        """Test we can remove only standard workspaces without children."""
-        depth = 2
-        branching = 2
-        self.create_workspace_tree(parent=self.default_workspace, depth=depth, branching=branching)
-
-        url = "/_private/api/utils/workspace/" + f"?without_child_only=true"
-        response = self.client.delete(url, **self.request.META)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # with depth = 2 and branching = 2 we created 6 workspaces + 1 workspace already existed in db
-        #
-        # Default workspace
-        #     * Workspace 1
-        #           * Workspace 1 1
-        #           * Workspace 1 2
-        #     * Workspace 2
-        #           * Workspace 2 1
-        #           * Workspace 2 2
-        #     * self.standard_workspace
-        #
-        # => with ?without_child_only=true we removed 5 workspaces and 'Workspace 1' and 'Workspace 2'
-        # were not removed
-        self.assertEqual(
-            response.content.decode(), f"5 workspace(s) deleted, another 2 standard workspace(s) exist in database."
-        )
-        self.assertEqual(Workspace.objects.filter(type=Workspace.Types.STANDARD).count(), 2)
-        self.assertEqual(replicate.call_count, 5)
-        replicate_workspace.assert_not_called()
+    return timezone.now() - timedelta(hours=1)
 
 
 class InternalRelationsViewsetTests(BaseInternalViewsetTests):
@@ -4499,6 +4273,207 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response_body["detail"], "Invalid request body provided in request to read_tuples.")
 
+    @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
+    @patch("internal.views.create_client_channel")
+    def test_lookup_subjects(self, mock_create_channel, mock_get_token):
+        """Test a request to lookup_subjects endpoint returns the correct response."""
+
+        mock_stub = MagicMock()
+        mock_response_1 = lookup_pb2.LookupSubjectsResponse(
+            subject=common_pb2.SubjectReference(
+                subject=common_pb2.ObjectReference(
+                    type=common_pb2.ObjectType(namespace="rbac", name="principal"), id="user-12345"
+                )
+            )
+        )
+
+        mock_response_2 = lookup_pb2.LookupSubjectsResponse(
+            subject=common_pb2.SubjectReference(
+                subject=common_pb2.ObjectReference(
+                    type=common_pb2.ObjectType(namespace="rbac", name="principal"), id="user-67891"
+                )
+            )
+        )
+
+        mock_stub.LookupSubjects.return_value = [mock_response_1, mock_response_2]
+
+        with patch("internal.views.lookup_pb2_grpc.KesselLookupServiceStub", return_value=mock_stub):
+
+            request_body = {
+                "resource": {
+                    "type": {"namespace": "rbac", "name": "workspace"},
+                    "id": "workspace-123",
+                },
+                "relation": "user_grant",
+                "subject_type": {"namespace": "rbac", "name": "principal"},
+            }
+
+            response = self.client.post(
+                "/_private/api/relations/lookup_subjects/",
+                request_body,
+                format="json",
+                **self.request.META,
+            )
+
+            response_body = json.loads(response.content)
+            subject_1 = response_body["subjects"][0]["subject"]["subject"]
+            subject_2 = response_body["subjects"][1]["subject"]["subject"]
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("subjects", response_body)
+            self.assertEqual(subject_1["id"], "user-12345")
+            self.assertEqual(subject_1["type"]["namespace"], "rbac")
+            self.assertEqual(subject_1["type"]["name"], "principal")
+            self.assertEqual(subject_2["id"], "user-67891")
+            self.assertEqual(subject_2["type"]["namespace"], "rbac")
+            self.assertEqual(subject_2["type"]["name"], "principal")
+
+    @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
+    @patch("internal.views.create_client_channel")
+    def test_lookup_subjects_with_subject_relation(self, mock_create_channel, mock_get_token):
+        """Test a request to lookup_subjects endpoint with optional subject_relation parameter."""
+
+        mock_stub = MagicMock()
+        mock_response = lookup_pb2.LookupSubjectsResponse(
+            subject=common_pb2.SubjectReference(
+                relation="member",
+                subject=common_pb2.ObjectReference(
+                    type=common_pb2.ObjectType(namespace="rbac", name="group"), id="group-12345"
+                ),
+            )
+        )
+
+        mock_stub.LookupSubjects.return_value = [mock_response]
+
+        with patch("internal.views.lookup_pb2_grpc.KesselLookupServiceStub", return_value=mock_stub):
+
+            request_body = {
+                "resource": {
+                    "type": {"namespace": "rbac", "name": "role_binding"},
+                    "id": "binding-123",
+                },
+                "relation": "subject",
+                "subject_type": {"namespace": "rbac", "name": "group"},
+                "subject_relation": "member",
+            }
+
+            response = self.client.post(
+                "/_private/api/relations/lookup_subjects/",
+                request_body,
+                format="json",
+                **self.request.META,
+            )
+
+            response_body = json.loads(response.content)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("subjects", response_body)
+            subject = response_body["subjects"][0]["subject"]
+            self.assertEqual(subject["relation"], "member")
+            self.assertEqual(subject["subject"]["id"], "group-12345")
+
+    @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
+    @patch("internal.views.create_client_channel")
+    def test_lookup_subjects_empty(self, mock_create_channel, mock_get_token):
+        """Test a request to lookup_subjects endpoint returns the correct response when no subjects are found."""
+
+        mock_stub = MagicMock()
+
+        mock_stub.LookupSubjects.return_value = []
+
+        with patch("internal.views.lookup_pb2_grpc.KesselLookupServiceStub", return_value=mock_stub):
+
+            request_body = {
+                "resource": {
+                    "type": {"namespace": "rbac", "name": "workspace"},
+                    "id": "workspace-123",
+                },
+                "relation": "user_grant",
+                "subject_type": {"namespace": "rbac", "name": "principal"},
+            }
+
+            response = self.client.post(
+                "/_private/api/relations/lookup_subjects/",
+                request_body,
+                format="json",
+                **self.request.META,
+            )
+            self.assertEqual(response.status_code, 204)
+
+    @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
+    @patch("internal.views.create_client_channel", side_effect=RpcError("Simulated GRPC error"))
+    def test_lookup_subjects_grpc_error(self, mock_channel, mock_token):
+        """Test a request to lookup_subjects endpoint returns the correct response in case of grpc error."""
+
+        request_body = {
+            "resource": {
+                "type": {"namespace": "rbac", "name": "workspace"},
+                "id": "workspace-123",
+            },
+            "relation": "user_grant",
+            "subject_type": {"namespace": "rbac", "name": "principal"},
+        }
+
+        response = self.client.post(
+            "/_private/api/relations/lookup_subjects/",
+            request_body,
+            format="json",
+            **self.request.META,
+        )
+        response_body = json.loads(response.content)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response_body)
+        self.assertIn("error", response_body)
+        self.assertEqual(response_body["detail"], "Error occurred in gRPC call")
+        self.assertEqual(response_body["error"], "Simulated GRPC error")
+
+    @patch("internal.views.create_client_channel", side_effect=Exception("Simulated internal error"))
+    def test_lookup_subjects_error(self, mock_channel):
+        """Test a request to lookup_subjects endpoint returns the correct response in case of an error."""
+
+        request_body = {
+            "resource": {
+                "type": {"namespace": "rbac", "name": "workspace"},
+                "id": "workspace-123",
+            },
+            "relation": "user_grant",
+            "subject_type": {"namespace": "rbac", "name": "principal"},
+        }
+
+        response = self.client.post(
+            "/_private/api/relations/lookup_subjects/",
+            request_body,
+            format="json",
+            **self.request.META,
+        )
+        response_body = json.loads(response.content)
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("detail", response_body)
+        self.assertIn("error", response_body)
+        self.assertEqual(response_body["detail"], "Error occurred in call to lookup subjects endpoint")
+        self.assertEqual(response_body["error"], "Simulated internal error")
+
+    @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
+    @patch("internal.views.create_client_channel")
+    def test_lookup_subjects_invalid_body(self, mock_create_channel, mock_get_token):
+        """Test a request to lookup_subjects endpoint returns the correct response in case of input validation failure."""
+        request_body = {
+            "invalid_resource": {
+                "type": {"namespace": "rbac", "name": "workspace"},
+                "id": "workspace-123",
+            },
+            "relation": "user_grant",
+            "subject_type": {"namespace": "rbac", "name": "principal"},
+        }
+
+        response = self.client.post(
+            "/_private/api/relations/lookup_subjects/",
+            request_body,
+            format="json",
+            **self.request.META,
+        )
+        response_body = json.loads(response.content)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response_body["detail"], "Invalid request body provided in request to lookup_subjects.")
+
 
 class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     """Test the /_private/api/inventory/ endpoints from internal viewset."""
@@ -4614,26 +4589,20 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
 class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     """Test the /_private/api/inventory/ endpoints from internal viewset."""
 
+    def setUp(self):
+        super().setUp()
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(tenant=self.tenant)
+
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+
     @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
     @patch("management.utils.create_client_channel")
     @patch("management.inventory_checker.inventory_api_check.GroupPrincipalInventoryChecker.check_relationships")
     def test_inventory_group_assignments(self, mock_check_relationships, mock_create_channel, mock_get_token):
         """Test a request to check group assignments of inventory returns correct response."""
         group_uuid = str(self.group.uuid)
-
-        # Create the required workspaces for this check
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
 
         mock_stub = MagicMock()
         mock_stub.Check.return_value = check_response_pb2.CheckResponse(allowed=allowed_pb2.Allowed.ALLOWED_TRUE)
@@ -4668,20 +4637,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         """Test the expected grpc error is returned in cases of grpc error for group assignments check"""
         group_uuid = str(self.group.uuid)
 
-        # Create the required workspaces for this check
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         response = self.client.get(
             f"/_private/api/inventory/group_assignments/{group_uuid}/",
             format="json",
@@ -4703,20 +4658,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         """Test the expected error is returned in cases of unexpected error for group assignments check"""
         group_uuid = str(self.group.uuid)
 
-        # Create the required workspaces for this check
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         response = self.client.get(
             f"/_private/api/inventory/group_assignments/{group_uuid}/",
             format="json",
@@ -4733,33 +4674,24 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     @patch("internal.jwt_utils.JWTProvider.get_jwt_token", return_value={"access_token": "mocked_valid_token"})
     @patch("management.utils.create_client_channel")
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants"
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
     )
-    def test_inventory_bootstrapped_tenants(
-        self, mock_check_bootstrapped_tenants, mock_create_channel, mock_get_token
-    ):
+    def test_inventory_bootstrapped_tenants(self, mock_check_bootstrapped_tenant, mock_create_channel, mock_get_token):
         """Test a request to check bootstrapped tenants on inventory returns correct response."""
-        # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
-        # Mock returns tuple of (bool, list of check strings)
+        # Mock returns tuple of (bool, list of check dicts)
         mock_relations_checked = [
-            "rbac/workspace:ws-123/parent#rbac/workspace:ws-456",
-            "rbac/workspace:ws-456/binding#rbac/role_binding:rb-789",
+            {
+                "name": "default_workspace_parent",
+                "check": "rbac/workspace:ws-123#parent@rbac/workspace:ws-456",
+                "exists": True,
+            },
+            {
+                "name": "root_workspace_parent",
+                "check": "rbac/workspace:ws-456#parent@rbac/tenant:localhost/org",
+                "exists": True,
+            },
         ]
-        mock_check_bootstrapped_tenants.return_value = (True, mock_relations_checked)
+        mock_check_bootstrapped_tenant.return_value = (True, mock_relations_checked)
 
         response = self.client.get(
             f"/_private/api/inventory/bootstrap_tenants/{self.tenant.org_id}/",
@@ -4776,26 +4708,12 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["relations_checked"], mock_relations_checked)
 
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants",
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant",
         side_effect=RpcError("Simulated GRPC error"),
     )
     def test_inventory_bootstrapped_tenants_grpc_error(self, mock_check_relationships):
         """Test the expected grpc error is returned in cases of grpc error for bootstrapped tenant check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         response = self.client.get(
             f"/_private/api/inventory/bootstrap_tenants/{self.tenant.org_id}/",
             format="json",
@@ -4811,26 +4729,12 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["error"], "Simulated GRPC error")
 
     @patch(
-        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenants",
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant",
         side_effect=Exception("Simulated internal error"),
     )
     def test_inventory_bootstrapped_tenants_error(self, mock_check_relationships):
         """Test the expected error is returned in cases of generic error for bootstrapped tenant check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         response = self.client.get(
             f"/_private/api/inventory/bootstrap_tenants/{self.tenant.org_id}/",
             format="json",
@@ -4854,19 +4758,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     ):
         """Test a request to check workspace relation on inventory returns correct response."""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -4912,20 +4803,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self, mock_workspace_view, mock_check_workspace_relation, mock_create_channel, mock_get_token
     ):
         """Test a request to check workspace relation descendants on inventory returns correct response."""
-        # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -4980,19 +4857,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     def test_inventory_workspace_relation_grpc_error(self, mock_check_workspace):
         """Test the expected grpc error is returned in cases of grpc error for workspace relation check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -5022,19 +4886,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     def test_inventory_workspace_relation_error(self, mock_check_workspace):
         """Test the expected error is returned in cases of generic error for workspace relation check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -5064,19 +4915,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     def test_inventory_workspace_root_error(self, mock_check_workspace):
         """Test the expected error is returned in cases of a root workspace uuid being provided for workspace relation check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -5107,19 +4945,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     def test_inventory_workspace_descendants_relation_grpc_error(self, mock_check_workspace):
         """Test the expected grpc error is returned in cases of grpc error for workspace relation descendants check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -5151,19 +4976,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     def test_inventory_workspace_descendants_relation_error(self, mock_check_workspace):
         """Test the expected error is returned in cases of generic error for workspace relation descendants check"""
         # Create the required objects for this test
-        TenantMapping.objects.create(tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         self.test_workspace = Workspace.objects.create(
             tenant=self.tenant,
             type=Workspace.Types.STANDARD,
@@ -5194,18 +5006,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     @patch("internal.views.check_role")
     def test_inventory_check_role(self, mock_bootstrapped_view, mock_check_role, mock_create_channel, mock_get_token):
         """Test a request to check role endpoint on inventory returns correct response."""
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
         mock_stub = MagicMock()
         mock_stub.Check.return_value = True
 
@@ -5259,19 +5059,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self, mock_bootstrapped_view, mock_check_role, mock_create_channel, mock_get_token
     ):
         """Test a request to check role endpoint on inventory returns correct response."""
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         custom_role = Role.objects.create(
             tenant=self.tenant,
             name="Custom role",
@@ -5327,19 +5114,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     )
     def test_inventory_check_role_grpc_error(self, mock_check_role):
         """Test a request to check role endpoint on inventory returns correct response in case of grpc error."""
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         with patch(
             "management.inventory_checker.inventory_api_check.inventory_service_pb2_grpc.KesselInventoryServiceStub"
         ):
@@ -5364,19 +5138,6 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
     )
     def test_inventory_check_role_error(self, mock_check_role):
         """Test a request to check role endpoint on inventory returns correct response in case of generic error."""
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
-
         with patch(
             "management.inventory_checker.inventory_api_check.inventory_service_pb2_grpc.KesselInventoryServiceStub"
         ):
@@ -5394,3 +5155,171 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertIn("error", response_body)
         self.assertEqual(response_body["detail"], "Unexpected error occurred during inventory role relation check")
         self.assertEqual(response_body["error"], "Simulated internal error")
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check"
+        ".CrossAccountRequestInventoryChecker.check_cross_account_request"
+    )
+    def test_inventory_check_cross_account_request(self, mock_check_car, mock_handler_cls):
+        """Test check_cross_account_request returns correct response when all relations exist."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        mock_handler = MagicMock()
+        mock_handler_cls.return_value = mock_handler
+        mock_check_car.return_value = True
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        self.assertIn("cross_account_request_checks", response_body)
+        checks = response_body["cross_account_request_checks"]
+        self.assertEqual(checks["request_id"], str(car.request_id))
+        self.assertEqual(checks["target_org"], self.tenant.org_id)
+        self.assertEqual(checks["user_id"], "12345")
+        self.assertEqual(checks["status"], "approved")
+        self.assertTrue(checks["relations_correct"])
+        self.assertEqual(len(checks["roles"]), 1)
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check"
+        ".CrossAccountRequestInventoryChecker.check_cross_account_request"
+    )
+    def test_inventory_check_cross_account_request_missing_relations(self, mock_check_car, mock_handler_cls):
+        """Test check_cross_account_request returns False when relations are missing."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        mock_handler = MagicMock()
+        mock_handler_cls.return_value = mock_handler
+        mock_check_car.return_value = False
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        self.assertFalse(response_body["cross_account_request_checks"]["relations_correct"])
+
+    def test_inventory_check_cross_account_request_not_approved(self):
+        """Test check_cross_account_request returns 400 for non-approved CAR."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="pending",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        response_body = response.json()
+        self.assertIn("not approved", response_body["detail"])
+
+    def test_inventory_check_cross_account_request_no_roles(self):
+        """Test check_cross_account_request returns True when CAR has no roles."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        checks = response_body["cross_account_request_checks"]
+        self.assertTrue(checks["relations_correct"])
+        self.assertEqual(checks["roles"], [])
+
+    def test_inventory_check_cross_account_request_not_found(self):
+        """Test check_cross_account_request returns 404 for nonexistent request."""
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{fake_uuid}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        side_effect=RpcError("Simulated gRPC error"),
+    )
+    def test_inventory_check_cross_account_request_grpc_error(self, mock_handler_cls):
+        """Test check_cross_account_request returns 400 on gRPC error."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        response_body = response.json()
+        self.assertIn("gRPC error", response_body["detail"])
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        side_effect=Exception("Simulated internal error"),
+    )
+    def test_inventory_check_cross_account_request_unexpected_error(self, mock_handler_cls):
+        """Test check_cross_account_request returns 500 on unexpected error."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 500)
+        response_body = response.json()
+        self.assertIn("Unexpected error", response_body["detail"])

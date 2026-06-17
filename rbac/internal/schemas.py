@@ -80,10 +80,22 @@ RELATIONS_TOOL_INPUT_SCHEMAS = [
     },
 ]
 
+LOOKUP_SUBJECTS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resource": ENTITY_SCHEMA,
+        "relation": {"type": "string"},
+        "subject_type": TYPE_SCHEMA,
+        "subject_relation": {"type": "string"},
+    },
+    "required": ["resource", "relation", "subject_type"],
+}
+
 RELATION_INPUT_SCHEMAS = {
     "lookup_resources": RELATIONS_TOOL_INPUT_SCHEMAS[0],
     "check_relation": RELATIONS_TOOL_INPUT_SCHEMAS[1],
     "read_tuples": RELATIONS_TOOL_INPUT_SCHEMAS[2],
+    "lookup_subjects": LOOKUP_SUBJECTS_SCHEMA,
 }
 
 INVENTORY_RESOURCE_SCHEMA = {

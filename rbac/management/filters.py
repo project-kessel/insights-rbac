@@ -19,9 +19,40 @@
 
 from django_filters import rest_framework as filters
 from management.utils import validate_and_get_key
+from rest_framework import serializers
+from rest_framework.filters import OrderingFilter
 
 NAME_MATCH_KEY = "name_match"
 VALID_NAME_MATCHES = ["partial", "exact"]
+
+
+class ValidatedOrderingFilter(OrderingFilter):
+    """OrderingFilter that validates order_by values and returns 400 for invalid fields."""
+
+    def get_ordering(self, request, queryset, view):
+        """Validate ordering fields and return the ordering list."""
+        params = request.query_params.get(self.ordering_param)
+        if not params:
+            return self.get_default_ordering(view)
+
+        fields = [param.strip() for param in params.split(",")]
+        valid_fields = self.get_valid_fields(queryset, view, {"request": request})
+        valid_field_names = {field[0] for field in valid_fields}
+
+        invalid_fields = []
+        for field in fields:
+            # Only allow a single optional '-' prefix for descending order
+            field_name = field.removeprefix("-")
+            if not field_name or field_name not in valid_field_names:
+                invalid_fields.append(field)
+
+        if invalid_fields:
+            message = "{} query parameter value '{}' is invalid. Valid inputs: {}.".format(
+                self.ordering_param, ", ".join(invalid_fields), ", ".join(sorted(valid_field_names))
+            )
+            raise serializers.ValidationError({self.ordering_param: message})
+
+        return super().get_ordering(request, queryset, view)
 
 
 class CommonFilters(filters.FilterSet):

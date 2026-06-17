@@ -27,6 +27,8 @@ https://docs.djangoproject.com/en/2.0/ref/settings/
 """
 
 import os
+import ssl
+from urllib.parse import quote as _url_quote
 
 import datetime
 import sys
@@ -92,6 +94,7 @@ INSTALLED_APPS = [
     # 'django.contrib.admin',
     "django.contrib.auth",
     "django.contrib.contenttypes",
+    "django.contrib.postgres",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
@@ -237,8 +240,26 @@ CW_CREATE_LOG_GROUP = ENVIRONMENT.bool("CW_CREATE_LOG_GROUP", default=False)
 LOGGING_FORMATTER = os.getenv("DJANGO_LOG_FORMATTER", "simple")
 DJANGO_LOGGING_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO")
 RBAC_LOGGING_LEVEL = os.getenv("RBAC_LOG_LEVEL", "INFO")
-LOGGING_HANDLERS = os.getenv("DJANGO_LOG_HANDLERS", "console").split(",")
-VERBOSE_FORMATTING = "%(levelname)s %(asctime)s %(module)s " "%(process)d %(thread)d %(message)s"
+
+
+def _parse_logging_handlers(raw_value):
+    """Parse comma-separated handler names, strip whitespace, and deduplicate.
+
+    'console' and 'ecs' both write to stderr.  Having both produces duplicate
+    log lines for every event.  When both are specified, keep only 'ecs'
+    (structured JSON for CloudWatch / log aggregation).
+    Use DJANGO_LOG_HANDLERS=console for plain-text development output.
+    """
+    handlers = [h.strip() for h in raw_value.split(",") if h.strip()]
+    if "console" in handlers and "ecs" in handlers:
+        handlers = [h for h in handlers if h != "console"]
+    return handlers
+
+
+LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "console"))
+
+ENV_NAME = os.getenv("ENV_NAME", "stage")
+VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
 
 if DEBUG and "ecs" in LOGGING_HANDLERS:
     DEBUG_LOG_HANDLERS = [v for v in LOGGING_HANDLERS if v != "ecs"]
@@ -257,20 +278,24 @@ if CW_AWS_ACCESS_KEY_ID:
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "env_name": {"()": "rbac.logging_filters.EnvironmentFilter", "env_name": ENV_NAME},
+    },
     "formatters": {
         "verbose": {"format": VERBOSE_FORMATTING},
-        "simple": {"format": "[%(asctime)s] %(levelname)s: %(message)s"},
+        "simple": {"format": "[%(asctime)s] %(levelname)s [%(env_name)s]: %(message)s"},
         "ecs_formatter": {"()": "rbac.ECSCustom.ECSCustomFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER},
+        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER, "filters": ["env_name"]},
         "file": {
             "level": RBAC_LOGGING_LEVEL,
             "class": "logging.FileHandler",
             "filename": LOGGING_FILE,
             "formatter": LOGGING_FORMATTER,
+            "filters": ["env_name"],
         },
-        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter"},
+        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter", "filters": ["env_name"]},
     },
     "loggers": {
         "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL},
@@ -308,6 +333,7 @@ if CW_AWS_ACCESS_KEY_ID:
         "formatter": LOGGING_FORMATTER,
         "use_queues": True,
         "create_log_group": CW_CREATE_LOG_GROUP,
+        "filters": ["env_name"],
     }
     LOGGING["handlers"]["watchtower"] = WATCHTOWER_HANDLER
 
@@ -316,18 +342,25 @@ if CW_AWS_ACCESS_KEY_ID:
 CORS_ORIGIN_ALLOW_ALL = True
 
 CORS_ALLOW_HEADERS = default_headers + ("x-rh-identity", "HTTP_X_RH_IDENTITY")
+CORS_EXPOSE_HEADERS = list(globals().get("CORS_EXPOSE_HEADERS", [])) + ["Mcp-Session-Id"]
 
 APPEND_SLASH = False
 
 # Celery settings
+REDIS_USERNAME = None
+REDIS_SSL_CA_CERTS = None
 if ENVIRONMENT.bool("CLOWDER_ENABLED", default=False):
     REDIS_HOST = LoadedConfig.inMemoryDb.hostname
     REDIS_PORT = LoadedConfig.inMemoryDb.port
     REDIS_PASSWORD = LoadedConfig.inMemoryDb.password
+    REDIS_SSL = REDIS_PASSWORD is not None
 else:
     REDIS_HOST = ENVIRONMENT.get_value("REDIS_HOST", default="localhost")
     REDIS_PORT = ENVIRONMENT.get_value("REDIS_PORT", default="6379")
     REDIS_PASSWORD = ENVIRONMENT.get_value("REDIS_PASSWORD", default=None)
+    REDIS_USERNAME = ENVIRONMENT.get_value("REDIS_USERNAME", default=None)
+    REDIS_SSL_CA_CERTS = ENVIRONMENT.get_value("REDIS_SSL_CA_CERTS", default=None)
+    REDIS_SSL = ENVIRONMENT.bool("REDIS_SSL", default=False)
 
 # Feature Flag settings
 FEATURE_FLAGS_CONF = LoadedConfig.featureFlags
@@ -346,8 +379,6 @@ CLOWDER_ENABLED = ENVIRONMENT.bool("CLOWDER_ENABLED", default=False)
 
 FEATURE_FLAGS_CACHE_DIR = ENVIRONMENT.get_value("FEATURE_FLAGS_CACHE_DIR", default="/tmp/")
 
-REDIS_SSL = REDIS_PASSWORD is not None
-
 ACCESS_CACHE_DB = 1
 ACCESS_CACHE_LIFETIME = 10 * 60
 ACCESS_CACHE_ENABLED = ENVIRONMENT.bool("ACCESS_CACHE_ENABLED", default=True)
@@ -365,14 +396,50 @@ REDIS_CACHE_CONNECTION_PARAMS = dict(
     socket_timeout=REDIS_SOCKET_TIMEOUT,
 )
 
+if REDIS_PASSWORD:
+    REDIS_CACHE_CONNECTION_PARAMS["password"] = REDIS_PASSWORD
+if REDIS_USERNAME:
+    REDIS_CACHE_CONNECTION_PARAMS["username"] = REDIS_USERNAME
 if REDIS_SSL:
     REDIS_CACHE_CONNECTION_PARAMS["connection_class"] = redis.SSLConnection
-    REDIS_CACHE_CONNECTION_PARAMS["password"] = REDIS_PASSWORD
-    DEFAULT_REDIS_URL = f"rediss://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0?ssl_cert_reqs=required"
+    REDIS_SSL_CERT_REQS = ssl.CERT_REQUIRED if REDIS_SSL_CA_CERTS else ssl.CERT_NONE
+    REDIS_CACHE_CONNECTION_PARAMS["ssl_cert_reqs"] = REDIS_SSL_CERT_REQS
+    if REDIS_SSL_CA_CERTS:
+        REDIS_CACHE_CONNECTION_PARAMS["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+
+_redis_scheme = "rediss" if REDIS_SSL else "redis"
+if REDIS_USERNAME and REDIS_PASSWORD:
+    _redis_auth = f"{_url_quote(REDIS_USERNAME)}:{_url_quote(REDIS_PASSWORD)}@"
+elif REDIS_PASSWORD:
+    _redis_auth = f":{_url_quote(REDIS_PASSWORD)}@"
 else:
-    DEFAULT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+    _redis_auth = ""
+DEFAULT_REDIS_URL = f"{_redis_scheme}://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/0"
+DJANGO_CACHE_URL = f"{_redis_scheme}://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/2"
+
+_cache_location = ENVIRONMENT.get_value("DJANGO_CACHE_BACKEND", default=DJANGO_CACHE_URL)
+if _cache_location.startswith("locmem"):
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+else:
+    _cache_config: dict = {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": _cache_location}
+    if REDIS_SSL:
+        _cache_options: dict = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
+        if REDIS_SSL_CA_CERTS:
+            _cache_options["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+        _cache_config["OPTIONS"] = _cache_options
+    CACHES = {"default": _cache_config}
 
 CELERY_BROKER_URL = ENVIRONMENT.get_value("CELERY_BROKER_URL", default=DEFAULT_REDIS_URL)
+_celery_concurrency = ENVIRONMENT.int("CELERY_WORKER_CONCURRENCY", default=0)
+if _celery_concurrency > 0:
+    CELERY_WORKER_CONCURRENCY = _celery_concurrency
+
+if REDIS_SSL:
+    _celery_ssl_conf = {"ssl_cert_reqs": REDIS_SSL_CERT_REQS}
+    if REDIS_SSL_CA_CERTS:
+        _celery_ssl_conf["ssl_ca_certs"] = REDIS_SSL_CA_CERTS
+    CELERY_BROKER_USE_SSL = _celery_ssl_conf
+    CELERY_REDIS_BACKEND_USE_SSL = _celery_ssl_conf
 
 ROLE_CREATE_ALLOW_LIST = ENVIRONMENT.get_value("ROLE_CREATE_ALLOW_LIST", default="").split(",")
 
@@ -410,6 +477,7 @@ if ENVIRONMENT.bool("LOG_DATABASE_QUERIES", default=False):
 
 # Internal API Configuration
 INTERNAL_API_PATH_PREFIXES = ["/_private/"]
+A2S_PATH_PREFIX = "/_private/_a2s/"
 
 try:
     INTERNAL_DESTRUCTIVE_API_OK_UNTIL = parse_dt(
@@ -422,6 +490,7 @@ except ValueError as e:
 
 KAFKA_ENABLED = ENVIRONMENT.get_value("KAFKA_ENABLED", default=False)
 MOCK_KAFKA = ENVIRONMENT.get_value("MOCK_KAFKA", default=False)
+MOCK_REDIS = ENVIRONMENT.get_value("MOCK_REDIS", default=False)
 
 NOTIFICATIONS_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_ENABLED", default=False)
 NOTIFICATIONS_RH_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_RH_ENABLED", default=False)
@@ -526,12 +595,13 @@ PRINCIPAL_USER_DOMAIN = ENVIRONMENT.get_value("PRINCIPAL_USER_DOMAIN", default="
 PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB", default=False)
 PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB", default=False)
 UMB_JOB_ENABLED = ENVIRONMENT.bool("UMB_JOB_ENABLED", default=True)
+
 UMB_HOST = ENVIRONMENT.get_value("UMB_HOST", default="localhost")
 UMB_PORT = ENVIRONMENT.get_value("UMB_PORT", default="61612")
 # Service account name
 SA_NAME = ENVIRONMENT.get_value("SA_NAME", default="nonprod-hcc-rbac")
 
-REDHAT_SSO = ENVIRONMENT.get_value("REDHAT_SSO", default="sso.stage.redhat.com")
+REDHAT_SSO = ENVIRONMENT.get_value("REDHAT_SSO", default="")
 OPENID_URL = ENVIRONMENT.get_value("OPENID_URL", default="/auth/realms/redhat-external/protocol/openid-connect/token")
 SCOPE = ENVIRONMENT.get_value("SCOPE", default="openid")
 TOKEN_GRANT_TYPE = ENVIRONMENT.get_value("TOKEN_GRANT_TYPE", default="client_credentials")
@@ -577,13 +647,14 @@ if CLOWDER_ENABLED:
             f"Falling back to default INVENTORY_API_SERVER value: {INVENTORY_API_SERVER}"
         )
 
-ENV_NAME = ENVIRONMENT.get_value("ENV_NAME", default="stage")
-
 # Versioned API settings
 V2_APIS_ENABLED = ENVIRONMENT.bool("V2_APIS_ENABLED", default=False)
 V2_READ_ONLY_API_MODE = ENVIRONMENT.bool("V2_READ_ONLY_API_MODE", default=False)
 WORKSPACE_ACCESS_CHECK_V2_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_CHECK_V2_ENABLED", default=False)
+# When True, use 'role_binding_view' permission; when False, use 'view' permission for role binding access
+USE_ROLE_BINDING_VIEW_PERMISSION = ENVIRONMENT.bool("USE_ROLE_BINDING_VIEW_PERMISSION", default=True)
 READ_ONLY_API_MODE = ENVIRONMENT.get_value("READ_ONLY_API_MODE", default=False)
+V2_EDIT_API_ENABLED = ENVIRONMENT.bool("V2_EDIT_API_ENABLED", default=False)
 V1_ROLE_PERMISSION_BLOCK_LIST = [
     permission.strip()
     for permission in ENVIRONMENT.get_value("V1_ROLE_PERMISSION_BLOCK_LIST", default="").split(",")
@@ -609,16 +680,39 @@ WORKSPACE_RESTRICT_DEFAULT_PEERS = ENVIRONMENT.bool("WORKSPACE_RESTRICT_DEFAULT_
 # Enable detailed timing logs for v2 workspace access checks (for performance investigation)
 WORKSPACE_ACCESS_TIMING_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_TIMING_ENABLED", default=False)
 
-# Permission scope configuration used by permission_scope.ImiplicitResourceService.
+# Permission scope configuration used by management.permission.scope_service.ImplicitResourceService.
 # These can include wildcard patterns (e.g. "rbac:*:read" or "advisor:*:*").
 ROOT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("ROOT_SCOPE_PERMISSIONS", default="")
 TENANT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("TENANT_SCOPE_PERMISSIONS", default="")
+DEFAULT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("DEFAULT_SCOPE_PERMISSIONS", default="")
+
+# Parity check settings - background job for comparing RBAC access with Kessel PDP
+PARITY_CHECK_ENABLED = ENVIRONMENT.bool("PARITY_CHECK_ENABLED", default=False)
+PARITY_CHECK_INTERVAL_SECONDS = ENVIRONMENT.int("PARITY_CHECK_INTERVAL_SECONDS", default=300)
+PARITY_CHECK_TENANT_SAMPLE_SIZE = ENVIRONMENT.int("PARITY_CHECK_TENANT_SAMPLE_SIZE", default=10)
+PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE = ENVIRONMENT.int("PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE", default=50)
+PARITY_CHECK_ORG_IDS = ENVIRONMENT.str("PARITY_CHECK_ORG_IDS", default="")
+PARITY_CHECK_SCHEDULE = ENVIRONMENT.str("PARITY_CHECK_SCHEDULE", default="0 0 * * *")
+
+# Disaster recovery settings
+DR_RECONCILE_ENABLED = ENVIRONMENT.bool("DR_RECONCILE_ENABLED", default=False)
+DR_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("DR_KAFKA_CONSUMER_GROUP_ID", default="rbac-dr-consumer-group")
+DR_MAX_EVENTS_PER_RECONCILE = ENVIRONMENT.int("DR_MAX_EVENTS_PER_RECONCILE", default=10000)
 
 # Org level permissons parent role uuids
 SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID", default="")
 SYSTEM_DEFAULT_TENANT_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_TENANT_ROLE_UUID", default="")
 SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID", default="")
 SYSTEM_ADMIN_TENANT_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_ADMIN_TENANT_ROLE_UUID", default="")
+
+# MCP settings
+MCP_ENABLED = ENVIRONMENT.bool("MCP_ENABLED", default=True)
+MCP_TOOL_TIMEOUT_SECONDS = ENVIRONMENT.int("MCP_TOOL_TIMEOUT_SECONDS", default=30)
+MCP_TOOL_MAX_WORKERS = ENVIRONMENT.int("MCP_TOOL_MAX_WORKERS", default=10)
+MCP_WRITE_ENABLED = ENVIRONMENT.bool("MCP_WRITE_ENABLED", default=False)
+MCP_WRITE_CONFIRMATION = ENVIRONMENT.bool("MCP_WRITE_CONFIRMATION", default=True)
+MCP_WRITE_CONFIRMATION_TTL = ENVIRONMENT.int("MCP_WRITE_CONFIRMATION_TTL", default=300)
+MCP_PII_REDACTION_ENABLED = ENVIRONMENT.bool("MCP_PII_REDACTION_ENABLED", default=True)
 
 # Manipulation of response to include ungrouped hosts id
 ADD_UNGROUPED_HOSTS_ID = ENVIRONMENT.bool("ADD_UNGROUPED_HOSTS_ID", default=False)
@@ -630,3 +724,8 @@ SYSTEM_USERS = ENVIRONMENT.json("SYSTEM_USERS", default={})
 
 # Principal caching settings
 PRINCIPAL_CACHE_LIFETIME = ENVIRONMENT.int("PRINCIPAL_CACHE_LIFETIME", default=3600)
+
+# Disaster recovery settings
+DR_RECOVERY_ENABLED = ENVIRONMENT.bool("DR_RECOVERY_ENABLED", default=False)
+DR_WORKSPACE_TOPIC = ENVIRONMENT.str("DR_WORKSPACE_TOPIC", default="outbox.event.workspace")
+DR_KAFKA_CONSUMER_TIMEOUT_MS = ENVIRONMENT.int("DR_KAFKA_CONSUMER_TIMEOUT_MS", default=30000)

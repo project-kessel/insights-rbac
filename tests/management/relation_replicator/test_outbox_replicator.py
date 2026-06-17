@@ -20,11 +20,26 @@ import logging
 from unittest.mock import ANY
 from uuid import uuid4
 from django.test import TestCase, override_settings
-from google.protobuf import json_format
-from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator, OutboxWAL
-from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
+
+from api.models import Tenant
+from management.relation_replicator.outbox_replicator import (
+    InMemoryLog,
+    OutboxReplicator,
+    OutboxWAL,
+    WorkspaceEventPayload,
+)
+from management.relation_replicator.relation_replicator import (
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+    WorkspaceEvent,
+    WorkspaceEventStream,
+)
+from management.workspace.serializer import WorkspaceEventSerializer
 from migration_tool.utils import create_relationship
 from prometheus_client import REGISTRY
+
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 @override_settings(
@@ -87,12 +102,12 @@ class OutboxReplicatorTest(TestCase):
             logged_event.payload,
             {
                 "relations_to_add": [
-                    json_format.MessageToDict(principal_to_group_add1),
-                    json_format.MessageToDict(principal_to_group_add2),
+                    principal_to_group_add1.to_dict(),
+                    principal_to_group_add2.to_dict(),
                 ],
                 "relations_to_remove": [
-                    json_format.MessageToDict(principal_to_group_remove1),
-                    json_format.MessageToDict(principal_to_group_remove2),
+                    principal_to_group_remove1.to_dict(),
+                    principal_to_group_remove2.to_dict(),
                 ],
                 "resource_context": {
                     "org_id": "",
@@ -359,6 +374,42 @@ class OutboxReplicatorTest(TestCase):
         self.assertEqual(context["org_id"], "")
         self.assertEqual(context["event_type"], ReplicationEventType.CREATE_GROUP.value)
 
+    def test_resource_context_for_migrate_binding_scope_with_notify_token(self):
+        """Test resource context includes notify_token for migrate_binding_scope events."""
+        relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
+
+        event = ReplicationEvent(
+            add=[relation],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456", "notify_token": "scope-batch-token"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+        self.replicator.replicate(event)
+
+        logged_event = self.log[0]
+        context = logged_event.payload["resource_context"]
+        self.assertEqual(context["org_id"], "123456")
+        self.assertEqual(context["event_type"], ReplicationEventType.MIGRATE_BINDING_SCOPE.value)
+        self.assertEqual(context["notify_token"], "scope-batch-token")
+
+    def test_resource_context_for_migrate_binding_scope_without_notify_token(self):
+        """Test migrate_binding_scope without notify_token falls back to standard context."""
+        relation = create_relationship(("rbac", "role"), "r1", ("rbac", "principal"), "localhost/p1", "member")
+
+        event = ReplicationEvent(
+            add=[relation],
+            remove=[],
+            event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
+            info={"org_id": "123456"},
+            partition_key=PartitionKey.byEnvironment(),
+        )
+
+        context = event.resource_context()
+        self.assertEqual(context["org_id"], "123456")
+        self.assertEqual(context["event_type"], ReplicationEventType.MIGRATE_BINDING_SCOPE.value)
+        self.assertNotIn("notify_token", context)
+
     def test_replicate_empty_event_warns_instead_of_saving(self):
         """Test replicate with empty event warns."""
         event = ReplicationEvent(
@@ -472,6 +523,46 @@ class OutboxReplicatorTest(TestCase):
         error_message = str(context.exception)
         self.assertIn("duplicate relationships", error_message)
         self.assertIn("role_binding", error_message)
+
+    def _do_test_workspace_event_for_stream(self, stream: WorkspaceEventStream, aggregate_type: str):
+        tenant = Tenant.objects.create(tenant_name="some tenant", org_id="some_org", account_id="some_acct")
+        bootstrap_result = bootstrap_tenant_for_v2_test(tenant)
+
+        workspace_data = WorkspaceEventSerializer(bootstrap_result.default_workspace).data
+
+        self.replicator.replicate_workspace(
+            WorkspaceEvent(
+                org_id=tenant.org_id,
+                account_number=tenant.account_id,
+                workspace=workspace_data,
+                event_type=ReplicationEventType.CREATE_WORKSPACE,
+                partition_key=PartitionKey.byEnvironment(),
+            ),
+            stream,
+        )
+
+        self.assertEqual(len(self.log), 1)
+        event = self.log.first()
+
+        self.assertEqual(event.aggregatetype, aggregate_type)
+        self.assertEqual(event.aggregateid, str(PartitionKey.byEnvironment()))
+        self.assertEqual(event.event_type, ReplicationEventType.CREATE_WORKSPACE)
+
+        self.assertEqual(
+            event.payload,
+            WorkspaceEventPayload(
+                org_id=tenant.org_id,
+                account_number=tenant.account_id,
+                workspace=workspace_data,
+                operation="create",
+            ),
+        )
+
+    def test_workspace_event(self):
+        self._do_test_workspace_event_for_stream(WorkspaceEventStream.STANDARD, "workspace")
+
+    def test_workspace_bulk_event(self):
+        self._do_test_workspace_event_for_stream(WorkspaceEventStream.BULK, "workspace-bulk")
 
 
 class OutboxReplicatorPrometheusTest(TestCase):

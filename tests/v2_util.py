@@ -1,178 +1,146 @@
-from typing import Optional
-from unittest import TestCase
+from typing import Callable, Optional
 
-from management.models import BindingMapping, CustomRoleV2, Role, RoleBinding, RoleV2
+from api.models import Tenant
+from management.group.platform import GlobalPolicyIdService
+from management.models import Permission, Role
+from management.relation_replicator.noop_replicator import NoopReplicator
+from management.relation_replicator.relation_replicator import (
+    RelationReplicator,
+    WorkspaceEventStream,
+    WorkspaceEvent,
+    ReplicationEvent,
+)
+from management.role.v2_model import SeededRoleV2
+from management.tenant_service import V2TenantBootstrapService
+from management.tenant_service.tenant_service import BootstrappedTenant
+from migration_tool import in_memory_tuples
 from migration_tool.in_memory_tuples import (
-    resource,
     all_of,
-    relation,
-    subject_type,
-    subject,
-    resource_type,
     InMemoryTuples,
+    InMemoryRelationReplicator,
 )
 
 
-def _v2_permissions_for(role: RoleV2) -> set[str]:
-    return set(p.v2_string() for p in role.permissions.all())
+def seed_v2_role_from_v1(role: Role) -> SeededRoleV2:
+    if not role.system:
+        raise ValueError("System role expected.")
+
+    # TODO: Set up the platform-/admin-default parent/child relationships if necessary. This isn't done here yet
+    #  because no code yet cares.
+
+    v2_role, _ = SeededRoleV2.objects.update_or_create(
+        tenant=role.tenant,
+        uuid=role.uuid,
+        v1_source=role,
+        defaults=dict(
+            name=role.name,
+            description=role.description,
+        ),
+    )
+
+    v2_role.permissions.set(Permission.objects.filter(accesses__role=role))
+
+    return v2_role
 
 
-def _assert_role_mappings_consistent(test: TestCase, role: CustomRoleV2, mappings: list[BindingMapping]):
-    expected_permissions = _v2_permissions_for(role)
+def make_read_tuples_mock(tuples: InMemoryTuples) -> Callable[[str, str, str, str, str], list[dict]]:
+    """Get a function with the signature of (read/iterate)_tuples_from_kessel that reads from an InMemoryTuples."""
 
-    test.assertGreater(len(mappings), 0, "Expected V2 role to be used in at least one BindingMapping.")
+    def read_tuples_fn(resource_type_name, resource_id, relation_name, subject_type_name, subject_id):
+        """Mock function to read tuples from InMemoryTuples."""
+        # Build a filter based on the provided parameters
+        filters = []
 
-    for binding_mapping in mappings:
-        test.assertFalse(binding_mapping.mappings["role"]["is_system"])
+        # TODO: replace this check with (not resource_type and not subject_type) if RelationsApiReplicator.read_tuples
+        #  is updated.
+        if not resource_type_name or not subject_type_name:
+            raise ValueError("Both resource_type and subject_type must be provided (due to a Kessel limitation)")
 
-        test.assertEqual(
-            expected_permissions,
-            set(binding_mapping.mappings["role"]["permissions"]),
-            f"Mismatched permissions between RoleV2 {role.uuid} and BindingMapping {binding_mapping.id} "
-            f"({binding_mapping.mappings["id"]})",
-        )
+        if resource_type_name:
+            filters.append(in_memory_tuples.resource_type("rbac", resource_type_name))
 
+        if resource_id:
+            filters.append(in_memory_tuples.resource_id(resource_id))
 
-def _assert_role_tuples_consistent(test: TestCase, tuples: InMemoryTuples, role: RoleV2):
-    expected_permissions = _v2_permissions_for(role)
+        if relation_name:
+            filters.append(in_memory_tuples.relation(relation_name))
 
-    tuple_permissions = set(
-        t.relation
-        for t in tuples.find_tuples(
-            all_of(
-                resource("rbac", "role", str(role.uuid)),
-                subject("rbac", "principal", "*"),
+        if subject_type_name:
+            # Note that SpiceDB does not filter based on the subject relation unless it's explicitly provided (which
+            # we do not do here or in the actual lookup).
+            filters.append(in_memory_tuples.subject_type("rbac", subject_type_name, any_relation=True))
+
+        if subject_id:
+            filters.append(in_memory_tuples.subject_id(subject_id))
+
+        found_tuples = tuples.find_tuples(all_of(*filters))
+
+        # Convert to dict format matching Kessel gRPC response
+        # Format: {"tuple": {"resource": {...}, "relation": "...", "subject": {...}}, ...}
+        result = []
+        for t in found_tuples:
+            subject_dict = {
+                "subject": {
+                    "type": {
+                        "namespace": t.subject.subject.type.namespace,
+                        "name": t.subject.subject.type.name,
+                    },
+                    "id": t.subject.subject.id,
+                },
+            }
+            if t.subject.relation is not None:
+                subject_dict["relation"] = t.subject.relation
+
+            result.append(
+                {
+                    "tuple": {
+                        "resource": {
+                            "type": {
+                                "namespace": t.resource.type.namespace,
+                                "name": t.resource.type.name,
+                            },
+                            "id": t.resource.id,
+                        },
+                        "relation": t.relation,
+                        "subject": subject_dict,
+                    },
+                }
             )
-        )
-    )
+        return result
 
-    test.assertEqual(
-        expected_permissions,
-        tuple_permissions,
-        f"Database and relations permissions do not match for role {role.uuid}",
-    )
+    return read_tuples_fn
 
 
-def _assert_binding_tuples_consistent(test: TestCase, tuples: InMemoryTuples, binding: RoleBinding):
-    resource_predicate = resource("rbac", "role_binding", str(binding.uuid))
+def bootstrap_tenant_for_v2_test(tenant: Tenant, tuples: Optional[InMemoryTuples] = None) -> BootstrappedTenant:
+    """
+    Bootstrap a tenant for V2 testing.
 
-    role_tuples = tuples.find_tuples(
-        all_of(
-            resource_predicate,
-            relation("role"),
-            subject_type("rbac", "role"),
-        )
-    )
+    Relation writes are sent to tuples, if provided, and are otherwise discarded.
+    """
+    # Ensure isolation between tests.
+    GlobalPolicyIdService.clear_shared()
 
-    test.assertEqual(1, len(role_tuples))
-    test.assertEqual(str(binding.role.uuid), role_tuples.only.subject_id)
-
-    resource_tuples = tuples.find_tuples(
-        all_of(
-            relation("binding"),
-            subject(
-                "rbac",
-                "role_binding",
-                str(binding.uuid),
-            ),
-        )
-    )
-
-    test.assertEqual(1, len(resource_tuples))
-    test.assertEqual(binding.resource_type, resource_tuples.only.resource_type_name)
-    test.assertEqual(binding.resource_id, resource_tuples.only.resource_id)
-
-    db_groups = set(str(g.uuid) for g in binding.bound_groups())
-
-    tuple_groups = set(
-        t.subject_id
-        for t in tuples.find_tuples(
-            all_of(
-                resource_predicate,
-                relation("subject"),
-                subject_type("rbac", "group", "member"),
-            )
-        )
-    )
-
-    test.assertEqual(
-        db_groups,
-        tuple_groups,
-        f"Database and relations groups do not match for role binding {binding.uuid} "
-        f"for role ({binding.role.uuid})",
-    )
+    replicator = InMemoryRelationReplicator(tuples) if tuples is not None else NoopReplicator()
+    return V2TenantBootstrapService(replicator=replicator).bootstrap_tenant(tenant, force=True)
 
 
-def _assert_binding_mapping_consistent(test: TestCase, binding: RoleBinding, mapping: BindingMapping):
-    test.assertEqual(str(binding.uuid), mapping.mappings["id"])
-    test.assertEqual(binding.role.v1_source, mapping.role)
-    test.assertEqual(binding.resource_type, mapping.resource_type_name)
-    test.assertEqual(binding.resource_id, mapping.resource_id)
-    test.assertEqual(str(binding.role.uuid), mapping.mappings["role"]["id"])
+class WorkspaceCacheReplicator(RelationReplicator):
+    _base_replicator: RelationReplicator
+    _workspace_events: dict[WorkspaceEventStream, list[WorkspaceEvent]]
 
-    v1_groups = set(mapping.mappings["groups"])
-    v2_groups = set(str(g.uuid) for g in binding.bound_groups())
+    def __init__(self, base_replicator: RelationReplicator):
+        self._base_replicator = base_replicator
+        self._workspace_events = {}
 
-    test.assertEqual(v1_groups, v2_groups)
+    def replicate(self, event: ReplicationEvent):
+        return self._base_replicator.replicate(event)
 
-    # Principals cannot currently be represented in RoleBindings (and shouldn't exist for custom groups anyway).
-    test.assertEqual(0, len(mapping.mappings["users"]))
+    def replicate_workspace(self, event: WorkspaceEvent, event_stream: WorkspaceEventStream):
+        self._workspace_events.setdefault(event_stream, []).append(event)
+        return self._base_replicator.replicate_workspace(event, event_stream)
 
+    def workspace_events_for(self, stream: WorkspaceEventStream) -> list[WorkspaceEvent]:
+        return self._workspace_events.get(stream, [])
 
-def _assert_v2_names(test: TestCase, v1_role: Role):
-    v2_roles = list(CustomRoleV2.objects.filter(v1_source=v1_role))
-
-    test.assertCountEqual(
-        [r.name for r in v2_roles],
-        [f"{v1_role.display_name} ({i + 1})" for i in range(len(v2_roles))],
-        "Expected V2 role names to be based on V1 role's display name and numbered sequentially",
-    )
-
-
-def _assert_no_phantom_roles(test: TestCase, tuples: InMemoryTuples):
-    """Check that there are no roles referenced in tuples that do not exist in the database."""
-    for v2_role_uuid in {
-        *(t.resource_id for t in tuples.find_tuples(resource_type("rbac", "role"))),
-        *(t.subject_id for t in tuples.find_tuples(subject_type("rbac", "role"))),
-    }:
-        if Role.objects.filter(system=True, uuid=v2_role_uuid).exists():
-            # We are not interested in system roles here.
-            continue
-
-        v2_role = CustomRoleV2.objects.filter(uuid=v2_role_uuid).first()
-        test.assertIsNotNone(v2_role, f"V2 Role with UUID {v2_role_uuid} exists in tuples but not in the database.")
-
-
-def assert_v2_custom_roles_consistent(test: TestCase, tuples: Optional[InMemoryTuples]):
-    binding_mappings_by_uuid = {
-        str(m.mappings["id"]): m for m in BindingMapping.objects.filter(role__system=False).prefetch_related("role")
-    }
-
-    role_bindings_by_uuid = {str(b.uuid): b for b in RoleBinding.objects.filter(role__type=RoleV2.Types.CUSTOM)}
-
-    # We should have the same UUIDs for both BindingMappings and RoleBindings.
-    test.assertCountEqual(role_bindings_by_uuid.keys(), binding_mappings_by_uuid.keys())
-
-    for role in Role.objects.filter(system=False):
-        _assert_v2_names(test, role)
-
-    for role in CustomRoleV2.objects.all():
-        test.assertIsNotNone(role.v1_source, "All custom roles created through dual-write should have a v1_source.")
-
-        _assert_role_mappings_consistent(
-            test,
-            role,
-            [m for m in binding_mappings_by_uuid.values() if m.mappings["role"]["id"] == str(role.uuid)],
-        )
-
-        if tuples is not None:
-            _assert_role_tuples_consistent(test, tuples, role)
-
-    for binding_uuid, binding in role_bindings_by_uuid.items():
-        _assert_binding_mapping_consistent(test, binding, binding_mappings_by_uuid[binding_uuid])
-
-        if tuples is not None:
-            _assert_binding_tuples_consistent(test, tuples, binding)
-
-    if tuples is not None:
-        _assert_no_phantom_roles(test, tuples)
+    def clear_events(self):
+        self._workspace_events = {}

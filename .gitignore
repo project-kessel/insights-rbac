@@ -132,7 +132,6 @@ docs/source/specs/output-dir/
 
 # dev for ephemeral
 dev/*
-/scripts/ephemeral/config.yaml
 docs/source/specs/typespec/node_modules/
 docs/source/specs/typespec/tsp-output/
 
@@ -142,5 +141,14 @@ rbac/management/principal/umb_certs/
 # ai
 .claude
 
+# git worktrees
+.worktrees/
+
+# direnv
+.envrc
+
 # Sphinx documentation build output
 _build/
+
+# Skill configuration (contains URLs and proxy settings)
+.cursor/skills/config.env

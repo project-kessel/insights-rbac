@@ -16,25 +16,36 @@
 #
 """Service for workspace management."""
 
+import itertools
 import logging
-import select
-import time
 import uuid
-from collections import deque
 from itertools import groupby
+from typing import Optional
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import transaction
 from django.db.models import Q
 from feature_flags import FEATURE_FLAGS
-from internal.utils import get_workspace_ids_from_resource_definition, is_resource_a_workspace
+from internal.pg_notify_wait import wait_for_pg_notify
+from internal.utils import get_workspace_ids_from_resource_definition
+from management.atomic_transactions import atomic
 from management.models import ResourceDefinition, Role, Workspace
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.relation_replicator.relation_replicator import (
+    PartitionKey,
+    RelationReplicator,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.role.model import BindingMapping
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.role_binding.model import RoleBinding
+from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
+from management.v2_filters import v2_name_filter
 from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
+from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
-from psycopg2 import sql
 from rest_framework import serializers
 
 from api.models import Tenant
@@ -78,11 +89,7 @@ def _record_ryw_metrics(duration: float, result: str) -> None:
     ryw_wait_total.labels(result=result).inc()
 
 
-LISTEN_SQL = sql.SQL("LISTEN {};").format(sql.Identifier(READ_YOUR_WRITES_CHANNEL))
-UNLISTEN_SQL = sql.SQL("UNLISTEN {};").format(sql.Identifier(READ_YOUR_WRITES_CHANNEL))
-
-
-def update_roles_for_removed_workspace(workspace_id: uuid.UUID) -> int:
+def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicator: RelationReplicator) -> int:
     """
     Update roles that reference a removed workspace and replicate the changes.
 
@@ -117,13 +124,7 @@ def update_roles_for_removed_workspace(workspace_id: uuid.UUID) -> int:
             ),
             attributeFilter__key=workspace_filter_key,
         )
-        .values(
-            "id",
-            "access__role_id",
-            "access__permission__permission",
-            "access__permission__application",
-            "access__permission__resource_type",
-        )
+        .values("id", "access__role_id")
         .order_by("access__role_id")
     )
 
@@ -144,7 +145,31 @@ def update_roles_for_removed_workspace(workspace_id: uuid.UUID) -> int:
                 logger.warning(f"Role vanished before it could be updated: pk={role_id!r}")
                 continue
 
-            dual_write = RelationApiDualWriteHandler(role, ReplicationEventType.FIX_RESOURCE_DEFINITIONS)
+            tenant_version = lock_tenant_version(role.tenant)
+
+            if tenant_version != TenantVersion.VERSION_1:
+                logger.info(
+                    f"Not updating role (pk={role.pk!r}) that is not in a V1 tenant; "
+                    f"only removing orphan BindingMappings."
+                )
+
+                # BindingMappings are no longer authoritative in a non-V1 tenant, so we don't need to handle any
+                # relations updates. We delete them here only to ensure that we have a clean slate later (since we
+                # want to make strong assertions about what BindingMappings exist in
+                # _remove_workspace_direct_role_bindings).
+                BindingMapping.objects.filter(
+                    resource_type_namespace="rbac",
+                    resource_type_name="workspace",
+                    resource_id=workspace_id_str,
+                    role=role,
+                ).delete()
+
+                continue
+
+            dual_write = RelationApiDualWriteHandler(
+                role, ReplicationEventType.FIX_RESOURCE_DEFINITIONS, replicator=replicator
+            )
+
             dual_write.prepare_for_update()  # Capture current bindings
 
             # Lock the ResourceDefinitions to prevent concurrent modifications
@@ -155,13 +180,8 @@ def update_roles_for_removed_workspace(workspace_id: uuid.UUID) -> int:
             rds_to_update = []
 
             for rd in locked_rds:
-                # Use metadata from initial query to avoid traversing FKs (access.permission)
-                meta = rds_metadata[rd.id]
-                app_name = meta["access__permission__application"]
-                res_type = meta["access__permission__resource_type"]
-
-                # Double-check is_resource_a_workspace
-                if not is_resource_a_workspace(app_name, res_type, rd.attributeFilter):
+                # Double-check that this resource definition is for workspaces.
+                if attribute_key_to_v2_related_resource_type(rd.attributeFilter["key"]) != ("rbac", "workspace"):
                     continue
 
                 # Get workspace IDs from resource definition
@@ -241,71 +261,177 @@ def update_roles_for_removed_workspace(workspace_id: uuid.UUID) -> int:
     return roles_updated
 
 
+# This must be SERIALIZABLE because we are potentially interacting with RoleBindings in V2 tenants.
+@atomic
+def _remove_workspace_direct_role_bindings(workspace: Workspace, replicator: RelationReplicator) -> int:
+    """
+    Delete role bindings bound a workspace about to be deleted.
+
+    It is assumed that all role bindings bound to custom roles have already been removed.
+    """
+    tenant_version = lock_tenant_version(workspace.tenant)
+
+    if tenant_version not in (TenantVersion.VERSION_1, TenantVersion.VERSION_2):
+        raise RuntimeError(f"Unexpected tenant version: {tenant_version!r}")
+
+    binding_mappings = list(
+        BindingMapping.objects.filter(
+            resource_type_namespace="rbac",
+            resource_type_name="workspace",
+            resource_id=str(workspace.id),
+        )
+    )
+
+    # There shouldn't have been any BindingMappings bound to a system role and a standard workspace created while the
+    # tenant was V1. (System roles won't have any relevant resource definitions naming the workspace, and their scope
+    # will always put them in the default workspace, root workspace, or the tenant in V1.)
+    #
+    # If the tenant has been converted to V2, no additional BindingMappings will have been created since that time.
+    #
+    # Since we have already removed all BindingMappings that came from custom roles in
+    # _update_custom_roles_for_removed_workspace (including any from V1 custom roles left over in a V2 tenant!),
+    # there shouldn't be any remaining here.
+    if len(binding_mappings) > 0:
+        raise AssertionError(
+            f"A standard workspace should not have any remaining BindingMappings "
+            f"(after removing any from custom roles), but found "
+            f"BindingMappings with pks={[bm.pk for bm in binding_mappings]}"
+        )
+
+    role_bindings = list(
+        RoleBinding.objects.filter(
+            resource_type="workspace",
+            resource_id=str(workspace.id),
+        )
+        .select_related("role")
+        .prefetch_related("group_entries", "principal_entries")
+        .select_for_update(of=["self"])
+    )
+
+    # In a V1 tenant, there shouldn't be any RoleBindings remaining for a standard workspace for the same reasons
+    # as BindingMappings above. (BindingMappings and RoleBindings should always be in sync in a V1 tenant.)
+    #
+    # In a V2 tenant, we can have RoleBindings that were either directly created in the workspace or that were
+    # created for a V1 custom role and not torn down in _update_custom_roles_for_removed_workspace (since that just
+    # removes to-be-orphaned BindingMappings in V2 tenants, which aren't authoritative anyway). In either case,
+    # we need to actually handle those RoleBindings (including by updating relations).
+
+    if tenant_version == TenantVersion.VERSION_1:
+        if len(role_bindings) > 0:
+            raise AssertionError(
+                f"A standard workspace should not have any remaining RoleBindings "
+                f"(after removing any from custom roles), but found "
+                f"RoleBindings with pks={[rb.pk for rb in role_bindings]}"
+            )
+
+        return 0
+
+    for batch in itertools.batched(itertools.chain.from_iterable(rb.all_tuples() for rb in role_bindings), 1000):
+        replicator.replicate(
+            ReplicationEvent(
+                event_type=ReplicationEventType.DELETE_WORKSPACE,
+                partition_key=PartitionKey.byEnvironment(),
+                remove=list(batch),
+                info={"org_id": workspace.tenant.org_id, "workspace_id": str(workspace.id)},
+            )
+        )
+
+    if len(role_bindings) > 0:
+        RoleBinding.objects.filter(pk__in=(rb.pk for rb in role_bindings)).delete()
+
+    return len(role_bindings)
+
+
 class WorkspaceService:
     """Workspace service."""
 
+    _replicator: RelationReplicator
+
+    def __init__(self, replicator: Optional[RelationReplicator] = None):
+        """Create a WorkspaceService that uses the provided replicator (defaulting to OutboxReplicator)."""
+        if replicator is None:
+            replicator = OutboxReplicator()
+
+        self._replicator = replicator
+
+    def list(self, queryset, params: dict):
+        """Apply parameter-based filters to a pre-filtered workspace queryset."""
+        ids = params.get("ids")
+        type_filter = params.get("type")
+        name = params.get("name")
+        parent_id = params.get("parent_id")
+
+        if ids:
+            queryset = queryset.filter(id__in=ids)
+        if type_filter:
+            queryset = queryset.filter(type__in=type_filter)
+        if name:
+            queryset = v2_name_filter(queryset, name)
+        if parent_id:
+            queryset = queryset.filter(parent_id=parent_id)
+        return queryset
+
+    def _dual_write_handler(
+        self, workspace: Workspace, event_type: ReplicationEventType
+    ) -> RelationApiDualWriteWorkspaceHandler:
+        return RelationApiDualWriteWorkspaceHandler(
+            workspace=workspace, event_type=event_type, replicator=self._replicator
+        )
+
+    @atomic
     def create(self, validated_data: dict, request_tenant: Tenant) -> Workspace:
         """Create workspace."""
-        with transaction.atomic():
-            try:
-                parent_id = validated_data.get("parent_id")
-                if parent_id is None:
-                    default = Workspace.objects.default(tenant=request_tenant)
-                    parent_id = default.id
-                parent = Workspace.objects.get(id=parent_id)
-                self._enforce_hierarchy_depth(parent_id, request_tenant)
-                if self._check_total_workspace_count_exceeded(request_tenant):
-                    # If two transactions to create workspaces happen at the same time
-                    # both will get the okay to add the workspace
-                    # which could lead to the case where there is an extra workspace over the allowed limit
-                    # locking will have a scalability impact so better not to catch this condition
-                    raise serializers.ValidationError(
-                        "The total number of workspaces allowed for this organisation has been exceeded."
-                    )
-
-                workspace = Workspace.objects.create(**validated_data, tenant=parent.tenant)
-                dual_write_handler = RelationApiDualWriteWorkspaceHandler(
-                    workspace, ReplicationEventType.CREATE_WORKSPACE
+        try:
+            parent_id = validated_data.get("parent_id")
+            if parent_id is None:
+                default = Workspace.objects.default(tenant=request_tenant)
+                parent_id = default.id
+            parent = Workspace.objects.get(id=parent_id)
+            self._enforce_hierarchy_depth(parent_id, request_tenant)
+            exceeded, workspace_count, max_limit = self._check_total_workspace_count_exceeded(request_tenant)
+            if exceeded:
+                raise serializers.ValidationError(
+                    f"Workspace limit reached ({workspace_count}/{max_limit}); please free up capacity"
+                    " by deleting empty workspaces or consolidating those with similar users and role bindings."
                 )
-                dual_write_handler.replicate_new_workspace()
 
-                # After the outbox message is created & committed, LISTEN for a NOTIFY
+            workspace = Workspace.objects.create(**validated_data, tenant=parent.tenant)
+            dual_write_handler = self._dual_write_handler(workspace, ReplicationEventType.CREATE_WORKSPACE)
+            dual_write_handler.replicate_new_workspace()
 
-                if FEATURE_FLAGS.is_read_your_writes_workspace_enabled() and settings.REPLICATION_TO_RELATION_ENABLED:
-                    transaction.on_commit(lambda: self._wait_for_notify_post_commit(workspace.id))
+            # After the outbox message is created & committed, LISTEN for a NOTIFY
 
-                return workspace
-            except ValidationError as e:
-                message = e.message_dict
-                if hasattr(e, "error_dict") and "__all__" in e.error_dict:
-                    for error in e.error_dict["__all__"]:
-                        for msg in error.messages:
-                            if "unique_workspace_name_per_parent" in msg:
-                                message = "Can't create workspace with same name within same parent workspace"
-                                break
-                raise serializers.ValidationError(message)
+            if FEATURE_FLAGS.is_read_your_writes_workspace_enabled() and settings.REPLICATION_TO_RELATION_ENABLED:
+                transaction.on_commit(lambda: self._wait_for_notify_post_commit(workspace.id))
+
+            return workspace
+        except ValidationError as e:
+            message = e.message_dict
+            if hasattr(e, "error_dict") and "__all__" in e.error_dict:
+                for error in e.error_dict["__all__"]:
+                    for msg in error.messages:
+                        if "unique_workspace_name_per_parent" in msg:
+                            message = "Can't create workspace with same name within same parent workspace"
+                            break
+            raise serializers.ValidationError(message)
 
     def update(self, instance: Workspace, validated_data: dict) -> Workspace:
         """Update workspace."""
         if instance.type in (Workspace.Types.ROOT, Workspace.Types.UNGROUPED_HOSTS):
             raise serializers.ValidationError(f"The {instance.type} workspace cannot be updated.")
-        parent_id = None
         for attr, value in validated_data.items():
-            if attr == "parent_id":
-                parent_id = value
             if self._parent_id_attr_update(attr, value, instance):
                 raise serializers.ValidationError("Can't update the 'parent_id' on a workspace directly")
             setattr(instance, attr, value)
-        if parent_id is not None:
-            self._enforce_hierarchy_depth(parent_id, instance.tenant)
 
-        # Skip Workspace Events for DEFAULT workspaces
-        skip_ws_events = instance.type == Workspace.Types.DEFAULT
+        # Previously, we didn't replicate the creation of default workspaces, so we have to create them before
+        # updating them.
+        force_create = instance.type == Workspace.Types.DEFAULT
 
         try:
             instance.save()
-            dual_write_handler = RelationApiDualWriteWorkspaceHandler(instance, ReplicationEventType.UPDATE_WORKSPACE)
-            dual_write_handler.replicate_updated_workspace(instance.parent, skip_ws_events)
+            dual_write_handler = self._dual_write_handler(instance, ReplicationEventType.UPDATE_WORKSPACE)
+            dual_write_handler.replicate_updated_workspace(instance.parent, force_create=force_create)
         except ValidationError as e:
             message = e.message_dict
             if hasattr(e, "error_dict") and "__all__" in e.error_dict:
@@ -318,25 +444,28 @@ class WorkspaceService:
             raise serializers.ValidationError(message)
         return instance
 
+    @atomic
     def destroy(self, instance: Workspace) -> None:
         """Destroy workspace."""
+        # Lock the workspace to prevent concurrent modifications or referencing
+        # by new/updated roles during deletion
+        instance = Workspace.objects.select_for_update().get(pk=instance.pk)
+
         if instance.type != Workspace.Types.STANDARD:
             raise serializers.ValidationError(f"Unable to delete {instance.type} workspace")
         if Workspace.objects.filter(parent=instance, tenant=instance.tenant).exists():
             raise serializers.ValidationError("Unable to delete due to workspace dependencies")
 
-        with transaction.atomic():
-            # Lock the workspace to prevent concurrent modifications or referencing
-            # by new/updated roles during deletion
-            Workspace.objects.select_for_update().get(pk=instance.pk)
+        # Update roles that reference this workspace before deleting it
+        roles_updated_count = _update_custom_roles_for_removed_workspace(instance.id, replicator=self._replicator)
+        logger.info(f"Updated {roles_updated_count} custom roles for workspace {instance.id} removal")
 
-            # Update roles that reference this workspace before deleting it
-            role_update_results = update_roles_for_removed_workspace(instance.id)
-            logger.info(f"Updated {role_update_results} roles for workspace {instance.id} removal")
+        system_bindings_removed_count = _remove_workspace_direct_role_bindings(instance, replicator=self._replicator)
+        logger.info(f"Removed {system_bindings_removed_count} system roles for workspace {instance.id} removal")
 
-            dual_write_handler = RelationApiDualWriteWorkspaceHandler(instance, ReplicationEventType.DELETE_WORKSPACE)
-            dual_write_handler.replicate_deleted_workspace()
-            instance.delete()
+        dual_write_handler = self._dual_write_handler(instance, ReplicationEventType.DELETE_WORKSPACE)
+        dual_write_handler.replicate_deleted_workspace()
+        instance.delete()
 
     def move(self, instance: Workspace, target_workspace_id: uuid.UUID) -> Workspace:
         """Move a workspace under new parent."""
@@ -349,7 +478,7 @@ class WorkspaceService:
         previous_parent_workspace = instance.parent
         instance.parent = target_workspace
         instance.save(update_fields=["parent"])
-        dual_write_handler = RelationApiDualWriteWorkspaceHandler(instance, ReplicationEventType.MOVE_WORKSPACE)
+        dual_write_handler = self._dual_write_handler(instance, ReplicationEventType.MOVE_WORKSPACE)
         dual_write_handler.replicate_updated_workspace(previous_parent_workspace, skip_ws_events=True)
         return instance
 
@@ -381,15 +510,15 @@ class WorkspaceService:
         max_depth_for_workspace = len(target_parent_workspace.ancestors()) + 1
         return max_depth_for_workspace > settings.WORKSPACE_HIERARCHY_DEPTH_LIMIT
 
-    def _check_total_workspace_count_exceeded(self, tenant: Tenant) -> bool:
+    def _check_total_workspace_count_exceeded(self, tenant: Tenant) -> tuple[bool, int, int]:
         """Check if the current org has exceeded the allowed amount of workspaces.
 
-        Returns True if total number of workspaces is exceeded.
+        Returns (exceeded, current_count, max_limit).
         """
         max_limit = settings.WORKSPACE_ORG_CREATION_LIMIT
 
         workspace_count = Workspace.objects.filter(tenant=tenant, type="standard").count()
-        return workspace_count >= max_limit
+        return workspace_count >= max_limit, workspace_count, max_limit
 
     @staticmethod
     def _enforce_hierarchy_depth_for_descendants(new_parent_id: uuid.UUID, instance: Workspace) -> None:
@@ -422,91 +551,31 @@ class WorkspaceService:
 
         Intended for use as a transaction.on_commit callback.
         """
+        timeout_seconds = settings.READ_YOUR_WRITES_TIMEOUT_SECONDS
+
+        if timeout_seconds is None or timeout_seconds <= 0:
+            logger.debug(
+                "[Service] RYW skipped waiting due to non-positive timeout for channel='%s' workspace_id='%s'",
+                READ_YOUR_WRITES_CHANNEL,
+                str(workspace_id),
+            )
+            return
+
         try:
-            connection.ensure_connection()
-            conn = connection.connection
-            timeout_seconds = settings.READ_YOUR_WRITES_TIMEOUT_SECONDS
-
-            # Early exit if misconfigured
-            if timeout_seconds is None or timeout_seconds <= 0:
-                logger.debug(
-                    "[Service] RYW skipped waiting due to non-positive timeout for channel='%s' workspace_id='%s'",
-                    READ_YOUR_WRITES_CHANNEL,
-                    str(workspace_id),
-                )
-                return
-
-            with connection.cursor() as cursor:
-                cursor.execute(LISTEN_SQL)
-
-            logger.info(
-                "[Service] RYW waiting for NOTIFY channel='%s' workspace_id='%s' timeout=%ss",
-                READ_YOUR_WRITES_CHANNEL,
-                str(workspace_id),
-                timeout_seconds,
+            wait_for_pg_notify(
+                channel=READ_YOUR_WRITES_CHANNEL,
+                expected_payload=str(workspace_id),
+                timeout_seconds=float(timeout_seconds),
+                log_label="[Service] RYW",
+                on_success=lambda d: _record_ryw_metrics(d, "success"),
+                on_timeout=lambda d: _record_ryw_metrics(d, "timeout"),
+                timeout_error_message=(
+                    f"Read-your-writes consistency check timed out after {timeout_seconds}s "
+                    f"for workspace {workspace_id}"
+                ),
             )
-
-            # Use monotonic clock and a strict deadline to avoid overshooting
-            started = time.monotonic()
-            deadline = started + float(timeout_seconds)
-            workspace_id_str = str(workspace_id)
-
-            # Clear any stale notifications from before LISTEN was issued
-            try:
-                conn.poll()  # bring any pending into conn.notifies
-                if getattr(conn, "notifies", None):
-                    conn.notifies.clear()
-            except Exception:
-                logger.debug("Failed to clear stale notifications before LISTEN, continuing anyway")
-
-            fd = conn.fileno() if hasattr(conn, "fileno") else conn
-
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-
-                readable, _, _ = select.select([fd], [], [], min(1.0, remaining))
-                if not readable:
-                    continue
-
-                conn.poll()
-                notifies = getattr(conn, "notifies", None)
-                if notifies:
-                    q = deque(notifies)
-                    notifies.clear()
-                    while q:
-                        n = q.popleft()
-                        payload = (getattr(n, "payload", "") or "").strip()
-                        if n.channel == READ_YOUR_WRITES_CHANNEL and payload == workspace_id_str:
-                            duration = time.monotonic() - started
-                            logger.info(
-                                "[Service] RYW received NOTIFY channel='%s' workspace_id='%s' after %.3fs",
-                                n.channel,
-                                payload,
-                                duration,
-                            )
-                            _record_ryw_metrics(duration, "success")
-                            return
-
-            duration = time.monotonic() - started
-            logger.error(
-                "[Service] RYW timed out waiting for NOTIFY channel='%s' workspace_id='%s' after %ss",
-                READ_YOUR_WRITES_CHANNEL,
-                str(workspace_id),
-                timeout_seconds,
-            )
-            _record_ryw_metrics(duration, "timeout")
-            raise TimeoutError(
-                f"Read-your-writes consistency check timed out after {timeout_seconds}s for workspace {workspace_id}"
-            )
+        except TimeoutError:
+            raise
         except Exception:
             logger.exception("Error while waiting for NOTIFY after workspace create")
             raise
-        finally:
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute(UNLISTEN_SQL)
-            except Exception:
-                # Best-effort cleanup
-                pass

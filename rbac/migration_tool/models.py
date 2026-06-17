@@ -15,11 +15,12 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import uuid
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
 
-from kessel.relations.v1beta1.common_pb2 import Relationship
 from management.principal.model import Principal
+from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple
 from management.workspace.model import Workspace
 from migration_tool.utils import create_relationship
 
@@ -64,6 +65,31 @@ class V2boundresource:
     resource_type: Tuple[str, str]
     resource_id: str
 
+    def __post_init__(self):
+        """Check that the object's state is valid."""
+        if not isinstance(self.resource_type, tuple):
+            raise TypeError(f"resource_type must be a tuple, but got: {self.resource_type!r}")
+
+        if len(self.resource_type) != 2:
+            raise ValueError(f"resource_type should have length two, but got: {self.resource_type!r}")
+
+        # TODO: eventually migrate uses of V2boundreference to ObjectReference.
+        # For now, we just ensure that any V2boundresource values are compatible with it.
+        try:
+            ObjectReference(
+                ObjectType(namespace=self.resource_type[0], name=self.resource_type[1]), id=self.resource_id
+            )
+        except Exception as e:
+            raise Exception("Error while checking compatibility with ObjectReference") from e
+
+    @classmethod
+    def for_workspace_id(cls, workspace_id: str | uuid.UUID) -> "V2boundresource":
+        """Return a V2boundresource corresponding to the provided workspace ID."""
+        if not (isinstance(workspace_id, str) or isinstance(workspace_id, uuid.UUID)):
+            raise TypeError(f"Expected workspace_id to be a string or UUID, but got: {workspace_id!r}")
+
+        return V2boundresource(("rbac", "workspace"), str(workspace_id))
+
     @classmethod
     def try_for_model(cls, model: Workspace | Tenant) -> Optional["V2boundresource"]:
         """
@@ -72,7 +98,7 @@ class V2boundresource:
         This will return None if no such resource can be computed (e.g. for a Tenant without an org_id).
         """
         if isinstance(model, Workspace):
-            return V2boundresource(("rbac", "workspace"), str(model.id))
+            return V2boundresource.for_workspace_id(model.id)
 
         if isinstance(model, Tenant):
             resource_id = model.tenant_resource_id()
@@ -168,18 +194,21 @@ class V2rolebinding:
 
     def as_tuples(self):
         """Create tuples from V2rolebinding model."""
-        tuples: list[Relationship] = list()
+        tuples: list[RelationTuple] = list()
 
         tuples.append(create_relationship(("rbac", "role_binding"), self.id, ("rbac", "role"), self.role.id, "role"))
 
         for perm in self.role.permissions:
-            tuples.append(create_relationship(("rbac", "role"), self.role.id, ("rbac", "principal"), "*", perm))
+            tuples.append(role_permission_tuple(role_id=self.role.id, permission=perm))
+
+        # We cannot duplicate relationships within a single batch, so we ensure that each subject relationship is
+        # added only once.
 
         for group in set(self.groups):
             # These might be duplicate but it is OK, spiceDB will handle duplication through touch
             tuples.append(role_binding_group_subject_tuple(self.id, group))
 
-        for user in self.users.values():
+        for user in set(self.users.values()):
             tuples.append(role_binding_user_subject_tuple(self.id, user))
 
         tuples.append(
@@ -195,7 +224,7 @@ class V2rolebinding:
         return tuples
 
 
-def role_binding_group_subject_tuple(role_binding_id: str, group_uuid: str) -> Relationship:
+def role_binding_group_subject_tuple(role_binding_id: str, group_uuid: str) -> RelationTuple:
     """Create a relationship tuple for a role binding and a group."""
     return create_relationship(
         ("rbac", "role_binding"),
@@ -207,7 +236,7 @@ def role_binding_group_subject_tuple(role_binding_id: str, group_uuid: str) -> R
     )
 
 
-def role_binding_user_subject_tuple(role_binding_id: str, user_id: str) -> Relationship:
+def role_binding_user_subject_tuple(role_binding_id: str, user_id: str) -> RelationTuple:
     """Create a relationship tuple for a role binding and a user."""
     id = Principal.user_id_to_principal_resource_id(user_id)
     return create_relationship(
@@ -216,6 +245,17 @@ def role_binding_user_subject_tuple(role_binding_id: str, user_id: str) -> Relat
         ("rbac", "principal"),
         id,
         "subject",
+    )
+
+
+def role_permission_tuple(role_id: str, permission: str) -> RelationTuple:
+    """Create a relationship tuple for a role having a given permission."""
+    return create_relationship(
+        ("rbac", "role"),
+        role_id,
+        ("rbac", "principal"),
+        "*",
+        permission,
     )
 
 

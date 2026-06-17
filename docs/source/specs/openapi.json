@@ -61,13 +61,79 @@
           },
           {
             "in": "query",
-            "name": "order_by",
+            "name": "principal_username",
             "required": false,
-            "description": "Parameter for ordering resource by database id so that latest actions appear first",
+            "description": "Parameter for filtering audit logs by principal username. Supports partial and exact matching via name_match parameter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_type",
+            "required": false,
+            "description": "Parameter for filtering audit logs by resource type. Multiple values can be provided.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "group",
+                  "role",
+                  "user",
+                  "permission"
+                ]
+              }
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "description": "Parameter for filtering audit logs by action. Multiple values can be provided.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "delete",
+                  "add",
+                  "edit",
+                  "create",
+                  "remove"
+                ]
+              }
+            }
+          },
+          {
+            "in": "query",
+            "name": "name_match",
+            "required": false,
+            "description": "Parameter for specifying the matching type for principal_username filter. Default is partial.",
             "schema": {
               "type": "string",
               "enum": [
-                "id"
+                "partial",
+                "exact"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "order_by",
+            "required": false,
+            "description": "Parameter for ordering audit logs. Prefix with '-' for descending order. Default is '-created'.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "-created",
+                "principal_username",
+                "-principal_username",
+                "resource_type",
+                "-resource_type",
+                "action",
+                "-action"
               ]
             }
           }
@@ -3646,10 +3712,6 @@
           "roles"
         ],
         "properties": {
-          "target_account": {
-            "type": "string",
-            "example": "12345"
-          },
           "target_org": {
             "type": "string",
             "example": "12345"
@@ -3791,10 +3853,6 @@
             "format": "uuid",
             "example": "2ad8cac5-336e-44c6-9b16-15ac84224d4b"
           },
-          "target_account": {
-            "type": "string",
-            "example": "12345"
-          },
           "target_org": {
             "type": "string",
             "example": "12345"
@@ -3824,10 +3882,6 @@
             "type": "string",
             "format": "uuid",
             "example": "2ad8cac5-336e-44c6-9b16-15ac84224d4b"
-          },
-          "target_account": {
-            "type": "string",
-            "example": "12345"
           },
           "target_org": {
             "type": "string",

@@ -17,16 +17,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import dataclasses
 import logging
+from collections.abc import Callable
 from typing import Any, Iterable, Optional, Tuple, Union
 
 import uuid_utils.compat as uuid
-from django.conf import settings
 from django.db.models import F
 from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
+from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
-from management.role.v2_model import CustomRoleV2, RoleBinding, RoleBindingGroup, RoleV2
+from management.role.v2_model import CustomRoleV2, RoleV2
+from management.role_binding.model import RoleBinding, RoleBindingGroup
 from migration_tool.ingest import add_element
 from migration_tool.models import (
     V2boundresource,
@@ -38,6 +40,36 @@ from migration_tool.models import (
 logger = logging.getLogger(__name__)
 
 _PermissionGroupings = dict[V2boundresource, set[Permission]]
+
+ScopeBoundResourceResolver = Callable[[Scope], V2boundresource]
+
+
+def constant_bound_resource(resource: V2boundresource) -> ScopeBoundResourceResolver:
+    """Return a resolver that always returns the same bound resource."""
+    return lambda _scope: resource
+
+
+def with_workspace_scope_inheritance(resource_map: dict[Scope, V2boundresource]) -> dict[Scope, V2boundresource]:
+    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT when needed.
+
+    Workspace bindings at ROOT cover the default workspace via parent inheritance,
+    so callers building a map from ``binding_scopes_for_role`` should apply this
+    before resolving per-permission scopes that may include DEFAULT.
+    """
+    result = dict(resource_map)
+    if Scope.ROOT in result and Scope.DEFAULT not in result:
+        result[Scope.DEFAULT] = result[Scope.ROOT]
+    return result
+
+
+def bound_resource_resolver_from_map(resource_map: dict[Scope, V2boundresource]) -> ScopeBoundResourceResolver:
+    """Return a resolver that maps scope to resource.
+
+    ``resource_map`` must contain an entry for every scope returned by
+    ``scope_for_permission`` for permissions being migrated. Use
+    ``with_workspace_scope_inheritance`` when building from binding scopes.
+    """
+    return lambda scope: resource_map[scope]
 
 
 def add_system_role(system_roles, role: V2role):
@@ -110,25 +142,32 @@ class MigrateCustomRoleResult:
 
 def v1_role_to_v2_bindings(
     v1_role: Role,
-    default_resource: V2boundresource,
+    resource_for_scope: ScopeBoundResourceResolver,
     existing_role_bindings: Iterable[BindingMapping],
     existing_v2_roles: Iterable[CustomRoleV2],
 ) -> MigrateCustomRoleResult:
-    """Convert a V1 role to a set of V2 role bindings."""
+    """Convert a V1 role to a set of V2 role bindings.
+
+    ``resource_for_scope`` maps each permission's implicit scope (from the scope
+    service) to the V2boundresource for permissions without explicit resource
+    definitions.
+    """
     from internal.utils import (
         get_or_create_ungrouped_workspace,
         get_workspace_ids_from_resource_definition,
-        is_resource_a_workspace,
     )
+
+    _scope_service = ImplicitResourceService.from_settings()
+
+    def _resolve_default(permission: Permission) -> V2boundresource:
+        scope = _scope_service.scope_for_permission(permission.permission)
+        return resource_for_scope(scope)
 
     perm_groupings: _PermissionGroupings = {}
 
     # Group V2 permissions by target resource
     for access in v1_role.access.all():
         permission: Permission = access.permission
-
-        if not is_for_enabled_app(permission):
-            continue
 
         default = True
         for resource_def in access.resourceDefinitions.all():
@@ -144,20 +183,30 @@ def v1_role_to_v2_bindings(
                     # Skip empty values
                     continue
 
-            # validate permission was not added to workspace out of users org for v1 (RHCLOUD-35481)
-            if is_resource_a_workspace(permission.application, permission.resource_type, attri_filter):
-                workspace_ids = get_workspace_ids_from_resource_definition(attri_filter)
-                if len(workspace_ids) >= 1:
-                    is_same_tenant = Workspace.objects.filter(id__in=workspace_ids, tenant=v1_role.tenant).exists()
-                    if not is_same_tenant:
-                        logger.info(f"""skipping migrating permission '{permission}' from v1 role '{v1_role.name}'
-                                -- it was added to workspace outside of users org""")
-                        continue
-
             resource_type = attribute_key_to_v2_related_resource_type(attri_filter["key"])
+
             if resource_type is None:
                 # Resource type not mapped to v2
                 continue
+
+            # validate permission was not added to workspace out of users org for v1 (RHCLOUD-35481)
+            if resource_type == ("rbac", "workspace"):
+                requested_workspace_ids = set(get_workspace_ids_from_resource_definition(attri_filter))
+
+                if len(requested_workspace_ids) > 0:
+                    actual_workspace_ids = set(
+                        w.id for w in Workspace.objects.filter(tenant=v1_role.tenant, id__in=requested_workspace_ids)
+                    )
+
+                    if requested_workspace_ids != actual_workspace_ids:
+                        logger.info(
+                            f"Skipping migrating permission '{permission}' from v1 role '{v1_role.name}'; "
+                            f"it was added to workspaces outside of users org: "
+                            f"{requested_workspace_ids - actual_workspace_ids}"
+                        )
+
+                        continue
+
             for resource_id in values_from_attribute_filter(attri_filter):
                 if resource_id is None:
                     if resource_type != ("rbac", "workspace"):
@@ -173,7 +222,7 @@ def v1_role_to_v2_bindings(
         if default:
             add_element(
                 perm_groupings,
-                default_resource,
+                _resolve_default(permission),
                 permission,
                 collection=set,
             )
@@ -252,6 +301,7 @@ def _get_or_create_binding(
         existing_mapping.update_mappings_from_role_binding(
             role_binding.as_migration_value(force_group_uuids=group_uuids)
         )
+        existing_mapping.v2_role = v2_role
 
         return existing_mapping, role_binding
     else:
@@ -266,6 +316,7 @@ def _get_or_create_binding(
         new_mapping = BindingMapping.for_role_binding(
             role_binding=role_binding.as_migration_value(force_group_uuids=group_uuids),
             v1_role=v1_role,
+            v2_role=v2_role,
         )
 
         return new_mapping, role_binding
@@ -291,6 +342,25 @@ def permission_groupings_to_v2_role_bindings(
 
     if not all(r.type == RoleV2.Types.CUSTOM for r in existing_v2_roles):
         raise ValueError(f"All provided V2 roles ({existing_v2_roles}) must be CUSTOM roles.")
+
+    requested_workspace_ids = set(
+        r.resource_id for r in perm_groupings.keys() if r.resource_type == ("rbac", "workspace")
+    )
+
+    if len(requested_workspace_ids) > 0:
+        # Ensure the workspaces we want exist and lock them to prevent them from being concurrently deleted.
+        locked_workspace_ids = set(
+            str(id)
+            for id in Workspace.objects.select_for_update()
+            .filter(tenant=v1_role.tenant, id__in=requested_workspace_ids)
+            .values_list("id", flat=True)
+        )
+
+        if requested_workspace_ids != locked_workspace_ids:
+            raise ValueError(
+                f"Could not migrate role referencing nonexistent workspaces: "
+                f"{requested_workspace_ids - locked_workspace_ids}"
+            )
 
     existing_mappings_by_resource = {mapping.get_role_binding().resource: mapping for mapping in existing_mappings}
 
@@ -351,11 +421,6 @@ def permission_groupings_to_v2_role_bindings(
         binding_mappings=tuple(latest_binding_mappings),
         role_bindings=tuple(latest_role_bindings),
     )
-
-
-def is_for_enabled_app(perm: Permission):
-    """Return true if the permission is for an app that should migrate."""
-    return perm.application not in settings.V2_MIGRATION_APP_EXCLUDE_LIST
 
 
 def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:

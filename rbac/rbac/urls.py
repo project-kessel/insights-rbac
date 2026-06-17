@@ -42,6 +42,10 @@ urlpatterns = [
     path("", include("django_prometheus.urls")),
 ]
 
+if settings.MCP_ENABLED:
+    urlpatterns.insert(2, path(settings.A2S_PATH_PREFIX.lstrip("/"), include(("management.mcp_urls", "mcp"))))
+
+
 if settings.V2_APIS_ENABLED:
     urlpatterns.extend(
         [

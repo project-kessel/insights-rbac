@@ -7,17 +7,18 @@ tags:
   - name: Role Bindings
   - name: Roles
 paths:
-  /role-bindings/by-subject/:
+  /role-bindings/:
     get:
-      operationId: RoleBindings_listBySubject
-      summary: List role bindings grouped by subject
-      description: List role bindings grouped by subject
+      operationId: RoleBindings_list
+      summary: List role bindings
+      description: List role bindings
       parameters:
         - name: limit
           in: query
           required: false
           schema:
-            $ref: '#/components/schemas/Limit'
+            allOf:
+              - $ref: '#/components/schemas/Limit'
             default: 10
           explode: false
         - name: cursor
@@ -27,26 +28,40 @@ paths:
           schema:
             $ref: '#/components/schemas/Cursor'
           explode: false
+        - name: role_id
+          in: query
+          required: false
+          description: Filter by role ID
+          schema:
+            type: string
+          explode: false
         - name: resource_id
           in: query
-          required: true
+          required: false
           description: Filter by resource ID
           schema:
             type: string
           explode: false
         - name: resource_type
           in: query
-          required: true
+          required: false
           description: Filter by resource type
+          schema:
+            type: string
+          explode: false
+        - name: resource.tenant.org_id
+          in: query
+          required: false
+          description: Org ID of the tenant resource to filter by. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.
           schema:
             type: string
           explode: false
         - name: subject_type
           in: query
           required: false
-          description: Filter by subject type
+          description: Filter by binding subject type (group or user) on each row. Distinct from granted_subject_type.
           schema:
-            type: string
+            $ref: '#/components/schemas/RoleBindings.BindingSubjectType'
           explode: false
         - name: subject_id
           in: query
@@ -55,29 +70,52 @@ paths:
           schema:
             type: string
           explode: false
-        - name: parent_role_bindings
+        - name: exclude_sources
           in: query
           required: false
-          description: Include role bindings inherited from parent resources
           schema:
-            type: boolean
-            default: false
+            allOf:
+              - $ref: '#/components/schemas/ExcludeSources'
+            default: none
+          explode: false
+        - name: granted_subject_type
+          in: query
+          required: false
+          description: Filter by the type of subject effectively granted access. When 'user', returns role bindings granted directly to the user and through their group memberships. When 'group', returns role bindings granted to the group. When 'principal', filters by external user ID via granted_subject.principal.user_id. Cannot be combined with subject_type/subject_id.
+          schema:
+            $ref: '#/components/schemas/RoleBindings.GrantedSubjectFilterType'
+          explode: false
+        - name: granted_subject_id
+          in: query
+          required: false
+          description: ID of the subject effectively granted access. Accepts a principal UUID or group UUID. Required when granted_subject_type is 'user' or 'group'.
+          schema:
+            type: string
+          explode: false
+        - name: granted_subject.principal.user_id
+          in: query
+          required: false
+          description: External user ID of the principal effectively granted access. Required when granted_subject_type is 'principal'.
+          schema:
+            type: string
           explode: false
         - name: fields
           in: query
           required: false
-          description: Control which fields are included in the response to optimize payload size and improve performance.
+          description: Control which fields are included in the response to optimize payload size.
           schema:
-            $ref: '#/components/schemas/FieldMask'
-            default: subject(group.name),role(name),resource(name,type),last_modified
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: resource(id),role(id),subject(id,type),sources(id)
           explode: false
         - name: order_by
           in: query
           required: false
-          description: Sort by specified field(s), prefix with '-' for descending order
+          description: Default sort is by the time the role was first created. Prefix with '-' for descending order.
           schema:
-            $ref: '#/components/schemas/OrderBy'
-            default: subject_name
+            allOf:
+              - $ref: '#/components/schemas/OrderBy'
+            default: role.id
           explode: false
       responses:
         '200':
@@ -98,58 +136,29 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/RoleBindings.RoleBindingBySubject'
-              examples:
-                example0:
-                  value:
-                    meta:
-                      limit: 10
-                    links:
-                      next: http://localhost:8000/api/rbac/v2/role-bindings/by-subject/?limit=10&parent_role_bindings=true&cursor=xyz
-                      previous: null
-                    data:
-                      - last_modified: '2024-08-04T12:00:00Z'
-                        subject:
-                          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-                          type: group
-                          group:
-                            name: Engineering Team
-                            description: Development and engineering team
-                            user_count: 25
-                        roles:
-                          - id: 550e8400-e29b-41d4-a716-446655440002
-                            name: Workspace Admin
-                        resource:
-                          id: 550e8400-e29b-41d4-a716-446655440003
-                          name: Child Workspace
-                          type: workspace
-                        inherited_from:
-                          id: 550e8400-e29b-41d4-a716-446655440001
-                          name: Parent Workspace
-                          type: workspace
-                example1:
-                  value:
-                    meta:
-                      limit: 10
-                    links:
-                      next: http://localhost:8000/api/rbac/v2/role-bindings/by-subject/?cursor=cD0yMDI1LTA4LTE1KzE0JTNBMDQlM0E0MS42ODM3NTIlMkIwMCUzQTAw
-                      previous: null
-                    data:
-                      - last_modified: '2024-08-04T12:00:00Z'
-                        subject:
-                          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-                          type: group
-                          group:
-                            name: Engineering Team
-                            description: Development and engineering team
-                            user_count: 25
-                        roles:
-                          - id: 550e8400-e29b-41d4-a716-446655440002
-                            name: Workspace Admin
-                        resource:
-                          id: 550e8400-e29b-41d4-a716-446655440001
-                          name: Engineering Workspace
-                          type: workspace
+                      $ref: '#/components/schemas/RoleBindings.RoleBinding'
+              example:
+                meta:
+                  limit: 10
+                links:
+                  next: http://localhost:8000/api/rbac/v2/role-bindings/?cursor=cD0yMDI1LTA4LTE1
+                  previous: null
+                data:
+                  - role:
+                      id: 550e8400-e29b-41d4-a716-446655440002
+                    subject:
+                      id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                      type: group
+                    resource:
+                      id: 550e8400-e29b-41d4-a716-446655440001
+                    sources:
+                      - id: 550e8400-e29b-41d4-a716-446655440001
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -198,6 +207,471 @@ paths:
                     format: uri
       tags:
         - Role Bindings
+  /role-bindings/by-subject/:
+    get:
+      operationId: RoleBindings_listBySubject
+      summary: List role bindings grouped by subject
+      description: List role bindings grouped by subject. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Limit'
+            default: 10
+          explode: false
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor for cursor-based pagination.
+          schema:
+            $ref: '#/components/schemas/Cursor'
+          explode: false
+        - name: resource_id
+          in: query
+          required: false
+          description: 'Filter by resource ID. For workspace: UUID. For tenant: tenant resource ID (format: {domain}/{org_id}). Required unless resource.tenant.org_id is provided.'
+          schema:
+            type: string
+          explode: false
+        - name: resource_type
+          in: query
+          required: false
+          description: Filter by resource type. Required unless resource.tenant.org_id is provided.
+          schema:
+            $ref: '#/components/schemas/ResourceType'
+          explode: false
+        - name: resource.tenant.org_id
+          in: query
+          required: false
+          description: Org ID of the tenant resource to filter by. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.
+          schema:
+            type: string
+          explode: false
+        - name: subject_type
+          in: query
+          required: false
+          description: 'Filter by binding subject kind: group or user (principal UUID). There is no granted_subject.* on this endpoint.'
+          schema:
+            $ref: '#/components/schemas/RoleBindings.BindingSubjectType'
+          explode: false
+        - name: subject_id
+          in: query
+          required: false
+          description: Filter by subject ID (group UUID or user/principal UUID)
+          schema:
+            type: string
+          explode: false
+        - name: exclude_sources
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ExcludeSources'
+            default: none
+          explode: false
+        - name: fields
+          in: query
+          required: false
+          description: Control which fields are included in the response to optimize payload size and improve performance.
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: subject(group.name),roles(name),resource(name,type),last_modified
+          explode: false
+        - name: order_by
+          in: query
+          required: false
+          description: Sort by specified field(s), prefix with '-' for descending order
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/OrderBy'
+            default: subject_name
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - meta
+                  - links
+                  - data
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/CursorPaginationMeta'
+                  links:
+                    $ref: '#/components/schemas/CursorPaginationLinks'
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RoleBindings.RoleBindingBySubject'
+              examples:
+                example0:
+                  value:
+                    meta:
+                      limit: 10
+                    links:
+                      next: http://localhost:8000/api/rbac/v2/role-bindings/by-subject/?limit=10&exclude_sources=direct&cursor=xyz
+                      previous: null
+                    data:
+                      - last_modified: '2024-08-04T12:00:00Z'
+                        subject:
+                          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                          type: group
+                          group:
+                            name: Engineering Team
+                            description: Development and engineering team
+                            user_count: 25
+                        roles:
+                          - id: 550e8400-e29b-41d4-a716-446655440002
+                            name: Workspace Admin
+                        resource:
+                          id: 550e8400-e29b-41d4-a716-446655440003
+                          name: Child Workspace
+                          type: workspace
+                        sources:
+                          - id: 550e8400-e29b-41d4-a716-446655440001
+                            name: Parent Workspace
+                            type: workspace
+                example1:
+                  value:
+                    meta:
+                      limit: 10
+                    links:
+                      next: http://localhost:8000/api/rbac/v2/role-bindings/by-subject/?cursor=cD0yMDI1LTA4LTE1KzE0JTNBMDQlM0E0MS42ODM3NTIlMkIwMCUzQTAw
+                      previous: null
+                    data:
+                      - last_modified: '2024-08-04T12:00:00Z'
+                        subject:
+                          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                          type: group
+                          group:
+                            name: Engineering Team
+                            description: Development and engineering team
+                            user_count: 25
+                        roles:
+                          - id: 550e8400-e29b-41d4-a716-446655440002
+                            name: Workspace Admin
+                        resource:
+                          id: 550e8400-e29b-41d4-a716-446655440001
+                          name: Engineering Workspace
+                          type: workspace
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 401
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 500
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+      tags:
+        - Role Bindings
+    put:
+      operationId: RoleBindings_update
+      summary: Update role bindings
+      description: Update roles for a specific subject on a resource. Replaces all existing roles with the provided roles. subject_type is user or group only (UUID via subject_id). granted_subject.* query params are not supported here; use GET /role-bindings/ to filter by external user ID.
+      parameters:
+        - name: resource_id
+          in: query
+          required: false
+          description: 'Identify the resource ID for the set of role bindings to replace. For workspace: UUID. For tenant: tenant resource ID (format: {domain}/{org_id}). Required unless resource.tenant.org_id is provided.'
+          schema:
+            type: string
+          explode: false
+        - name: resource_type
+          in: query
+          required: false
+          description: Identify the resource type for the set of role bindings to replace. Required unless resource.tenant.org_id is provided.
+          schema:
+            $ref: '#/components/schemas/ResourceType'
+          explode: false
+        - name: resource.tenant.org_id
+          in: query
+          required: false
+          description: Org ID of the tenant resource. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.
+          schema:
+            type: string
+          explode: false
+        - name: subject_id
+          in: query
+          required: true
+          description: Identify the subject ID for the set of role bindings to replace
+          schema:
+            type: string
+          explode: false
+        - name: subject_type
+          in: query
+          required: true
+          description: 'Subject kind: group or user (principal UUID). No granted_subject.* params on this path.'
+          schema:
+            $ref: '#/components/schemas/RoleBindings.BindingSubjectType'
+          explode: false
+        - name: fields
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: resource(id),subject(id,type),roles(id)
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindings.RoleBindingBySubject'
+              example:
+                subject:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  type: group
+                  group:
+                    name: Engineering Team
+                    user_count: 25
+                roles:
+                  - id: 550e8400-e29b-41d4-a716-446655440002
+                    name: Workspace Admin
+                  - id: 550e8400-e29b-41d4-a716-446655440003
+                    name: Viewer
+                resource:
+                  id: 550e8400-e29b-41d4-a716-446655440001
+                  type: workspace
+                  name: Engineering Workspace
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 401
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem404'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 500
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+      tags:
+        - Role Bindings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleBindings.UpdateRoleBindingsRequest'
+            example:
+              roles:
+                - id: 550e8400-e29b-41d4-a716-446655440002
+                - id: 550e8400-e29b-41d4-a716-446655440003
+  /role-bindings:batchCreate/:
+    post:
+      operationId: RoleBindings_batchCreate
+      summary: Grant access to a resource to a set of subjects with a set of roles
+      description: Grant access to a resource to a set of subjects with a set of roles
+      parameters:
+        - name: fields
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: resource(id,type),role(id),subject(id,type)
+          explode: false
+      responses:
+        '201':
+          description: Response containing the created role bindings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindings.BatchCreateRoleBindingsResponse'
+              example:
+                role_bindings:
+                  - resource:
+                      id: 550e8400-e29b-41d4-a716-446655440001
+                      type: workspace
+                    subject:
+                      id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                      type: group
+                    role:
+                      id: 550e8400-e29b-41d4-a716-446655440002
+                  - resource:
+                      id: 550e8400-e29b-41d4-a716-446655440001
+                      type: workspace
+                    subject:
+                      id: 3fa85f64-5717-4562-b3fc-2c963f66afa7
+                      type: user
+                    role:
+                      id: 550e8400-e29b-41d4-a716-446655440003
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 401
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 500
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+      tags:
+        - Role Bindings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleBindings.BatchCreateRoleBindingsRequest'
+            example:
+              requests:
+                - resource:
+                    id: 550e8400-e29b-41d4-a716-446655440001
+                    type: workspace
+                  subject:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    type: group
+                  role:
+                    id: 550e8400-e29b-41d4-a716-446655440002
+                - resource:
+                    id: 550e8400-e29b-41d4-a716-446655440001
+                    type: workspace
+                  subject:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa7
+                    type: user
+                  role:
+                    id: 550e8400-e29b-41d4-a716-446655440003
   /roles/:
     get:
       operationId: Roles_list
@@ -208,7 +682,8 @@ paths:
           in: query
           required: false
           schema:
-            $ref: '#/components/schemas/Limit'
+            allOf:
+              - $ref: '#/components/schemas/Limit'
             default: 10
           explode: false
         - name: cursor
@@ -221,7 +696,28 @@ paths:
         - name: name
           in: query
           required: false
-          description: Filter by role name using case sensitive exact match.
+          description: Filter by role name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).
+          schema:
+            type: string
+          explode: false
+        - name: resource_type
+          in: query
+          required: false
+          description: Filter roles by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns roles from all scopes.
+          schema:
+            type: string
+          explode: false
+        - name: resource_id
+          in: query
+          required: false
+          description: 'Filter by resource ID. For workspace: UUID. For tenant: tenant resource ID (format: {domain}/{org_id}). Requires resource_type unless resource.tenant.org_id is provided.'
+          schema:
+            type: string
+          explode: false
+        - name: resource.tenant.org_id
+          in: query
+          required: false
+          description: Org ID of the tenant resource to filter by. Cannot be combined with resource_id. When provided, resource_type is implicitly 'tenant'.
           schema:
             type: string
           explode: false
@@ -230,7 +726,8 @@ paths:
           required: false
           description: Control which fields are included in the response to optimize payload size.
           schema:
-            $ref: '#/components/schemas/FieldMask'
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
             default: id,name,description,last_modified
           explode: false
         - name: order_by
@@ -238,7 +735,8 @@ paths:
           required: false
           description: "Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, last_modified."
           schema:
-            $ref: '#/components/schemas/OrderBy'
+            allOf:
+              - $ref: '#/components/schemas/OrderBy'
             default: name
           explode: false
       responses:
@@ -260,7 +758,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Roles.Role'
+                      $ref: '#/components/schemas/Role'
               examples:
                 example0:
                   value:
@@ -285,6 +783,12 @@ paths:
                         name: Workspace Admin
                         description: description
                         last_modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -350,6 +854,7 @@ paths:
             **Examples:**
             - `?fields=id,name,permissions_count` - Include id, name, and count (no permissions array)
             - `?fields=permissions_count,last_modified` - Include only count and timestamp
+            - `?fields=id,name,org_id` - Include org_id (not returned by default; must be requested explicitly)
           schema:
             type: string
             default: id,name,description,permissions,last_modified
@@ -360,7 +865,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Roles.Role'
+                $ref: '#/components/schemas/Role'
               example:
                 id: 550e8400-e29b-41d4-a716-446655440002
                 name: Custom Inventory Admin
@@ -457,7 +962,8 @@ paths:
           required: false
           description: Control which fields are included in the response to optimize payload size.
           schema:
-            $ref: '#/components/schemas/FieldMask'
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
             default: id,name,description,permissions,last_modified
           explode: false
       responses:
@@ -466,7 +972,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Roles.Role'
+                $ref: '#/components/schemas/Role'
               examples:
                 example0:
                   value:
@@ -484,6 +990,12 @@ paths:
                         resource_type: hosts
                         operation: write
                     last_modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -554,7 +1066,8 @@ paths:
           required: false
           description: Control which fields are included in the response to optimize payload size.
           schema:
-            $ref: '#/components/schemas/FieldMask'
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
             default: id,name,description,permissions,last_modified
           explode: false
       responses:
@@ -563,7 +1076,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Roles.Role'
+                $ref: '#/components/schemas/Role'
               example:
                 id: 550e8400-e29b-41d4-a716-446655440002
                 name: Updated Inventory Admin
@@ -658,6 +1171,84 @@ paths:
                 - application: inventory
                   resource_type: hosts
                   operation: delete
+  /roles:batchDelete/:
+    post:
+      operationId: Roles_batchDelete
+      description: Delete multiple roles by ID atomically.
+      parameters: []
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 401
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem404'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 500
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+      tags:
+        - Roles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Roles.BatchDeleteRolesRequest'
+            example:
+              ids:
+                - 3a780e8d-da23-4a2c-a457-c9d31d8a6df0
+                - 4fc3eb8e-2675-4807-8072-c69bd2a66482
   /workspaces/:
     get:
       operationId: Workspaces_list
@@ -668,7 +1259,8 @@ paths:
           in: query
           required: false
           schema:
-            $ref: '#/components/schemas/Limit'
+            allOf:
+              - $ref: '#/components/schemas/Limit'
             default: 10
           explode: false
         - name: offset
@@ -676,23 +1268,48 @@ paths:
           required: false
           description: Offset for offset-based pagination.
           schema:
-            $ref: '#/components/schemas/Offset'
+            allOf:
+              - $ref: '#/components/schemas/Offset'
             default: 0
           explode: false
         - name: type
           in: query
           required: false
-          description: Defaults to all when param is not supplied.
+          description: Filter by workspace type. Supports comma-separated values (e.g. type=standard,ungrouped-hosts). Defaults to all when not supplied. Case-insensitive.
           schema:
-            $ref: '#/components/schemas/Workspaces.WorkspaceTypesQueryParam'
+            type: string
             default: all
           explode: false
         - name: name
           in: query
           required: false
-          description: Case sensitive exact match of workspace by name.
+          description: Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns (e.g. foo*).
           schema:
             type: string
+          explode: false
+        - name: parent_id
+          in: query
+          required: false
+          description: Filter workspaces by parent workspace UUID. Returns only direct children of the specified workspace. Useful for lazy-loading a nested tree structure.
+          schema:
+            $ref: '#/components/schemas/UUID'
+          explode: false
+        - name: ids
+          in: query
+          required: false
+          description: Filter workspaces by one or more comma-separated UUIDs. Defaults to type=standard unless type is explicitly specified.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/UUID'
+          explode: false
+        - name: order_by
+          in: query
+          required: false
+          description: "Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, created, modified, type."
+          schema:
+            type: string
+            default: name
           explode: false
       responses:
         '200':
@@ -719,6 +1336,12 @@ paths:
                     description: This is a basic workspace.
                     created: 2024-05-06T12:20-12-0700
                     modified: 2024-05-06T12:20-12-0700
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -879,6 +1502,33 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Workspaces.ReadWorkspaceResponse'
                   - $ref: '#/components/schemas/Workspaces.ReadWorkspaceWithAncestryResponse'
+              examples:
+                example0:
+                  value:
+                    _: 200
+                    id: e4277742-b91c-43f1-a185-b827e8574345
+                    parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
+                    type: standard
+                    name: Alpha Workspace
+                    description: Create a standard workspace.
+                    created: '2024-08-04T12:00:00Z'
+                    modified: '2024-08-04T12:00:00Z'
+                example1:
+                  value:
+                    _: 200
+                    id: e4277742-b91c-43f1-a185-b827e8574345
+                    parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
+                    type: standard
+                    name: Alpha Workspace
+                    description: Create a standard workspace.
+                    created: '2024-08-04T12:00:00Z'
+                    modified: '2024-08-04T12:00:00Z'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
         '401':
           description: Access is unauthorized.
           content:
@@ -965,21 +1615,23 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 400
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - type: object
+                    properties:
+                      type:
+                        $ref: '#/components/schemas/Problems.ProblemType'
+                      status:
+                        type: number
+                        enum:
+                          - 400
+                      title:
+                        type: string
+                      detail:
+                        type: string
+                      instance:
+                        type: string
+                        format: uri
         '401':
           description: Access is unauthorized.
           content:
@@ -1068,21 +1720,23 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 400
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - type: object
+                    properties:
+                      type:
+                        $ref: '#/components/schemas/Problems.ProblemType'
+                      status:
+                        type: number
+                        enum:
+                          - 400
+                      title:
+                        type: string
+                      detail:
+                        type: string
+                      instance:
+                        type: string
+                        format: uri
         '401':
           description: Access is unauthorized.
           content:
@@ -1159,7 +1813,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
         '401':
           description: Access is unauthorized.
           content:
@@ -1334,6 +1990,13 @@ components:
           description: Limit of returned objects. Use -1 to return all objects.
           example: 10
           default: 10
+    ExcludeSources:
+      type: string
+      enum:
+        - direct
+        - indirect
+        - none
+      description: "Exclude bindings by source type: 'none' (default) shows all, 'indirect' excludes inherited, 'direct' excludes direct"
     FieldMask:
       type: string
       description: |-
@@ -1425,6 +2088,23 @@ components:
         - `name` - Sort by name ascending
         - `-last_modified` - Sort by last_modified descending
         - `name,-created` - Sort by name ascending, then created descending
+    Permission:
+      type: object
+      required:
+        - application
+        - resource_type
+        - operation
+      properties:
+        application:
+          type: string
+        resource_type:
+          type: string
+        operation:
+          type: string
+      example:
+        application: rbac
+        resource_type: workspace
+        operation: read
     Problems.Problem400:
       type: object
       required:
@@ -1542,6 +2222,54 @@ components:
             instance:
               type: string
               format: uri
+    ResourceType:
+      type: string
+      enum:
+        - workspace
+        - tenant
+      description: Resource type for role binding operations. 'workspace' for workspace-scoped bindings (resource_id is workspace UUID). 'tenant' for tenant-scoped bindings (resource_id is tenant resource ID in format {domain}/{org_id}, e.g. redhat/12345).
+    Role:
+      type: object
+      properties:
+        id:
+          allOf:
+            - $ref: '#/components/schemas/UUID'
+          description: UUID that uniquely identifies the role
+        name:
+          type: string
+          description: A human readable name for the role. Must be unique within a tenant.
+        description:
+          type: string
+          description: A description of the role to help clarify its purpose. Does not need to be unique.
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+          description: List of permissions assigned to this role
+        permissions_count:
+          type: integer
+          format: int32
+          description: Number of permissions assigned to this role
+        last_modified:
+          type: string
+          format: date-time
+          description: Timestamp of when the role was last modified
+        org_id:
+          type: string
+          description: ID of the organization that owns this role. Will not be populated if roles belong to the Public Tenant.
+      example:
+        id: 550e8400-e29b-41d4-a716-446655440002
+        name: Workspace Admin
+        description: Full administrative access to workspace
+        permissions:
+          - application: rbac
+            resource_type: workspace
+            operation: read
+          - application: rbac
+            resource_type: workspace
+            operation: write
+        permissions_count: 2
+        last_modified: '2024-08-04T12:00:00Z'
     RoleBindings.BaseSubject:
       type: object
       required:
@@ -1558,6 +2286,118 @@ components:
         propertyName: type
         mapping:
           group: '#/components/schemas/RoleBindings.GroupSubject'
+          user: '#/components/schemas/RoleBindings.UserSubject'
+    RoleBindings.BatchCreateRoleBindingsRequest:
+      type: object
+      required:
+        - requests
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBindings.CreateRoleBindingsRequest'
+          minItems: 1
+          maxItems: 100
+          description: List of role bindings to create (maximum 100)
+      description: Batch request to create multiple role bindings
+      example:
+        requests:
+          - resource:
+              id: 550e8400-e29b-41d4-a716-446655440001
+              type: workspace
+            subject:
+              id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+              type: group
+            role:
+              id: 550e8400-e29b-41d4-a716-446655440002
+          - resource:
+              id: 550e8400-e29b-41d4-a716-446655440001
+              type: workspace
+            subject:
+              id: 3fa85f64-5717-4562-b3fc-2c963f66afa7
+              type: user
+            role:
+              id: 550e8400-e29b-41d4-a716-446655440003
+    RoleBindings.BatchCreateRoleBindingsResponse:
+      type: object
+      required:
+        - role_bindings
+      properties:
+        role_bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBindings.RoleBinding'
+          description: The role bindings that were created
+      description: Response containing the created role bindings
+    RoleBindings.BindingSubjectType:
+      type: string
+      enum:
+        - user
+        - group
+      description: Subject kind for create/batch, by-subject, and list filters on the binding's subject (group UUID or user/principal UUID). Does not include principal as a separate type string; for external user ID use GET /role-bindings/ with granted_subject_type=principal and granted_subject.principal.user_id.
+    RoleBindings.CreateRoleBindingsRequest:
+      type: object
+      required:
+        - resource
+        - subject
+        - role
+      properties:
+        resource:
+          type: object
+          properties:
+            id:
+              type: string
+              description: Identifier of the resource
+            type:
+              type: string
+              description: Type of resource
+              example: workspace
+          required:
+            - id
+            - type
+          description: Resource to bind the role to
+        subject:
+          type: object
+          properties:
+            id:
+              allOf:
+                - $ref: '#/components/schemas/UUID'
+              description: UUID that uniquely identifies the subject
+            type:
+              allOf:
+                - $ref: '#/components/schemas/RoleBindings.BindingSubjectType'
+              description: Type of subject
+          required:
+            - id
+            - type
+          description: Subject to grant access to
+        role:
+          type: object
+          properties:
+            id:
+              allOf:
+                - $ref: '#/components/schemas/UUID'
+              description: UUID that uniquely identifies the role
+          required:
+            - id
+          description: Role to assign
+      description: Request body for creating role bindings
+      example:
+        resource:
+          id: redhat/12345
+          type: tenant
+        subject:
+          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+          type: group
+        role:
+          id: 550e8400-e29b-41d4-a716-446655440002
+    RoleBindings.GrantedSubjectFilterType:
+      type: string
+      enum:
+        - user
+        - group
+        - principal
+      description: Effective-grant filter for GET /role-bindings/ only. With type principal, use query granted_subject.principal.user_id. Cannot be combined with subject_type/subject_id on the same request. Not used on /role-bindings/by-subject/.
     RoleBindings.GroupDetails:
       type: object
       properties:
@@ -1591,8 +2431,7 @@ components:
       type: object
       properties:
         id:
-          allOf:
-            - $ref: '#/components/schemas/UUID'
+          type: string
           description: Resource identifier
         name:
           type: string
@@ -1601,16 +2440,44 @@ components:
           type: string
           description: Resource type
           example: workspace
-    RoleBindings.Role:
+    RoleBindings.RoleBinding:
       type: object
       properties:
-        id:
+        role:
           allOf:
-            - $ref: '#/components/schemas/UUID'
-          description: Role identifier
-        name:
-          type: string
-          description: Name of the role
+            - $ref: '#/components/schemas/Role'
+          description: The role that grants permissions to the subject on the resource
+        subject:
+          anyOf:
+            - $ref: '#/components/schemas/RoleBindings.UserSubject'
+            - $ref: '#/components/schemas/RoleBindings.GroupSubject'
+          description: The subject (user or group) that is granted the role
+        resource:
+          allOf:
+            - $ref: '#/components/schemas/RoleBindings.Resource'
+          description: The resource on which the subject is granted the role
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBindings.Resource'
+          description: Resources from which this role binding is sourced (direct or inherited)
+      example:
+        role:
+          id: 550e8400-e29b-41d4-a716-446655440002
+          name: Workspace Admin
+          permissions:
+            - application: rbac
+              resource_type: workspace
+              operation: read
+            - application: rbac
+              resource_type: workspace
+              operation: write
+        subject:
+          id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+          type: group
+          group:
+            name: Engineering Team
+            user_count: 25
     RoleBindings.RoleBindingBySubject:
       type: object
       properties:
@@ -1626,16 +2493,17 @@ components:
         roles:
           type: array
           items:
-            $ref: '#/components/schemas/RoleBindings.Role'
+            $ref: '#/components/schemas/Role'
           description: Roles assigned to the subject
         resource:
           allOf:
             - $ref: '#/components/schemas/RoleBindings.Resource'
           description: Resource the roles apply to
-        inherited_from:
-          allOf:
-            - $ref: '#/components/schemas/RoleBindings.Resource'
-          description: Resource from which this role binding is inherited (only present when parent_role_bindings=true)
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBindings.Resource'
+          description: Resources from which this role binding is sourced (direct or inherited)
       example:
         last_modified: '2024-08-04T12:00:00Z'
         subject:
@@ -1652,10 +2520,32 @@ components:
           id: 550e8400-e29b-41d4-a716-446655440003
           name: Child Workspace
           type: workspace
-        inherited_from:
-          id: 550e8400-e29b-41d4-a716-446655440001
-          name: Parent Workspace
-          type: workspace
+        sources:
+          - id: 550e8400-e29b-41d4-a716-446655440001
+            name: Parent Workspace
+            type: workspace
+    RoleBindings.UpdateRoleBindingsRequest:
+      type: object
+      required:
+        - roles
+      properties:
+        roles:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                allOf:
+                  - $ref: '#/components/schemas/UUID'
+                description: Role identifier
+            required:
+              - id
+          description: Roles to assign (replaces existing roles for the target binding). Empty array removes all bindings.
+      description: Request body for updating role bindings - contains the new roles to assign
+      example:
+        roles:
+          - id: 550e8400-e29b-41d4-a716-446655440002
+          - id: 550e8400-e29b-41d4-a716-446655440003
     RoleBindings.UserDetails:
       type: object
       properties:
@@ -1678,23 +2568,39 @@ components:
           description: User details
       allOf:
         - $ref: '#/components/schemas/RoleBindings.BaseSubject'
+    Roles.BatchDeleteRolesRequest:
+      type: object
+      required:
+        - ids
+      properties:
+        ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/UUID'
+          minItems: 1
+          maxItems: 100
+          description: The IDs of the roles to delete. A maximum of 100 roles can be deleted in one batch.
+          example:
+            - 3a780e8d-da23-4a2c-a457-c9d31d8a6df0
+            - 4fc3eb8e-2675-4807-8072-c69bd2a66482
+      description: Data for request to delete multiple roles by ID.
     Roles.CreateOrUpdateRoleRequest:
       type: object
       required:
         - name
-        - description
         - permissions
       properties:
         name:
           type: string
-          description: A human readable name for the role. Does not need to be unique.
+          pattern: ^[^*]+$
+          description: A human readable name for the role. Must be unique within a tenant. Asterisks (*) are not allowed.
         description:
           type: string
           description: A description of the role to help clarify its purpose. Does not need to be unique.
         permissions:
           type: array
           items:
-            $ref: '#/components/schemas/Roles.Permission'
+            $ref: '#/components/schemas/Permission'
           description: List of permissions to assign to this role
       description: Role data for create and update operations
       example:
@@ -1707,65 +2613,6 @@ components:
           - application: inventory
             resource_type: hosts
             operation: write
-    Roles.Permission:
-      type: object
-      required:
-        - application
-        - resource_type
-        - operation
-      properties:
-        application:
-          type: string
-          description: Application name
-        resource_type:
-          type: string
-          description: Resource type within the application
-        operation:
-          type: string
-          description: Operation for this permission
-      example:
-        application: inventory
-        resource_type: hosts
-        operation: read
-    Roles.Role:
-      type: object
-      properties:
-        id:
-          allOf:
-            - $ref: '#/components/schemas/UUID'
-          description: UUID that uniquely identifies the role
-        name:
-          type: string
-          description: A human readable name for the role. Does not need to be unique.
-        description:
-          type: string
-          description: A description of the role to help clarify its purpose. Does not need to be unique.
-        permissions:
-          type: array
-          items:
-            $ref: '#/components/schemas/Roles.Permission'
-          description: List of permissions assigned to this role
-        permissions_count:
-          type: integer
-          format: int32
-          description: Number of permissions assigned to this role
-        last_modified:
-          type: string
-          format: date-time
-          description: Timestamp of when the role was last modified
-      description: Role with optional fields (supports field masking)
-      example:
-        id: 550e8400-e29b-41d4-a716-446655440002
-        name: Custom Inventory Admin
-        description: Custom role for inventory management
-        permissions:
-          - application: inventory
-            resource_type: hosts
-            operation: read
-          - application: inventory
-            resource_type: hosts
-            operation: write
-        last_modified: '2024-08-04T12:00:00Z'
     Timestamps:
       type: object
       required:
@@ -1810,7 +2657,6 @@ components:
           allOf:
             - $ref: '#/components/schemas/UUID'
           description: Parent ID of Workspace A
-          default: Parent ID of Workspace A
       allOf:
         - $ref: '#/components/schemas/Workspaces.BasicWorkspace'
       example:
@@ -1839,7 +2685,6 @@ components:
           allOf:
             - $ref: '#/components/schemas/UUID'
           description: The UUID of the new parent workspace.
-          default: Parent ID of target workspace
       example:
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
     Workspaces.MoveWorkspaceResponse:
@@ -1851,11 +2696,11 @@ components:
         id:
           allOf:
             - $ref: '#/components/schemas/UUID'
-          default: Workspace ID of moved workspace
+          description: Workspace ID of moved workspace
         parent_id:
           allOf:
             - $ref: '#/components/schemas/UUID'
-          default: New parent ID of moved workspace
+          description: New parent ID of moved workspace
       example:
         _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
@@ -1957,7 +2802,6 @@ components:
           allOf:
             - $ref: '#/components/schemas/UUID'
           description: Must match current parent_id value. Not updatable directly on the workspace.
-          default: Parent ID of Workspace A
       example:
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         name: Alpha Workspace

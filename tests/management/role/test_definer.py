@@ -37,7 +37,11 @@ from management.models import (
 from management.permission.scope_service import Scope
 from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType
 from management.role.definer import seed_roles, seed_permissions, _seed_platform_roles
-from management.role.platform import platform_v2_role_uuid_for
+from management.role.platform import (
+    ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
+    admin_platform_parent_scope_for_seeded_system_role,
+    platform_v2_role_uuid_for,
+)
 from management.role.relation_api_dual_write_handler import (
     RelationApiDualWriteHandler,
     SeedingRelationApiDualWriteHandler,
@@ -73,6 +77,7 @@ def _child_predicate(parent_uuid: str | UUID, child_uuid: str | UUID):
     )
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class RoleDefinerTests(IdentityRequest):
     """Test the role definer functions."""
 
@@ -83,12 +88,22 @@ class RoleDefinerTests(IdentityRequest):
             f"Expected child relation to be present: parent={str(parent_uuid)}, child={str(child_uuid)}",
         )
 
+        platform_role = PlatformRoleV2.objects.get(uuid=parent_uuid)
+        child_role = SeededRoleV2.objects.get(uuid=child_uuid)
+
+        self.assertTrue(platform_role.children.contains(child_role))
+
     def _assert_not_child(self, tuples: InMemoryTuples, parent_uuid: str | UUID, child_uuid: str | UUID):
         self.assertEqual(
             0,
             len(tuples.find_tuples(_child_predicate(parent_uuid=parent_uuid, child_uuid=child_uuid))),
             f"Expected child relation to be absent: parent={str(parent_uuid)}, child={str(child_uuid)}",
         )
+
+        platform_role = PlatformRoleV2.objects.get(uuid=parent_uuid)
+        child_role = SeededRoleV2.objects.get(uuid=child_uuid)
+
+        self.assertFalse(platform_role.children.contains(child_role))
 
     def setUp(self):
         """Set up the role definer tests."""
@@ -261,6 +276,35 @@ class RoleDefinerTests(IdentityRequest):
                     ["unready1", "unready2"],
                     "Unready tenant should not be notified",
                 )
+
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_role_create_skip_notifications(self, send_kafka_message):
+        """Test that skip_notifications suppresses RH notifications during role seeding."""
+        kafka_mock = copy_call_args(send_kafka_message)
+        with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
+            from management.seeds import role_seeding
+
+            role_seeding(skip_notifications=True)
+
+        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
+        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
+
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_role_update_skip_notifications(self, send_kafka_message):
+        """Test that skip_notifications suppresses RH notifications during role update seeding."""
+        kafka_mock = copy_call_args(send_kafka_message)
+        self.try_seed_roles()
+
+        # Force an update by zeroing the version
+        Role.objects.filter(platform_default=True).update(version=0)
+
+        with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
+            from management.seeds import role_seeding
+
+            role_seeding(skip_notifications=True)
+
+        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
+        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
 
     def try_seed_roles(self):
         """Try to seed roles"""
@@ -655,15 +699,20 @@ class RoleDefinerTests(IdentityRequest):
         root_platform_default_uuid = UUID(settings.SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID)
         tenant_platform_default_uuid = UUID(settings.SYSTEM_DEFAULT_TENANT_ROLE_UUID)
         tenant_admin_default_uuid = UUID(settings.SYSTEM_ADMIN_TENANT_ROLE_UUID)
+        root_admin_default_uuid = UUID(settings.SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID)
 
         initial_count = len(tuples)
 
-        # Note that notifications_role and approval_role are platform_default, while inventory_role is admin_default.
+        # Note that notifications_role and approval_role are platform_default, while user_access_role is admin_default.
         notifications_role = Role.objects.public_tenant_only().get(name="Notifications viewer")
         approval_role = Role.objects.public_tenant_only().get(name="Approval Approver")
+        user_access_role = Role.objects.public_tenant_only().get(name="User Access administrator")
+
+        # This role is a special case: when assigned as part of default access (only), it should always be assigned in
+        # root scope. See RHCLOUD-45734 and https://github.com/project-kessel/insights-rbac/pull/2653
         inventory_role = Role.objects.public_tenant_only().get(name="Inventory Groups Administrator")
 
-        # Assert that seed_role creates relations in the default scope.
+        # Assert that seed_role creates relations in the default scope for ordinary roles.
         self._assert_child(
             tuples,
             parent_uuid=default_platform_default_uuid,
@@ -677,14 +726,24 @@ class RoleDefinerTests(IdentityRequest):
         self._assert_child(
             tuples,
             parent_uuid=default_admin_default_uuid,
+            child_uuid=user_access_role.uuid,
+        )
+
+        # As mentioned above, this role is a special case and should always have root scope.
+        self._assert_child(
+            tuples,
+            parent_uuid=root_admin_default_uuid,
             child_uuid=inventory_role.uuid,
         )
 
         # Force updating the existing relationships even though the role version numbers have not changed.
-        # This puts approval_role in root scope and inventory_role in tenant scope.
+        # This puts approval_role in root scope and user_access_role in tenant scope.
+        #
+        # inventory_role's permissions become tenant-scoped, but the admin-default assignment always stays in root
+        # scope.
         with self.settings(
             ROOT_SCOPE_PERMISSIONS="approval:actions:create",
-            TENANT_SCOPE_PERMISSIONS="inventory:*:*",
+            TENANT_SCOPE_PERMISSIONS="rbac:*:*,inventory:*:*",
         ):
             seed_roles(force_update_relationships=True)
 
@@ -714,6 +773,18 @@ class RoleDefinerTests(IdentityRequest):
         self._assert_child(
             tuples,
             parent_uuid=tenant_admin_default_uuid,
+            child_uuid=user_access_role.uuid,
+        )
+
+        # inventory_role should still be in the root scope.
+        self._assert_child(
+            tuples,
+            parent_uuid=root_admin_default_uuid,
+            child_uuid=inventory_role.uuid,
+        )
+        self._assert_not_child(
+            tuples,
+            parent_uuid=tenant_admin_default_uuid,
             child_uuid=inventory_role.uuid,
         )
 
@@ -723,11 +794,13 @@ class RoleDefinerTests(IdentityRequest):
             "Expected overall number of tuples not to change.",
         )
 
+        count_after_first_update = len(tuples)
+
         # Check that we can also move roles between non-default scopes.
-        # This puts both approval_role and inventory_role in tenant scope.
+        # This puts both approval_role and inventory_role permissions in tenant scope.
         with self.settings(
             ROOT_SCOPE_PERMISSIONS="",
-            TENANT_SCOPE_PERMISSIONS="approval:actions:create,inventory:*:*",
+            TENANT_SCOPE_PERMISSIONS="approval:actions:create,rbac:*:*",
         ):
             seed_roles(force_update_relationships=True)
 
@@ -751,17 +824,75 @@ class RoleDefinerTests(IdentityRequest):
         )
         self._assert_child(
             tuples,
+            parent_uuid=default_platform_default_uuid,
+            child_uuid=approval_role.uuid,
+        )
+        self._assert_child(
+            tuples,
+            parent_uuid=tenant_admin_default_uuid,
+            child_uuid=user_access_role.uuid,
+        )
+
+        # inventory_role should still not have moved.
+        self._assert_child(
+            tuples,
+            parent_uuid=root_admin_default_uuid,
+            child_uuid=inventory_role.uuid,
+        )
+        self._assert_not_child(
+            tuples,
+            parent_uuid=default_admin_default_uuid,
+            child_uuid=inventory_role.uuid,
+        )
+        self._assert_not_child(
+            tuples,
             parent_uuid=tenant_admin_default_uuid,
             child_uuid=inventory_role.uuid,
         )
 
+        # Second force-update net tuple delta (+2): both platform-default approval roles in
+        # approval_local_test.json move from ROOT-only to TENANT + DEFAULT platform parents.
+        #   • Approval Approver: remove root platform parent, add tenant + default (+1)
+        #   • Approval Administrator Local Test: same scope change (+1)
+        # All other roles seeded here keep the same binding scopes, so their parent tuples
+        # are removed and re-added unchanged (net 0).
         self.assertEqual(
-            initial_count,
+            count_after_first_update + 2,
             len(tuples),
-            "Expected overall number of tuples not to change.",
+            "Both approval platform-default roles gain tenant and default workspace platform parents.",
         )
 
+    def test_admin_default_seeded_roles_force_root_scope(self):
+        """Test that all roles in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE are overridden to ROOT."""
+        for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
+            for derived_scope in Scope:
+                result = admin_platform_parent_scope_for_seeded_system_role(
+                    role_name, derived_scope, apply_override=True
+                )
+                self.assertEqual(
+                    result,
+                    Scope.ROOT,
+                    f"{role_name!r} with derived scope {derived_scope.name} should be forced to ROOT",
+                )
 
+    def test_admin_default_force_root_does_not_apply_without_override(self):
+        """Test that the ROOT override is skipped when apply_override=False."""
+        for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
+            for derived_scope in Scope:
+                result = admin_platform_parent_scope_for_seeded_system_role(
+                    role_name, derived_scope, apply_override=False
+                )
+                self.assertEqual(result, derived_scope)
+
+    def test_admin_default_force_root_does_not_apply_to_other_roles(self):
+        """Test that ordinary admin_default roles are NOT forced to ROOT."""
+        result = admin_platform_parent_scope_for_seeded_system_role(
+            "Some Other Role", Scope.DEFAULT, apply_override=True
+        )
+        self.assertEqual(result, Scope.DEFAULT)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class V2RoleSeedingTests(IdentityRequest):
     """Test V2 role seeding functionality."""
 
@@ -986,9 +1117,9 @@ class V2RoleSeedingTests(IdentityRequest):
         default_platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, Scope.DEFAULT, policy_service)
         default_platform_role = PlatformRoleV2.objects.get(uuid=default_platform_role_uuid)
 
-        self.assertIn(
-            default_platform_role,
+        self.assertCountEqual(
             list(v2_role.parents.all()),
+            [default_platform_role],
             "v2_role should have DEFAULT platform role as parent initially",
         )
 
@@ -1006,19 +1137,14 @@ class V2RoleSeedingTests(IdentityRequest):
 
         # Verify: old parent (DEFAULT) should be removed, new parent (ROOT) should be present
         parents = list(v2_role.parents.all())
-        self.assertNotIn(
-            default_platform_role,
+        self.assertCountEqual(
             parents,
-            "DEFAULT platform role should be removed from parents after scope change",
-        )
-        self.assertIn(
-            root_platform_role,
-            parents,
-            "ROOT platform role should be added as parent after scope change",
+            [root_platform_role],
+            "Scope change to ROOT should leave a single ROOT platform parent",
         )
 
     def test_v2_role_parents_cleared_when_scope_changes_to_tenant(self):
-        """Test that v2_role.parents is cleared when scope changes from DEFAULT to TENANT."""
+        """Test that v2_role.parents reflect binding scopes when tenant scope is introduced."""
         seed_group()
 
         # First seeding with role in DEFAULT scope
@@ -1035,9 +1161,9 @@ class V2RoleSeedingTests(IdentityRequest):
         default_platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, Scope.DEFAULT, policy_service)
         default_platform_role = PlatformRoleV2.objects.get(uuid=default_platform_role_uuid)
 
-        self.assertIn(default_platform_role, list(v2_role.parents.all()))
+        self.assertCountEqual(list(v2_role.parents.all()), [default_platform_role])
 
-        # Change to TENANT scope
+        # notifications:notifications:read becomes TENANT-scoped; integrations:endpoints:read stays DEFAULT.
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="notifications:*:*"):
             seed_roles()
 
@@ -1048,15 +1174,10 @@ class V2RoleSeedingTests(IdentityRequest):
         tenant_platform_role = PlatformRoleV2.objects.get(uuid=tenant_platform_role_uuid)
 
         parents = list(v2_role.parents.all())
-        self.assertNotIn(
-            default_platform_role,
+        self.assertCountEqual(
             parents,
-            "DEFAULT platform role should be removed after scope change to TENANT",
-        )
-        self.assertIn(
-            tenant_platform_role,
-            parents,
-            "TENANT platform role should be added after scope change",
+            [default_platform_role, tenant_platform_role],
+            "Mixed TENANT and DEFAULT permissions should yield both platform parents",
         )
 
     def test_v2_role_seeded_for_unchanged_v1_role(self):
@@ -1102,6 +1223,48 @@ class V2RoleSeedingTests(IdentityRequest):
             "Non-default role should have no parents",
         )
 
+    def test_role_without_bindings_does_not_trigger_migration(self):
+        """Test that roles without bindings don't trigger migration.
+
+        Migration is triggered based on whether a role has actual bindings in V1 tenants.
+        Roles without any bindings (whether default or non-default) don't need migration.
+        If a role later gets manual bindings and then changes scope, those bindings WILL
+        be migrated.
+        """
+        seed_group()
+
+        # First seeding with role in DEFAULT scope
+        with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
+            seed_roles()
+
+        # Pick a specific non-default role by name from the test seed data
+        # "Cost Administrator Local Test" is a known non-default system role with permissions in test data
+        non_default_role = Role.objects.public_tenant_only().filter(name="Cost Administrator Local Test").first()
+        self.assertIsNotNone(
+            non_default_role,
+            "Expected 'Cost Administrator Local Test' role to exist in seeded roles",
+        )
+
+        # Mock the migration function
+        with patch("management.role.definer._migrate_bindings_for_scope_change") as mock_migrate:
+            # Change the scope for this role's permissions by moving its permissions to ROOT
+            permission_pattern = f"{non_default_role.access.first().permission.application}:*:*"
+
+            # Re-seed with the permission now in ROOT scope
+            with self.settings(ROOT_SCOPE_PERMISSIONS=permission_pattern, TENANT_SCOPE_PERMISSIONS=""):
+                seed_roles()
+
+            # Verify that migration was NOT called for this role
+            # The new _determine_old_scopes checks for actual bindings in V1 tenants.
+            # Since this test doesn't create any bindings for this role,
+            # _determine_old_scopes returns empty set and migration is skipped.
+            migration_called_for_role = any(call[0][0] == non_default_role for call in mock_migrate.call_args_list)
+            self.assertFalse(
+                migration_called_for_role,
+                f"Migration should NOT be called for role {non_default_role.name} "
+                "because it has no bindings to migrate (only roles with actual bindings need migration)",
+            )
+
     def test_v2_role_permissions_updated_when_v1_changes(self):
         """Test that V2 role permissions are updated when V1 role permissions change."""
         seed_group()
@@ -1136,3 +1299,157 @@ class V2RoleSeedingTests(IdentityRequest):
         # V2 should now match V1's permissions (which were reset during seeding)
         v1_permissions = set(access.permission for access in v1_role.access.all())
         self.assertEqual(v2_permissions, v1_permissions)
+
+
+@override_settings(
+    REPLICATION_TO_RELATION_ENABLED=True,
+    ROOT_SCOPE_PERMISSIONS="advisor:*:*",
+    TENANT_SCOPE_PERMISSIONS="subscriptions:*:*",
+    SYSTEM_DEFAULT_TENANT_ROLE_UUID="3c9e6f1a-8b2d-4e5c-9a7f-1d3b5c8e2a4f",
+    SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID="5e8a2c4f-9d1b-4c7e-8f3a-6d2b9c1e5a7f",
+    SYSTEM_ADMIN_TENANT_ROLE_UUID="a7f3c8b2-1d4e-4f9a-8c6d-2b5e7a9f1c3d",
+    SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID="9b4c7e1f-3a5d-4f8c-9e2a-7c1d5b8f3a6e",
+)
+@patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+class SeedMixedScopeTest(IdentityRequest):
+    """Test that seeding a mixed-scope system role attaches to multiple platform parents."""
+
+    def setUp(self):
+        super().setUp()
+        self.public_tenant = Tenant.objects.get(tenant_name="public")
+
+    def test_seed_mixed_scope_system_role_multiple_platform_parents(self, replicate):
+        """A mixed-scope system role generates platform parent relations at each binding scope."""
+        tuples = InMemoryTuples()
+        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        # Create a system role with mixed permissions directly (bypasses full seeding).
+        from management.permission.scope_service import ImplicitResourceService
+
+        resource_service = ImplicitResourceService.from_settings()
+
+        role = Role.objects.create(
+            name="Mixed Scope Test Role",
+            system=True,
+            platform_default=True,
+            tenant=self.public_tenant,
+        )
+        # subscriptions → TENANT, advisor → ROOT
+        sub_perm, _ = Permission.objects.get_or_create(
+            permission="subscriptions:organization:read", tenant=self.public_tenant
+        )
+        adv_perm, _ = Permission.objects.get_or_create(
+            permission="advisor:recommendation:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=sub_perm, tenant=self.public_tenant)
+        Access.objects.create(role=role, permission=adv_perm, tenant=self.public_tenant)
+
+        # Verify the role is mixed TENANT + ROOT
+        binding_scopes = resource_service.binding_scopes_for_role(role)
+        self.assertEqual(sorted(binding_scopes), sorted([Scope.TENANT, Scope.ROOT]))
+
+        # Replicate as new system role via the SeedingHandler
+        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler.replicate_new_system_role()
+
+        # The handler should generate platform parent relations for BOTH scopes.
+        # It generates child relations: platform_role#child@this_role
+        platform_tenant_uuid = settings.SYSTEM_DEFAULT_TENANT_ROLE_UUID
+        platform_root_uuid = settings.SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
+
+        tenant_parent_tuples = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(
+            len(tenant_parent_tuples),
+            1,
+            "Mixed-scope role should have TENANT platform parent relation",
+        )
+
+        root_parent_tuples = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(
+            len(root_parent_tuples),
+            1,
+            "Mixed-scope role should have ROOT platform parent relation",
+        )
+
+    def test_existing_tenant_only_role_splits_on_re_seed(self, replicate):
+        """A role initially seeded at TENANT-only scope gains a ROOT parent when re-seeded with mixed permissions."""
+        tuples = InMemoryTuples()
+        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        platform_tenant_uuid = settings.SYSTEM_DEFAULT_TENANT_ROLE_UUID
+        platform_root_uuid = settings.SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
+
+        # Phase 1: create a role with only TENANT-scoped permissions.
+        role = Role.objects.create(
+            name="Re-seed Split Role",
+            system=True,
+            platform_default=True,
+            tenant=self.public_tenant,
+        )
+        sub_perm, _ = Permission.objects.get_or_create(
+            permission="subscriptions:organization:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=sub_perm, tenant=self.public_tenant)
+
+        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler.replicate_new_system_role()
+
+        # Only TENANT parent should exist.
+        tenant_tuples_before = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(tenant_tuples_before), 1, "Should start with TENANT parent")
+
+        root_tuples_before = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(root_tuples_before), 0, "Should NOT have ROOT parent initially")
+
+        # Phase 2: add a ROOT-scoped permission (advisor) and re-seed.
+        adv_perm, _ = Permission.objects.get_or_create(
+            permission="advisor:recommendation:read", tenant=self.public_tenant
+        )
+        Access.objects.create(role=role, permission=adv_perm, tenant=self.public_tenant)
+
+        handler2 = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler2.prepare_for_update()
+        handler2.replicate_update_system_role()
+
+        # Now BOTH parents should exist.
+        tenant_tuples_after = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_tenant_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(tenant_tuples_after), 1, "Should still have TENANT parent after split")
+
+        root_tuples_after = tuples.find_tuples(
+            all_of(
+                resource("rbac", "role", platform_root_uuid),
+                relation("child"),
+                subject("rbac", "role", str(role.uuid)),
+            )
+        )
+        self.assertEqual(len(root_tuples_after), 1, "Should now also have ROOT parent after split")

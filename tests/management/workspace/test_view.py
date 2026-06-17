@@ -24,18 +24,17 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import OperationalError
+from django.db import OperationalError, transaction
 from django.test.utils import override_settings
 from django.urls import clear_url_caches
 from importlib import reload
 from psycopg2.errors import DeadlockDetected, SerializationFailure
 from unittest.mock import patch
 from django.urls import reverse
+from management.audit_log.model import AuditLog
+from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from rest_framework import status
 from rest_framework.test import APIClient
-
-from api.models import Tenant
-from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.workspace.serializer import WorkspaceEventSerializer
@@ -49,8 +48,10 @@ from migration_tool.in_memory_tuples import (
     subject,
 )
 from migration_tool.utils import create_relationship
+from api.models import Tenant
 from rbac import urls
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 class BasicWorkspaceViewTests:
@@ -90,6 +91,7 @@ class BasicWorkspaceViewTests:
             group.principals.add(principal)
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class WorkspaceViewTests(IdentityRequest, BasicWorkspaceViewTests):
     """Test the Workspace view."""
 
@@ -102,18 +104,11 @@ class WorkspaceViewTests(IdentityRequest, BasicWorkspaceViewTests):
         self.tenant.save()
 
         self.service = WorkspaceService()
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+
         self.ungrouped_workspace = Workspace.objects.create(
             name="Ungrouped Hosts Workspace",
             description="Ungrouped Hosts Workspace - description",
@@ -144,6 +139,7 @@ class WorkspaceViewTests(IdentityRequest, BasicWorkspaceViewTests):
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class TransactionalWorkspaceViewTests(TransactionalIdentityRequest, BasicWorkspaceViewTests):
     @override_settings(WORKSPACE_HIERARCHY_DEPTH_LIMIT=10)
     def setUp(self):
@@ -154,18 +150,12 @@ class TransactionalWorkspaceViewTests(TransactionalIdentityRequest, BasicWorkspa
         self.tenant.save()
 
         self.service = WorkspaceService()
-        self.root_workspace = Workspace.objects.create(
-            name="Root Workspace",
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            name="Default Workspace",
-            description="Default Description",
-            parent_id=self.root_workspace.id,
-        )
+
+        with transaction.atomic():
+            bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+            self.default_workspace = bootstrap_result.default_workspace
+            self.root_workspace = bootstrap_result.root_workspace
+
         self.ungrouped_workspace = Workspace.objects.create(
             name="Ungrouped Hosts Workspace",
             description="Ungrouped Hosts Workspace - description",
@@ -196,7 +186,12 @@ class TransactionalWorkspaceViewTests(TransactionalIdentityRequest, BasicWorkspa
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
 
 
-@override_settings(V2_APIS_ENABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=100, WORKSPACE_RESTRICT_DEFAULT_PEERS=False)
+@override_settings(
+    ATOMIC_RETRY_DISABLED=True,
+    V2_APIS_ENABLED=True,
+    WORKSPACE_HIERARCHY_DEPTH_LIMIT=100,
+    WORKSPACE_RESTRICT_DEFAULT_PEERS=False,
+)
 class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
     """Tests for create/update/delete workspaces."""
 
@@ -531,7 +526,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
     @override_settings(WORKSPACE_ORG_CREATION_LIMIT=4)
     def test_create_workspaces_exceed_limit(self):
         """
-        Test that when creating workspaces if the limit exceeds the organisations workspace limit
+        Test that when creating workspaces if the limit exceeds the organization's workspace limit
         the correct response is returned.
         """
         workspace_names = ["Workspace A", "Workspace B", "Workspace C", "Workspace D"]
@@ -554,13 +549,15 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         resp_body = json.loads(response.content.decode())
         self.assertEqual(
-            resp_body.get("detail"), "The total number of workspaces allowed for this organisation has been exceeded."
+            resp_body.get("detail"),
+            "Workspace limit reached (6/4); please free up capacity by deleting empty workspaces"
+            " or consolidating those with similar users and role bindings.",
         )
 
     @override_settings(WORKSPACE_ORG_CREATION_LIMIT=9)
     def test_create_workspaces_not_exceed_limit(self):
         """
-        Test that when creating workspaces if the limit does not exceed the organisations workspace limit
+        Test that when creating workspaces if the limit does not exceed the organization's workspace limit
         the correct response is returned.
         """
         workspace_names = ["Workspace A", "Workspace B", "Workspace C", "Workspace D"]
@@ -831,7 +828,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
         client = APIClient()
 
-        workspace_request_data = {"name": "Newer Workspace"}
+        workspace_request_data = {"name": "Newer Workspace", "parent_id": workspace.parent_id}
 
         response = client.put(url, workspace_request_data, format="json", **self.headers)
 
@@ -1125,30 +1122,86 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         client = APIClient()
         url = reverse("v2_management:workspace-detail", kwargs={"pk": self.default_workspace.id})
 
+        root_parent_id = str(self.default_workspace.parent_id)
+
         # Test data cases:
         #    - name and description update,
         #    - only name update
         #    - only description update (name without change but must be present because the field is required)
-        test_data_cases = [
+        # For PUT, parent_id (= root workspace id) is required per the spec.
+        # For PATCH, parent_id is optional.
+        put_test_data_cases = [
+            {"name": "New name", "description": "New description", "parent_id": root_parent_id},
+            {"name": "New name", "description": self.default_workspace.description, "parent_id": root_parent_id},
+            {"name": self.default_workspace.name, "description": "New description", "parent_id": root_parent_id},
+        ]
+        patch_test_data_cases = [
             {"name": "New name", "description": "New description"},
             {"name": "New name", "description": self.default_workspace.description},
             {"name": self.default_workspace.name, "description": "New description"},
         ]
 
-        for test_data in test_data_cases:
-            for method in ("put", "patch"):  # try to update via PUT and PATCH endpoint
-                response = getattr(client, method)(url, test_data, format="json", **self.headers)
-                self.assertEqual(response.status_code, status.HTTP_200_OK)
-                resp_body = response.json()
-                self.assertEqual(resp_body.get("id"), str(self.default_workspace.id))
-                self.assertEqual(resp_body.get("name"), test_data["name"])
-                self.assertEqual(resp_body.get("description"), test_data["description"])
-                self.assertEqual(resp_body.get("type"), Workspace.Types.DEFAULT)
-                self.assertEqual(resp_body.get("parent_id"), str(self.default_workspace.parent_id))
+        for test_data in put_test_data_cases:
+            response = client.put(url, test_data, format="json", **self.headers)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            resp_body = response.json()
+            self.assertEqual(resp_body.get("id"), str(self.default_workspace.id))
+            self.assertEqual(resp_body.get("name"), test_data["name"])
+            self.assertEqual(resp_body.get("description"), test_data["description"])
+            self.assertEqual(resp_body.get("type"), Workspace.Types.DEFAULT)
+            self.assertEqual(resp_body.get("parent_id"), root_parent_id)
 
-                # After test set the default values back
-                self.default_workspace.name = "Default"
-                self.default_workspace.description = "Default description"
+            # After test set the default values back
+            self.default_workspace.name = "Default"
+            self.default_workspace.description = "Default description"
+
+        for test_data in patch_test_data_cases:
+            response = client.patch(url, test_data, format="json", **self.headers)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            resp_body = response.json()
+            self.assertEqual(resp_body.get("id"), str(self.default_workspace.id))
+            self.assertEqual(resp_body.get("name"), test_data["name"])
+            self.assertEqual(resp_body.get("description"), test_data["description"])
+            self.assertEqual(resp_body.get("type"), Workspace.Types.DEFAULT)
+            self.assertEqual(resp_body.get("parent_id"), root_parent_id)
+
+            # After test set the default values back
+            self.default_workspace.name = "Default"
+            self.default_workspace.description = "Default description"
+
+    def test_update_standard_workspace_put_without_parent_id_fails(self):
+        """Test that PUT to a standard workspace without parent_id returns 400."""
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": self.standard_workspace.id})
+
+        response = client.put(url, {"name": "New Name"}, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        resp_body = response.json()
+        self.assertIn("parent_id", str(resp_body))
+
+    def test_update_default_workspace_put_with_root_parent_id_success(self):
+        """Test that PUT to the default workspace with the root workspace's id as parent_id succeeds.
+
+        The spec requires parent_id to match the current value. The default workspace's parent
+        is the root workspace, so passing root workspace's id should succeed.
+        Previously this failed with 'Sub-workspaces may only be created under the default workspace.'
+        """
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": self.default_workspace.id})
+
+        request_data = {
+            "name": self.default_workspace.name,
+            "description": self.default_workspace.description,
+            "parent_id": str(self.default_workspace.parent_id),
+        }
+
+        response = client.put(url, request_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        resp_body = response.json()
+        self.assertEqual(resp_body.get("type"), Workspace.Types.DEFAULT)
+        self.assertEqual(resp_body.get("parent_id"), str(self.default_workspace.parent_id))
 
     def test_update_workspace_existing_name_fail(self):
         """Test the workspace name update (PUT) fail for already existing "name" under same parent."""
@@ -1161,7 +1214,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
 
         client = APIClient()
         url = reverse("v2_management:workspace-detail", kwargs={"pk": wsA.id})
-        workspace_request_data = {"name": wsB.name}
+        workspace_request_data = {"name": wsB.name, "parent_id": wsA.parent_id}
 
         response = client.put(url, workspace_request_data, format="json", **self.headers)
 
@@ -1219,7 +1272,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
 
         client = APIClient()
         url = reverse("v2_management:workspace-detail", kwargs={"pk": wsAA.id})
-        workspace_request_data = {"name": wsB.name}
+        workspace_request_data = {"name": wsB.name, "parent_id": wsAA.parent_id}
         # expected structure after update:
         # self.default_workspace (default) -> Workspace A (standard) -> Workspace B (standard)
         #                                  -> Workspace B (standard)
@@ -1263,6 +1316,110 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response_message = response.json()
         self.assertEqual(response_message.get("name"), wsB.name)
         self.assertEqual(response_message.get("parent_id"), str(wsA.id))
+
+    def test_create_workspace_invalid_name_characters(self):
+        """Test that create rejects names with disallowed characters."""
+        client = APIClient()
+        url = reverse("v2_management:workspace-list")
+        for invalid_name in ["ws@name", "ws#name", "ws!name", "ws.name", "ws/name", "ws+name"]:
+            response = client.post(
+                url,
+                {"name": invalid_name, "parent_id": self.default_workspace.id},
+                format="json",
+                **self.headers,
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, f"Expected 400 for '{invalid_name}'")
+
+    def test_create_workspace_valid_name_characters(self):
+        """Test that create accepts names with allowed characters."""
+        client = APIClient()
+        url = reverse("v2_management:workspace-list")
+        valid_names = ["My Workspace", "ws-name", "ws_name", "Workspace 123", "simple"]
+        for valid_name in valid_names:
+            response = client.post(
+                url,
+                {"name": valid_name, "parent_id": self.default_workspace.id},
+                format="json",
+                **self.headers,
+            )
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED, f"Expected 201 for '{valid_name}'")
+
+    def test_update_workspace_invalid_name_characters(self):
+        """Test that PUT rejects a new name with disallowed characters."""
+        workspace = Workspace.objects.create(
+            name="Valid Name",
+            tenant=self.tenant,
+            parent=self.default_workspace,
+            type=Workspace.Types.STANDARD,
+        )
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        response = client.put(
+            url,
+            {"name": "invalid@name", "parent_id": workspace.parent_id},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_partial_update_workspace_invalid_name_characters(self):
+        """Test that PATCH rejects a new name with disallowed characters."""
+        workspace = Workspace.objects.create(
+            name="Valid Name",
+            tenant=self.tenant,
+            parent=self.default_workspace,
+            type=Workspace.Types.STANDARD,
+        )
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        response = client.patch(url, {"name": "bad!name"}, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_update_workspace_legacy_name_unchanged(self):
+        """Test that PUT with an unchanged legacy name (with disallowed chars) succeeds."""
+        workspace = Workspace.objects.create(
+            name="legacy@name",
+            tenant=self.tenant,
+            parent=self.default_workspace,
+            type=Workspace.Types.STANDARD,
+        )
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        response = client.put(
+            url,
+            {"name": "legacy@name", "description": "updated desc", "parent_id": workspace.parent_id},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "legacy@name")
+
+    def test_partial_update_workspace_legacy_name_not_sent(self):
+        """Test that PATCH without name field on a workspace with legacy name succeeds."""
+        workspace = Workspace.objects.create(
+            name="legacy@name",
+            tenant=self.tenant,
+            parent=self.default_workspace,
+            type=Workspace.Types.STANDARD,
+        )
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        response = client.patch(url, {"description": "updated desc"}, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "legacy@name")
+
+    def test_update_workspace_legacy_name_changed_to_invalid(self):
+        """Test that changing a legacy name to a different invalid name is rejected."""
+        workspace = Workspace.objects.create(
+            name="legacy@name",
+            tenant=self.tenant,
+            parent=self.default_workspace,
+            type=Workspace.Types.STANDARD,
+        )
+        client = APIClient()
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        response = client.patch(url, {"name": "other@invalid"}, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_update_workspace_invalid_uuid(self):
         """Test that update fails with 400 when workspace id is not a valid UUID."""
@@ -1519,11 +1676,11 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
     @patch("management.base_viewsets.BaseV2ViewSet.create")
     def test_create_retry_exhausted_after_three_failures(self, mock_super_create):
         """
-        Test that create operation returns 409 CONFLICT after all retry attempts fail.
+        Test that create operation returns 503 SERVICE UNAVAILABLE after all retry attempts fail.
 
         The retry=3 parameter means: 1 initial attempt + 3 retries = 4 total attempts.
         If all attempts fail with SerializationFailure, the exception should propagate
-        and be caught by the create() method, returning a 409 response.
+        and be caught by the create() method, returning a 503 response with Retry-After header.
         """
         # Mock to always fail with SerializationFailure
         serialization_error = OperationalError("could not serialize access")
@@ -1537,9 +1694,10 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         data = {"name": "Test Workspace", "parent_id": str(self.default_workspace.id)}
         response = client.post(url, data, format="json", **self.headers)
 
-        # Verify returns 409 CONFLICT after all retries exhausted
-        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
-        self.assertIn("Too many concurrent updates", str(response.data["detail"]))
+        # Verify returns 503 SERVICE UNAVAILABLE after all retries exhausted
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
+        self.assertEqual(response["Retry-After"], "1")
 
         # Verify the method was called 4 times (1 initial + 3 retries)
         self.assertEqual(mock_super_create.call_count, 4)
@@ -1675,8 +1833,76 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         # Verify method was called only once (no retries for ValidationError)
         self.assertEqual(mock_super_create.call_count, 1)
 
+    @patch(
+        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+    )
+    def test_create_dual_write_operational_error_propagates_for_retry(self, mock_replicate):
+        """
+        Test that OperationalError from dual write handler propagates through for pgtransaction retry.
 
-@override_settings(V2_APIS_ENABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=5)
+        Previously, _replicate() wrapped all exceptions in DualWriteException, which prevented
+        pgtransaction from recognizing the error as retryable. After the fix, OperationalError
+        (wrapping SerializationFailure) should propagate directly, allowing pgtransaction to retry.
+        When retries are exhausted, the view returns 503 with Retry-After header.
+        """
+        serialization_error = OperationalError("could not serialize access")
+        serialization_error.__cause__ = SerializationFailure("could not serialize access due to concurrent update")
+
+        mock_replicate.side_effect = serialization_error
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        data = {"name": "Test Workspace DW", "parent_id": str(self.default_workspace.id)}
+        response = client.post(url, data, format="json", **self.headers)
+
+        # OperationalError propagates through _replicate -> pgtransaction retries -> exhausted -> 503
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
+        self.assertEqual(response["Retry-After"], "1")
+
+    @patch(
+        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+    )
+    def test_create_dual_write_non_db_exception_raises_dual_write_error(self, mock_replicate):
+        """
+        Test that non-database exceptions from _replicate() are still wrapped in DualWriteException.
+
+        Only OperationalError (serialization/deadlock) should propagate for retry.
+        Other exceptions should remain wrapped in DualWriteException and bubble up.
+        """
+        from management.relation_replicator.relation_replicator import DualWriteException
+
+        mock_replicate.side_effect = DualWriteException(ValueError("some other error"))
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        data = {"name": "Test Workspace DW2", "parent_id": str(self.default_workspace.id)}
+
+        # Non-DB DualWriteException bubbles up as unhandled (not caught by the view)
+        with self.assertRaises(DualWriteException):
+            client.post(url, data, format="json", **self.headers)
+
+    @patch("management.base_viewsets.BaseV2ViewSet.create")
+    def test_create_bare_operational_error_propagates(self, mock_super_create):
+        """
+        Test that OperationalError without __cause__ re-raises as unhandled.
+
+        If OperationalError has no __cause__ (e.g., connection error, not serialization),
+        it should propagate as an unhandled exception rather than being silently swallowed.
+        """
+        bare_error = OperationalError("connection reset by peer")
+
+        mock_super_create.side_effect = bare_error
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        data = {"name": "Test Workspace Bare", "parent_id": str(self.default_workspace.id)}
+
+        with self.assertRaises(OperationalError):
+            client.post(url, data, format="json", **self.headers)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=5)
 class WorkspaceMove(TransactionalWorkspaceViewTests):
     """Tests for move workspace."""
 
@@ -2378,11 +2604,11 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
     @patch("management.workspace.serializer.WorkspaceSerializer.move")
     def test_move_retry_exhausted_after_three_failures(self, mock_serializer_move):
         """
-        Test that move operation returns 409 CONFLICT after all retry attempts fail.
+        Test that move operation returns 503 SERVICE UNAVAILABLE after all retry attempts fail.
 
         The retry=3 parameter means: 1 initial attempt + 3 retries = 4 total attempts.
         If all attempts fail with SerializationFailure, the exception should propagate
-        and be caught by the move() method, returning a 409 response.
+        and be caught by the move() method, returning a 503 response with Retry-After header.
         """
         # Mock to always fail with SerializationFailure
         serialization_error = OperationalError("could not serialize access")
@@ -2396,9 +2622,10 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         data = {"parent_id": str(self.default_workspace.id)}
         response = client.post(url, data, format="json", **self.headers)
 
-        # Verify returns 409 CONFLICT after all retries exhausted
-        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
-        self.assertIn("Too many concurrent updates", str(response.data["detail"]))
+        # Verify returns 503 SERVICE UNAVAILABLE after all retries exhausted
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
+        self.assertEqual(response["Retry-After"], "1")
 
         # Verify the method was called 4 times (1 initial + 3 retries)
         self.assertEqual(mock_serializer_move.call_count, 4)
@@ -2525,8 +2752,33 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         # Verify the method was only called once (no retries for ValidationError)
         self.assertEqual(mock_serializer_move.call_count, 1)
 
+    @patch(
+        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+    )
+    def test_move_dual_write_operational_error_propagates_for_retry(self, mock_replicate):
+        """
+        Test that OperationalError from dual write handler propagates through for pgtransaction retry on move.
 
-@override_settings(V2_APIS_ENABLED=True)
+        Same fix as create path: _replicate() now re-raises OperationalError instead of wrapping
+        in DualWriteException, allowing pgtransaction to retry. When retries are exhausted, returns 503.
+        """
+        serialization_error = OperationalError("could not serialize access")
+        serialization_error.__cause__ = SerializationFailure("could not serialize access due to concurrent update")
+
+        mock_replicate.side_effect = serialization_error
+
+        url = reverse("v2_management:workspace-move", kwargs={"pk": self.test_workspace.id})
+        client = APIClient()
+        data = {"parent_id": str(self.default_workspace.id)}
+        response = client.post(url, data, format="json", **self.headers)
+
+        # OperationalError propagates through _replicate -> pgtransaction retries -> exhausted -> 503
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
+        self.assertEqual(response["Retry-After"], "1")
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
 class WorkspaceTestsList(WorkspaceViewTests):
     """Tests for listing workspaces."""
 
@@ -2601,6 +2853,115 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(payload.get("data")[0]["id"], str(self.default_workspace.id))
         self.assertType(payload, "default")
 
+    def test_workspace_list_multiple_types(self):
+        """List workspaces with comma-separated type values."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=standard,ungrouped-hosts", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        expected_count = Workspace.objects.filter(type__in=["standard", "ungrouped-hosts"]).count()
+        self.assertEqual(payload.get("meta").get("count"), expected_count)
+        returned_types = {ws["type"] for ws in payload.get("data")}
+        self.assertTrue(returned_types.issubset({"standard", "ungrouped-hosts"}))
+        self.assertIn(str(self.standard_workspace.id), [ws["id"] for ws in payload.get("data")])
+        self.assertIn(str(self.ungrouped_workspace.id), [ws["id"] for ws in payload.get("data")])
+
+    def test_workspace_list_multiple_types_with_whitespace_and_case(self):
+        """List workspaces with whitespace and mixed case in comma-separated type values."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=STANDARD, ungrouped-hosts", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        expected_count = Workspace.objects.filter(type__in=["standard", "ungrouped-hosts"]).count()
+        self.assertEqual(payload.get("meta").get("count"), expected_count)
+        returned_types = {ws["type"] for ws in payload.get("data")}
+        self.assertTrue(returned_types.issubset({"standard", "ungrouped-hosts"}))
+
+    def test_workspace_list_multiple_types_with_all(self):
+        """List workspaces with type=standard,all returns all types (all takes precedence)."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=standard,all", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_multiple_types_with_all_different_position_and_case(self):
+        """List workspaces with type=ALL,standard returns all types (all takes precedence, case-insensitive)."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=ALL,standard", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_multiple_types_invalid_value(self):
+        """List workspaces with an invalid type in comma-separated values returns a structured 400 error."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=standard,invalid", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIsInstance(response.data, dict)
+        self.assertIn("detail", response.data)
+        message = str(response.data["detail"])
+        self.assertIn("invalid", message)
+        self.assertIn("allowed", message.lower())
+
+    def test_workspace_list_multiple_types_root_default(self):
+        """List workspaces with type=root,default returns only root and default workspaces."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=root,default", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        expected_count = Workspace.objects.filter(type__in=[Workspace.Types.ROOT, Workspace.Types.DEFAULT]).count()
+        self.assertEqual(payload.get("meta").get("count"), expected_count)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.root_workspace.id), returned_ids)
+        self.assertIn(str(self.default_workspace.id), returned_ids)
+
+    def test_workspace_list_empty_type_returns_all(self):
+        """List workspaces with ?type= (empty string) returns all workspaces (not zero)."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_type_nul_byte_returns_400(self):
+        """List workspaces with NUL byte in type param returns 400."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?type=standard\x00evil", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_workspace_list_filter_by_ids_with_multiple_types(self):
+        """Test filtering workspaces by ids with multiple comma-separated types."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        ids = f"{self.standard_workspace.id},{self.ungrouped_workspace.id},{self.root_workspace.id}"
+        response = client.get(f"{url}?ids={ids}&type=standard,ungrouped-hosts", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # Only standard and ungrouped-hosts workspaces should be returned
+        self.assertEqual(payload.get("meta").get("count"), 2)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.ungrouped_workspace.id), returned_ids)
+        self.assertNotIn(str(self.root_workspace.id), returned_ids)
+
     def test_workspace_list_queryset_by_tenant(self):
         """List workspaces only for the request tenant."""
         tenant = Tenant.objects.create(tenant_name="Tenant 2")
@@ -2616,12 +2977,19 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(payload.get("data")[0]["id"], str(self.root_workspace.id))
         self.assertType(payload, "root")
 
-    def test_workspace_list_filter_by_name(self):
-        """List workspaces filtered by name."""
-        ws_name_1 = "Workspace for filter 1"
-        ws_name_2 = "Workspace for filter 2"
-        workspaces = Workspace.objects.bulk_create(
+    def test_workspace_list_filter_by_name_substring(self):
+        """Test that name filter without wildcards does case-insensitive substring match."""
+        ws_name_1 = "Sales Team Alpha"
+        ws_name_2 = "Sales Team Beta"
+        ws_name_3 = "Engineering Squad"
+        Workspace.objects.bulk_create(
             [
+                Workspace(
+                    name=ws_name_1,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
                 Workspace(
                     name=ws_name_2,
                     tenant=self.tenant,
@@ -2629,7 +2997,7 @@ class WorkspaceTestsList(WorkspaceViewTests):
                     parent_id=self.default_workspace.id,
                 ),
                 Workspace(
-                    name=ws_name_1.upper(),
+                    name=ws_name_3,
                     tenant=self.tenant,
                     type="standard",
                     parent_id=self.default_workspace.id,
@@ -2639,13 +3007,142 @@ class WorkspaceTestsList(WorkspaceViewTests):
 
         url = reverse("v2_management:workspace-list")
         client = APIClient()
-        response = client.get(f"{url}?name={ws_name_1}", None, format="json", **self.headers)
-        payload = response.data
 
+        # Full name "Sales Team Alpha" returns only that workspace
+        response = client.get(f"{url}?name=Sales Team Alpha", None, format="json", **self.headers)
+        payload = response.data
         self.assertSuccessfulList(response, payload)
         self.assertEqual(payload.get("meta").get("count"), 1)
-        self.assertType(payload, "standard")
-        assert payload.get("data")[0]["name"] == ws_name_1.upper()
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
+
+        # Partial string "Sales" matches both Sales workspaces (substring semantics)
+        response = client.get(f"{url}?name=Sales", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Full name match for "Engineering Squad"
+        response = client.get(f"{url}?name=Engineering Squad", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_3)
+
+    def test_workspace_list_filter_by_name_wildcard(self):
+        """Test that name filter with * wildcards does glob pattern matching."""
+        ws_name_1 = "Sales Team Alpha"
+        ws_name_2 = "Sales Team Beta"
+        ws_name_3 = "Engineering Squad"
+        Workspace.objects.bulk_create(
+            [
+                Workspace(
+                    name=ws_name_1,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+                Workspace(
+                    name=ws_name_2,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+                Workspace(
+                    name=ws_name_3,
+                    tenant=self.tenant,
+                    type="standard",
+                    parent_id=self.default_workspace.id,
+                ),
+            ]
+        )
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+
+        # Substring wildcard *Sales* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=*Sales*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Prefix wildcard Sales* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=Sales*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Suffix wildcard *Alpha matches only Sales Team Alpha
+        response = client.get(f"{url}?name=*Alpha", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
+
+        # Substring wildcard *Team* matches both Sales Team workspaces
+        response = client.get(f"{url}?name=*Team*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+
+        # Complex pattern Sales*Alpha matches only Sales Team Alpha
+        response = client.get(f"{url}?name=Sales*Alpha", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], ws_name_1)
+
+    def test_workspace_list_filter_by_name_wildcard_no_match(self):
+        """Test that a wildcard pattern matching nothing returns empty list."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?name=zzz*", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"], [])
+
+    def test_workspace_list_filter_by_name_wildcard_star_returns_all(self):
+        """Test that name=* returns all workspaces (no filter applied)."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        total_count = Workspace.objects.count()
+
+        response = client.get(f"{url}?name=*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), total_count)
+
+    def test_workspace_list_filter_by_name_is_case_insensitive(self):
+        """Test that name filter is case-insensitive for both substring and wildcard matching."""
+        Workspace.objects.create(
+            name="Sales Team Alpha",
+            tenant=self.tenant,
+            type="standard",
+            parent_id=self.default_workspace.id,
+        )
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+
+        # Lowercase substring match
+        response = client.get(f"{url}?name=sales team alpha", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
+
+        # Uppercase substring match
+        response = client.get(f"{url}?name=SALES TEAM ALPHA", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
+
+        # Case-insensitive wildcard
+        response = client.get(f"{url}?name=*sales*", None, format="json", **self.headers)
+        payload = response.data
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["name"], "Sales Team Alpha")
 
     def test_workspace_list_filter_by_name_empty_string(self):
         """Test that filtering by empty name string returns all workspaces."""
@@ -2792,8 +3289,269 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertEqual(len(payload.get("data")), Workspace.objects.count())
         self.assertEqual(payload.get("meta").get("count"), Workspace.objects.count())
 
+    def test_workspace_list_filter_by_single_id(self):
+        """Test filtering workspaces by a single id."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?ids={self.standard_workspace.id}", None, format="json", **self.headers)
+        payload = response.data
 
-@override_settings(V2_APIS_ENABLED=True)
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["id"], str(self.standard_workspace.id))
+
+    def test_workspace_list_filter_by_multiple_ids(self):
+        """Test filtering workspaces by multiple comma-separated ids."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # Use two standard workspaces since ids filter defaults to type=standard
+        ids = f"{self.standard_workspace.id},{self.standard_sub_workspace.id}"
+        response = client.get(f"{url}?ids={ids}", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 2)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.standard_sub_workspace.id), returned_ids)
+
+    def test_workspace_list_filter_by_ids_empty_string(self):
+        """Test that filtering by empty ids string returns all workspaces."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?ids=", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Empty ids filter should return all workspaces (same as no filter)
+        self.assertIn("data", response.data)
+        self.assertEqual(response.data.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_filter_by_invalid_ids(self):
+        """Test that filtering by invalid UUID returns a validation error."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?ids=invalid-uuid", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not a valid UUID", str(response.data))
+
+    def test_workspace_list_filter_by_multiple_ids_with_invalid(self):
+        """Test that filtering by ids with one invalid UUID returns a validation error."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        ids = f"{self.standard_workspace.id},invalid-uuid"
+        response = client.get(f"{url}?ids={ids}", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not a valid UUID", str(response.data))
+
+    def test_workspace_list_filter_by_nonexistent_ids(self):
+        """Test filtering by a valid UUID that doesn't exist returns empty results."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        non_existent_uuid = "00000000-0000-0000-0000-000000000000"
+        response = client.get(f"{url}?ids={non_existent_uuid}", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload.get("meta").get("count"), 0)
+        self.assertEqual(len(payload.get("data")), 0)
+
+    def test_workspace_list_filter_by_ids_with_type_all(self):
+        """Test filtering workspaces by ids with type=all returns all types."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        ids = f"{self.standard_workspace.id},{self.default_workspace.id},{self.root_workspace.id}"
+        response = client.get(f"{url}?ids={ids}&type=all", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # All three workspaces should be returned when type=all is specified
+        self.assertEqual(payload.get("meta").get("count"), 3)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.default_workspace.id), returned_ids)
+        self.assertIn(str(self.root_workspace.id), returned_ids)
+
+    def test_workspace_list_filter_by_ids_defaults_to_standard(self):
+        """Test that ids filter defaults to type=standard when type not specified."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # Include workspaces of different types
+        ids = f"{self.standard_workspace.id},{self.default_workspace.id},{self.root_workspace.id}"
+        response = client.get(f"{url}?ids={ids}", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # Only the standard workspace should be returned (default type filter)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["id"], str(self.standard_workspace.id))
+        self.assertEqual(payload.get("data")[0]["type"], "standard")
+
+    def test_workspace_list_filter_by_parent_id(self):
+        """Test filtering workspaces by parent_id returns only direct children."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # Filter for children of default_workspace — should return standard workspaces under it
+        response = client.get(
+            f"{url}?parent_id={self.default_workspace.id}&type=all", None, format="json", **self.headers
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # default_workspace has: standard_workspace, ungrouped_workspace as direct children
+        self.assertEqual(payload.get("meta").get("count"), 2)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.ungrouped_workspace.id), returned_ids)
+
+    def test_workspace_list_filter_by_parent_id_non_root_parent(self):
+        """Test that parent_id works for intermediate hierarchy nodes, not just root/default."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # standard_sub_workspace is a child of standard_workspace
+        response = client.get(
+            f"{url}?parent_id={self.standard_workspace.id}&type=all", None, format="json", **self.headers
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["id"], str(self.standard_sub_workspace.id))
+
+    def test_workspace_list_filter_by_parent_id_returns_only_direct_children(self):
+        """Test that parent_id filter returns only direct children, not deeper descendants."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # standard_sub_workspace is a child of standard_workspace, NOT of default_workspace
+        response = client.get(
+            f"{url}?parent_id={self.default_workspace.id}&type=standard", None, format="json", **self.headers
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        # standard_sub_workspace should NOT appear — it's a grandchild, not a direct child
+        self.assertNotIn(str(self.standard_sub_workspace.id), returned_ids)
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        # ungrouped_workspace is a direct child of default but has type=ungrouped-hosts, not standard
+        self.assertNotIn(str(self.ungrouped_workspace.id), returned_ids)
+
+    def test_workspace_list_filter_by_parent_id_with_name(self):
+        """Test combining parent_id and name filters."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(
+            f"{url}?parent_id={self.default_workspace.id}&name=Standard Workspace&type=all",
+            None,
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload.get("meta").get("count"), 1)
+        self.assertEqual(payload.get("data")[0]["id"], str(self.standard_workspace.id))
+
+    def test_workspace_list_filter_by_parent_id_with_ids(self):
+        """Test combining parent_id with ids returns only workspaces matching both filters."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # standard_sub_workspace is a child of standard_workspace, NOT of default_workspace
+        # so it should be excluded by the parent_id filter even though it's in the ids list
+        ids_param = f"{self.standard_workspace.id},{self.standard_sub_workspace.id}"
+        response = client.get(
+            f"{url}?parent_id={self.default_workspace.id}&ids={ids_param}&type=all",
+            None,
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        returned_ids = {ws["id"] for ws in payload.get("data")}
+        # Only standard_workspace is both in the ids list AND a child of default_workspace
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertNotIn(str(self.standard_sub_workspace.id), returned_ids)
+
+    def test_workspace_list_filter_by_parent_id_empty_string(self):
+        """Test that filtering by empty parent_id returns all workspaces."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?parent_id=", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("data", response.data)
+        self.assertEqual(response.data.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_filter_by_parent_id_whitespace_only(self):
+        """Test that filtering by whitespace-only parent_id returns all workspaces."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?parent_id=   ", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("data", response.data)
+        self.assertEqual(response.data.get("meta").get("count"), Workspace.objects.count())
+
+    def test_workspace_list_filter_by_parent_id_invalid_uuid(self):
+        """Test that filtering by invalid parent_id UUID returns a validation error."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?parent_id=not-a-uuid", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # Assert on error structure rather than exact message text
+        error_fields = [e["field"] for e in response.data.get("errors", [])]
+        self.assertIn("parent_id", error_fields)
+
+    def test_workspace_list_filter_by_parent_id_nonexistent(self):
+        """Test that filtering by a valid but non-existent parent_id returns empty results."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        non_existent_uuid = "00000000-0000-0000-0000-000000000000"
+        response = client.get(f"{url}?parent_id={non_existent_uuid}", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload.get("meta").get("count"), 0)
+        self.assertEqual(len(payload.get("data")), 0)
+
+    def test_workspace_list_filter_by_parent_id_with_nul_character(self):
+        """Test that filtering by parent_id containing NUL character returns a validation error."""
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.get(f"{url}?parent_id=test\x00uuid", None, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.get("content-type"), "application/problem+json")
+        self.assertIn("parent_id", str(response.data))
+        self.assertIn("invalid characters", str(response.data))
+
+    def test_workspace_list_filter_by_parent_id_cross_tenant(self):
+        """Test that parent_id from another tenant returns no results and does not leak current-tenant workspaces."""
+        other_tenant = Tenant.objects.create(tenant_name="Other Tenant")
+        other_root = Workspace.objects.create(name="Other Root", type="root", tenant=other_tenant)
+
+        # Sanity check: current tenant has workspaces
+        current_tenant_workspaces = Workspace.objects.filter(tenant=self.tenant)
+        self.assertTrue(current_tenant_workspaces.exists())
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        # Try to filter by a parent_id that belongs to a different tenant
+        response = client.get(f"{url}?parent_id={other_root.id}", None, format="json", **self.headers)
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload.get("meta").get("count"), 0)
+
+        # Verify no current-tenant workspaces leaked into the response
+        returned_ids = {ws["id"] for ws in payload.get("data")}
+        self.assertNotIn(str(self.default_workspace.id), returned_ids)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
 class WorkspaceTestsDetail(WorkspaceViewTests):
     """Tests for get workspace detail."""
 
@@ -2967,7 +3725,7 @@ class WorkspaceTestsDetail(WorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
-@override_settings(V2_APIS_ENABLED=False)
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=False)
 class WorkspaceViewTestsV2Disabled(WorkspaceViewTests):
     def test_get_workspace_list(self):
         """Test for accessing v2 APIs which should be disabled by default."""
@@ -2978,7 +3736,7 @@ class WorkspaceViewTestsV2Disabled(WorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
-@override_settings(WORKSPACE_HIERARCHY_DEPTH_LIMIT=2, V2_APIS_ENABLED=True)
+@override_settings(ATOMIC_RETRY_DISABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=2, V2_APIS_ENABLED=True)
 class WorkspaceViewTestsWithHierarchyLimit(TransactionalWorkspaceViewTests):
     """Test workspace hierarchy limits."""
 
@@ -3006,7 +3764,7 @@ class WorkspaceViewTestsWithHierarchyLimit(TransactionalWorkspaceViewTests):
         self.assertEqual(response.get("content-type"), "application/problem+json")
 
 
-@override_settings(WORKSPACE_RESTRICT_DEFAULT_PEERS=True, V2_APIS_ENABLED=True)
+@override_settings(ATOMIC_RETRY_DISABLED=True, WORKSPACE_RESTRICT_DEFAULT_PEERS=True, V2_APIS_ENABLED=True)
 class WorkspaceViewTestsWithPeerRestrictions(TransactionalWorkspaceViewTests):
     """Test workspace peer restrictions."""
 
@@ -3023,3 +3781,165 @@ class WorkspaceViewTestsWithPeerRestrictions(TransactionalWorkspaceViewTests):
 
         self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.get("content-type"), "application/problem+json")
+
+
+@override_settings(V2_APIS_ENABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=100, WORKSPACE_RESTRICT_DEFAULT_PEERS=False)
+class WorkspaceAuditLogTests(TransactionalWorkspaceViewTests):
+    """Tests for workspace audit logging."""
+
+    def setUp(self):
+        super().setUp()
+        self.tuples = InMemoryTuples()
+        self.in_memory_replicator = InMemoryRelationReplicator(self.tuples)
+
+        from management.workspace.view import WorkspaceViewSet
+
+        def get_queryset_without_lock(self):
+            from management.base_viewsets import BaseV2ViewSet
+
+            return BaseV2ViewSet.get_queryset(self)
+
+        self.patcher = patch.object(WorkspaceViewSet, "get_queryset", get_queryset_without_lock)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        super().tearDown()
+
+    def _assert_audit_log(self, action: str, description: str):
+        client = APIClient()
+        audit_logs = client.get("/api/rbac/v1/auditlogs/", **self.headers).data["data"]
+
+        self.assertIn(
+            {
+                "action": action,
+                "description": description,
+                "resource_type": AuditLog.WORKSPACE,
+                "principal_username": self.user_data["username"],
+            },
+            [
+                {k: log[k] for k in ["action", "description", "resource_type", "principal_username"]}
+                for log in audit_logs
+            ],
+        )
+
+    def test_create_workspace_audit_log(self):
+        """Test that creating a workspace creates an audit log entry."""
+        workspace = {"name": "Audit Log Workspace", "description": "Test", "parent_id": self.default_workspace.id}
+
+        url = reverse("v2_management:workspace-list")
+        client = APIClient()
+        response = client.post(url, workspace, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        self._assert_audit_log(action=AuditLog.CREATE, description="Created workspace: Audit Log Workspace")
+
+    def test_update_workspace_audit_log(self):
+        """Test that updating a workspace creates an audit log entry."""
+        workspace = Workspace.objects.create(
+            name="Original Name",
+            description="Original Desc",
+            tenant=self.tenant,
+            parent=self.standard_workspace,
+        )
+
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        client = APIClient()
+        data = {"name": "Updated Name", "description": "Updated Desc", "parent_id": workspace.parent_id}
+        response = client.put(url, data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._assert_audit_log(
+            action=AuditLog.EDIT,
+            description=f"workspace {workspace.name}:\nEdited name\nEdited description",
+        )
+
+    def test_update_workspace_name_only_audit_log(self):
+        """Test that updating only the name is reflected in the audit log."""
+        workspace = Workspace.objects.create(
+            name="Name Only",
+            description="Keep This",
+            tenant=self.tenant,
+            parent=self.standard_workspace,
+        )
+
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        client = APIClient()
+        data = {"name": "New Name", "description": "Keep This", "parent_id": workspace.parent_id}
+        response = client.put(url, data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._assert_audit_log(
+            action=AuditLog.EDIT,
+            description=f"workspace {workspace.name}:\nEdited name",
+        )
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
+    def test_delete_workspace_audit_log(self, replicate_workspace, replicate):
+        """Test that deleting a workspace creates an audit log entry."""
+        replicate.side_effect = self.in_memory_replicator.replicate
+        workspace = Workspace.objects.create(
+            name="Workspace To Delete",
+            description="Will be deleted",
+            tenant=self.tenant,
+            parent=self.root_workspace,
+        )
+        relationship = create_relationship(
+            ("rbac", "workspace"),
+            str(workspace.id),
+            ("rbac", "workspace"),
+            str(self.root_workspace.id),
+            "parent",
+        )
+        self.tuples.write([relationship], [])
+
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        client = APIClient()
+        response = client.delete(url, None, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self._assert_audit_log(action=AuditLog.DELETE, description="Deleted workspace: Workspace To Delete")
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_move_workspace_audit_log(self, replicate):
+        """Test that moving a workspace creates an audit log entry."""
+        replicate.side_effect = self.in_memory_replicator.replicate
+
+        source_workspace = self.service.create(
+            {"name": "Source WS", "parent_id": self.default_workspace.id}, self.tenant
+        )
+        target_workspace = self.service.create(
+            {"name": "Target WS", "parent_id": self.default_workspace.id}, self.tenant
+        )
+
+        url = reverse("v2_management:workspace-move", kwargs={"pk": source_workspace.id})
+        client = APIClient()
+        response = client.post(url, {"parent_id": target_workspace.id}, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._assert_audit_log(
+            action=AuditLog.EDIT,
+            description="Moved workspace: Source WS to parent Target WS",
+        )
+
+    def test_partial_update_workspace_audit_log(self):
+        """Test that a PATCH with only description does not log 'Edited name'."""
+        workspace = Workspace.objects.create(
+            name="Partial Update WS",
+            description="Old Desc",
+            tenant=self.tenant,
+            parent=self.standard_workspace,
+        )
+
+        url = reverse("v2_management:workspace-detail", kwargs={"pk": workspace.id})
+        client = APIClient()
+        response = client.patch(url, {"description": "New Desc"}, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._assert_audit_log(
+            action=AuditLog.EDIT,
+            description=f"workspace {workspace.name}:\nEdited description",
+        )

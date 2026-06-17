@@ -19,10 +19,10 @@
 
 from typing import Callable, List, Optional
 
-from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django_filters import rest_framework as filters
+from management.atomic_transactions import atomic
 from management.filters import CommonFilters
 from management.principal.proxy import PrincipalProxy
 from management.relation_replicator.relation_replicator import ReplicationEventType
@@ -132,11 +132,15 @@ class CrossAccountRequestViewSet(
             return self.replace_user_id_with_info(result)
         return result
 
+    # This can operate on V2 tenants and approves CARs which creates role bindings,
+    # so we need SERIALIZABLE transaction to coordinate with role scope migrations.
+    @atomic
     def partial_update(self, request, *args, **kwargs):
         """Patch a cross-account request. Target account admin use it to update status of the request."""
         return super().partial_update(request=request, *args, **kwargs)
 
-    @transaction.atomic
+    # This can operate on V2 tenants, so we need to use a SERIALIZABLE transaction here.
+    @atomic
     def update(self, request, *args, **kwargs):
         """Update a cross-account request. TAM requestor use it to update their requesters."""
         validate_uuid(kwargs.get("pk"), "cross-account request uuid validation")
