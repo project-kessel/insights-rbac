@@ -337,6 +337,8 @@ class RoleScopeState(models.Model):
     version and computed_scopes are to be updated during seeding to reflect the scopes computed at that time.
     migrated should be set to False on any change and only updated to True when any bindings to previous scopes have
     been successfully migrated to the new scopes.
+
+    This should only be updated in a SERIALIZABLE transaction for synchronization reasons.
     """
 
     role = OneToOneField(Role, on_delete=models.CASCADE, related_name="scope_state", null=False)
