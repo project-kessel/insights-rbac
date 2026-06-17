@@ -9,7 +9,7 @@
     "@typespec/compiler": "^1.7.0"
   },
   "devDependencies": {
-    "@typespec/compiler": "^1.7.0"
+    "@typespec/compiler": "1.13.0"
   },
   "private": true,
   "dependencies": {
