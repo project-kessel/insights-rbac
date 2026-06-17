@@ -13,7 +13,7 @@
   },
   "private": true,
   "dependencies": {
-    "@typespec/http": "^1.7.0",
+    "@typespec/http": "1.13.0",
     "@typespec/json-schema": "1.13.0",
     "@typespec/openapi3": "^1.7.0",
     "@typespec/rest": "^0.83.0",
