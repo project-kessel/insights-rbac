@@ -21,6 +21,7 @@ This module contains:
 - Output serializers: For serializing response data
 """
 
+import logging
 import uuid
 from typing import Optional
 
@@ -36,6 +37,8 @@ from management.utils import FieldSelection, FieldSelectionValidationError, norm
 from rest_framework import serializers
 
 from api.models import Tenant
+
+logger = logging.getLogger(__name__)
 
 _SUBJECT_TYPE_GROUP = "group"
 _SUBJECT_TYPE_USER = "user"
@@ -829,6 +832,15 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
                 for child in obj.role.children.all():
                     if child.uuid == effective_uuid:
                         return child
+                # effective_role_uuid doesn't match any child — data integrity issue.
+                logger.warning(
+                    "RoleBinding %s: effective_role_uuid %s not found among children of platform role %s (%s). "
+                    "Falling back to the platform role itself.",
+                    obj.uuid,
+                    effective_uuid,
+                    obj.role.uuid,
+                    obj.role.name,
+                )
         return obj.role
 
     def get_role(self, obj: RoleBinding):
