@@ -686,6 +686,11 @@ ROOT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("ROOT_SCOPE_PERMISSIONS", default
 TENANT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("TENANT_SCOPE_PERMISSIONS", default="")
 DEFAULT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("DEFAULT_SCOPE_PERMISSIONS", default="")
 
+# Whether to enable automatic scope migration during seeding. (This is intended to allow the migrations to be run
+# manually before enabling the automatic runs, thus preventing the migration running sequentially for all roles on the
+# first seeding run after the feature is added.)
+AUTOMATIC_SCOPE_MIGRATION_ENABLED = ENVIRONMENT.bool("AUTOMATIC_SCOPE_MIGRATION_ENABLED", default=False)
+
 # Parity check settings - background job for comparing RBAC access with Kessel PDP
 PARITY_CHECK_ENABLED = ENVIRONMENT.bool("PARITY_CHECK_ENABLED", default=False)
 PARITY_CHECK_INTERVAL_SECONDS = ENVIRONMENT.int("PARITY_CHECK_INTERVAL_SECONDS", default=300)

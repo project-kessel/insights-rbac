@@ -368,8 +368,9 @@ def seed_roles(force_create_relationships=False, force_update_relationships=Fals
         # We must use all() to ensure we actually load the roles within the transaction.
         _do_delete_system_roles(roles_to_delete.all())
 
-    for role in current_roles:
-        _log_scope_change_and_migrate(v1_role=role, resource_service=resource_service)
+    if settings.AUTOMATIC_SCOPE_MIGRATION_ENABLED:
+        for role in current_roles:
+            _log_scope_change_and_migrate(v1_role=role, resource_service=resource_service)
 
 
 def seed_permissions():

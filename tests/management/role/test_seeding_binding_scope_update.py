@@ -39,7 +39,9 @@ from tests.management.role.test_dual_write import DualWriteTestCase
 from api.models import Tenant
 
 
-@override_settings(ATOMIC_RETRY_DISABLED=True, REPLICATION_TO_RELATION_ENABLED=True)
+@override_settings(
+    ATOMIC_RETRY_DISABLED=True, REPLICATION_TO_RELATION_ENABLED=True, AUTOMATIC_SCOPE_MIGRATION_ENABLED=True
+)
 class SystemRoleBindingScopeUpdateTests(DualWriteTestCase):
     """Test that system role bindings are updated when role scope changes during seeding."""
 
