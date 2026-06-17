@@ -343,7 +343,7 @@ class _SeedRolesConfig:
 # We do each operation in a SERIALIZABLE transaction so that other SERIALIZABLE transactions can have a consistent view
 # of what system roles exist. Retry on serialization failures since concurrent seeding can conflict.
 @atomic_with_retry(retries=3)
-def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_service=None):
+def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_service=None) -> Role:
     """Create the role object in the database."""
     public_tenant = Tenant.objects.get(tenant_name="public")
     name = data.get("name")
@@ -412,24 +412,24 @@ def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_ser
     return role
 
 
-def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None, resource_service=None):
+def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None, resource_service=None) -> list[Role]:
     """Update or create roles from list.
 
     This function uses all-or-nothing semantics: if any role fails to seed after retries,
     the entire seeding operation fails. This prevents inconsistent state where V1 roles
     exist without their corresponding V2 SeededRoleV2 records.
     """
-    current_role_ids = set()
+    current_roles: list[Role] = list()
     # Sort roles by name to ensure consistent lock ordering and prevent deadlocks
     sorted_roles = sorted(roles, key=lambda r: r.get("name", ""))
     for role_json in sorted_roles:
         try:
             role = _make_role(role_json, config, platform_roles, resource_service)
-            current_role_ids.add(role.id)
+            current_roles.append(role)
         except Exception as e:
             logger.error(f'Failed to update or create system role: {role_json.get("name")} with error: {e}')
             raise
-    return current_role_ids
+    return current_roles
 
 
 # SERIALIZABLE for the same reason as _make_role above.
@@ -452,7 +452,7 @@ def seed_roles(force_create_relationships=False, force_update_relationships=Fals
         for f in os.listdir(roles_directory)
         if os.path.isfile(os.path.join(roles_directory, f)) and f.endswith(".json")
     ]
-    current_role_ids = set()
+    current_roles: list[Role] = list()
 
     platform_roles = _seed_platform_roles()
     resource_service = ImplicitResourceService.from_settings()
@@ -461,7 +461,7 @@ def seed_roles(force_create_relationships=False, force_update_relationships=Fals
         with open(role_file_path) as json_file:
             data = json.load(json_file)
             role_list = data.get("roles")
-            file_role_ids = _update_or_create_roles(
+            file_roles = _update_or_create_roles(
                 role_list,
                 _SeedRolesConfig(
                     force_create_relationships=force_create_relationships,
@@ -470,10 +470,10 @@ def seed_roles(force_create_relationships=False, force_update_relationships=Fals
                 platform_roles,
                 resource_service,
             )
-            current_role_ids.update(file_role_ids)
+            current_roles.extend(file_roles)
 
     # Find roles in DB but not in config
-    roles_to_delete = Role.objects.public_tenant_only().exclude(id__in=current_role_ids)
+    roles_to_delete = Role.objects.public_tenant_only().exclude(id__in={r.id for r in current_roles})
     logger.info(f"The following '{roles_to_delete.count()}' roles(s) eligible for removal: {roles_to_delete.values()}")
 
     if destructive_ok("seeding"):
