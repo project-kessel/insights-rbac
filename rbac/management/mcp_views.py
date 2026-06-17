@@ -43,7 +43,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from management.access.view import AccessView
 from management.audit_log.view import AuditLogViewSet
-from management.cache import _connection_pool
+from management.cache import _get_connection_pool, _is_mock_redis
 from management.group.view import GroupViewSet
 from management.models import Access, AuditLog, Group, Permission
 from management.permission.view import PermissionViewSet
@@ -152,12 +152,17 @@ _REDIS_DESC_PREFIX = "mcp:desc:"
 
 def _get_redis():
     """Get a Redis connection using the shared connection pool from management.cache."""
-    return Redis(connection_pool=_connection_pool, ssl=settings.REDIS_SSL)
+    if _is_mock_redis():
+        return None
+    return Redis(connection_pool=_get_connection_pool(), ssl=settings.REDIS_SSL)
 
 
 def _get_description_override(tool_name: str) -> str | None:
     try:
-        value = _get_redis().get(f"{_REDIS_DESC_PREFIX}{tool_name}")
+        conn = _get_redis()
+        if conn is None:
+            return None
+        value = conn.get(f"{_REDIS_DESC_PREFIX}{tool_name}")
         return value.decode() if value else None
     except redis_exceptions.RedisError:
         logger.debug("mcp: redis unavailable for description override, tool=%s", tool_name)
@@ -165,16 +170,22 @@ def _get_description_override(tool_name: str) -> str | None:
 
 
 def _set_description_override(tool_name: str, description: str) -> None:
-    _get_redis().set(f"{_REDIS_DESC_PREFIX}{tool_name}", description)
+    conn = _get_redis()
+    if conn is not None:
+        conn.set(f"{_REDIS_DESC_PREFIX}{tool_name}", description)
 
 
 def _delete_description_override(tool_name: str) -> None:
-    _get_redis().delete(f"{_REDIS_DESC_PREFIX}{tool_name}")
+    conn = _get_redis()
+    if conn is not None:
+        conn.delete(f"{_REDIS_DESC_PREFIX}{tool_name}")
 
 
 def _get_all_description_overrides() -> dict[str, str]:
     try:
         r = _get_redis()
+        if r is None:
+            return {}
         keys = r.keys(f"{_REDIS_DESC_PREFIX}*")
         if not keys:
             return {}
@@ -221,6 +232,7 @@ class ToolConfig:
     required_resource_type: str = "tenant"
     v1_permission: tuple[str, str] | None = None
     caveats: str = ""
+    redacted_fields: tuple[str, ...] = ()
 
 
 _TOOL_CONFIG: dict[str, ToolConfig] = {}
@@ -236,6 +248,7 @@ def register_tool(
     required_resource_type: str = "tenant",
     v1_permission: tuple[str, str] | None = None,
     caveats: str = "",
+    redacted_fields: tuple[str, ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a tool with both FastMCP and _TOOL_CONFIG.
 
@@ -266,6 +279,7 @@ def register_tool(
             required_resource_type=required_resource_type,
             v1_permission=v1_permission,
             caveats=resolved_caveats,
+            redacted_fields=redacted_fields,
         )
 
         if passes_request:
@@ -286,6 +300,9 @@ def register_tool(
         return fn
 
     return decorator
+
+
+_PRINCIPAL_REDACTED_FIELDS: tuple[str, ...] = ("email", "last_name")
 
 
 def _clone_request(
@@ -508,14 +525,17 @@ def hello(message: str = "Hello, World!") -> str:
         "list_principals(name='John Smith'). "
         "To confirm a user exists and check their org admin status, call "
         "list_principals(usernames='<user>', match_criteria='exact'). "
-        "Returns: {meta: {count}, links, data: [{username, email, first_name, last_name, is_org_admin, ...}]}. "
+        "Returns: {meta: {count}, links, data: [{uuid, username, first_name, is_org_admin, ...}]}. "
+        "Sensitive fields (email, last_name) are redacted by default. "
         "Calls: GET /api/v1/principals/\n"
         "Caveats:\n"
         "- Shows only users provisioned in this org -- does not include cross-account (TAM) users or "
         "service accounts from other identity providers.\n"
-        "- 'is_org_admin' reflects the current state from the identity provider, not a historical snapshot."
+        "- 'is_org_admin' reflects the current state from the identity provider, not a historical snapshot.\n"
+        "- Sensitive fields (email, last_name) are redacted from responses."
     ),
     requires_auth=True,
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def list_principals(
     request: HttpRequest,
@@ -569,7 +589,7 @@ def list_principals(
         except (json.JSONDecodeError, AttributeError):
             pass
 
-    return result
+    return _strip_pii_from_principal_list(result, tenant=getattr(request, "tenant", None))
 
 
 def _list_principals_by_name(
@@ -632,7 +652,7 @@ def _list_principals_by_name(
 
     base_params = f"name={name_filter}&sort_order={sort_order}&status={status}&username_only={username_only}"
 
-    return json.dumps(
+    raw_json = json.dumps(
         {
             "meta": {"count": len(filtered_users), "limit": limit, "offset": offset},
             "links": {
@@ -651,6 +671,35 @@ def _list_principals_by_name(
         },
         default=str,
     )
+    return _strip_pii_from_principal_list(raw_json, tenant=getattr(request, "tenant", None))
+
+
+def _strip_pii_from_principal_list(raw_json: str, tenant: Any = None, redacted_fields: tuple[str, ...] = ()) -> str:
+    """Strip redacted fields from a principal-list API response, enriching with UUIDs."""
+    fields = redacted_fields or _PRINCIPAL_REDACTED_FIELDS
+    if not _is_pii_redaction_enabled():
+        return raw_json
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return raw_json
+
+    data = parsed.get("data", [])
+    if tenant and data:
+        usernames = [item.get("username") for item in data if item.get("username")]
+        if usernames:
+            uuid_map = dict(
+                Principal.objects.filter(username__in=usernames, tenant=tenant).values_list("username", "uuid")
+            )
+            for item in data:
+                uname = item.get("username")
+                if uname and uname in uuid_map:
+                    item["uuid"] = str(uuid_map[uname])
+
+    for item in data:
+        for field in fields:
+            item.pop(field, None)
+    return json.dumps(parsed, default=str)
 
 
 def _call_view(
@@ -746,6 +795,75 @@ def get_status(request: HttpRequest) -> str:
     """Return server status by delegating to the status view."""
     path = reverse("v1_api:server-status")
     return _call_view(request, _status_view, path, {})
+
+
+@register_tool(
+    description=(
+        "Check MCP server health: tool registry integrity, database connectivity, "
+        "and Redis availability. No authentication required — designed for "
+        "infrastructure probing and readiness checks. "
+        "Returns status 'ok' when all checks pass, 'degraded' with per-check "
+        "details when any check fails."
+    ),
+    requires_auth=False,
+    api_version=ApiVersion.UNVERSIONED,
+)
+def health_check() -> str:
+    """Verify MCP-specific health: tool registry, database, and Redis."""
+    checks: dict[str, str] = {}
+    details: dict[str, str] = {}
+
+    # 1. Tool registry check
+    try:
+        config_count = len(_TOOL_CONFIG)
+        tools = _get_tools()
+        tools_count = len(tools)
+        if config_count > 0 and tools_count > 0:
+            checks["tools"] = "ok"
+        else:
+            checks["tools"] = "error"
+            details["tools"] = "registry empty"
+    except Exception:
+        logger.exception("mcp: health_check tools registry probe failed")
+        checks["tools"] = "error"
+        details["tools"] = "unavailable"
+
+    # 2. Database check
+    try:
+        _check_database()
+        checks["database"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check database probe failed")
+        checks["database"] = "error"
+        details["database"] = "unavailable"
+
+    # 3. Redis check
+    try:
+        _check_redis()
+        checks["redis"] = "ok"
+    except Exception:
+        logger.exception("mcp: health_check redis probe failed")
+        checks["redis"] = "error"
+        details["redis"] = "unavailable"
+
+    overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    result: dict[str, Any] = {"status": overall, "checks": checks}
+    if details:
+        result["details"] = details
+    return json.dumps(result)
+
+
+def _check_database() -> None:
+    """Probe database connectivity via a lightweight ORM query."""
+    Tenant.objects.exists()
+
+
+def _check_redis() -> None:
+    """Probe Redis connectivity via PING. No-op when Redis is mocked."""
+    conn = _get_redis()
+    if conn is None:
+        return
+    conn.ping()
 
 
 @register_tool(
@@ -1773,10 +1891,12 @@ def get_group(
     description=(
         "List principals (users) that are members of a specific group. "
         "Optionally filter by principal_type. "
-        "Returns: {meta: {count}, links, data: [{username, email, first_name, last_name, ...}]}. "
+        "Returns: {meta: {count}, links, data: [{uuid, username, first_name, ...}]}. "
+        "Sensitive fields (email, last_name) are redacted by default. "
         "Calls: GET /api/v1/groups/{uuid}/principals/"
     ),
     requires_auth=True,
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def list_group_principals(
     request: HttpRequest,
@@ -1795,7 +1915,8 @@ def list_group_principals(
         query_params["principal_type"] = principal_type
 
     path = reverse("v1_management:group-principals", kwargs={"uuid": group_uuid})
-    return _call_view(request, _group_principals_view, path, query_params, uuid=group_uuid)
+    result = _call_view(request, _group_principals_view, path, query_params, uuid=group_uuid)
+    return _strip_pii_from_principal_list(result, tenant=getattr(request, "tenant", None))
 
 
 @register_tool(
@@ -1809,7 +1930,7 @@ def list_group_principals(
         "list_cross_account_requests(query_by='target_org', status='approved'). "
         "Order by: 'request_id', 'start_date', 'end_date', 'created', 'modified', "
         "'status' (prefix with '-' to reverse). "
-        "Returns: {meta: {count}, links, data: [{request_id, target_account, status, start_date, end_date, ...}]}. "
+        "Returns: {meta: {count}, links, data: [{request_id, target_org, status, start_date, end_date, ...}]}. "
         "Calls: GET /api/v1/cross-account-requests/\n"
         "Caveats:\n"
         "- Cross-account requests are org-to-org, not user-to-user. A TAM requests access to your "
@@ -1855,8 +1976,8 @@ def list_cross_account_requests(
 @register_tool(
     description=(
         "Get details of a specific cross-account access request by its ID, including "
-        "status, start/end dates, target account, and the requested roles. "
-        "Returns: {request_id, target_account, status, start_date, end_date, created, roles, ...}. "
+        "status, start/end dates, target org, and the requested roles. "
+        "Returns: {request_id, target_org, status, start_date, end_date, created, roles, ...}. "
         "Calls: GET /api/v1/cross-account-requests/{request_id}/"
     ),
     requires_auth=True,
@@ -1886,8 +2007,9 @@ def get_cross_account_request(
         "RESPONSE FORMAT: Present results as a table: "
         "requester name | roles granted | specific permissions | expiration | status. "
         "Explain the lifecycle: create → pending → approved → active → expired. "
-        "Returns: {requests: [{request_id, status, end_date, days_remaining, requester_info, "
+        "Returns: {requests: [{request_id, status, end_date, days_remaining, requester_info: {user_id}, "
         "roles: [{name, permissions: [...]}], permission_summary}], analysis}. "
+        "Sensitive requester fields (email, last_name) are redacted; requesters are identified by user_id. "
         "AFTER ANALYSIS: Present numbered options: "
         "(1) update the cross-account request with an expanded roles list, "
         "(2) deny the current request and ask the TAM to resubmit with the correct scope (cleaner audit trail). "
@@ -1897,6 +2019,7 @@ def get_cross_account_request(
     api_version=ApiVersion.COMMON,
     required_relation="rbac_roles_read",
     v1_permission=("role", "read"),
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def investigate_tam_access(
     request: HttpRequest,
@@ -1974,11 +2097,12 @@ def investigate_tam_access(
                     "last_name": principal.get("last_name", ""),
                     "email": principal.get("email", ""),
                     "username": principal.get("username", ""),
+                    "user_id": str(principal.get("user_id", "")),
                 }
     except Exception:
         logger.warning("mcp: failed to fetch requester info from BOP", exc_info=True)
 
-    # Filter by requester name/email if provided
+    # Filter by requester name/email if provided (uses BOP data internally, not exposed)
     filtered_requests = requests_list
     if requester_name or requester_email:
         filtered_requests = []
@@ -2017,7 +2141,11 @@ def investigate_tam_access(
 
     for car in filtered_requests:
         days_remaining = (car.end_date - now).days if car.end_date else None
-        requester_info = user_info_map.get(car.user_id, {"user_id": car.user_id})
+        raw_info = user_info_map.get(car.user_id, {})
+        if _is_pii_redaction_enabled():
+            requester_info = {"user_id": raw_info.get("user_id", car.user_id)}
+        else:
+            requester_info = raw_info if raw_info else {"user_id": car.user_id}
 
         roles_data: list[dict[str, Any]] = []
         for role in car.roles.all():
@@ -2118,9 +2246,10 @@ def investigate_tam_access(
         "Red Hat user | roles | access scope | expiration | approved by | recent activity. "
         "When no active access exists, still present a summary stating zero access, "
         "note any pending/expired requests, and provide a monitoring recommendation. "
-        "Returns: {active_access: [{user_info, roles, permissions, expires, days_remaining, "
+        "Returns: {active_access: [{user_info: {user_id}, roles, permissions, expires, days_remaining, "
         "audit_activity: {total_actions, recent_actions, summary}}], summary: {total_users, "
         "expiring_soon, unused_access}}. "
+        "Sensitive user fields (email, last_name) are redacted; users are identified by user_id. "
         "AFTER ANALYSIS: Present numbered options: "
         "(1) cancel unused cross-account access (requests with no audit log activity), "
         "(2) format the full report for a CISO briefing, "
@@ -2131,6 +2260,7 @@ def investigate_tam_access(
     api_version=ApiVersion.COMMON,
     required_relation="rbac_roles_read",
     v1_permission=("role", "read"),
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def audit_redhat_access(
     request: HttpRequest,
@@ -2215,11 +2345,12 @@ def audit_redhat_access(
                     "last_name": principal.get("last_name", ""),
                     "email": principal.get("email", ""),
                     "username": principal.get("username", ""),
+                    "user_id": str(principal.get("user_id", "")),
                 }
     except Exception:
         logger.warning("mcp: failed to fetch requester info from BOP", exc_info=True)
 
-    # Batch query audit logs for all usernames
+    # Batch query audit logs for all usernames (uses username internally for audit log lookup)
     all_usernames = {info.get("username") for info in user_info_map.values() if info.get("username")}
     audit_by_user: dict[str, list[AuditLog]] = {u: [] for u in all_usernames}
     audit_counts_by_user: dict[str, int] = {}
@@ -2311,13 +2442,19 @@ def audit_redhat_access(
         results.append(
             {
                 "request_id": str(car.request_id),
-                "user_info": {
-                    "user_id": requester_info.get("user_id", car.user_id),
-                    "name": f"{requester_info.get('first_name', '')} {requester_info.get('last_name', '')}".strip()
-                    or car.user_id,
-                    "email": requester_info.get("email", ""),
-                    "username": username or f"user_{car.user_id}",
-                },
+                "user_info": (
+                    {"user_id": requester_info.get("user_id", car.user_id)}
+                    if _is_pii_redaction_enabled()
+                    else {
+                        "user_id": requester_info.get("user_id", car.user_id),
+                        "name": (
+                            f"{requester_info.get('first_name', '')} {requester_info.get('last_name', '')}".strip()
+                            or car.user_id
+                        ),
+                        "email": requester_info.get("email", ""),
+                        "username": username or f"user_{car.user_id}",
+                    }
+                ),
                 "status": status_display,
                 "start_date": car.start_date.strftime("%Y-%m-%d") if car.start_date else None,
                 "end_date": car.end_date.strftime("%Y-%m-%d") if car.end_date else None,
@@ -2361,8 +2498,9 @@ def audit_redhat_access(
         "roles/permissions they'd lose, and identifies who would be left stranded (losing all "
         "non-default access). Essential for org changes, contractor offboarding, or acquisitions. "
         "Provide either group_uuid OR group_name to identify the group. "
-        "Returns: {group: {...}, members: [{username, type, other_groups, access_impact}], "
+        "Returns: {group: {...}, members: [{uuid, type, other_groups, access_impact}], "
         "roles: [{name, permissions}], analysis: {stranded_users, stranded_service_accounts, ...}}. "
+        "Members are identified by UUID. Sensitive fields (email, last_name) are redacted. "
         "STRANDED means the member is ONLY in this group plus platform_default — they'd be demoted "
         "to default access only. Service accounts with no other groups would start 403'ing. "
         "Queries: Group, Principal, Policy, Role, Access models directly (no per-member API calls). "
@@ -2376,6 +2514,7 @@ def audit_redhat_access(
     api_version=ApiVersion.COMMON,
     required_relation="rbac_roles_read",
     v1_permission=("group", "read"),
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def audit_group_for_dissolution(
     request: HttpRequest,
@@ -2512,8 +2651,8 @@ def audit_group_for_dissolution(
         else:
             access_impact = "no impact - all permissions retained via other groups"
 
+        redact = _is_pii_redaction_enabled()
         member_info: dict[str, Any] = {
-            "username": principal.username,
             "uuid": str(principal.uuid),
             "type": principal.type,
             "other_groups": other_groups_info,
@@ -2525,19 +2664,22 @@ def audit_group_for_dissolution(
             "permissions_retained": len(retained_permissions),
         }
 
+        if not redact:
+            member_info["username"] = principal.username
         if principal.type == Principal.Types.SERVICE_ACCOUNT:
             member_info["service_account_id"] = principal.service_account_id
 
         members_data.append(member_info)
 
-        # Track stranded members
+        # Track stranded members by UUID (or username when redaction is off)
+        member_id = str(principal.uuid) if redact else principal.username
         if is_stranded:
             if principal.type == Principal.Types.USER:
-                stranded_users.append(principal.username)
+                stranded_users.append(member_id)
             else:
-                stranded_service_accounts.append(principal.username)
+                stranded_service_accounts.append(member_id)
         elif lost_permissions and retained_permissions:
-            members_with_overlap.append(principal.username)
+            members_with_overlap.append(member_id)
 
     # Group permissions by application for summary
     perm_by_app: dict[str, int] = {}
@@ -3003,8 +3145,6 @@ _DEFAULT_AUDIT_LOG_LIMIT = 10
 @register_tool(
     description=(
         "Get comprehensive state for a specific user, returning all RBAC information in one call. "
-        "Users may be referred to by name, as contractors, vendors, temps, consultants, or other "
-        "employment types -- these are all regular RBAC principals and should be looked up the same way. "
         "This is the best tool for understanding a user's complete RBAC picture. "
         "Returns: (1) groups the user belongs to with roles assigned to each, "
         "(2) all permissions/access the user has (auto-detects V1/V2), "
@@ -3024,9 +3164,10 @@ _DEFAULT_AUDIT_LOG_LIMIT = 10
         "(3) both. "
         "Format as 'Reply 1, 2, or 3 -- or no'. "
         "Note: Deactivating the user account itself is handled in the IT/account portal, not the RBAC API. "
-        "Returns: {username, org_version, groups: [{name, roles, recent_activity}], "
+        "Returns: {uuid, org_version, groups: [{name, roles, recent_activity}], "
         "access: [{permission, role_name, ...}], user_actions: {total_count, by_group, by_type, recent}, "
-        "summary: {group_count, permission_count, actions_by_user, recent_actions_on_groups}}.\n"
+        "summary: {group_count, permission_count, actions_by_user, recent_actions_on_groups}}. "
+        "The user is identified by UUID in the response (email, last_name redacted).\n"
         "Caveats:\n"
         "- Org admins have implicit full access that bypasses all RBAC checks; "
         "this is not reflected in the returned data.\n"
@@ -3037,6 +3178,7 @@ _DEFAULT_AUDIT_LOG_LIMIT = 10
     api_version=ApiVersion.UNIFIED,
     required_relation="rbac_roles_read",
     v1_permission=("principal", "read"),
+    redacted_fields=_PRINCIPAL_REDACTED_FIELDS,
 )
 def get_user_state(
     request: HttpRequest,
@@ -3078,7 +3220,7 @@ def get_user_state(
     username = resolved_username
 
     result: dict[str, Any] = {
-        "username": username,
+        **({"uuid": str(principal.uuid)} if _is_pii_redaction_enabled() else {"username": username}),
         "org_version": org_version,
         "groups": [],
         "access": [],
@@ -3221,10 +3363,9 @@ def get_user_state(
     result["summary"]["recent_actions_on_groups"] = total_activity
     result["summary"]["actions_by_user"] = len(user_performed_actions)
 
-    # Add hints for deeper investigation
     result["hints"] = {
         "check_specific_permission": (
-            f"Use check_user_permission(username='{username}', permission='app:resource:verb') to verify"
+            "Use check_user_permission(username=..., permission='app:resource:verb') to verify"
         ),
         "view_audit_details": "Use list_audit_logs(group_name='<group>', include_authorization=True) for details",
         "trace_role_permissions": "Use get_role(role_uuid='<uuid>') to see all permissions granted by a role",
@@ -4438,9 +4579,9 @@ def create_workspace(
     description=(
         "Create a cross-account access request. Allows users from one org (e.g. TAMs) "
         "to request temporary access to another org's resources. "
-        "Required: target_account (the account number to request access to), "
+        "Required: target_org (the org ID to request access to), "
         "start_date (YYYY-MM-DD), end_date (YYYY-MM-DD), roles (list of role UUIDs). "
-        "Example: create_cross_account_request(target_account='12345', "
+        "Example: create_cross_account_request(target_org='12345', "
         "start_date='2026-06-01', end_date='2026-06-30', roles=['<role-uuid>']) "
         "Returns: the created request with request_id, status, dates. "
         "Calls: POST /api/v1/cross-account-requests/"
@@ -4451,14 +4592,14 @@ def create_workspace(
 def create_cross_account_request(
     request: HttpRequest,
     *,
-    target_account: str,
+    target_org: str,
     start_date: str,
     end_date: str,
     roles: list[str],
 ) -> str:
     """Create a cross-account request by delegating to CrossAccountRequestViewSet."""
     body: dict[str, Any] = {
-        "target_account": target_account,
+        "target_org": target_org,
         "start_date": start_date,
         "end_date": end_date,
         "roles": roles,
@@ -5456,7 +5597,10 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
 
     Returns None on success, or a sanitized error message on failure.
     """
-    schemas = _get_tool_schemas()
+    try:
+        schemas = _get_tool_schemas()
+    except Exception:
+        return None
     schema = schemas.get(tool_name)
     if schema is None:
         return None
@@ -5482,6 +5626,11 @@ def _is_write_enabled() -> bool:
 def _is_write_confirmation_enabled() -> bool:
     """Check whether write tools require user confirmation before executing."""
     return getattr(settings, "MCP_WRITE_CONFIRMATION", True)
+
+
+def _is_pii_redaction_enabled() -> bool:
+    """Check whether PII is redacted from MCP tool responses."""
+    return getattr(settings, "MCP_PII_REDACTION_ENABLED", True)
 
 
 # --- Write confirmation token system ---

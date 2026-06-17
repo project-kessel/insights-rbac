@@ -15,6 +15,9 @@ insights-rbac is a Django REST Framework microservice providing Role-Based Acces
 | [`docs/database-guidelines.md`](docs/database-guidelines.md) | Multi-tenancy (TenantAwareModel), UUID conventions (v7 for new models), model patterns, constraints/indexes, workspace hierarchy (recursive SQL), Debezium outbox, migrations |
 | [`docs/testing-guidelines.md`](docs/testing-guidelines.md) | Test runner (dotted paths), base classes (IdentityRequest), v2 test setup (feature flag, URL reload, Kessel mocks), relation replication testing, mocking patterns, coverage |
 | [`docs/integration-guidelines.md`](docs/integration-guidelines.md) | Kessel Relations/Inventory (gRPC), Kafka producer/consumer, Debezium CDC, BOP, IT Service, UMB, notifications, feature flags, Prometheus metrics |
+| [`docs/MCP.md`](docs/MCP.md) | MCP endpoint developer guide: protocol (JSON-RPC 2.0 / StreamableHTTP), all 54 tools with parameters, `@register_tool` decorator, write confirmation flow, API version gating, adding new tools |
+| [`docs/MCP-operator-guide.md`](docs/MCP-operator-guide.md) | MCP endpoint operator guide: deployment, configuration (env vars), authentication (A2S routing), security considerations, Prometheus metrics, troubleshooting |
+| [`docs/mcp-scenario-validation.md`](docs/mcp-scenario-validation.md) | MCP scenario validation test plan: 10 end-to-end scenarios for validating MCP tool behavior with real orgs (V1 and V2) |
 
 ## Context Index
 
@@ -26,6 +29,8 @@ insights-rbac is a Django REST Framework microservice providing Role-Based Acces
 | `docs/ARCHITECTURE.md` | High-level system design, component relationships, data flow |
 | `docs/source/specs/v2/openapi.yaml` | V2 API specification (generated) |
 | `docs/source/specs/typespec/main.tsp` | TypeSpec source -- the contract for v2 API changes |
+| `docs/MCP.md` | MCP endpoint developer guide (protocol, tools, adding new tools) |
+| `docs/MCP-operator-guide.md` | MCP endpoint operator guide (deployment, config, security, metrics) |
 | `Makefile` | Build, test, migration, and Docker commands |
 | `tox.ini` | Test environments, linting config, env vars for tests |
 | `.pre-commit-config.yaml` | Pre-commit hooks: flake8, black, trailing whitespace, django-upgrade, openapi-spec-validator |
@@ -34,30 +39,33 @@ insights-rbac is a Django REST Framework microservice providing Role-Based Acces
 
 ### Testing
 
-Django's test runner requires **dotted module paths**, not file paths. If `tox` is not on PATH, use `pipenv run tox`.
+Django's test runner requires **dotted module paths**, not file paths. Use `tox -r` to match CI (Tekton pipeline).
 
 ```bash
-# Run all tests (with coverage)
-pipenv run tox -e py312
+# Run all environments (lint + tests + mypy), same as CI
+tox -r
+
+# Run all tests with coverage
+tox -r -e py312
 
 # Run all tests without coverage (faster)
-pipenv run tox -e py312-fast
+tox -r -e py312-fast
 
 # Run a specific test module
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view
+tox -r -e py312-fast -- tests.management.workspace.test_view
 
 # Run a specific test class
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList
+tox -r -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList
 
 # Run a single test method
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
+tox -r -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
 ```
 
 ### Linting and Formatting
 
 ```bash
-pipenv run tox -e lint                             # flake8 + black --check
-pipenv run black -t py312 -l 119 rbac tests        # auto-format
+tox -r -e lint                                     # flake8 + black --check
+black -t py312 -l 119 rbac tests                   # auto-format
 ```
 
 ### Local Development
@@ -98,7 +106,7 @@ The `.pre-commit-config.yaml` enforces:
 - django-upgrade (target 5.2)
 - openapi-spec-validator
 
-Run manually: `pipenv run pre-commit run --all-files`
+Run manually: `pre-commit run --all-files`
 
 ## Key Conventions
 

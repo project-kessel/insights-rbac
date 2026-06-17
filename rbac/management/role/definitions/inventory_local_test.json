@@ -32,6 +32,19 @@
             "permission": "inventory:groups:read"
           }
         ]
+      },
+      {
+        "name": "Inventory Hosts Viewer Local Test",
+        "description": "Be able to read Inventory Hosts data. Just for local testing.",
+        "system": true,
+        "platform_default": true,
+        "admin_default": false,
+        "version": 1,
+        "access": [
+          {
+            "permission": "inventory:hosts:read"
+          }
+        ]
       }
     ]
   }

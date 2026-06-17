@@ -16,11 +16,13 @@
 #
 """Test the internal utils module."""
 
-import datetime
 import uuid
+from datetime import timedelta
 from typing import Optional
 from unittest.mock import patch
+
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from api.cross_access.model import CrossAccountRequest
 from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
@@ -109,7 +111,9 @@ class ReplicateMissingBindingTuplesTest(TestCase):
 
         def create_car():
             car = CrossAccountRequest.objects.create(
-                target_org=self.tenant.org_id, user_id=principal.user_id, end_date=datetime.date(9999, 1, 1)
+                target_org=self.tenant.org_id,
+                user_id=principal.user_id,
+                end_date=timezone.now() + timedelta(days=364),
             )
 
             car.roles.set([role])
@@ -801,6 +805,7 @@ class RemoveOrphanBindingMappingsTest(DualWriteTestCase):
                 users={},
             ),
             role,
+            v2_role=None,
         )
 
         for tuple in binding.as_tuples():

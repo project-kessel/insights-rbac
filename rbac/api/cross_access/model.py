@@ -32,6 +32,8 @@ STATUS_LIST = ["pending", "cancelled", "approved", "denied", "expired"]
 class CrossAccountRequest(models.Model):
     """Cross account access request."""
 
+    STATUS_APPROVED = "approved"
+
     request_id = models.UUIDField(default=uuid4, editable=False, unique=True, null=False, primary_key=True)
     target_account = models.CharField(max_length=36, default=None, null=True)
     target_org = models.CharField(max_length=36, default=None)

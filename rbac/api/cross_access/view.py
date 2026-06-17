@@ -132,6 +132,9 @@ class CrossAccountRequestViewSet(
             return self.replace_user_id_with_info(result)
         return result
 
+    # This can operate on V2 tenants and approves CARs which creates role bindings,
+    # so we need SERIALIZABLE transaction to coordinate with role scope migrations.
+    @atomic
     def partial_update(self, request, *args, **kwargs):
         """Patch a cross-account request. Target account admin use it to update status of the request."""
         return super().partial_update(request=request, *args, **kwargs)

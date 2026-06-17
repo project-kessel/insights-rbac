@@ -17,6 +17,7 @@
 
 """RBAC Kafka consumer for processing Debezium and replication messages."""
 
+import enum
 import json
 import logging
 import random
@@ -28,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import grpc
 from django.conf import settings
-from django.db import connection
+from django.db import OperationalError, connection, transaction
 from google.protobuf import json_format
 from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
@@ -143,6 +144,12 @@ replication_event_latency = Histogram(
     "End-to-end latency from event creation to successful processing in seconds",
     ["event_type"],
     buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+
+consistency_token_save_total = Counter(
+    "rbac_kafka_consumer_consistency_token_save_total",
+    "Consistency token save attempts and outcomes",
+    ["status"],  # success, lock_timeout, error
 )
 
 
@@ -722,6 +729,57 @@ def _send_pg_notify_best_effort(channel: str, payload: str, description: str) ->
         logger.info("Sent NOTIFY on channel '%s' (%s)", channel, description)
     except Exception as e:
         logger.error("Failed NOTIFY on channel '%s' (%s): %s", channel, description, e)
+
+
+_CONSISTENCY_TOKEN_LOCK_TIMEOUT_MS = 2_000
+
+
+class _TokenSaveStatus(enum.Enum):
+    SUCCESS = "success"
+    LOCK_TIMEOUT = "lock_timeout"
+    ERROR = "error"
+
+
+def _save_consistency_token_best_effort(org_id: str, token: str, aggregateid: str) -> None:
+    """Persist the latest relations consistency token on the tenant row.
+
+    This is a best-effort operation: if the row is locked by a long-running
+    transaction (e.g. migrate_binding_scope, bootstrap_tenants), we fail fast
+    with a short lock_timeout instead of blocking for the session-wide 60s.
+    A future message for the same org will overwrite the token anyway, so
+    skipping one save is harmless.
+    """
+    token_save_status = _TokenSaveStatus.SUCCESS
+    try:
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = %s", [f"{_CONSISTENCY_TOKEN_LOCK_TIMEOUT_MS}ms"])
+            rows = Tenant.objects.filter(org_id=org_id).update(relations_consistency_token=token)
+        if rows == 0:
+            logger.warning("Tenant not found for org_id: %s. Unable to save consistency token.", org_id)
+    except OperationalError as e:
+        error_str = str(e).lower()
+        is_lock_timeout = (
+            "lock timeout" in error_str
+            or "lock_timeout" in error_str
+            or "canceling statement due to lock" in error_str
+        )
+        if is_lock_timeout:
+            token_save_status = _TokenSaveStatus.LOCK_TIMEOUT
+            logger.warning(
+                "Consistency token save skipped (lock contention) for org_id=%s, "
+                "aggregateid=%s. A later message will update the token.",
+                org_id,
+                aggregateid,
+            )
+        else:
+            token_save_status = _TokenSaveStatus.ERROR
+            logger.error("Consistency token save failed for org_id=%s: %s", org_id, e)
+    except Exception as e:
+        token_save_status = _TokenSaveStatus.ERROR
+        logger.error("Consistency token save failed for org_id=%s: %s", org_id, e)
+    finally:
+        consistency_token_save_total.labels(status=token_save_status.value).inc()
 
 
 class RBACKafkaConsumer:
@@ -1344,14 +1402,7 @@ class RBACKafkaConsumer:
             )
 
             if token and org_id:
-                try:
-                    tenant = Tenant.objects.get(org_id=org_id)
-                    tenant.relations_consistency_token = token
-                    tenant.save()
-                except Tenant.DoesNotExist:
-                    logger.warning(
-                        f"Tenant not found for org_id: {org_id}. " f"Unable to save consistency token: {token}"
-                    )
+                _save_consistency_token_best_effort(org_id, token, debezium_msg.aggregateid)
             else:
                 logger.warning(
                     f"No consistency token in either write or delete response - "

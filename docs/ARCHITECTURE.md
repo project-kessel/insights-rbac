@@ -37,6 +37,18 @@ insights-rbac is a microservice within the [console.redhat.com](https://console.
 5. For v2 APIs, permission checks are performed against Kessel Relations (SpiceDB) via gRPC.
 6. The response is returned with tenant-scoped data only.
 
+### MCP Endpoint (Agent-to-Service)
+
+The MCP endpoint (`/_private/_a2s/mcp/`) exposes RBAC operations as tools via the [Model Context Protocol](https://modelcontextprotocol.io/) JSON-RPC 2.0 interface, enabling AI agents to discover and invoke RBAC operations.
+
+- **Transport**: StreamableHTTP (JSON-RPC 2.0 over HTTP POST)
+- **Auth**: Same `x-rh-identity` header as the public API (routed through `IdentityHeaderMiddleware`, not the internal PSK/JWT auth)
+- **Tools**: 54 registered tools (31 read, 23 write) covering roles, groups, permissions, workspaces, role bindings, audit, and cross-account access
+- **Write safety**: Disabled by default (`MCP_WRITE_ENABLED`); optional two-phase confirmation with SHA-256 bound tokens
+- **Execution**: Synchronous in-process (WSGI thread), delegating to existing Django views via `_clone_request()`
+
+See [MCP.md](MCP.md) for the developer guide and [MCP-operator-guide.md](MCP-operator-guide.md) for deployment and configuration.
+
 ## Component Overview
 
 ### Application Layers
@@ -45,6 +57,7 @@ insights-rbac is a microservice within the [console.redhat.com](https://console.
 rbac/
   api/              # V1 REST API -- roles, groups, policies, permissions, principals
   management/       # Core domain modules (shared by v1 and v2)
+    mcp_views.py    #   MCP endpoint (JSON-RPC, 54 tools, A2S auth)
   internal/         # Internal/service-to-service API (PSK-authenticated)
   core/             # Shared utilities, middleware, JWT, error handling
   rbac/             # Django project config (settings, WSGI, Celery, URL root)

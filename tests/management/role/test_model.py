@@ -20,6 +20,7 @@ from django.db import IntegrityError, transaction
 
 from api.cross_access.model import CrossAccountRequest
 from management.models import BindingMapping, ExtRoleRelation, ExtTenant, Role
+from management.role.v2_model import RoleV2
 from tests.identity_request import IdentityRequest
 from migration_tool.models import (
     V2role,
@@ -27,8 +28,9 @@ from migration_tool.models import (
     V2boundresource,
 )
 from migration_tool.utils import create_relationship
-from datetime import datetime, timedelta
 from datetime import timedelta
+
+from django.utils import timezone
 
 
 class RoleModelTests(IdentityRequest):
@@ -119,22 +121,22 @@ class BindingMappingTests(IdentityRequest):
         self.v2rolebinding = V2rolebinding(
             id="v2rolebinding", role=self.v2role, resource=self.resource, groups=frozenset(), users={}
         )
-        self.binding_mapping = BindingMapping.for_role_binding(self.v2rolebinding, self.role)
+        self.binding_mapping = BindingMapping.for_role_binding(self.v2rolebinding, self.role, v2_role=None)
         self.user_id_1 = "user1"
         self.user_id_2 = "user2"
         self.cars = CrossAccountRequest.objects.bulk_create(
             [
                 CrossAccountRequest(
                     target_org=self.tenant.org_id,
-                    start_date=datetime.now(),
-                    end_date=datetime.now() + timedelta(days=1),
+                    start_date=timezone.now(),
+                    end_date=timezone.now() + timedelta(days=1),
                     status="approved",
                     user_id=self.user_id_1,
                 ),
                 CrossAccountRequest(
                     target_org=self.tenant.org_id,
-                    start_date=datetime.now(),
-                    end_date=datetime.now() + timedelta(days=1),
+                    start_date=timezone.now(),
+                    end_date=timezone.now() + timedelta(days=1),
                     status="approved",
                     user_id=self.user_id_2,
                 ),
@@ -312,3 +314,80 @@ class BindingMappingTests(IdentityRequest):
         role_binding = self.binding_mapping.get_role_binding()
         self.assertIn("group1", role_binding.groups)
         self.assertEqual(len(role_binding.groups), 2)
+
+    def test_unique_constraint_prevents_duplicate_v2_role_resource(self):
+        """Test that two BindingMappings with same v2_role + resource are rejected."""
+        v2_role = RoleV2.objects.create(name="test-v2-role", tenant=self.tenant)
+
+        BindingMapping.objects.create(
+            mappings=self.binding_mapping.mappings,
+            role=self.role,
+            v2_role=v2_role,
+            resource_type_namespace="ns",
+            resource_type_name="type",
+            resource_id="rid",
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BindingMapping.objects.create(
+                    mappings=self.binding_mapping.mappings,
+                    role=self.role,
+                    v2_role=v2_role,
+                    resource_type_namespace="ns",
+                    resource_type_name="type",
+                    resource_id="rid",
+                )
+
+    def test_null_v2_role_does_not_conflict(self):
+        """Test that multiple BindingMappings with NULL v2_role are allowed."""
+        BindingMapping.objects.create(
+            mappings=self.binding_mapping.mappings,
+            role=self.role,
+            v2_role=None,
+            resource_type_namespace="ns",
+            resource_type_name="type",
+            resource_id="rid",
+        )
+        BindingMapping.objects.create(
+            mappings=self.binding_mapping.mappings,
+            role=self.role,
+            v2_role=None,
+            resource_type_namespace="ns",
+            resource_type_name="type",
+            resource_id="rid",
+        )
+        self.assertEqual(
+            BindingMapping.objects.filter(
+                v2_role__isnull=True, resource_type_namespace="ns", resource_type_name="type", resource_id="rid"
+            ).count(),
+            2,
+        )
+
+    def test_set_null_on_delete_v2_role(self):
+        """Test that deleting a RoleV2 sets v2_role to NULL on BindingMapping."""
+        v2_role = RoleV2.objects.create(name="set-null-test", tenant=self.tenant)
+        bm = BindingMapping.objects.create(
+            mappings=self.binding_mapping.mappings,
+            role=self.role,
+            v2_role=v2_role,
+            resource_type_namespace="ns",
+            resource_type_name="type",
+            resource_id="rid",
+        )
+        bm_pk = bm.pk
+        v2_role.delete()
+        bm.refresh_from_db()
+        self.assertTrue(BindingMapping.objects.filter(pk=bm_pk).exists())
+        self.assertIsNone(bm.v2_role)
+
+    def test_for_role_binding_with_v2_role(self):
+        """Test that for_role_binding accepts and sets v2_role."""
+        v2_role = RoleV2.objects.create(name="factory-test", tenant=self.tenant)
+        mapping = BindingMapping.for_role_binding(self.v2rolebinding, self.role, v2_role=v2_role)
+        self.assertEqual(mapping.v2_role, v2_role)
+
+    def test_for_role_binding_without_v2_role(self):
+        """Test that for_role_binding still works without v2_role."""
+        mapping = BindingMapping.for_role_binding(self.v2rolebinding, self.role, v2_role=None)
+        self.assertIsNone(mapping.v2_role)

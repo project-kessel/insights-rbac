@@ -4,25 +4,28 @@ Rules and patterns for writing tests in insights-rbac. This is a reference for c
 
 ## Running Tests
 
-Django's test runner requires **dotted module paths**, not file paths.
+Django's test runner requires **dotted module paths**, not file paths. Use `tox -r` to match CI (Tekton pipeline).
 
 ```bash
+# Run all environments (lint + tests + mypy), same as CI
+tox -r
+
 # All tests without coverage (fast feedback loop)
-pipenv run tox -e py312-fast
+tox -r -e py312-fast
 
 # All tests with coverage
-pipenv run tox -e py312
+tox -r -e py312
 
 # Specific module / class / method
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
+tox -r -e py312-fast -- tests.management.workspace.test_view
+tox -r -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList
+tox -r -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
 
 # Profile slowest tests
-pipenv run tox -e py312-profile
+tox -r -e py312-profile
 
 # Lint + format check
-pipenv run tox -e lint
+tox -r -e lint
 ```
 
 Both `py312` and `py312-fast` run with `--failfast`. The `py312` env uses `--parallel 4` (4 workers) and collects branch coverage (omits migrations). The `py312-fast` env uses `--parallel` (auto worker count) and skips coverage.

@@ -549,7 +549,9 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         resp_body = json.loads(response.content.decode())
         self.assertEqual(
-            resp_body.get("detail"), "The total number of workspaces allowed for this organization has been exceeded."
+            resp_body.get("detail"),
+            "Workspace limit reached (6/4); please free up capacity by deleting empty workspaces"
+            " or consolidating those with similar users and role bindings.",
         )
 
     @override_settings(WORKSPACE_ORG_CREATION_LIMIT=9)

@@ -19,7 +19,7 @@
 import logging
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from api.models import Status, Tenant
@@ -89,6 +89,7 @@ class ReadyViewTest(TestCase):
             response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
     def test_ready_returns_200_when_platform_default_group_exists(self):
         """When MIGRATE_AND_SEED_ON_INIT is False but platform default group exists, returns 200."""
         from management.group.definer import seed_group

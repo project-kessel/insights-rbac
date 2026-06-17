@@ -209,6 +209,10 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RECONCILE_ENABLED
+            value: ${DR_RECONCILE_ENABLED}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -539,6 +543,10 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RECONCILE_ENABLED
+            value: ${DR_RECONCILE_ENABLED}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -833,6 +841,64 @@ objects:
           requests:
             cpu: ${RBAC_KAFKA_CONSUMER_CPU_REQUEST}
             memory: ${RBAC_KAFKA_CONSUMER_MEMORY_REQUEST}
+
+    - name: rbac-postgres-exporter
+      minReplicas: ${{MIN_POSTGRES_EXPORTER_REPLICAS}}
+      podSpec:
+        image: ${POSTGRES_EXPORTER_IMAGE}
+        args:
+        - "--extend.query-path=/etc/config.yaml"
+        env:
+        - name: DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              key: host
+              name: ${DB_SECRET_NAME}
+              optional: false
+        - name: DATABASE_PORT
+          valueFrom:
+            secretKeyRef:
+              key: port
+              name: ${DB_SECRET_NAME}
+              optional: false
+        - name: DATABASE_NAME
+          valueFrom:
+            secretKeyRef:
+              key: db
+              name: ${DB_SECRET_NAME}
+              optional: false
+        - name: DATA_SOURCE_URI
+          value: "$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)?sslmode=${PGSSLMODE}"
+        - name: DATA_SOURCE_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: ${DB_SECRET_NAME}
+              optional: false
+        - name: DATA_SOURCE_PASS
+          valueFrom:
+            secretKeyRef:
+              key: pass
+              name: ${DB_SECRET_NAME}
+              optional: false
+        volumes:
+        - name: postgres-exporter-queries
+          configMap:
+            name: rbac-postgres-exporter-queries
+        volumeMounts:
+        - name: postgres-exporter-queries
+          mountPath: /etc/config.yaml
+          subPath: queries.yaml
+        resources:
+          requests:
+            cpu: ${POSTGRES_EXPORTER_CPU_REQUEST}
+            memory: ${POSTGRES_EXPORTER_MEMORY_REQUEST}
+          limits:
+            cpu: ${POSTGRES_EXPORTER_CPU_LIMIT}
+            memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT}
+      webServices:
+        metrics:
+          enabled: true
 
     jobs:
       - name: user-id-populator
@@ -1299,7 +1365,7 @@ objects:
           image: ${IMAGE}:${IMAGE_TAG}
           command:
             - /opt/rbac/rbac/manage.py
-            - replicate-default-workspaces
+            - replicate_default_workspaces
             - "--all"
           resources:
             limits:
@@ -1413,6 +1479,20 @@ objects:
       requests:
         storage: 2Gi
 
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: rbac-postgres-exporter
+    labels:
+      app: rbac-postgres-exporter
+  spec:
+    ports:
+    - name: 9187-tcp
+      port: 9187
+      targetPort: 9187
+    selector:
+      pod: rbac-postgres-exporter
+    type: ClusterIP
 parameters:
 - description: Image name
   name: IMAGE
@@ -1574,6 +1654,10 @@ parameters:
   displayName: Memory Limit
   name: CELERY_WORKER_MEMORY_LIMIT
   value: 512Mi
+- description: Number of concurrent Celery worker processes. 0 uses Celery default (CPU count).
+  displayName: Celery Worker Concurrency
+  name: CELERY_WORKER_CONCURRENCY
+  value: "0"
 - description: Initial amount of CPU the init worker container will request.
   displayName: RBAC worker init container CPU Resource Request
   name: INIT_WORKER_CPU_REQUEST
@@ -1646,6 +1730,9 @@ parameters:
   value: 'platform.notifications.ingress'
 - description: Enable kafka
   name: KAFKA_ENABLED
+  value: 'False'
+- description: Enable disaster recovery reconciliation endpoint and Celery task
+  name: DR_RECONCILE_ENABLED
   value: 'False'
 - name: EXTERNAL_SYNC_TOPIC
   value: 'platform.rbac.sync'
@@ -1885,3 +1972,21 @@ parameters:
 - name: PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE
   description: Max principals per tenant
   value: '50'
+- name: MIN_POSTGRES_EXPORTER_REPLICAS
+  description: Minimum replicas for postgres-exporter
+  value: '1'
+- name: POSTGRES_EXPORTER_IMAGE
+  description: Postgres exporter image
+  value: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
+- name: POSTGRES_EXPORTER_CPU_REQUEST
+  description: Postgres exporter CPU request
+  value: 1m
+- name: POSTGRES_EXPORTER_MEMORY_REQUEST
+  description: Postgres exporter memory request
+  value: 16Mi
+- name: POSTGRES_EXPORTER_CPU_LIMIT
+  description: Postgres exporter CPU limit
+  value: 100m
+- name: POSTGRES_EXPORTER_MEMORY_LIMIT
+  description: Postgres exporter memory limit
+  value: 64Mi

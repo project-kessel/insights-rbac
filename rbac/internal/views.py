@@ -17,6 +17,7 @@
 
 """View for internal tenant management."""
 
+import datetime
 import json
 import logging
 from typing import Optional
@@ -27,7 +28,7 @@ from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connection, transaction
 from django.db.migrations.recorder import MigrationRecorder
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.html import escape
 from django.views.decorators.http import require_http_methods
@@ -61,6 +62,7 @@ from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,
+    CrossAccountRequestInventoryChecker,
     GroupPrincipalInventoryChecker,
     RoleRelationInventoryChecker,
     WorkspaceRelationInventoryChecker,
@@ -93,6 +95,7 @@ from management.tasks import (
     migrate_binding_scope_in_worker,
     migrate_data_in_worker,
     recompute_tenant_role_bindings_in_worker,
+    recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
@@ -116,7 +119,8 @@ from rest_framework import status
 
 from api.common.pagination import StandardResultsSetPagination, WSGIRequestResultsSetPagination
 from api.cross_access.model import RequestsRoles
-from api.models import Tenant, User
+from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.models import CrossAccountRequest, Tenant, User
 from api.tasks import (
     cross_account_cleanup,
     populate_tenant_account_id_in_worker,
@@ -2084,6 +2088,8 @@ def check_role(request, role_uuid):
                 },
             }
         )
+    except Http404:
+        raise
     except RpcError as e:
         return JsonResponse(
             {"detail": "gRPC error occurred during inventory role relation check", "error": str(e)},
@@ -2092,6 +2098,89 @@ def check_role(request, role_uuid):
     except Exception as e:
         return JsonResponse(
             {"detail": "Unexpected error occurred during inventory role relation check", "error": str(e)}, status=500
+        )
+
+
+def check_cross_account_request(request, request_id):
+    """Check an approved cross account request has correct relations on Inventory API.
+
+    Re-runs the CAR dual writer with an in-memory replicator to determine the expected
+    relation tuples, then verifies each exists in the Inventory API.
+
+    The InMemoryRelationReplicator used here has no external side effects — it writes
+    only to an in-memory tuple store — so the transaction.atomic() + set_rollback(True)
+    block safely prevents any DB mutations without risk of non-transactional side effects.
+    """
+    try:
+        car = get_object_or_404(CrossAccountRequest, request_id=request_id)
+
+        if car.status != CrossAccountRequest.STATUS_APPROVED:
+            return JsonResponse(
+                {"detail": f"Cross account request {request_id} is not approved (status: {car.status})."},
+                status=400,
+            )
+
+        cross_account_roles = car.roles.all()
+        if not cross_account_roles.exists():
+            return JsonResponse(
+                {
+                    "cross_account_request_checks": {
+                        "request_id": str(car.request_id),
+                        "target_org": car.target_org,
+                        "user_id": car.user_id,
+                        "status": car.status,
+                        "roles": [],
+                        "relations_correct": True,
+                    },
+                }
+            )
+
+        tuples = InMemoryTuples()
+
+        with transaction.atomic():
+            handler = RelationApiDualWriteCrossAccessHandler(
+                cross_account_request=car,
+                event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
+                replicator=InMemoryRelationReplicator(tuples),
+            )
+            handler.generate_relations_to_add_roles(cross_account_roles)
+            handler.replicate()
+
+            # Ensure that we don't accidentally update any models.
+            transaction.set_rollback(True)
+
+        car_checker = CrossAccountRequestInventoryChecker()
+        car_correct = car_checker.check_cross_account_request(list(tuples), str(car.request_id))
+
+        return JsonResponse(
+            {
+                "cross_account_request_checks": {
+                    "request_id": str(car.request_id),
+                    "target_org": car.target_org,
+                    "user_id": car.user_id,
+                    "status": car.status,
+                    "roles": [str(r.uuid) for r in cross_account_roles],
+                    "relations_correct": car_correct,
+                },
+            }
+        )
+    except Http404:
+        raise
+    except RpcError as e:
+        return JsonResponse(
+            {
+                "detail": "gRPC error occurred during inventory cross account request check",
+                "error": str(e),
+            },
+            status=400,
+        )
+    except Exception:
+        logger.exception("Unexpected error during inventory cross account request check")
+        return JsonResponse(
+            {
+                "detail": "Unexpected error during inventory cross account request check",
+            },
+            status=500,
         )
 
 
@@ -2624,3 +2713,129 @@ def recompute_tenant_role_bindings(request, org_id):
             {"detail": f"Error recomputing role bindings for tenant: {str(e)}"},
             status=500,
         )
+
+
+@require_http_methods(["POST"])
+def recover_workspace_events(request: HttpRequest) -> JsonResponse:
+    """Trigger corrective workspace event generation after a DB restore.
+
+    POST /_private/api/disaster_recovery/workspaces/
+
+    Accepts JSON body:
+        {
+            "restore_timestamp": "2026-05-28T10:00:00Z",
+            "buffer_minutes": 5
+        }
+
+    Returns 202 with task_id on success.
+    """
+    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
+        return JsonResponse({"detail": "DR recovery is disabled (DR_RECOVERY_ENABLED=False)"}, status=403)
+
+    try:
+        body = load_request_body(request)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({"detail": "Invalid JSON body"}, status=400)
+
+    restore_timestamp = body.get("restore_timestamp")
+    if not restore_timestamp:
+        return JsonResponse({"detail": "restore_timestamp is required"}, status=400)
+
+    try:
+        parsed_ts = datetime.datetime.fromisoformat(restore_timestamp)
+    except (ValueError, TypeError):
+        return JsonResponse({"detail": "restore_timestamp must be a valid ISO 8601 datetime"}, status=400)
+
+    if parsed_ts.tzinfo is None:
+        parsed_ts = parsed_ts.replace(tzinfo=datetime.timezone.utc)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if parsed_ts > now:
+        return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
+
+    buffer_minutes = body.get("buffer_minutes", 5)
+    if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
+        return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
+
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
+
+    try:
+        task = recover_workspace_events_in_worker.delay(
+            restore_timestamp_iso=restore_timestamp,
+            buffer_minutes=buffer_minutes,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Workspace DR recovery task enqueued: task_id=%s restore_timestamp=%s buffer_minutes=%d",
+            task.id,
+            restore_timestamp,
+            buffer_minutes,
+        )
+        return JsonResponse(
+            {
+                "task_id": task.id,
+                "status": "enqueued",
+                "restore_timestamp": restore_timestamp,
+                "buffer_minutes": buffer_minutes,
+                "dry_run": dry_run,
+            },
+            status=202,
+        )
+    except Exception:
+        logger.exception("Error enqueuing workspace DR recovery task")
+        return JsonResponse({"detail": "Error enqueuing recovery task"}, status=500)
+
+
+@require_http_methods(["POST"])
+def disaster_recovery_reconcile(request):
+    """Trigger disaster recovery reconciliation for Kessel Relations.
+
+    POST /_private/api/disaster_recovery/reconcile/
+
+    Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
+    """
+    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+        return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
+
+    from datetime import datetime
+
+    from management.tasks import run_disaster_recovery_reconcile
+
+    body = load_request_body(request)
+
+    restore_timestamp_str = body.get("restore_timestamp")
+    if not restore_timestamp_str:
+        return JsonResponse({"error": "restore_timestamp is required"}, status=400)
+
+    try:
+        dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
+        restore_timestamp_ms = int(dt.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+
+    buffer_seconds = body.get("buffer_seconds", 300)
+    if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
+        return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
+
+    task = run_disaster_recovery_reconcile.delay(
+        restore_timestamp_ms=restore_timestamp_ms,
+        buffer_seconds=buffer_seconds,
+        dry_run=dry_run,
+    )
+
+    return JsonResponse(
+        {
+            "message": "Disaster recovery reconciliation enqueued.",
+            "task_id": str(task.id),
+            "restore_timestamp_ms": restore_timestamp_ms,
+            "buffer_seconds": buffer_seconds,
+            "dry_run": dry_run,
+        },
+        status=202,
+    )

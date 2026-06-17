@@ -18,6 +18,7 @@
 """Role binding access permissions using Kessel Inventory API."""
 
 import logging
+import uuid
 
 from feature_flags import FEATURE_FLAGS
 from management.permissions.workspace_inventory_access import (
@@ -25,6 +26,7 @@ from management.permissions.workspace_inventory_access import (
 )
 from management.principal.proxy import get_kessel_principal_id
 from rest_framework import permissions
+from rest_framework.exceptions import ParseError
 
 from api.models import Tenant
 
@@ -236,8 +238,14 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
                          don't pre-resolve).
         """
         if resource_type not in self.ALLOWED_RESOURCE_TYPES:
-            logger.debug("Denied access for unknown resource_type: %s", resource_type)
-            return False
+            allowed = ", ".join(sorted(self.ALLOWED_RESOURCE_TYPES))
+            raise ParseError(f"'{resource_type}' is not a valid resource_type. Allowed values: {allowed}.")
+
+        if resource_type == "workspace":
+            try:
+                uuid.UUID(str(resource_id))
+            except ValueError:
+                raise ParseError(detail=f"'{resource_id}' is not a valid UUID for resource_id.")
 
         if resource_type == "tenant":
             is_org_admin = getattr(request.user, "admin", False)

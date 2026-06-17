@@ -34,6 +34,7 @@ from management.role.v2_serializer import (
     validate_fields_parameter,
 )
 from management.role.v2_service import RoleV2Service
+from management.role_binding.serializer import resolve_resource_identifiers
 from management.utils import v2response_error_from_errors
 from management.v2_mixins import AtomicOperationsMixin
 from rest_framework import status
@@ -64,7 +65,7 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
     DEFAULT_CREATE_UPDATE_FIELDS = {"id", "name", "description", "permissions", "last_modified"}
 
     def get_queryset(self):
-        """Return assignable roles for the requesting tenant. Restricts writes to custom roles."""
+        """Return assignable roles for the requesting tenant. Restricts creates to custom roles."""
         if self.action == "retrieve":
             fields = RoleV2Service.DEFAULT_RETRIEVE_FIELDS
         else:
@@ -73,6 +74,8 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         if self.action in ("list", "retrieve"):
             return base_qs.excluding_out_of_scope_v2_roles()
+        if self.action in ("update", "bulk_destroy"):
+            return base_qs
         return base_qs.filter(type=RoleV2.Types.CUSTOM)
 
     def get_serializer_context(self):
@@ -111,6 +114,14 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         input_serializer = RoleV2ListSerializer(data=request.query_params, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
         validated_params = input_serializer.validated_data
+
+        if validated_params.get("resource_tenant_org_id"):
+            resource_type, resource_id = resolve_resource_identifiers(validated_params)
+            validated_params = {
+                **{k: v for k, v in validated_params.items() if k != "resource_tenant_org_id"},
+                "resource_id": resource_id,
+                "resource_type": resource_type,
+            }
 
         service = RoleV2Service(tenant=request.tenant)
         queryset = service.list(validated_params)
@@ -156,6 +167,9 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         with atomic_block():
             instance = self.get_object()
 
+            if instance.type != RoleV2.Types.CUSTOM:
+                raise ValidationError({"uuid": "System roles may not be updated."})
+
             audit_log = AuditLog()
             audit_log.log_edit(request=request, resource=AuditLog.ROLE_V2, object=instance)
 
@@ -193,6 +207,27 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         ids = set(serializer.validated_data["ids"])
 
+        if ids:
+            non_custom = (
+                RoleV2.objects.for_tenant(request.tenant)
+                .assignable()
+                .filter(uuid__in=ids)
+                .exclude(type=RoleV2.Types.CUSTOM)
+            )
+            if non_custom.exists():
+                return Response(
+                    v2response_error_from_errors(
+                        errors=[
+                            {
+                                "detail": "System roles may not be deleted.",
+                                "status": status.HTTP_400_BAD_REQUEST,
+                                "source": "ids",
+                            }
+                        ],
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             removed_roles = service.bulk_delete(ids, from_tenant=self.request.tenant)
 
@@ -207,12 +242,18 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
         except CustomRoleRequiredError as e:
-            # This should be impossible. We constrain deletions to be from the user's tenant. Non-custom roles should
-            # only exist in the public tenant, and there shouldn't be any users in the public tenant. Thus,
-            # we will never find any non-custom roles to try to delete.
             return Response(
-                {"title": "An internal error occurred.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                v2response_error_from_errors(
+                    errors=[
+                        {
+                            "detail": str(e),
+                            "status": status.HTTP_400_BAD_REQUEST,
+                            "source": "ids",
+                        }
+                    ],
+                    exc=e,
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # We don't allow a revert here because sending a notification in the middle could fail. This would make it

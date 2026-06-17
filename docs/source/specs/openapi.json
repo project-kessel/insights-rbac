@@ -3712,10 +3712,6 @@
           "roles"
         ],
         "properties": {
-          "target_account": {
-            "type": "string",
-            "example": "12345"
-          },
           "target_org": {
             "type": "string",
             "example": "12345"
@@ -3857,10 +3853,6 @@
             "format": "uuid",
             "example": "2ad8cac5-336e-44c6-9b16-15ac84224d4b"
           },
-          "target_account": {
-            "type": "string",
-            "example": "12345"
-          },
           "target_org": {
             "type": "string",
             "example": "12345"
@@ -3890,10 +3882,6 @@
             "type": "string",
             "format": "uuid",
             "example": "2ad8cac5-336e-44c6-9b16-15ac84224d4b"
-          },
-          "target_account": {
-            "type": "string",
-            "example": "12345"
           },
           "target_org": {
             "type": "string",

@@ -543,7 +543,6 @@ class AccessViewTests(IdentityRequest):
         Access.objects.create(role=system_role, permission=assigned_permission, tenant=self.tenant)
 
         cross_account_request = CrossAccountRequest.objects.create(
-            target_account=account_id,
             user_id=user_id,
             target_org=org_id,
             end_date=timezone.now() + timedelta(10),
@@ -588,7 +587,6 @@ class AccessViewTests(IdentityRequest):
         ## This CAR will provide permission: "test:assigned:permission"
         role = self.create_role_and_permission("Test Role one", "test:assigned:permission1", True)
         cross_account_request = CrossAccountRequest.objects.create(
-            target_account=account_id,
             user_id=user_id,
             target_org=org_id,
             end_date=timezone.now() + timedelta(10),
@@ -598,7 +596,6 @@ class AccessViewTests(IdentityRequest):
         ## CAR below will provide permission: "app:*:*"
         role = self.create_role_and_permission("Test Role two", "test:assigned:permission2", True)
         cross_account_request = CrossAccountRequest.objects.create(
-            target_account=account_id,
             user_id=user_id,
             target_org=org_id,
             end_date=timezone.now() + timedelta(20),

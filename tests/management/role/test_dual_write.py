@@ -16,7 +16,9 @@
 #
 """Test tuple changes for RBAC operations."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from django.utils import timezone
 from typing import Callable, Optional, Tuple, Iterable
 from django.test import TestCase, override_settings
 from django.db.models import Q
@@ -548,6 +550,8 @@ class DualWriteTestCase(TestCase):
         )
 
         self.assertIn(group_id, mapping.mappings["groups"])
+        self.assertIsNotNone(mapping.v2_role, "BindingMapping should have v2_role set during dual-write")
+        self.assertEqual(str(mapping.v2_role.uuid), v2_role_id)
 
         binding = RoleBinding.objects.get(
             resource_type=target.resource_type[1],
@@ -3247,7 +3251,7 @@ class RbacFixture:
         return CrossAccountRequest.objects.create(
             target_org=tenant.org_id,
             user_id=user_id,
-            start_date=datetime.now(),
-            end_date=datetime.now() + timedelta(days=1),
+            start_date=timezone.now(),
+            end_date=timezone.now() + timedelta(days=1),
             status="approved",
         )

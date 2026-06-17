@@ -24,7 +24,9 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from django.test import override_settings
 from django.urls import reverse
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+
+from django.utils import timezone
 from unittest.mock import MagicMock
 from unittest.mock import patch
 from kessel.relations.v1beta1 import common_pb2
@@ -143,10 +145,10 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     """Test the internal viewset."""
 
     def valid_destructive_time():
-        return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) + timedelta(hours=1)
+        return timezone.now() + timedelta(hours=1)
 
     def invalid_destructive_time():
-        return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) - timedelta(hours=1)
+        return timezone.now() - timedelta(hours=1)
 
     def test_delete_tenant_disallowed(self):
         """Test that we cannot delete a tenant when disallowed."""
@@ -998,7 +1000,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             **self.request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id})
+        binding_attrs.update({"id": binding_mapping.id, "role": self.role.id, "v2_role": None})
         self.assertEqual(json.loads(response.content.decode()), [binding_attrs])
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
@@ -2166,8 +2168,8 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         car = CrossAccountRequest.objects.create(
             target_org="123456",
             user_id="1111111",
-            start_date=datetime.now(),
-            end_date=datetime.now() + timedelta(10),
+            start_date=timezone.now(),
+            end_date=timezone.now() + timedelta(10),
             status="approved",
         )
         car.roles.add(*(system_role, custom_role))
@@ -3745,11 +3747,11 @@ class InternalS2SViewsetTests(IdentityRequest):
 
 
 def valid_destructive_time():
-    return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) + timedelta(hours=1)
+    return timezone.now() + timedelta(hours=1)
 
 
 def invalid_destructive_time():
-    return datetime.now(timezone.utc).replace(tzinfo=pytz.UTC) - timedelta(hours=1)
+    return timezone.now() - timedelta(hours=1)
 
 
 class InternalRelationsViewsetTests(BaseInternalViewsetTests):
@@ -5153,3 +5155,171 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertIn("error", response_body)
         self.assertEqual(response_body["detail"], "Unexpected error occurred during inventory role relation check")
         self.assertEqual(response_body["error"], "Simulated internal error")
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check"
+        ".CrossAccountRequestInventoryChecker.check_cross_account_request"
+    )
+    def test_inventory_check_cross_account_request(self, mock_check_car, mock_handler_cls):
+        """Test check_cross_account_request returns correct response when all relations exist."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        mock_handler = MagicMock()
+        mock_handler_cls.return_value = mock_handler
+        mock_check_car.return_value = True
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        self.assertIn("cross_account_request_checks", response_body)
+        checks = response_body["cross_account_request_checks"]
+        self.assertEqual(checks["request_id"], str(car.request_id))
+        self.assertEqual(checks["target_org"], self.tenant.org_id)
+        self.assertEqual(checks["user_id"], "12345")
+        self.assertEqual(checks["status"], "approved")
+        self.assertTrue(checks["relations_correct"])
+        self.assertEqual(len(checks["roles"]), 1)
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check"
+        ".CrossAccountRequestInventoryChecker.check_cross_account_request"
+    )
+    def test_inventory_check_cross_account_request_missing_relations(self, mock_check_car, mock_handler_cls):
+        """Test check_cross_account_request returns False when relations are missing."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        mock_handler = MagicMock()
+        mock_handler_cls.return_value = mock_handler
+        mock_check_car.return_value = False
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        self.assertFalse(response_body["cross_account_request_checks"]["relations_correct"])
+
+    def test_inventory_check_cross_account_request_not_approved(self):
+        """Test check_cross_account_request returns 400 for non-approved CAR."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="pending",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        response_body = response.json()
+        self.assertIn("not approved", response_body["detail"])
+
+    def test_inventory_check_cross_account_request_no_roles(self):
+        """Test check_cross_account_request returns True when CAR has no roles."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        response_body = response.json()
+        checks = response_body["cross_account_request_checks"]
+        self.assertTrue(checks["relations_correct"])
+        self.assertEqual(checks["roles"], [])
+
+    def test_inventory_check_cross_account_request_not_found(self):
+        """Test check_cross_account_request returns 404 for nonexistent request."""
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{fake_uuid}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        side_effect=RpcError("Simulated gRPC error"),
+    )
+    def test_inventory_check_cross_account_request_grpc_error(self, mock_handler_cls):
+        """Test check_cross_account_request returns 400 on gRPC error."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        response_body = response.json()
+        self.assertIn("gRPC error", response_body["detail"])
+
+    @patch(
+        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        side_effect=Exception("Simulated internal error"),
+    )
+    def test_inventory_check_cross_account_request_unexpected_error(self, mock_handler_cls):
+        """Test check_cross_account_request returns 500 on unexpected error."""
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="12345",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        car.roles.add(self.role)
+
+        response = self.client.get(
+            f"/_private/api/inventory/check_cross_account_request/{car.request_id}/",
+            format="json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 500)
+        response_body = response.json()
+        self.assertIn("Unexpected error", response_body["detail"])

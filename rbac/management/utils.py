@@ -569,6 +569,11 @@ def clean_query_param(value, param_name):
     return value
 
 
+def normalize_blank_or_none(value: str | None) -> str | None:
+    """Return None for empty/blank strings, pass through otherwise."""
+    return (value and value.strip()) or None
+
+
 def validate_uuid(uuid, key="UUID Validation"):
     """Verify UUID provided is valid."""
     try:

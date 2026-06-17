@@ -709,7 +709,7 @@ class RoleDefinerTests(IdentityRequest):
         user_access_role = Role.objects.public_tenant_only().get(name="User Access administrator")
 
         # This role is a special case: when assigned as part of default access (only), it should always be assigned in
-        # root scope. See RHCLOUD-45734 and https://github.com/RedHatInsights/insights-rbac/pull/2653
+        # root scope. See RHCLOUD-45734 and https://github.com/project-kessel/insights-rbac/pull/2653
         inventory_role = Role.objects.public_tenant_only().get(name="Inventory Groups Administrator")
 
         # Assert that seed_role creates relations in the default scope for ordinary roles.
@@ -1222,6 +1222,48 @@ class V2RoleSeedingTests(IdentityRequest):
             0,
             "Non-default role should have no parents",
         )
+
+    def test_role_without_bindings_does_not_trigger_migration(self):
+        """Test that roles without bindings don't trigger migration.
+
+        Migration is triggered based on whether a role has actual bindings in V1 tenants.
+        Roles without any bindings (whether default or non-default) don't need migration.
+        If a role later gets manual bindings and then changes scope, those bindings WILL
+        be migrated.
+        """
+        seed_group()
+
+        # First seeding with role in DEFAULT scope
+        with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
+            seed_roles()
+
+        # Pick a specific non-default role by name from the test seed data
+        # "Cost Administrator Local Test" is a known non-default system role with permissions in test data
+        non_default_role = Role.objects.public_tenant_only().filter(name="Cost Administrator Local Test").first()
+        self.assertIsNotNone(
+            non_default_role,
+            "Expected 'Cost Administrator Local Test' role to exist in seeded roles",
+        )
+
+        # Mock the migration function
+        with patch("management.role.definer._migrate_bindings_for_scope_change") as mock_migrate:
+            # Change the scope for this role's permissions by moving its permissions to ROOT
+            permission_pattern = f"{non_default_role.access.first().permission.application}:*:*"
+
+            # Re-seed with the permission now in ROOT scope
+            with self.settings(ROOT_SCOPE_PERMISSIONS=permission_pattern, TENANT_SCOPE_PERMISSIONS=""):
+                seed_roles()
+
+            # Verify that migration was NOT called for this role
+            # The new _determine_old_scopes checks for actual bindings in V1 tenants.
+            # Since this test doesn't create any bindings for this role,
+            # _determine_old_scopes returns empty set and migration is skipped.
+            migration_called_for_role = any(call[0][0] == non_default_role for call in mock_migrate.call_args_list)
+            self.assertFalse(
+                migration_called_for_role,
+                f"Migration should NOT be called for role {non_default_role.name} "
+                "because it has no bindings to migrate (only roles with actual bindings need migration)",
+            )
 
     def test_v2_role_permissions_updated_when_v1_changes(self):
         """Test that V2 role permissions are updated when V1 role permissions change."""
