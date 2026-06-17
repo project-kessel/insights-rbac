@@ -830,6 +830,64 @@ objects:
             cpu: ${RBAC_KAFKA_CONSUMER_CPU_REQUEST}
             memory: ${RBAC_KAFKA_CONSUMER_MEMORY_REQUEST}
 
+    - name: rbac-postgres-exporter
+      minReplicas: ${{MIN_POSTGRES_EXPORTER_REPLICAS}}
+      podSpec:
+        image: ${POSTGRES_EXPORTER_IMAGE}
+        args:
+        - "--extend.query-path=/etc/config.yaml"
+        env:
+        - name: DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              key: db.host
+              name: rbac-db
+              optional: false
+        - name: DATABASE_PORT
+          valueFrom:
+            secretKeyRef:
+              key: db.port
+              name: rbac-db
+              optional: false
+        - name: DATABASE_NAME
+          valueFrom:
+            secretKeyRef:
+              key: db.name
+              name: rbac-db
+              optional: false
+        - name: DATA_SOURCE_URI
+          value: "$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)?sslmode=${PGSSLMODE}"
+        - name: DATA_SOURCE_USER
+          valueFrom:
+            secretKeyRef:
+              key: db.user
+              name: rbac-db
+              optional: false
+        - name: DATA_SOURCE_PASS
+          valueFrom:
+            secretKeyRef:
+              key: db.password
+              name: rbac-db
+              optional: false
+        volumes:
+        - name: postgres-exporter-queries
+          configMap:
+            name: rbac-postgres-exporter-queries
+        volumeMounts:
+        - name: postgres-exporter-queries
+          mountPath: /etc/config.yaml
+          subPath: queries.yaml
+        resources:
+          requests:
+            cpu: ${POSTGRES_EXPORTER_CPU_REQUEST}
+            memory: ${POSTGRES_EXPORTER_MEMORY_REQUEST}
+          limits:
+            cpu: ${POSTGRES_EXPORTER_CPU_LIMIT}
+            memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT}
+      webServices:
+        metrics:
+          enabled: true
+
     jobs:
       - name: user-id-populator
         podSpec:
@@ -1405,6 +1463,20 @@ objects:
       requests:
         storage: 2Gi
 
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: rbac-postgres-exporter
+    labels:
+      app: rbac-postgres-exporter
+  spec:
+    ports:
+    - name: 9187-tcp
+      port: 9187
+      targetPort: 9187
+    selector:
+      pod: rbac-postgres-exporter
+    type: ClusterIP
 parameters:
 - description: Image name
   name: IMAGE
@@ -1872,3 +1944,21 @@ parameters:
 - name: PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE
   description: Max principals per tenant
   value: '50'
+- name: MIN_POSTGRES_EXPORTER_REPLICAS
+  description: Minimum replicas for postgres-exporter
+  value: '1'
+- name: POSTGRES_EXPORTER_IMAGE
+  description: Postgres exporter image
+  value: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
+- name: POSTGRES_EXPORTER_CPU_REQUEST
+  description: Postgres exporter CPU request
+  value: 1m
+- name: POSTGRES_EXPORTER_MEMORY_REQUEST
+  description: Postgres exporter memory request
+  value: 16Mi
+- name: POSTGRES_EXPORTER_CPU_LIMIT
+  description: Postgres exporter CPU limit
+  value: 100m
+- name: POSTGRES_EXPORTER_MEMORY_LIMIT
+  description: Postgres exporter memory limit
+  value: 64Mi

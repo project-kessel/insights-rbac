@@ -22,15 +22,11 @@ import time
 from typing import Optional, Set
 
 import grpc
-from kessel.inventory.v1beta2 import (
-    allowed_pb2,
-    consistency_pb2,
-    consistency_token_pb2,
-    representation_type_pb2,
-    request_pagination_pb2,
-    streamed_list_objects_request_pb2,
-)
+from kessel.inventory.v1beta2 import allowed_pb2
 from kessel.inventory.v1beta2.check_for_update_request_pb2 import CheckForUpdateRequest
+from kessel.inventory.v1beta2.consistency_pb2 import Consistency
+from kessel.inventory.v1beta2.consistency_token_pb2 import ConsistencyToken
+from kessel.rbac.v2 import list_workspaces as sdk_list_workspaces
 from management.inventory_client import (
     inventory_client,
     make_resource_ref,
@@ -45,9 +41,10 @@ logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 class WorkspaceInventoryAccessChecker:
     """Check workspace access using Inventory API."""
 
-    # Page size for Inventory API StreamedListObjects requests with continuation token pagination.
+    # Used to calculate the max-items safety guard (PAGE_SIZE * MAX_PAGES).
+    # The SDK handles actual gRPC pagination internally with its own limit.
     PAGE_SIZE = 1000
-    # Maximum number of pages to fetch to prevent infinite loops from buggy server responses.
+    # Used with PAGE_SIZE to cap total items fetched, preventing runaway iteration.
     MAX_PAGES = 10000
 
     def _log_and_return_allowed(
@@ -186,48 +183,6 @@ class WorkspaceInventoryAccessChecker:
             relation=relation,
         )
 
-    def _build_streamed_request(
-        self,
-        principal_id: str,
-        relation: str,
-        continuation_token: Optional[str],
-        consistency_token: Optional[str] = None,
-    ) -> streamed_list_objects_request_pb2.StreamedListObjectsRequest:
-        """Build a StreamedListObjects request with pagination and optional consistency."""
-        kwargs = dict(
-            object_type=representation_type_pb2.RepresentationType(
-                resource_type="workspace",
-                reporter_type="rbac",
-            ),
-            relation=relation,
-            subject=make_subject_ref(principal_id),
-            pagination=request_pagination_pb2.RequestPagination(
-                limit=self.PAGE_SIZE,
-                continuation_token=continuation_token or "",
-            ),
-        )
-        if consistency_token:
-            kwargs["consistency"] = consistency_pb2.Consistency(
-                at_least_as_fresh=consistency_token_pb2.ConsistencyToken(token=consistency_token),
-            )
-        return streamed_list_objects_request_pb2.StreamedListObjectsRequest(**kwargs)
-
-    def _extract_workspace_id(self, response) -> Optional[str]:
-        """Extract workspace ID from a StreamedListObjects response, or None if malformed."""
-        obj = getattr(response, "object", None)
-        if not obj:
-            return None
-        workspace_id = getattr(obj, "resource_id", None)
-        return workspace_id or None
-
-    def _extract_continuation_token(self, response) -> Optional[str]:
-        """Extract continuation token from a response's pagination info, or None if not present."""
-        pagination = getattr(response, "pagination", None)
-        if not pagination:
-            return None
-        token = getattr(pagination, "continuation_token", None)
-        return token or None
-
     def lookup_accessible_workspaces(
         self,
         principal_id: str,
@@ -236,16 +191,17 @@ class WorkspaceInventoryAccessChecker:
         consistency_token: Optional[str] = None,
     ) -> Set[str]:
         """
-        Lookup which workspaces are accessible to the principal using Inventory API StreamedListObjects.
+        Lookup which workspaces are accessible to the principal via SDK list_workspaces.
 
-        This uses the Inventory API v1beta2's StreamedListObjects method which efficiently streams all
-        accessible workspaces using continuation token pagination. It answers the question:
-        "Which workspaces does this principal have the specified relation to?"
+        Uses the Kessel SDK's list_workspaces() function which handles gRPC request construction
+        and continuation-token pagination internally. RBAC applies a max-items safety guard
+        and timing instrumentation on top of the SDK call.
 
         Args:
             principal_id: Principal identifier (e.g., "localhost/username")
             relation: The relation to check
             request_id: Optional request ID for logging/tracing
+            consistency_token: Optional consistency token for read-after-write correctness
 
         Returns:
             Set[str]: Set of workspace IDs that the principal has access to
@@ -256,63 +212,52 @@ class WorkspaceInventoryAccessChecker:
                 "lookup_accessible_workspaces called with consistency_token=%s",
                 consistency_token,
             )
-            accessible_workspaces = set()
-            continuation_token = None
-            page_count = 0
-            # Time spent establishing gRPC streaming iterators (stub method invocation)
-            iterator_setup_seconds = 0.0
-            # Time spent iterating over gRPC stream responses
-            stream_iteration_seconds = 0.0
 
-            while page_count < self.MAX_PAGES:
-                page_count += 1
-
-                request_data = self._build_streamed_request(
-                    principal_id, relation, continuation_token, consistency_token=consistency_token
+            subject_ref = make_subject_ref(principal_id)
+            consistency = None
+            if consistency_token:
+                consistency = Consistency(
+                    at_least_as_fresh=ConsistencyToken(token=consistency_token),
                 )
 
-                t0 = time.perf_counter()
-                responses = stub.StreamedListObjects(request_data)
-                iterator_setup_seconds += time.perf_counter() - t0
+            accessible_workspaces = set()
+            item_count = 0
+            max_items = self.PAGE_SIZE * self.MAX_PAGES
 
-                last_token = None
-                t0 = time.perf_counter()
-                for response in responses:
-                    workspace_id = self._extract_workspace_id(response)
-                    if workspace_id:
-                        accessible_workspaces.add(workspace_id)
-                    else:
-                        logger.warning(
-                            f"Malformed workspace response from StreamedListObjects: "
-                            f"missing object.resource_id in response for principal={principal_id}"
-                        )
+            t0 = time.perf_counter()
 
-                    token = self._extract_continuation_token(response)
-                    if token:
-                        last_token = token
-                stream_iteration_seconds += time.perf_counter() - t0
-
-                if not last_token:
-                    break
-
-                if last_token == continuation_token:
+            for response in sdk_list_workspaces(
+                inventory=stub,
+                subject=subject_ref,
+                relation=relation,
+                consistency=consistency,
+            ):
+                workspace_id = getattr(getattr(response, "object", None), "resource_id", None)
+                if workspace_id:
+                    accessible_workspaces.add(workspace_id)
+                else:
                     logger.warning(
-                        f"Inventory API returned duplicate continuation token for principal={principal_id}. "
-                        "Breaking pagination loop to avoid infinite loop."
+                        "Malformed workspace response from SDK list_workspaces: "
+                        "missing object.resource_id in response for principal=%s",
+                        principal_id,
+                    )
+
+                item_count += 1
+                if item_count >= max_items:
+                    logger.warning(
+                        "Reached maximum item limit (%d) while fetching workspaces "
+                        "for principal=%s. Some workspaces may not be included.",
+                        max_items,
+                        principal_id,
                     )
                     break
 
-                continuation_token = last_token
-
-            if page_count >= self.MAX_PAGES:
-                logger.warning(
-                    f"Reached maximum page limit ({self.MAX_PAGES}) while fetching workspaces "
-                    f"for principal={principal_id}. Some workspaces may not be included."
-                )
+            iteration_seconds = time.perf_counter() - t0
 
             logger.info(
-                f"Accessible workspaces for principal={principal_id}: "
-                f"{len(accessible_workspaces)} found via StreamedListObjects"
+                "Accessible workspaces for principal=%s: %d found via SDK list_workspaces",
+                principal_id,
+                len(accessible_workspaces),
             )
 
             if settings.WORKSPACE_ACCESS_TIMING_ENABLED:
@@ -323,11 +268,10 @@ class WorkspaceInventoryAccessChecker:
                         "principal_id": principal_id,
                         "relation": relation,
                         "workspace_count": len(accessible_workspaces),
-                        "page_count": page_count,
-                        "max_pages": self.MAX_PAGES,
-                        "iterator_setup_ms": round(iterator_setup_seconds * 1000, 2),
-                        "stream_iteration_ms": round(stream_iteration_seconds * 1000, 2),
-                        "hit_max_pages": page_count >= self.MAX_PAGES,
+                        "item_count": item_count,
+                        "max_items": max_items,
+                        "iteration_ms": round(iteration_seconds * 1000, 2),
+                        "hit_max_items": item_count >= max_items,
                     },
                 )
 
