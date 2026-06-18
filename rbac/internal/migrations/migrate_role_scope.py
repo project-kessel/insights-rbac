@@ -63,7 +63,7 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     expected_scopes = resource_service.binding_scopes_for_role(v1_role)
 
     if scope_state is not None:
-        if set(scope_state.computed_scopes) != set(int(s) for s in expected_scopes):
+        if set(scope_state.computed_scopes) != set(expected_scopes):
             logger.warning(
                 f"Not migrating binding scopes for system role {v1_role.name!r}; either it has changed "
                 f"concurrently or the current scope settings do not match those used to compute the most recent "
@@ -86,7 +86,7 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
         scope_state = RoleScopeState.objects.create(
             role=v1_role,
             version=0,
-            computed_scopes=[int(s) for s in expected_scopes],
+            computed_scopes=list(expected_scopes),
             migrated=False,
         )
 

@@ -376,7 +376,6 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
             logger.info("Added %d permissions to V2 role %s.", len(v1_permissions), display_name)
 
         binding_scopes = resource_service.binding_scopes_for_role(v1_role)
-        binding_scope_ints = [int(s) for s in binding_scopes]
 
         # Clear parents first since scope may have changed since previous seeding
         v2_role.parents.clear()
@@ -402,15 +401,17 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
         # correctly detect *all* changes to the role's scopes (including those caused by settings changes rather than
         # changes to the role itself).
         if existing_scope_state is not None:
-            if set(existing_scope_state.computed_scopes) != set(binding_scope_ints):
+            if set(existing_scope_state.computed_scopes) != set(binding_scopes):
                 # We don't need to worry about updates being lost here, since we will only update this in a
                 # SERIALIZABLE transaction.
                 existing_scope_state.version = existing_scope_state.version + 1
-                existing_scope_state.computed_scopes = binding_scope_ints
+                existing_scope_state.computed_scopes = list(binding_scopes)
                 existing_scope_state.migrated = False
                 existing_scope_state.save()
         else:
-            RoleScopeState.objects.create(role=v1_role, version=0, computed_scopes=binding_scope_ints, migrated=False)
+            RoleScopeState.objects.create(
+                role=v1_role, version=0, computed_scopes=list(binding_scopes), migrated=False
+            )
 
         return v2_role
     except Exception:
