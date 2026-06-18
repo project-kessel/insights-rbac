@@ -20,6 +20,7 @@
 import datetime
 import json
 import logging
+import uuid
 from typing import Optional
 
 import requests
@@ -55,9 +56,15 @@ from kessel.inventory.v1beta2 import (
     resource_reference_pb2,
     subject_reference_pb2,
 )
-from kessel.relations.v1beta1 import check_pb2, lookup_pb2, relation_tuples_pb2
-from kessel.relations.v1beta1 import check_pb2_grpc, lookup_pb2_grpc, relation_tuples_pb2_grpc
-from kessel.relations.v1beta1 import common_pb2
+from kessel.relations.v1beta1 import (
+    check_pb2,
+    check_pb2_grpc,
+    common_pb2,
+    lookup_pb2,
+    lookup_pb2_grpc,
+    relation_tuples_pb2,
+    relation_tuples_pb2_grpc,
+)
 from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
@@ -72,9 +79,7 @@ from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
     USER_ENV_HEADER,
-)
-from management.principal.proxy import PrincipalProxy
-from management.principal.proxy import (
+    PrincipalProxy,
     bop_request_status_count,
     bop_request_time_tracking,
 )
@@ -94,6 +99,7 @@ from management.tasks import (
     fix_missing_binding_base_tuples_in_worker,
     migrate_binding_scope_in_worker,
     migrate_data_in_worker,
+    migrate_role_scope_if_changed_in_worker,
     recompute_tenant_role_bindings_in_worker,
     recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
@@ -2712,6 +2718,27 @@ def recompute_tenant_role_bindings(request, org_id):
         logger.exception(f"Error recomputing role bindings for tenant {org_id}")
         return JsonResponse(
             {"detail": f"Error recomputing role bindings for tenant: {str(e)}"},
+            status=500,
+        )
+
+
+@require_http_methods(["POST"])
+def migrate_role_scope_if_changed(request, role_uuid):
+    try:
+        parsed_uuid = uuid.UUID(role_uuid)
+    except ValueError:
+        return JsonResponse({"message": f"invalid UUID: {role_uuid}"}, status=400)
+
+    if not Role.objects.public_tenant_only().filter(uuid=role_uuid, system=True).exists():
+        return JsonResponse({"message": f"role does not exist; UUID: {str(parsed_uuid)}"}, status=404)
+
+    try:
+        migrate_role_scope_if_changed_in_worker.delay(role_uuid=str(parsed_uuid))
+        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+    except Exception as e:
+        logger.exception(f"Error migrating scope for role {parsed_uuid}")
+        return JsonResponse(
+            {"detail": f"Error migrating scope for role: {str(e)}"},
             status=500,
         )
 

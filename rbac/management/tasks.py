@@ -26,6 +26,7 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
+from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
 from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
@@ -52,6 +53,7 @@ from management.principal.cleaner import (
     clean_tenants_principals,
     process_principal_events_from_umb,
 )
+from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, SeededRoleV2
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
@@ -199,6 +201,11 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
     return recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+
+
+@shared_task
+def migrate_role_scope_if_changed_in_worker(role_uuid: str):
+    return migrate_role_scope_if_changed(v1_role=Role.objects.filter(uuid=role_uuid).get())
 
 
 @shared_task
