@@ -50,6 +50,7 @@ from management.parity_check import run_parity_checks
 from management.permission.scope_service import ImplicitResourceService
 from management.principal.cleaner import (
     clean_tenants_principals,
+    process_principal_events_from_kafka,
     process_principal_events_from_umb,
 )
 from management.role.v2_model import CustomRoleV2, SeededRoleV2
@@ -73,6 +74,38 @@ def principal_cleanup():
 def principal_cleanup_via_umb():
     """Celery task to clean up principals no longer existing."""
     process_principal_events_from_umb()
+
+
+@shared_task
+def principal_cleanup_via_kafka():
+    """Celery task to clean up principals via Kafka messages."""
+    process_principal_events_from_kafka()
+
+
+@shared_task
+def principal_cleanup_via_message_bus():
+    """
+    Dispatcher task that checks Unleash flag at runtime to decide between Kafka and UMB.
+
+    This task is scheduled when both PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB and
+    PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA are enabled. It allows runtime switching
+    between message bus implementations via Unleash flag without requiring worker restart.
+    """
+    from feature_flags import FEATURE_FLAGS
+
+    # Check Unleash flag at runtime to decide which consumer to use
+    if FEATURE_FLAGS.is_kafka_principal_cleanup_enabled():
+        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
+            logger.info("Unleash flag enabled: dispatching to Kafka principal cleanup")
+            process_principal_events_from_kafka()
+        else:
+            logger.warning("Unleash flag enabled for Kafka but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
+    else:
+        if settings.UMB_JOB_ENABLED:
+            logger.info("Unleash flag disabled: dispatching to UMB principal cleanup")
+            process_principal_events_from_umb()
+        else:
+            logger.warning("Unleash flag disabled for Kafka but UMB_JOB_ENABLED is False")
 
 
 @shared_task
