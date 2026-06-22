@@ -2721,11 +2721,9 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     POST /_private/api/disaster_recovery/workspaces/
 
-    Accepts JSON body:
-        {
-            "restore_timestamp": "2026-05-28T10:00:00Z",
-            "buffer_minutes": 5
-        }
+    Supports two modes (mutually exclusive):
+    - Timestamp mode: {"restore_timestamp": "2026-05-28T10:00:00Z", "buffer_minutes": 5}
+    - Offset mode: {"start_offset": 100, "end_offset": 200}
 
     Returns 202 with task_id on success.
     """
@@ -2737,9 +2735,60 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"detail": "Invalid JSON body"}, status=400)
 
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
+
+    start_offset = body.get("start_offset")
+    end_offset = body.get("end_offset")
     restore_timestamp = body.get("restore_timestamp")
-    if not restore_timestamp:
-        return JsonResponse({"detail": "restore_timestamp is required"}, status=400)
+
+    use_offsets = start_offset is not None
+    use_timestamp = restore_timestamp is not None
+
+    if use_offsets and use_timestamp:
+        return JsonResponse(
+            {"detail": "Cannot specify both restore_timestamp and start_offset; use one mode or the other"},
+            status=400,
+        )
+    if not use_offsets and not use_timestamp:
+        return JsonResponse(
+            {"detail": "Either restore_timestamp or start_offset is required"},
+            status=400,
+        )
+
+    if use_offsets:
+        if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
+            return JsonResponse({"detail": "start_offset must be a non-negative integer"}, status=400)
+        if end_offset is not None:
+            if isinstance(end_offset, bool) or not isinstance(end_offset, int) or end_offset <= start_offset:
+                return JsonResponse({"detail": "end_offset must be an integer greater than start_offset"}, status=400)
+
+        try:
+            task = recover_workspace_events_in_worker.delay(
+                start_offset=start_offset,
+                end_offset=end_offset,
+                dry_run=dry_run,
+            )
+            logger.info(
+                "Workspace DR recovery task enqueued (offset mode): task_id=%s start_offset=%d end_offset=%s",
+                task.id,
+                start_offset,
+                end_offset,
+            )
+            return JsonResponse(
+                {
+                    "task_id": task.id,
+                    "status": "enqueued",
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "dry_run": dry_run,
+                },
+                status=202,
+            )
+        except Exception:
+            logger.exception("Error enqueuing workspace DR recovery task")
+            return JsonResponse({"detail": "Error enqueuing recovery task"}, status=500)
 
     try:
         parsed_ts = datetime.datetime.fromisoformat(restore_timestamp)
@@ -2756,10 +2805,6 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     buffer_minutes = body.get("buffer_minutes", 5)
     if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
         return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
-
-    dry_run = body.get("dry_run", False)
-    if not isinstance(dry_run, bool):
-        return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
 
     try:
         task = recover_workspace_events_in_worker.delay(
@@ -2794,7 +2839,9 @@ def disaster_recovery_reconcile(request):
 
     POST /_private/api/disaster_recovery/reconcile/
 
-    Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
+    Supports two modes (mutually exclusive):
+    - Timestamp mode: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
+    - Offset mode: {"start_offset": 100, "end_offset": 200, "dry_run": false}
     """
     if not getattr(settings, "DR_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
@@ -2805,9 +2852,48 @@ def disaster_recovery_reconcile(request):
 
     body = load_request_body(request)
 
+    dry_run = body.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
+
+    start_offset = body.get("start_offset")
+    end_offset = body.get("end_offset")
     restore_timestamp_str = body.get("restore_timestamp")
-    if not restore_timestamp_str:
-        return JsonResponse({"error": "restore_timestamp is required"}, status=400)
+
+    use_offsets = start_offset is not None
+    use_timestamp = restore_timestamp_str is not None
+
+    if use_offsets and use_timestamp:
+        return JsonResponse(
+            {"error": "Cannot specify both restore_timestamp and start_offset; use one mode or the other"},
+            status=400,
+        )
+    if not use_offsets and not use_timestamp:
+        return JsonResponse({"error": "Either restore_timestamp or start_offset is required"}, status=400)
+
+    if use_offsets:
+        if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
+            return JsonResponse({"error": "start_offset must be a non-negative integer"}, status=400)
+        if end_offset is not None:
+            if isinstance(end_offset, bool) or not isinstance(end_offset, int) or end_offset <= start_offset:
+                return JsonResponse({"error": "end_offset must be an integer greater than start_offset"}, status=400)
+
+        task = run_disaster_recovery_reconcile.delay(
+            start_offset=start_offset,
+            end_offset=end_offset,
+            dry_run=dry_run,
+        )
+
+        return JsonResponse(
+            {
+                "message": "Disaster recovery reconciliation enqueued.",
+                "task_id": str(task.id),
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+                "dry_run": dry_run,
+            },
+            status=202,
+        )
 
     try:
         dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
@@ -2818,10 +2904,6 @@ def disaster_recovery_reconcile(request):
     buffer_seconds = body.get("buffer_seconds", 300)
     if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
         return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
-
-    dry_run = body.get("dry_run", False)
-    if not isinstance(dry_run, bool):
-        return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
 
     task = run_disaster_recovery_reconcile.delay(
         restore_timestamp_ms=restore_timestamp_ms,
