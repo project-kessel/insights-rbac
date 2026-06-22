@@ -7,7 +7,7 @@ from management.disaster_recovery.corrective_writer import (
     generate_corrective_actions,
     write_corrective_events,
 )
-from management.disaster_recovery.kafka_reader import read_events_in_window
+from management.disaster_recovery.kafka_reader import read_events_by_offset, read_events_in_window
 from management.disaster_recovery.resource_checker import check_resources_exist
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 
@@ -15,44 +15,68 @@ logger = logging.getLogger(__name__)
 
 
 def reconcile(
-    restore_timestamp_ms: int,
+    restore_timestamp_ms: int | None = None,
     buffer_seconds: int = 300,
     replicator: OutboxReplicator | None = None,
     dry_run: bool = False,
+    start_offset: int | None = None,
+    end_offset: int | None = None,
 ) -> dict:
     """Run disaster recovery reconciliation.
 
-    1. Calculate time window [restore_timestamp - buffer, restore_timestamp]
-    2. Read Kafka events from that window
-    3. Extract all unique resource references from tuples
-    4. Bulk-check resource existence in RBAC database
-    5. Generate corrective actions per the truth table
-    6. Write corrective events to outbox
-    7. Return summary
+    Supports two modes (mutually exclusive):
+    - Timestamp mode: provide restore_timestamp_ms (+ buffer_seconds)
+    - Offset mode: provide start_offset (+ optional end_offset)
+
+    Steps:
+    1. Read Kafka events from the specified window
+    2. Extract all unique resource references from tuples
+    3. Bulk-check resource existence in RBAC database
+    4. Generate corrective actions per the truth table
+    5. Write corrective events to outbox
+    6. Return summary
     """
-    if buffer_seconds < 0:
-        raise ValueError(f"buffer_seconds must be non-negative, got {buffer_seconds}")
+    use_offsets = start_offset is not None
+    use_timestamp = restore_timestamp_ms is not None
+
+    if not use_offsets and not use_timestamp:
+        raise ValueError("Either restore_timestamp_ms or start_offset must be provided")
+    if use_offsets and use_timestamp:
+        raise ValueError("Cannot specify both restore_timestamp_ms and start_offset")
 
     start = time.monotonic()
 
-    buffer_ms = buffer_seconds * 1000
-    start_timestamp_ms = restore_timestamp_ms - buffer_ms
-    end_timestamp_ms = restore_timestamp_ms
+    if use_offsets:
+        logger.info(
+            "Starting DR reconciliation by offset: [%d, %s)",
+            start_offset,
+            end_offset if end_offset is not None else "END",
+        )
+        events = read_events_by_offset(start_offset, end_offset)
+        window_info: dict = {"start_offset": start_offset, "end_offset": end_offset}
+    else:
+        if buffer_seconds < 0:
+            raise ValueError(f"buffer_seconds must be non-negative, got {buffer_seconds}")
 
-    logger.info(
-        "Starting DR reconciliation: window [%d, %d] (buffer=%ds)",
-        start_timestamp_ms,
-        end_timestamp_ms,
-        buffer_seconds,
-    )
+        buffer_ms = buffer_seconds * 1000
+        start_timestamp_ms_calc = restore_timestamp_ms - buffer_ms
+        end_timestamp_ms = restore_timestamp_ms
 
-    events = read_events_in_window(start_timestamp_ms, end_timestamp_ms)
+        logger.info(
+            "Starting DR reconciliation: window [%d, %d] (buffer=%ds)",
+            start_timestamp_ms_calc,
+            end_timestamp_ms,
+            buffer_seconds,
+        )
+
+        events = read_events_in_window(start_timestamp_ms_calc, end_timestamp_ms)
+        window_info = {"start_ms": start_timestamp_ms_calc, "end_ms": end_timestamp_ms}
 
     if not events:
-        logger.info("No events found in the time window, nothing to reconcile")
+        logger.info("No events found in the specified window, nothing to reconcile")
         return {
             "status": "completed",
-            "time_window": {"start_ms": start_timestamp_ms, "end_ms": end_timestamp_ms},
+            "window": window_info,
             "events_read": 0,
             "tuples_processed": 0,
             "corrective_adds": 0,
@@ -101,7 +125,7 @@ def reconcile(
 
         result = {
             "status": "dry_run",
-            "time_window": {"start_ms": start_timestamp_ms, "end_ms": end_timestamp_ms},
+            "window": window_info,
             "events_read": len(events),
             "tuples_processed": len(all_tuples),
             "corrective_adds": len(adds),
@@ -131,7 +155,7 @@ def reconcile(
 
     result = {
         "status": "completed",
-        "time_window": {"start_ms": start_timestamp_ms, "end_ms": end_timestamp_ms},
+        "window": window_info,
         "events_read": len(events),
         "tuples_processed": len(all_tuples),
         "duration_seconds": elapsed,

@@ -558,18 +558,24 @@ def run_kessel_parity_checks_in_worker():
 
 @shared_task
 def recover_workspace_events_in_worker(
-    restore_timestamp_iso: str,
+    restore_timestamp_iso: str | None = None,
     buffer_minutes: int = 5,
     dry_run: bool = False,
+    start_offset: int | None = None,
+    end_offset: int | None = None,
 ) -> dict:
     """Celery task to generate corrective workspace events after a DB restore.
 
-    Reads workspace events from Kafka for the data loss window, compares against
-    current RBAC DB state, and writes corrective events to the outbox table.
+    Supports two modes (mutually exclusive):
+    - Timestamp mode: provide restore_timestamp_iso (+ buffer_minutes)
+    - Offset mode: provide start_offset (+ optional end_offset)
 
     Args:
-        restore_timestamp_iso: ISO 8601 timestamp of the DB restore point (T-30).
+        restore_timestamp_iso: ISO 8601 timestamp of the DB restore point.
         buffer_minutes: Minutes to extend the window before restore_timestamp.
+        dry_run: If True, analyze but don't write corrective events.
+        start_offset: Start Kafka offset (inclusive) on each partition.
+        end_offset: End Kafka offset (exclusive). If None, reads to end.
 
     Returns:
         dict: Summary statistics of corrective events generated.
@@ -586,35 +592,47 @@ def recover_workspace_events_in_worker(
     start = time.monotonic()
 
     try:
-        restore_dt = datetime.datetime.fromisoformat(restore_timestamp_iso)
-        if restore_dt.tzinfo is None:
-            restore_dt = restore_dt.replace(tzinfo=datetime.timezone.utc)
-
-        buffer_delta = datetime.timedelta(minutes=buffer_minutes)
-        start_dt = restore_dt - buffer_delta
-        end_dt = datetime.datetime.now(datetime.timezone.utc)
-
-        start_ms = int(start_dt.timestamp() * 1000)
-        end_ms = int(end_dt.timestamp() * 1000)
-
         topic = getattr(settings, "DR_WORKSPACE_TOPIC", "outbox.event.workspace")
 
-        logger.info(
-            "Starting workspace DR recovery: topic=%s start=%s end=%s buffer_minutes=%d",
-            topic,
-            start_dt.isoformat(),
-            end_dt.isoformat(),
-            buffer_minutes,
-        )
-
-        from core.kafka_dr import read_events_by_timestamp
+        from core.kafka_dr import read_events_by_offset, read_events_by_timestamp
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
-        kafka_events = read_events_by_timestamp(
-            topic=topic,
-            start_timestamp_ms=start_ms,
-            end_timestamp_ms=end_ms,
-        )
+        if start_offset is not None:
+            logger.info(
+                "Starting workspace DR recovery by offset: topic=%s start_offset=%d end_offset=%s",
+                topic,
+                start_offset,
+                end_offset,
+            )
+            kafka_events = read_events_by_offset(
+                topic=topic,
+                start_offset=start_offset,
+                end_offset=end_offset,
+            )
+        else:
+            restore_dt = datetime.datetime.fromisoformat(restore_timestamp_iso)
+            if restore_dt.tzinfo is None:
+                restore_dt = restore_dt.replace(tzinfo=datetime.timezone.utc)
+
+            buffer_delta = datetime.timedelta(minutes=buffer_minutes)
+            start_dt = restore_dt - buffer_delta
+            end_dt = datetime.datetime.now(datetime.timezone.utc)
+
+            start_ms = int(start_dt.timestamp() * 1000)
+            end_ms = int(end_dt.timestamp() * 1000)
+
+            logger.info(
+                "Starting workspace DR recovery: topic=%s start=%s end=%s buffer_minutes=%d",
+                topic,
+                start_dt.isoformat(),
+                end_dt.isoformat(),
+                buffer_minutes,
+            )
+            kafka_events = read_events_by_timestamp(
+                topic=topic,
+                start_timestamp_ms=start_ms,
+                end_timestamp_ms=end_ms,
+            )
 
         logger.info("Read %d Kafka events from topic %s", len(kafka_events), topic)
 
@@ -623,9 +641,14 @@ def recover_workspace_events_in_worker(
         elapsed = time.monotonic() - start
         result = dict(stats)
         result["duration_seconds"] = round(elapsed, 3)
-        result["restore_timestamp"] = restore_timestamp_iso
-        result["buffer_minutes"] = buffer_minutes
         result["kafka_events_read"] = len(kafka_events)
+
+        if start_offset is not None:
+            result["start_offset"] = start_offset
+            result["end_offset"] = end_offset
+        else:
+            result["restore_timestamp"] = restore_timestamp_iso
+            result["buffer_minutes"] = buffer_minutes
 
         logger.info("Workspace DR recovery task completed in %.3fs: %s", elapsed, result)
 
@@ -636,17 +659,24 @@ def recover_workspace_events_in_worker(
 
 @shared_task
 def run_disaster_recovery_reconcile(
-    restore_timestamp_ms: int, buffer_seconds: int = 300, dry_run: bool = False
+    restore_timestamp_ms: int | None = None,
+    buffer_seconds: int = 300,
+    dry_run: bool = False,
+    start_offset: int | None = None,
+    end_offset: int | None = None,
 ) -> dict:
     """Celery task for disaster recovery reconciliation of Kessel Relations.
 
-    Reads Kafka events from the data loss window, validates against current
-    RBAC database state, and writes corrective events through the outbox table.
+    Supports two modes (mutually exclusive):
+    - Timestamp mode: provide restore_timestamp_ms (+ buffer_seconds)
+    - Offset mode: provide start_offset (+ optional end_offset)
 
     Args:
         restore_timestamp_ms: Unix timestamp in milliseconds of the DB restore point.
         buffer_seconds: Extra time before restore_timestamp to include (default 300).
         dry_run: If True, analyze but don't write corrective events.
+        start_offset: Start Kafka offset (inclusive) on each partition.
+        end_offset: End Kafka offset (exclusive). If None, reads to end.
 
     Returns:
         dict: Summary with counts of corrective actions taken.
@@ -661,6 +691,8 @@ def run_disaster_recovery_reconcile(
             restore_timestamp_ms=restore_timestamp_ms,
             buffer_seconds=buffer_seconds,
             dry_run=dry_run,
+            start_offset=start_offset,
+            end_offset=end_offset,
         )
     except Exception as e:
         logger.exception("Disaster recovery reconciliation failed")
