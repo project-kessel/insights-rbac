@@ -298,8 +298,9 @@ def read_events_by_offset(
         poll_timeout_ms = 5000
         empty_polls = 0
         max_empty_polls = 3
+        finished_partitions: set[TopicPartition] = set()
 
-        while len(events) < max_events:
+        while len(events) < max_events and len(finished_partitions) < len(active_partitions):
             records = consumer.poll(timeout_ms=poll_timeout_ms)
 
             if not records:
@@ -309,12 +310,14 @@ def read_events_by_offset(
                 continue
 
             empty_polls = 0
-            past_range = False
 
             for tp, messages in records.items():
+                if tp in finished_partitions:
+                    continue
+
                 for message in messages:
                     if end_offset is not None and message.offset >= end_offset:
-                        past_range = True
+                        finished_partitions.add(tp)
                         break
 
                     payload = _parse_debezium_payload(message.value)
@@ -328,11 +331,8 @@ def read_events_by_offset(
                     if len(events) >= max_events:
                         break
 
-                if past_range or len(events) >= max_events:
+                if len(events) >= max_events:
                     break
-
-            if past_range:
-                break
 
         partition_stats: dict[int, list[int]] = {}
         for ev in events:

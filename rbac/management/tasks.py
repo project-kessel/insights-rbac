@@ -583,6 +583,13 @@ def recover_workspace_events_in_worker(
     if not getattr(settings, "DR_RECOVERY_ENABLED", False):
         return {"message": "DR recovery disabled (DR_RECOVERY_ENABLED=False)"}
 
+    use_offsets = start_offset is not None
+    use_timestamp = restore_timestamp_iso is not None
+    if use_offsets and use_timestamp:
+        raise ValueError("Cannot specify both restore_timestamp_iso and start_offset")
+    if not use_offsets and not use_timestamp:
+        raise ValueError("Either restore_timestamp_iso or start_offset must be provided")
+
     from django.core.cache import cache
 
     lock_key = "dr_workspace_recovery_lock"
@@ -597,7 +604,7 @@ def recover_workspace_events_in_worker(
         from core.kafka_dr import read_events_by_offset, read_events_by_timestamp
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
-        if start_offset is not None:
+        if use_offsets:
             logger.info(
                 "Starting workspace DR recovery by offset: topic=%s start_offset=%d end_offset=%s",
                 topic,
@@ -643,7 +650,7 @@ def recover_workspace_events_in_worker(
         result["duration_seconds"] = round(elapsed, 3)
         result["kafka_events_read"] = len(kafka_events)
 
-        if start_offset is not None:
+        if use_offsets:
             result["start_offset"] = start_offset
             result["end_offset"] = end_offset
         else:
