@@ -60,7 +60,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.content)
         self.assertIn("error", data)
-        self.assertIn("restore_timestamp", data["error"])
+        self.assertIn("Either", data["error"])
         mock_task.delay.assert_not_called()
 
     @override_settings(DR_RECONCILE_ENABLED=True)
@@ -157,6 +157,137 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertEqual(response.status_code, 202)
         data = json.loads(response.content)
         self.assertEqual(data["buffer_seconds"], 300)
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_offset_mode_returns_202(self, mock_task):
+        mock_result = MagicMock()
+        mock_result.id = "task-offset-mode"
+        mock_task.delay.return_value = mock_result
+
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"start_offset": 100, "end_offset": 200}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        data = json.loads(response.content)
+        self.assertEqual(data["task_id"], "task-offset-mode")
+        self.assertEqual(data["start_offset"], 100)
+        self.assertEqual(data["end_offset"], 200)
+        mock_task.delay.assert_called_once_with(
+            start_offset=100,
+            end_offset=200,
+            dry_run=False,
+        )
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_offset_mode_without_end_offset(self, mock_task):
+        mock_result = MagicMock()
+        mock_result.id = "task-offset-no-end"
+        mock_task.delay.return_value = mock_result
+
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"start_offset": 50}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        data = json.loads(response.content)
+        self.assertIsNone(data["end_offset"])
+        mock_task.delay.assert_called_once_with(
+            start_offset=50,
+            end_offset=None,
+            dry_run=False,
+        )
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_both_timestamp_and_offset_rejected(self, mock_task):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"restore_timestamp": "2026-05-28T10:00:00Z", "start_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("Cannot specify both", data["error"])
+        mock_task.delay.assert_not_called()
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_neither_timestamp_nor_offset_rejected(self, mock_task):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"dry_run": True}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("Either", data["error"])
+        mock_task.delay.assert_not_called()
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_negative_start_offset_rejected(self, mock_task):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"start_offset": -1}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("start_offset", data["error"])
+        mock_task.delay.assert_not_called()
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_end_offset_not_greater_than_start_rejected(self, mock_task):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"start_offset": 200, "end_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("end_offset", data["error"])
+        mock_task.delay.assert_not_called()
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_offset_mode_with_dry_run(self, mock_task):
+        mock_result = MagicMock()
+        mock_result.id = "task-offset-dry"
+        mock_task.delay.return_value = mock_result
+
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"start_offset": 0, "end_offset": 500, "dry_run": True}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        data = json.loads(response.content)
+        self.assertTrue(data["dry_run"])
+        mock_task.delay.assert_called_once_with(
+            start_offset=0,
+            end_offset=500,
+            dry_run=True,
+        )
 
 
 class DisasterRecoveryTaskFeatureFlagTest(TestCase):

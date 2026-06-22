@@ -113,17 +113,6 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
             dry_run=False,
         )
 
-    def test_missing_restore_timestamp_returns_400(self):
-        """Missing restore_timestamp returns 400."""
-        response = self.client.post(
-            DR_URL,
-            data=json.dumps({"buffer_minutes": 5}),
-            content_type="application/json",
-            **self.headers,
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("restore_timestamp is required", response.json()["detail"])
-
     def test_invalid_timestamp_format_returns_400(self):
         """Invalid timestamp format returns 400."""
         response = self.client.post(
@@ -204,6 +193,96 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    @patch("internal.views.recover_workspace_events_in_worker.delay")
+    def test_offset_mode_returns_202(self, mock_delay):
+        """Offset mode with start_offset returns 202."""
+        mock_delay.return_value.id = "task-offset-ws"
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"start_offset": 100, "end_offset": 200}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertEqual(data["task_id"], "task-offset-ws")
+        self.assertEqual(data["start_offset"], 100)
+        self.assertEqual(data["end_offset"], 200)
+        mock_delay.assert_called_once_with(
+            start_offset=100,
+            end_offset=200,
+            dry_run=False,
+        )
+
+    @patch("internal.views.recover_workspace_events_in_worker.delay")
+    def test_offset_mode_without_end_offset(self, mock_delay):
+        """Offset mode without end_offset reads to end."""
+        mock_delay.return_value.id = "task-offset-no-end"
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"start_offset": 50}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertIsNone(data["end_offset"])
+
+    def test_both_timestamp_and_offset_returns_400(self):
+        """Providing both timestamp and offset returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"restore_timestamp": "2026-05-28T10:00:00Z", "start_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot specify both", response.json()["detail"])
+
+    def test_neither_timestamp_nor_offset_returns_400(self):
+        """Missing both timestamp and offset returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"dry_run": True}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Either", response.json()["detail"])
+
+    def test_negative_start_offset_returns_400(self):
+        """Negative start_offset returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"start_offset": -1}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("non-negative", response.json()["detail"])
+
+    def test_end_offset_not_greater_returns_400(self):
+        """end_offset <= start_offset returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"start_offset": 200, "end_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("end_offset", response.json()["detail"])
+
+    def test_missing_restore_timestamp_returns_400(self):
+        """Missing restore_timestamp returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"buffer_minutes": 5}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Either", response.json()["detail"])
+
 
 @override_settings(DR_RECOVERY_ENABLED=True)
 class TestRecoverWorkspaceEventsTask(TestCase):
@@ -273,3 +352,39 @@ class TestRecoverWorkspaceEventsTask(TestCase):
 
         mock_read.assert_called_once()
         self.assertIn("duration_seconds", result)
+
+    @patch("core.kafka_dr.read_events_by_offset")
+    def test_task_offset_mode_calls_offset_reader(self, mock_read):
+        """Task in offset mode calls read_events_by_offset."""
+        mock_read.return_value = []
+
+        from management.tasks import recover_workspace_events_in_worker
+
+        result = recover_workspace_events_in_worker(start_offset=100, end_offset=200)
+
+        mock_read.assert_called_once_with(
+            topic="outbox.event.workspace",
+            start_offset=100,
+            end_offset=200,
+        )
+        self.assertEqual(result["kafka_events_read"], 0)
+        self.assertEqual(result["start_offset"], 100)
+        self.assertEqual(result["end_offset"], 200)
+        self.assertNotIn("restore_timestamp", result)
+
+    @patch("core.kafka_dr.read_events_by_offset")
+    def test_task_offset_mode_without_end_offset(self, mock_read):
+        """Task in offset mode without end_offset reads to end."""
+        mock_read.return_value = []
+
+        from management.tasks import recover_workspace_events_in_worker
+
+        result = recover_workspace_events_in_worker(start_offset=50)
+
+        mock_read.assert_called_once_with(
+            topic="outbox.event.workspace",
+            start_offset=50,
+            end_offset=None,
+        )
+        self.assertEqual(result["start_offset"], 50)
+        self.assertIsNone(result["end_offset"])
