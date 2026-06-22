@@ -318,6 +318,7 @@ def read_events_by_offset(
                 for message in messages:
                     if end_offset is not None and message.offset >= end_offset:
                         finished_partitions.add(tp)
+                        consumer.pause([tp])
                         break
 
                     payload = _parse_debezium_payload(message.value)
