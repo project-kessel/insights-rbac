@@ -36,7 +36,7 @@ from management.cache import JWTCache
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.permission.scope_service import ImplicitResourceService, Scope
 from management.relation_replicator.types import RelationTuple
-from management.role.platform import admin_platform_parent_scope_for_seeded_system_role, platform_v2_role_uuid_for
+from management.role.platform import admin_platform_parent_scopes_for_seeded_system_role, platform_v2_role_uuid_for
 from management.role.relations import role_child_relationship
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from management.utils import create_client_channel_inventory, create_client_channel_relation
@@ -553,24 +553,28 @@ def generate_seeded_role_hierarchy_tuples(
 
     if implicit_resource_service is None:
         implicit_resource_service = ImplicitResourceService.from_settings()
-    scope = implicit_resource_service.scope_for_role(v1_role)
+
+    binding_scopes = set(implicit_resource_service.binding_scopes_for_role(v1_role))
+    admin_scopes = set(admin_platform_parent_scopes_for_seeded_system_role(v1_role.name, binding_scopes))
+
     policy_service = GlobalPolicyIdService.shared()
     tuples = []
 
     if v1_role.admin_default:
-        try:
-            admin_scope = admin_platform_parent_scope_for_seeded_system_role(v1_role.name, scope, apply_override=True)
-            parent_uuid = platform_v2_role_uuid_for(DefaultAccessType.ADMIN, admin_scope, policy_service)
-            tuples.append(role_child_relationship(parent_uuid, seeded_role.uuid))
-        except DefaultGroupNotAvailableError:
-            logger.warning(f"Default admin group not available for seeded role {seeded_role.uuid}")
+        for scope in admin_scopes:
+            try:
+                parent_uuid = platform_v2_role_uuid_for(DefaultAccessType.ADMIN, scope, policy_service)
+                tuples.append(role_child_relationship(parent_uuid, seeded_role.uuid))
+            except DefaultGroupNotAvailableError:
+                logger.warning(f"Default admin group not available for seeded role {seeded_role.uuid}")
 
     if v1_role.platform_default:
-        try:
-            parent_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, scope, policy_service)
-            tuples.append(role_child_relationship(parent_uuid, seeded_role.uuid))
-        except DefaultGroupNotAvailableError:
-            logger.warning(f"Default platform group not available for seeded role {seeded_role.uuid}")
+        for scope in binding_scopes:
+            try:
+                parent_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, scope, policy_service)
+                tuples.append(role_child_relationship(parent_uuid, seeded_role.uuid))
+            except DefaultGroupNotAvailableError:
+                logger.warning(f"Default platform group not available for seeded role {seeded_role.uuid}")
 
     return tuples
 

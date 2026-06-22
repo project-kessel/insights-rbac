@@ -37,7 +37,7 @@ from management.permission.scope_service import ImplicitResourceService, Scope
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.model import Access, ExtRoleRelation, ExtTenant, ResourceDefinition, Role, RoleScopeState
 from management.role.platform import (
-    admin_platform_parent_scope_for_seeded_system_role,
+    admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
 )
 from management.role.relation_api_dual_write_handler import (
@@ -387,11 +387,8 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
                 logger.info("Added %s as child of platform role %s", display_name, platform_role.name)
 
         if v1_role.admin_default:
-            for scope in binding_scopes:
-                admin_scope = admin_platform_parent_scope_for_seeded_system_role(
-                    v1_role.name, scope, apply_override=True
-                )
-                admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, admin_scope)]
+            for scope in admin_platform_parent_scopes_for_seeded_system_role(v1_role.name, binding_scopes):
+                admin_platform_role = platform_roles[(DefaultAccessType.ADMIN, scope)]
                 admin_platform_role.children.add(v2_role)
                 logger.info("Added %s as child of admin platform role %s", display_name, admin_platform_role.name)
 
