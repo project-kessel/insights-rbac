@@ -2802,6 +2802,7 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
             logger.exception("Error enqueuing workspace DR recovery task")
             return JsonResponse({"detail": "Error enqueuing recovery task"}, status=500)
 
+    assert restore_timestamp is not None
     try:
         parsed_ts = datetime.datetime.fromisoformat(restore_timestamp)
     except (ValueError, TypeError):

@@ -46,7 +46,7 @@ def reconcile(
 
     start = time.monotonic()
 
-    if use_offsets:
+    if start_offset is not None:
         logger.info(
             "Starting DR reconciliation by offset: [%d, %s)",
             start_offset,
@@ -55,6 +55,7 @@ def reconcile(
         events = read_events_by_offset(start_offset, end_offset)
         window_info: dict = {"start_offset": start_offset, "end_offset": end_offset}
     else:
+        assert restore_timestamp_ms is not None
         if buffer_seconds < 0:
             raise ValueError(f"buffer_seconds must be non-negative, got {buffer_seconds}")
 

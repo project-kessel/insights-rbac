@@ -604,7 +604,7 @@ def recover_workspace_events_in_worker(
         from core.kafka_dr import read_events_by_offset, read_events_by_timestamp
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
-        if use_offsets:
+        if start_offset is not None:
             logger.info(
                 "Starting workspace DR recovery by offset: topic=%s start_offset=%d end_offset=%s",
                 topic,
@@ -617,6 +617,7 @@ def recover_workspace_events_in_worker(
                 end_offset=end_offset,
             )
         else:
+            assert restore_timestamp_iso is not None
             restore_dt = datetime.datetime.fromisoformat(restore_timestamp_iso)
             if restore_dt.tzinfo is None:
                 restore_dt = restore_dt.replace(tzinfo=datetime.timezone.utc)
