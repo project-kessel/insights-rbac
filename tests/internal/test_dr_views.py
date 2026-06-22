@@ -49,7 +49,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
 
     @override_settings(DR_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
-    def test_missing_restore_timestamp(self, mock_task):
+    def test_missing_all_modes(self, mock_task):
         response = self.client.post(
             "/_private/api/disaster_recovery/reconcile/",
             data=json.dumps({"buffer_seconds": 300}),
@@ -60,7 +60,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.content)
         self.assertIn("error", data)
-        self.assertIn("Either", data["error"])
+        self.assertIn("required", data["error"])
         mock_task.delay.assert_not_called()
 
     @override_settings(DR_RECONCILE_ENABLED=True)
@@ -218,7 +218,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
 
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.content)
-        self.assertIn("Cannot specify both", data["error"])
+        self.assertIn("exactly one mode", data["error"])
         mock_task.delay.assert_not_called()
 
     @override_settings(DR_RECONCILE_ENABLED=True)
@@ -233,7 +233,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
 
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.content)
-        self.assertIn("Either", data["error"])
+        self.assertIn("required", data["error"])
         mock_task.delay.assert_not_called()
 
     @override_settings(DR_RECONCILE_ENABLED=True)
@@ -288,6 +288,112 @@ class DisasterRecoveryViewTest(IdentityRequest):
             end_offset=500,
             dry_run=True,
         )
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_last_minutes_mode_returns_202(self, mock_task):
+        mock_result = MagicMock()
+        mock_result.id = "task-last-min"
+        mock_task.delay.return_value = mock_result
+
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": 30}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        data = json.loads(response.content)
+        self.assertEqual(data["task_id"], "task-last-min")
+        self.assertEqual(data["last_minutes"], 30)
+        self.assertEqual(data["buffer_seconds"], 1800)
+        self.assertIn("restore_timestamp_ms", data)
+        mock_task.delay.assert_called_once()
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    @patch("management.tasks.run_disaster_recovery_reconcile")
+    def test_last_minutes_mode_with_dry_run(self, mock_task):
+        mock_result = MagicMock()
+        mock_result.id = "task-last-dry"
+        mock_task.delay.return_value = mock_result
+
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": 10, "dry_run": True}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        data = json.loads(response.content)
+        self.assertTrue(data["dry_run"])
+        self.assertEqual(data["last_minutes"], 10)
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    def test_last_minutes_zero_returns_400(self):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": 0}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("positive integer", data["error"])
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    def test_last_minutes_negative_returns_400(self):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": -5}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("positive integer", data["error"])
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    def test_last_minutes_non_integer_returns_400(self):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": "thirty"}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("positive integer", data["error"])
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    def test_last_minutes_with_timestamp_returns_400(self):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": 30, "restore_timestamp": "2026-05-28T10:00:00Z"}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("exactly one mode", data["error"])
+
+    @override_settings(DR_RECONCILE_ENABLED=True)
+    def test_last_minutes_with_offset_returns_400(self):
+        response = self.client.post(
+            "/_private/api/disaster_recovery/reconcile/",
+            data=json.dumps({"last_minutes": 30, "start_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("exactly one mode", data["error"])
 
 
 class DisasterRecoveryTaskFeatureFlagTest(TestCase):

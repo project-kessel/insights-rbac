@@ -237,7 +237,7 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
             **self.headers,
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Cannot specify both", response.json()["detail"])
+        self.assertIn("exactly one mode", response.json()["detail"])
 
     def test_neither_timestamp_nor_offset_returns_400(self):
         """Missing both timestamp and offset returns 400."""
@@ -248,7 +248,7 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
             **self.headers,
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Either", response.json()["detail"])
+        self.assertIn("required", response.json()["detail"])
 
     def test_negative_start_offset_returns_400(self):
         """Negative start_offset returns 400."""
@@ -272,8 +272,8 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("end_offset", response.json()["detail"])
 
-    def test_missing_restore_timestamp_returns_400(self):
-        """Missing restore_timestamp returns 400."""
+    def test_missing_all_modes_returns_400(self):
+        """Missing all mode parameters returns 400."""
         response = self.client.post(
             DR_URL,
             data=json.dumps({"buffer_minutes": 5}),
@@ -281,7 +281,94 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
             **self.headers,
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Either", response.json()["detail"])
+        self.assertIn("required", response.json()["detail"])
+
+    @patch("internal.views.recover_workspace_events_in_worker.delay")
+    def test_last_minutes_mode_returns_202(self, mock_delay):
+        """last_minutes mode returns 202."""
+        mock_delay.return_value.id = "task-last-min"
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": 30}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertEqual(data["task_id"], "task-last-min")
+        self.assertEqual(data["last_minutes"], 30)
+        self.assertEqual(data["buffer_minutes"], 30)
+        self.assertIn("restore_timestamp", data)
+
+    @patch("internal.views.recover_workspace_events_in_worker.delay")
+    def test_last_minutes_mode_with_dry_run(self, mock_delay):
+        """last_minutes mode with dry_run returns 202."""
+        mock_delay.return_value.id = "task-last-min-dry"
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": 10, "dry_run": True}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertTrue(data["dry_run"])
+        self.assertEqual(data["last_minutes"], 10)
+
+    def test_last_minutes_zero_returns_400(self):
+        """last_minutes=0 returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": 0}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("positive integer", response.json()["detail"])
+
+    def test_last_minutes_negative_returns_400(self):
+        """Negative last_minutes returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": -5}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("positive integer", response.json()["detail"])
+
+    def test_last_minutes_non_integer_returns_400(self):
+        """Non-integer last_minutes returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": "thirty"}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("positive integer", response.json()["detail"])
+
+    def test_last_minutes_with_timestamp_returns_400(self):
+        """Providing both last_minutes and restore_timestamp returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": 30, "restore_timestamp": "2026-05-28T10:00:00Z"}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("exactly one mode", response.json()["detail"])
+
+    def test_last_minutes_with_offset_returns_400(self):
+        """Providing both last_minutes and start_offset returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps({"last_minutes": 30, "start_offset": 100}),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("exactly one mode", response.json()["detail"])
 
 
 @override_settings(DR_RECOVERY_ENABLED=True)
@@ -388,3 +475,22 @@ class TestRecoverWorkspaceEventsTask(TestCase):
         )
         self.assertEqual(result["start_offset"], 50)
         self.assertIsNone(result["end_offset"])
+
+    def test_task_both_modes_raises_value_error(self):
+        """Task raises ValueError when both offset and timestamp are provided."""
+        from management.tasks import recover_workspace_events_in_worker
+
+        with self.assertRaises(ValueError) as ctx:
+            recover_workspace_events_in_worker(
+                restore_timestamp_iso="2026-05-28T10:00:00Z",
+                start_offset=100,
+            )
+        self.assertIn("Cannot specify both", str(ctx.exception))
+
+    def test_task_neither_mode_raises_value_error(self):
+        """Task raises ValueError when neither offset nor timestamp is provided."""
+        from management.tasks import recover_workspace_events_in_worker
+
+        with self.assertRaises(ValueError) as ctx:
+            recover_workspace_events_in_worker()
+        self.assertIn("Either", str(ctx.exception))

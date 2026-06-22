@@ -2721,9 +2721,10 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     POST /_private/api/disaster_recovery/workspaces/
 
-    Supports two modes (mutually exclusive):
+    Supports three modes (mutually exclusive):
     - Timestamp mode: {"restore_timestamp": "2026-05-28T10:00:00Z", "buffer_minutes": 5}
     - Offset mode: {"start_offset": 100, "end_offset": 200}
+    - Last-minutes mode: {"last_minutes": 30}
 
     Returns 202 with task_id on success.
     """
@@ -2742,20 +2743,31 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     start_offset = body.get("start_offset")
     end_offset = body.get("end_offset")
     restore_timestamp = body.get("restore_timestamp")
+    last_minutes = body.get("last_minutes")
 
     use_offsets = start_offset is not None
     use_timestamp = restore_timestamp is not None
+    use_last_minutes = last_minutes is not None
 
-    if use_offsets and use_timestamp:
+    mode_count = sum([use_offsets, use_timestamp, use_last_minutes])
+    if mode_count > 1:
         return JsonResponse(
-            {"detail": "Cannot specify both restore_timestamp and start_offset; use one mode or the other"},
+            {"detail": "Specify exactly one mode: restore_timestamp, start_offset, or last_minutes"},
             status=400,
         )
-    if not use_offsets and not use_timestamp:
+    if mode_count == 0:
         return JsonResponse(
-            {"detail": "Either restore_timestamp or start_offset is required"},
+            {"detail": "One of restore_timestamp, start_offset, or last_minutes is required"},
             status=400,
         )
+
+    if use_last_minutes:
+        if isinstance(last_minutes, bool) or not isinstance(last_minutes, int) or last_minutes <= 0:
+            return JsonResponse({"detail": "last_minutes must be a positive integer"}, status=400)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        restore_timestamp = now.isoformat()
+        buffer_minutes = last_minutes
+        use_timestamp = True
 
     if use_offsets:
         if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
@@ -2798,13 +2810,14 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     if parsed_ts.tzinfo is None:
         parsed_ts = parsed_ts.replace(tzinfo=datetime.timezone.utc)
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if parsed_ts > now:
-        return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
+    if not use_last_minutes:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if parsed_ts > now:
+            return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
 
-    buffer_minutes = body.get("buffer_minutes", 5)
-    if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
-        return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
+        buffer_minutes = body.get("buffer_minutes", 5)
+        if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
+            return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
 
     try:
         task = recover_workspace_events_in_worker.delay(
@@ -2818,16 +2831,16 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
             restore_timestamp,
             buffer_minutes,
         )
-        return JsonResponse(
-            {
-                "task_id": task.id,
-                "status": "enqueued",
-                "restore_timestamp": restore_timestamp,
-                "buffer_minutes": buffer_minutes,
-                "dry_run": dry_run,
-            },
-            status=202,
-        )
+        response_data: dict = {
+            "task_id": task.id,
+            "status": "enqueued",
+            "restore_timestamp": restore_timestamp,
+            "buffer_minutes": buffer_minutes,
+            "dry_run": dry_run,
+        }
+        if use_last_minutes:
+            response_data["last_minutes"] = last_minutes
+        return JsonResponse(response_data, status=202)
     except Exception:
         logger.exception("Error enqueuing workspace DR recovery task")
         return JsonResponse({"detail": "Error enqueuing recovery task"}, status=500)
@@ -2839,14 +2852,16 @@ def disaster_recovery_reconcile(request):
 
     POST /_private/api/disaster_recovery/reconcile/
 
-    Supports two modes (mutually exclusive):
+    Supports three modes (mutually exclusive):
     - Timestamp mode: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
     - Offset mode: {"start_offset": 100, "end_offset": 200, "dry_run": false}
+    - Last-minutes mode: {"last_minutes": 30, "dry_run": false}
     """
     if not getattr(settings, "DR_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
 
-    from datetime import datetime
+    from datetime import datetime as dt_cls
+    from datetime import timezone
 
     from management.tasks import run_disaster_recovery_reconcile
 
@@ -2859,17 +2874,23 @@ def disaster_recovery_reconcile(request):
     start_offset = body.get("start_offset")
     end_offset = body.get("end_offset")
     restore_timestamp_str = body.get("restore_timestamp")
+    last_minutes = body.get("last_minutes")
 
     use_offsets = start_offset is not None
     use_timestamp = restore_timestamp_str is not None
+    use_last_minutes = last_minutes is not None
 
-    if use_offsets and use_timestamp:
+    mode_count = sum([use_offsets, use_timestamp, use_last_minutes])
+    if mode_count > 1:
         return JsonResponse(
-            {"error": "Cannot specify both restore_timestamp and start_offset; use one mode or the other"},
+            {"error": "Specify exactly one mode: restore_timestamp, start_offset, or last_minutes"},
             status=400,
         )
-    if not use_offsets and not use_timestamp:
-        return JsonResponse({"error": "Either restore_timestamp or start_offset is required"}, status=400)
+    if mode_count == 0:
+        return JsonResponse(
+            {"error": "One of restore_timestamp, start_offset, or last_minutes is required"},
+            status=400,
+        )
 
     if use_offsets:
         if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
@@ -2895,15 +2916,22 @@ def disaster_recovery_reconcile(request):
             status=202,
         )
 
-    try:
-        dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
-        restore_timestamp_ms = int(dt.timestamp() * 1000)
-    except (ValueError, TypeError):
-        return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+    if use_last_minutes:
+        if isinstance(last_minutes, bool) or not isinstance(last_minutes, int) or last_minutes <= 0:
+            return JsonResponse({"error": "last_minutes must be a positive integer"}, status=400)
+        now = dt_cls.now(timezone.utc)
+        restore_timestamp_ms = int(now.timestamp() * 1000)
+        buffer_seconds = last_minutes * 60
+    else:
+        try:
+            dt = dt_cls.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
+            restore_timestamp_ms = int(dt.timestamp() * 1000)
+        except (ValueError, TypeError):
+            return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
 
-    buffer_seconds = body.get("buffer_seconds", 300)
-    if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
-        return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+        buffer_seconds = body.get("buffer_seconds", 300)
+        if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
+            return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
 
     task = run_disaster_recovery_reconcile.delay(
         restore_timestamp_ms=restore_timestamp_ms,
@@ -2911,13 +2939,13 @@ def disaster_recovery_reconcile(request):
         dry_run=dry_run,
     )
 
-    return JsonResponse(
-        {
-            "message": "Disaster recovery reconciliation enqueued.",
-            "task_id": str(task.id),
-            "restore_timestamp_ms": restore_timestamp_ms,
-            "buffer_seconds": buffer_seconds,
-            "dry_run": dry_run,
-        },
-        status=202,
-    )
+    response_data = {
+        "message": "Disaster recovery reconciliation enqueued.",
+        "task_id": str(task.id),
+        "restore_timestamp_ms": restore_timestamp_ms,
+        "buffer_seconds": buffer_seconds,
+        "dry_run": dry_run,
+    }
+    if use_last_minutes:
+        response_data["last_minutes"] = last_minutes
+    return JsonResponse(response_data, status=202)
