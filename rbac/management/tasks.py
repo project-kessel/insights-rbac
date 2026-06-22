@@ -205,6 +205,7 @@ def recompute_tenant_role_bindings_in_worker(org_id: str):
 
 @shared_task
 def migrate_role_scope_if_changed_in_worker(role_uuid: str):
+    """Celery task to migrate existing role bindings for a role if its scope has changed."""
     return migrate_role_scope_if_changed(v1_role=Role.objects.filter(uuid=role_uuid).get())
 
 

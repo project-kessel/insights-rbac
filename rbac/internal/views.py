@@ -78,8 +78,8 @@ from management.models import BindingMapping, Group, Permission, Principal, Reso
 from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
-    USER_ENV_HEADER,
     PrincipalProxy,
+    USER_ENV_HEADER,
     bop_request_status_count,
     bop_request_time_tracking,
 )
@@ -2724,6 +2724,14 @@ def recompute_tenant_role_bindings(request, org_id):
 
 @require_http_methods(["POST"])
 def migrate_role_scope_if_changed(request, role_uuid):
+    """
+    Migrate existing role bindings for a role if its scope has changed.
+
+    POST /_private/api/utils/migrate_role_scope_if_changed/<role_uuid>/
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
     try:
         parsed_uuid = uuid.UUID(role_uuid)
     except ValueError:
