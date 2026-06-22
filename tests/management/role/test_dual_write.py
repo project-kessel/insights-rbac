@@ -2914,12 +2914,18 @@ class DualWriteCrossAccountReqeustTestCase(DualWriteTestCase):
 
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="app:resource:verb"):
             car = self.given_car(self.user_id, [system_role])
+
             self._expect_user_tenant_count(1, system_role)
+            self._expect_user_root_count(0, system_role)
+            self._expect_user_default_count(0, system_role)
 
         # Expiring the CAR should remove the role binding even if the role's scope has changed in the interim.
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
             self.given_car_expired(car)
+
+            self._expect_user_tenant_count(0, system_role)
             self._expect_user_root_count(0, system_role)
+            self._expect_user_default_count(0, system_role)
 
     def test_scope_removal(self):
         self._do_test_scope_removal()
