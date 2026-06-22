@@ -16,47 +16,45 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import uuid
-from api.cross_access.model import CrossAccountRequest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
+
 from django.contrib.auth.models import User as DjangoUser
 from django.test import TestCase, override_settings
 from management.group.definer import add_roles, clone_default_group_in_public_schema, seed_group
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
-from management.models import BindingMapping, Workspace, Access, Permission
+from management.models import Access, BindingMapping, Permission, Workspace
 from management.permission.scope_service import ImplicitResourceService, Scope
 from management.policy.model import Policy
-from management.role.model import ResourceDefinition
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.definer import seed_roles
-from management.role.model import Role
+from management.role.model import ResourceDefinition, Role
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
-    InMemoryTuples,
     InMemoryRelationReplicator,
+    InMemoryTuples,
     all_of,
-    resource,
     relation,
+    resource,
     subject,
     subject_id,
     subject_type,
 )
 from migration_tool.migrate_binding_scope import (
+    car_source,
+    custom_role_source,
+    migrate_all_role_bindings,
     migrate_custom_role_bindings,
     migrate_system_role_bindings_for_group,
-    migrate_all_role_bindings,
-    car_source,
     system_role_source,
-    custom_role_source,
 )
 from migration_tool.utils import create_relationship
-from api.models import Tenant
 from tests.management.group.test_view import find_relation_in_list
 from tests.management.role.test_dual_write import DualWriteTestCase, RbacFixture
 from tests.util import (
@@ -64,7 +62,10 @@ from tests.util import (
     assert_v1_v2_tuples_fully_consistent,
     assert_v2_tuples_consistent,
 )
-from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
+from tests.v2_util import bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
+
+from api.cross_access.model import CrossAccountRequest
+from api.models import Tenant
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -301,10 +302,12 @@ class BindingScopeMigrationTupleVerificationTest(TestCase):
 
         # Verify scope logic worked correctly (create fresh service with current settings)
         service = ImplicitResourceService.from_settings()
-        actual_scope = service.scope_for_role(role)
+        actual_scopes = service.binding_scopes_for_role(role)
 
         # Verify scope was correctly determined as ROOT
-        self.assertEqual(actual_scope, Scope.ROOT, f"Handler should determine ROOT scope for rbac:* permissions")
+        self.assertCountEqual(
+            actual_scopes, {Scope.ROOT}, f"Handler should determine ROOT scope for rbac:* permissions"
+        )
 
         # Verify binding is at root workspace
         self.assertEqual(final_binding.resource_type_name, "workspace")
@@ -1188,29 +1191,19 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
         - Verifies all bindings are migrated to correct scopes
         - Verifies tuples are correctly updated
         """
-
-        # Helper function to swap scopes for simulating historical incorrect bindings
-        def wrong_scope_for_role(role):
-            """Return wrong scope for test roles to simulate incorrect historical bindings."""
-            if hasattr(role, "uuid"):
-                if role.uuid == non_platform_default_role.uuid:
-                    return Scope.DEFAULT  # Wrong! Should be ROOT
-                elif role.uuid == platform_default_role.uuid:
-                    return Scope.ROOT  # Wrong! Should be DEFAULT
-            return service.scope_for_role(role)  # Use correct scope for other roles
-
         # Redirect all OutboxReplicator.replicate() calls to our InMemoryRelationReplicator
         mock_replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
 
         # Step 1: Create system roles using fixture helpers
-        # Get a platform default system role with DEFAULT scope (not rbac:*:* which would be ROOT scope)
-        service = ImplicitResourceService.from_settings()
-        platform_default_role = None
-        for role in Role.objects.filter(system=True, platform_default=True):
-            if service.scope_for_role(role) == Scope.DEFAULT:
-                platform_default_role = role
-                break
+
+        # Get a platform default system role. This should have DEFAULT scope (since no approval permissions are
+        # assigned root/tenant scope).
+        platform_default_role = Role.objects.filter(name="Approval Approver", system=True).first()
+
         self.assertIsNotNone(platform_default_role, "Should have a platform default system role with DEFAULT scope")
+        self.assertTrue(platform_default_role.platform_default)
+        self.assertFalse(platform_default_role.admin_default)
+        self.assertTrue(all(a.permission.application == "approval" for a in platform_default_role.access.all()))
 
         # Create non-platform default system role with ROOT scope (rbac:*:* matches ROOT_SCOPE_PERMISSIONS)
         non_platform_default_role = self.given_v1_system_role(
@@ -1235,18 +1228,8 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
         self.switch_tenant(self.tenant3)
         custom_group_t3, _ = self.fixture.new_group(name="Custom Admins", tenant=self.tenant3)
 
-        # Step 5: Simulate incorrect binding state by using wrong scope configuration
-        # Use a mock resource service that returns wrong scopes to simulate historical incorrect bindings
-        mock_wrong_scope_service = Mock(spec=ImplicitResourceService)
-        mock_wrong_scope_service.scope_for_role = Mock(side_effect=wrong_scope_for_role)
-        mock_wrong_scope_service.binding_scopes_for_role = Mock(side_effect=lambda role: [wrong_scope_for_role(role)])
-
-        # Temporarily patch ImplicitResourceService.from_settings to return wrong scopes when creating bindings
-        with patch(
-            "management.group.relation_api_dual_write_group_handler.ImplicitResourceService.from_settings",
-            return_value=mock_wrong_scope_service,
-        ):
-            # Add roles with wrong scope configuration - this will create bindings at wrong scopes
+        # Assign the two roles in the incorrect scopes.
+        with self.settings(ROOT_SCOPE_PERMISSIONS="approval:*:*"):
             add_roles(custom_group_t3, [platform_default_role.uuid, non_platform_default_role.uuid], self.tenant3)
 
         # Verify non-platform role is at DEFAULT workspace (wrong)
@@ -1273,26 +1256,28 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
         service = ImplicitResourceService.from_settings()
 
         for binding in BindingMapping.objects.all():
-            expected_scope = service.scope_for_role(binding.role)
+            expected_scopes = set(service.binding_scopes_for_role(binding.role))
             binding_id = binding.mappings["id"]
 
             if binding.resource_type_name == "workspace":
                 workspace = Workspace.objects.get(id=binding.resource_id)
 
-                if expected_scope == Scope.ROOT:
+                if expected_scopes == {Scope.ROOT}:
                     self.assertEqual(
                         workspace.type,
                         Workspace.Types.ROOT,
                         f"Binding {binding.id} for role '{binding.role.name}' (ROOT scope) "
                         f"should be at root workspace, got {workspace.type}",
                     )
-                elif expected_scope == Scope.DEFAULT:
+                elif expected_scopes == {Scope.DEFAULT}:
                     self.assertEqual(
                         workspace.type,
                         Workspace.Types.DEFAULT,
                         f"Binding {binding.id} for role '{binding.role.name}' (DEFAULT scope) "
                         f"should be at default workspace, got {workspace.type}",
                     )
+                else:
+                    self.fail(f"Unexpected binding scopes: {expected_scopes}")
 
                 # Verify complete workspace->binding tuple exists
                 complete_ws_binding_tuples = self.tuples.find_tuples(
