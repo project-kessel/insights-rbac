@@ -1552,8 +1552,8 @@ class RoleBindingListOutputSerializerTest(IdentityRequest):
         fs = RoleBindingFieldSelection.parse("role(name),subject(group.name),resource(type)")
         data = self._serialize(self.binding, field_selection=fs)
 
-        # Role includes only explicitly requested fields (name)
-        self.assertNotIn("id", data["role"])
+        # Role includes id (always) plus explicitly requested fields
+        self.assertIn("id", data["role"])
         self.assertEqual(data["role"]["name"], "test_role")
 
         # Subject includes type (always) + group.name, but not id
@@ -2287,13 +2287,13 @@ class UpdateRoleBindingResponseSerializerTests(IdentityRequest):
     # ── With field_selection ─────────────────────────────────────────
 
     def test_field_selection_role_name(self):
-        """Requesting roles(name) returns only name."""
+        """Requesting roles(name) returns id (always) plus name."""
         result = self._make_group_result()
         field_selection = RoleBindingBySubjectFieldSelection(nested_fields={"roles": {"name"}})
         serializer = UpdateRoleBindingResponseSerializer(result, context={"field_selection": field_selection})
         data = serializer.data
 
-        self.assertEqual(data, {"roles": [{"name": "role_one"}]})
+        self.assertEqual(data, {"roles": [{"id": self.role1.uuid, "name": "role_one"}]})
 
     def test_field_selection_resource_name_and_type(self):
         """Requesting resource(name,type) returns only those."""
@@ -2522,8 +2522,8 @@ class RoleBindingUserSubjectSerializerTest(IdentityRequest):
         result = serializer.get_roles(self.principal)
 
         self.assertEqual(len(result), 1)
-        # Only explicitly requested fields are returned
-        self.assertNotIn("id", result[0])
+        # id is always included for consistency with subject/resource
+        self.assertIn("id", result[0])
         self.assertEqual(result[0]["name"], "test_role")
 
     def test_roles_deduplicates_same_role_from_multiple_bindings(self):
@@ -2636,8 +2636,8 @@ class RoleBindingUserSubjectSerializerTest(IdentityRequest):
         self.assertEqual(data["subject"]["type"], "user")
         self.assertEqual(data["subject"]["user"]["username"], "testuser")
 
-        # Check roles with name (only explicitly requested fields)
-        self.assertNotIn("id", data["roles"][0])
+        # Check roles with id (always) + name
+        self.assertIn("id", data["roles"][0])
         self.assertEqual(data["roles"][0]["name"], "test_role")
 
         # Check resource with name and type

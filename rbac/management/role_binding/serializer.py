@@ -87,8 +87,10 @@ def _build_role_response(role: RoleV2, field_selection: Optional[FieldSelection]
     endpoints.
 
     Default (no *field_selection*): returns ``{id, created, modified}``.
-    With *field_selection* that mentions ``role`` or ``roles``: returns only
-    the explicitly requested sub-fields.
+    With *field_selection* that mentions ``role`` or ``roles``: returns
+    ``id`` (always) plus the explicitly requested sub-fields.  This is
+    consistent with subject (always ``id`` + ``type``) and resource
+    (always ``id``).
     With *field_selection* that does **not** mention ``role``/``roles``: falls
     back to the default set so sections that are always rendered (e.g. the
     list endpoint) still carry identity information.
@@ -104,15 +106,14 @@ def _build_role_response(role: RoleV2, field_selection: Optional[FieldSelection]
         # No field selection, or role/roles not mentioned → defaults
         return {"id": role.uuid, "created": role.created, "modified": role.modified}
 
-    # Only return explicitly requested fields
-    role_data: dict = {}
+    # Always include id for consistency with other sections (subject, resource)
+    role_data: dict = {"id": role.uuid}
     for field_name in role_fields:
         if field_name == "id":
-            role_data["id"] = role.uuid
-        else:
-            value = getattr(role, field_name, None)
-            if value is not None:
-                role_data[field_name] = value
+            continue  # already included above
+        value = getattr(role, field_name, None)
+        if value is not None:
+            role_data[field_name] = value
     return role_data
 
 

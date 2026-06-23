@@ -1185,7 +1185,7 @@ class RoleBindingSerializerTests(IdentityRequest):
     def test_field_selection_filters_role_fields(self):
         """Test that field selection filters role fields.
 
-        Only explicitly requested fields are included.
+        id is always included, plus explicitly requested fields.
         """
         field_selection = RoleBindingFieldSelection.parse("role(name)")
         context = {**self.context, "field_selection": field_selection}
@@ -1194,8 +1194,8 @@ class RoleBindingSerializerTests(IdentityRequest):
         data = serializer.data
 
         role = data["roles"][0]
-        # Only explicitly requested fields
-        self.assertNotIn("id", role)
+        # id is always included for consistency with subject/resource
+        self.assertIn("id", role)
         self.assertIn("name", role)
 
     def test_field_selection_filters_resource_fields(self):
