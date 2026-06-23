@@ -580,8 +580,8 @@ def recover_workspace_events_in_worker(
     Returns:
         dict: Summary statistics of corrective events generated.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return {"message": "DR recovery disabled (DR_RECOVERY_ENABLED=False)"}
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return {"message": "DR recovery disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}
 
     use_offsets = start_offset is not None
     use_timestamp = restore_timestamp_iso is not None
@@ -689,7 +689,7 @@ def run_disaster_recovery_reconcile(
     Returns:
         dict: Summary with counts of corrective actions taken.
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return {"message": "Disaster recovery reconciliation is disabled"}
 
     try:
