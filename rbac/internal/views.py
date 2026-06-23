@@ -2715,6 +2715,58 @@ def recompute_tenant_role_bindings(request, org_id):
         )
 
 
+class _DRValidationError(Exception):
+    pass
+
+
+def _validate_dr_mode(body):
+    """Validate mutual exclusivity and type correctness of DR mode params.
+
+    Returns a dict with 'mode' ('offset'|'timestamp'|'last_minutes') and the
+    validated params. Raises _DRValidationError on failure.
+    """
+    start_offset = body.get("start_offset")
+    end_offset = body.get("end_offset")
+    restore_timestamp = body.get("restore_timestamp")
+    last_minutes = body.get("last_minutes")
+
+    use_offsets = start_offset is not None
+    use_timestamp = restore_timestamp is not None
+    use_last_minutes = last_minutes is not None
+
+    mode_count = sum([use_offsets, use_timestamp, use_last_minutes])
+    if mode_count > 1:
+        raise _DRValidationError("Specify exactly one mode: restore_timestamp, start_offset, or last_minutes")
+    if mode_count == 0:
+        raise _DRValidationError("One of restore_timestamp, start_offset, or last_minutes is required")
+
+    if use_last_minutes:
+        if isinstance(last_minutes, bool) or not isinstance(last_minutes, int) or last_minutes <= 0:
+            raise _DRValidationError("last_minutes must be a positive integer")
+
+    if use_offsets:
+        if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
+            raise _DRValidationError("start_offset must be a non-negative integer")
+        if end_offset is not None:
+            if isinstance(end_offset, bool) or not isinstance(end_offset, int) or end_offset <= start_offset:
+                raise _DRValidationError("end_offset must be an integer greater than start_offset")
+
+    if use_offsets:
+        mode = "offset"
+    elif use_last_minutes:
+        mode = "last_minutes"
+    else:
+        mode = "timestamp"
+
+    return {
+        "mode": mode,
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "restore_timestamp": restore_timestamp,
+        "last_minutes": last_minutes,
+    }
+
+
 @require_http_methods(["POST"])
 def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     """Trigger corrective workspace event generation after a DB restore.
@@ -2740,42 +2792,23 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     if not isinstance(dry_run, bool):
         return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
 
-    start_offset = body.get("start_offset")
-    end_offset = body.get("end_offset")
-    restore_timestamp = body.get("restore_timestamp")
-    last_minutes = body.get("last_minutes")
+    try:
+        dr_mode = _validate_dr_mode(body)
+    except _DRValidationError as e:
+        return JsonResponse({"detail": str(e)}, status=400)
 
-    use_offsets = start_offset is not None
-    use_timestamp = restore_timestamp is not None
-    use_last_minutes = last_minutes is not None
+    mode = dr_mode["mode"]
+    start_offset = dr_mode["start_offset"]
+    end_offset = dr_mode["end_offset"]
+    restore_timestamp = dr_mode["restore_timestamp"]
+    last_minutes = dr_mode["last_minutes"]
 
-    mode_count = sum([use_offsets, use_timestamp, use_last_minutes])
-    if mode_count > 1:
-        return JsonResponse(
-            {"detail": "Specify exactly one mode: restore_timestamp, start_offset, or last_minutes"},
-            status=400,
-        )
-    if mode_count == 0:
-        return JsonResponse(
-            {"detail": "One of restore_timestamp, start_offset, or last_minutes is required"},
-            status=400,
-        )
-
-    if use_last_minutes:
-        if isinstance(last_minutes, bool) or not isinstance(last_minutes, int) or last_minutes <= 0:
-            return JsonResponse({"detail": "last_minutes must be a positive integer"}, status=400)
+    if mode == "last_minutes":
         now = datetime.datetime.now(datetime.timezone.utc)
         restore_timestamp = now.isoformat()
         buffer_minutes = last_minutes
-        use_timestamp = True
 
-    if use_offsets:
-        if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
-            return JsonResponse({"detail": "start_offset must be a non-negative integer"}, status=400)
-        if end_offset is not None:
-            if isinstance(end_offset, bool) or not isinstance(end_offset, int) or end_offset <= start_offset:
-                return JsonResponse({"detail": "end_offset must be an integer greater than start_offset"}, status=400)
-
+    if mode == "offset":
         try:
             task = recover_workspace_events_in_worker.delay(
                 start_offset=start_offset,
@@ -2811,7 +2844,7 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     if parsed_ts.tzinfo is None:
         parsed_ts = parsed_ts.replace(tzinfo=datetime.timezone.utc)
 
-    if not use_last_minutes:
+    if mode == "timestamp":
         now = datetime.datetime.now(datetime.timezone.utc)
         if parsed_ts > now:
             return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
@@ -2839,7 +2872,7 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
             "buffer_minutes": buffer_minutes,
             "dry_run": dry_run,
         }
-        if use_last_minutes:
+        if mode == "last_minutes":
             response_data["last_minutes"] = last_minutes
         return JsonResponse(response_data, status=202)
     except Exception:
@@ -2872,34 +2905,18 @@ def disaster_recovery_reconcile(request):
     if not isinstance(dry_run, bool):
         return JsonResponse({"error": "dry_run must be a boolean"}, status=400)
 
-    start_offset = body.get("start_offset")
-    end_offset = body.get("end_offset")
-    restore_timestamp_str = body.get("restore_timestamp")
-    last_minutes = body.get("last_minutes")
+    try:
+        dr_mode = _validate_dr_mode(body)
+    except _DRValidationError as e:
+        return JsonResponse({"error": str(e)}, status=400)
 
-    use_offsets = start_offset is not None
-    use_timestamp = restore_timestamp_str is not None
-    use_last_minutes = last_minutes is not None
+    mode = dr_mode["mode"]
+    start_offset = dr_mode["start_offset"]
+    end_offset = dr_mode["end_offset"]
+    restore_timestamp_str = dr_mode["restore_timestamp"]
+    last_minutes = dr_mode["last_minutes"]
 
-    mode_count = sum([use_offsets, use_timestamp, use_last_minutes])
-    if mode_count > 1:
-        return JsonResponse(
-            {"error": "Specify exactly one mode: restore_timestamp, start_offset, or last_minutes"},
-            status=400,
-        )
-    if mode_count == 0:
-        return JsonResponse(
-            {"error": "One of restore_timestamp, start_offset, or last_minutes is required"},
-            status=400,
-        )
-
-    if use_offsets:
-        if isinstance(start_offset, bool) or not isinstance(start_offset, int) or start_offset < 0:
-            return JsonResponse({"error": "start_offset must be a non-negative integer"}, status=400)
-        if end_offset is not None:
-            if isinstance(end_offset, bool) or not isinstance(end_offset, int) or end_offset <= start_offset:
-                return JsonResponse({"error": "end_offset must be an integer greater than start_offset"}, status=400)
-
+    if mode == "offset":
         task = run_disaster_recovery_reconcile.delay(
             start_offset=start_offset,
             end_offset=end_offset,
@@ -2917,9 +2934,7 @@ def disaster_recovery_reconcile(request):
             status=202,
         )
 
-    if use_last_minutes:
-        if isinstance(last_minutes, bool) or not isinstance(last_minutes, int) or last_minutes <= 0:
-            return JsonResponse({"error": "last_minutes must be a positive integer"}, status=400)
+    if mode == "last_minutes":
         now = dt_cls.now(timezone.utc)
         restore_timestamp_ms = int(now.timestamp() * 1000)
         buffer_seconds = last_minutes * 60
@@ -2947,6 +2962,6 @@ def disaster_recovery_reconcile(request):
         "buffer_seconds": buffer_seconds,
         "dry_run": dry_run,
     }
-    if use_last_minutes:
+    if mode == "last_minutes":
         response_data["last_minutes"] = last_minutes
     return JsonResponse(response_data, status=202)

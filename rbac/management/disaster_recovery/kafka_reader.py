@@ -287,6 +287,7 @@ def read_events_by_offset(
         for tp in topic_partitions:
             partition_end = end_offsets_map.get(tp, 0)
             if start_offset >= partition_end:
+                consumer.pause([tp])
                 continue
             consumer.seek(tp, start_offset)
             active_partitions.append(tp)

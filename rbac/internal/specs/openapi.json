@@ -5445,7 +5445,7 @@
         }
       }
     },
-    "/api/disaster_recovery/workspaces/": {
+    "/_private/api/disaster_recovery/workspaces/": {
       "post": {
         "tags": [
           "Disaster Recovery"
@@ -5533,7 +5533,7 @@
         }
       }
     },
-    "/api/disaster_recovery/reconcile/": {
+    "/_private/api/disaster_recovery/reconcile/": {
       "post": {
         "tags": [
           "Disaster Recovery"
