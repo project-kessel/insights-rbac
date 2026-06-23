@@ -39,6 +39,7 @@ class AuditLog(TenantAwareModel):
     PERMISSION = "permission"
     WORKSPACE = "workspace"
     ROLE_BINDING = "role_binding"
+    PRINCIPAL = "principal"
     RESOURCE_CHOICES = (
         (GROUP, "Group"),
         (ROLE, "Role"),
@@ -47,6 +48,7 @@ class AuditLog(TenantAwareModel):
         (PERMISSION, "Permission"),
         (WORKSPACE, "Workspace"),
         (ROLE_BINDING, "Role Binding"),
+        (PRINCIPAL, "Principal"),
     )
 
     DELETE = "delete"
@@ -54,12 +56,14 @@ class AuditLog(TenantAwareModel):
     EDIT = "edit"
     CREATE = "create"
     REMOVE = "remove"
+    READ = "read"
     ACTION_CHOICES = (
         (DELETE, "Delete"),
         (ADD, "Add"),
         (EDIT, "Edit"),
         (CREATE, "Create"),
         (REMOVE, "Remove"),
+        (READ, "Read"),
     )
 
     SOURCE_AI_ASSISTANT = "ai_assistant"
