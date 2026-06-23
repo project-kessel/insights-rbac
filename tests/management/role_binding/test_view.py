@@ -1297,15 +1297,6 @@ class RoleBindingListViewSetTest(IdentityRequest):
         platform_group = Group.objects.create(name="platform_group", tenant=self.tenant)
         RoleBindingGroup.objects.create(group=platform_group, binding=platform_binding)
 
-        # Register cleanup so resources are freed even if assertions fail
-        self.addCleanup(RoleBindingGroup.objects.filter(binding=platform_binding).delete)
-        self.addCleanup(platform_binding.delete)
-        self.addCleanup(platform_group.delete)
-        self.addCleanup(platform_role.children.clear)
-        self.addCleanup(child_role_1.delete)
-        self.addCleanup(child_role_2.delete)
-        self.addCleanup(platform_role.delete)
-
         url = self._get_list_url()
         response = self.client.get(
             f"{url}?fields=role(id,name),subject(id,type),resource(id)&limit=100",
@@ -1351,14 +1342,6 @@ class RoleBindingListViewSetTest(IdentityRequest):
         )
         group = Group.objects.create(name="platform_limit_group", tenant=self.tenant)
         RoleBindingGroup.objects.create(group=group, binding=binding)
-
-        self.addCleanup(RoleBindingGroup.objects.filter(binding=binding).delete)
-        self.addCleanup(binding.delete)
-        self.addCleanup(group.delete)
-        self.addCleanup(platform_role.children.clear)
-        for child in children:
-            self.addCleanup(child.delete)
-        self.addCleanup(platform_role.delete)
 
         url = self._get_list_url()
         response = self.client.get(
