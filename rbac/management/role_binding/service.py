@@ -212,7 +212,10 @@ class RoleBindingService:
 
         # Handle edge case: exclude_direct but no inherited bindings available
         if exclude_direct and binding_uuids is None:
-            # Relations API failed or not configured — cannot determine inherited bindings
+            # Relations API failed or not configured — cannot determine inherited bindings.
+            # We still call .with_expanded_platform_roles() before .none() because
+            # CursorPagination validates ordering fields via .order_by() even on empty
+            # querysets, so the ``effective_role_created`` annotation must exist.
             return RoleBinding.objects.for_tenant(self.tenant).with_expanded_platform_roles().none()
 
         queryset = RoleBinding.objects.for_tenant(self.tenant)

@@ -18,7 +18,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
 
@@ -1597,6 +1597,51 @@ class RoleBindingListOutputSerializerTest(IdentityRequest):
             ws.delete()
             default_ws.delete()
             root.delete()
+
+
+class GetEffectiveRoleFallbackTest(IdentityRequest):
+    """Test _get_effective_role fallback when effective_role_uuid mismatches children."""
+
+    def setUp(self):
+        """Set up test data."""
+        super().setUp()
+        from management.role.v2_model import PlatformRoleV2, SeededRoleV2
+
+        self.PlatformRoleV2 = PlatformRoleV2
+        self.SeededRoleV2 = SeededRoleV2
+
+    @patch("management.role_binding.serializer.logger")
+    def test_fallback_returns_platform_role_on_uuid_mismatch(self, mock_logger):
+        """When effective_role_uuid doesn't match any child, fall back to the platform role and log a warning."""
+        platform_role = self.PlatformRoleV2.objects.create(name="Platform Fallback", tenant=self.tenant)
+        child = self.SeededRoleV2.objects.create(name="Real Child", tenant=self.tenant)
+        platform_role.children.add(child)
+
+        binding = RoleBinding.objects.create(
+            role=platform_role,
+            resource_type="workspace",
+            resource_id="ws-fallback",
+            tenant=self.tenant,
+        )
+        group = Group.objects.create(name="fallback_group", tenant=self.tenant)
+        RoleBindingGroup.objects.create(group=group, binding=binding)
+
+        # Annotate the binding with a UUID that doesn't match any child
+        non_matching_uuid = uuid.uuid4()
+        binding.effective_role_uuid = non_matching_uuid
+
+        serializer = RoleBindingListOutputSerializer(
+            binding,
+            context={"request": Mock()},
+        )
+        role = serializer._get_effective_role(binding)
+
+        # Should fall back to the platform role itself
+        self.assertEqual(role.uuid, platform_role.uuid)
+        # Should log a warning about the mismatch
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("not found among children", warning_msg)
 
 
 class ExpandPlatformRolesQuerySetTest(IdentityRequest):
