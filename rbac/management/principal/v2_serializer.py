@@ -51,12 +51,14 @@ class PrincipalV2ListInputSerializer(serializers.Serializer):
         choices=VALID_MATCH_CRITERIA,
         required=False,
         default="exact",
+        allow_blank=True,
         help_text="Username matching: 'exact' (default) or 'partial' (case-insensitive substring).",
     )
     sort_order = serializers.ChoiceField(
         choices=VALID_SORT_ORDER,
         required=False,
         default="asc",
+        allow_blank=True,
         help_text="Sort direction for username: 'asc' (default) or 'desc'.",
     )
 
@@ -67,3 +69,11 @@ class PrincipalV2ListInputSerializer(serializers.Serializer):
     def validate_username(self, value):
         """Return None for empty values."""
         return value or None
+
+    def validate_match_criteria(self, value):
+        """Return default for empty values."""
+        return value or "exact"
+
+    def validate_sort_order(self, value):
+        """Return default for empty values."""
+        return value or "asc"

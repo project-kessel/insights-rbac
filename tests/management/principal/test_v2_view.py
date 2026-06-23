@@ -92,10 +92,6 @@ class PrincipalV2ViewTests(IdentityRequest):
             tenant=self.tenant,
         )
 
-    def tearDown(self):
-        """Clean up test data."""
-        Principal.objects.filter(tenant=self.tenant).delete()
-
     def test_list_all_principals(self, mock_kessel_id):
         """List returns all non-cross-account principals for the tenant."""
         client = APIClient()
@@ -247,9 +243,6 @@ class PrincipalV2ViewTests(IdentityRequest):
         response = client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-
-        other_principal.delete()
-        other_tenant.delete()
 
     def test_list_empty_tenant(self, mock_kessel_id):
         """List with no principals returns empty data with count 0."""

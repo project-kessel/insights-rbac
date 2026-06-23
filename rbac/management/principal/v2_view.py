@@ -50,13 +50,12 @@ class PrincipalV2ViewSet(BaseV2ViewSet):
 
         username = validated.get("username")
         if username:
-            match_criteria = validated.get("match_criteria", "exact")
-            if match_criteria == "partial":
+            if validated["match_criteria"] == "partial":
                 queryset = queryset.filter(username__icontains=username)
             else:
                 queryset = queryset.filter(username=username.lower())
 
-        sort_order = validated.get("sort_order", "asc")
+        sort_order = validated["sort_order"]
         if sort_order == "desc":
             queryset = queryset.order_by("-username")
 
