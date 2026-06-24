@@ -598,7 +598,9 @@ class DualWriteTestCase(TestCase):
         self.assertCountEqual(entries, actual)
 
 
-@override_settings(ROOT_SCOPE_PERMISSIONS="root:*:*", TENANT_SCOPE_PERMISSIONS="tenant:*:*")
+@override_settings(
+    ATOMIC_RETRY_DISABLED=True, ROOT_SCOPE_PERMISSIONS="root:*:*", TENANT_SCOPE_PERMISSIONS="tenant:*:*"
+)
 class DualWriteGroupTestCase(DualWriteTestCase):
     """Test dual write logic for group modifications."""
 
@@ -2157,6 +2159,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
             self.assertEqual(len(deleted_tuple), 0)
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class DualWriteCustomRolesTestCase(DualWriteTestCase):
     """Test dual write logic when we are working with custom roles."""
 

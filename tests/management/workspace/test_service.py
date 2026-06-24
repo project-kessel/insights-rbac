@@ -509,7 +509,12 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
         group_handler.generate_relations_reset_roles([custom_role])
         group_handler.replicate()
 
+        binding_mapping = BindingMapping.objects.get(role=custom_role)
+
         ensure_v2_write_activated(self.tenant)
+
+        # Emulate the BindingMapping not being removed during an old version of V1-to-V2 conversion.
+        binding_mapping.save(force_insert=True)
 
         def assert_binding_exists(value: bool):
             self.assertEqual(

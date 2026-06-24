@@ -342,7 +342,12 @@ class TestRemoveOrphanRelations(DualWriteTestCase):
         # NoopReplicator.
 
         service = RoleBindingService(tenant=self.tenant, replicator=NoopReplicator())
+        binding_mapping = BindingMapping.objects.filter(role=target_role).get()
+
         ensure_v2_write_activated(self.tenant)
+
+        # Emulate the BindingMapping not being removed during an old version of V1-to-V2 conversion.
+        binding_mapping.save(force_insert=True)
 
         def assert_role_bindings(v1_count: int, v2_count: int, tuples_count: int):
             self.assertEqual(v1_count, BindingMapping.objects.filter(role=target_role).count())

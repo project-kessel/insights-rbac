@@ -47,10 +47,12 @@ from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBin
 from management.role_binding.service import RoleBindingService, API_PRINCIPAL_SOURCE
 from management.subject import SubjectType
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
+from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator
 from rbac import urls
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 def _coerce_api_datetime(value):
@@ -1565,18 +1567,13 @@ class RoleBindingViewSetTest(IdentityRequest):
         super().setUp()
         self.client = APIClient()
 
-        # Create workspace hierarchy (root -> default -> standard)
-        self.root_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT,
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT,
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            parent=self.root_workspace,
-        )
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+        self.root_workspace = bootstrap_result.root_workspace
+        self.default_workspace = bootstrap_result.default_workspace
+
+        # We will be creating a bindings without V1 representations below, meaning this tenant must be V2.
+        ensure_v2_write_activated(self.tenant)
+
         self.workspace = Workspace.objects.create(
             name="Test Workspace",
             description="Test workspace description",
@@ -1584,9 +1581,6 @@ class RoleBindingViewSetTest(IdentityRequest):
             type=Workspace.Types.STANDARD,
             parent=self.default_workspace,
         )
-
-        # TenantMapping required for V2 write operations (e.g. PUT by-subject)
-        TenantMapping.objects.get_or_create(tenant=self.tenant, defaults={})
 
         # Create permission and role
         self.permission = Permission.objects.create(

@@ -919,10 +919,11 @@ class RemoveOrphanBindingMappingsTest(DualWriteTestCase):
         self.assertEqual(set(self.tuples), tuples_before)
 
     def test_no_remove_v2_tenant(self):
+        ensure_v2_write_activated(self.tenant)
+
+        # Emulate the BindingMapping not being removed during an old version of V1-to-V2 conversion.
         role, binding_mapping = self._create_empty_binding_mapping()
         tuples_before = set(self.tuples)
-
-        ensure_v2_write_activated(self.tenant)
 
         self._do_remove_empty()
 
@@ -1076,8 +1077,12 @@ class ExpireOrphanCrossAccountRequests(DualWriteTestCase):
 
     def test_preserve_v2_tenant(self):
         car = self.given_car(self.source_user_id, [self.role])
+        binding_mapping = BindingMapping.objects.get(role=self.role)
 
         ensure_v2_write_activated(self.tenant)
+
+        # Emulate the BindingMapping not being removed during an old version of V1-to-V2 conversion.
+        binding_mapping.save(force_insert=True)
 
         def expect_exists():
             self.expect_1_role_binding_to_workspace(

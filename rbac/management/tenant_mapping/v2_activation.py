@@ -39,9 +39,17 @@ Usage:
 
 import enum
 import logging
+from typing import Optional
 
 from django.db import connection
+from django.db.models import UUIDField
+from django.db.models.fields.json import KT
+from django.db.models.functions import Cast
+from django.db.models.lookups import In
 from django.utils import timezone
+from management.atomic_transactions import atomic
+from management.role.model import BindingMapping
+from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service.v2 import TenantNotBootstrappedError
 
@@ -78,6 +86,46 @@ class V1WriteBlockedError(Exception):
     pass
 
 
+def _remove_tenant_binding_mappings(tenant: Tenant, tenant_mapping: TenantMapping):
+    """Remove all BindingMappings within a tenant about to be migrated."""
+    if tenant_mapping.tenant_id != tenant.id:
+        raise ValueError(f"Tenant/TenantMapping mismatch: {tenant.id!r} vs. {tenant_mapping.tenant_id!r}")
+
+    binding_uuids = list(
+        RoleBinding.objects.filter(tenant=tenant)
+        .exclude(uuid__in=tenant_mapping.role_binding_ids())
+        .select_for_update()
+        .values_list("uuid", flat=True)
+    )
+
+    _, delete_result = BindingMapping.objects.filter(In(Cast(KT("mappings__id"), UUIDField()), binding_uuids)).delete()
+    actual_removed = delete_result.get("management.BindingMapping", 0)
+
+    # If a tenant is being migrated to V2, we expect that there should not yet be any RoleBindings within it that
+    # do not have a corresponding BindingMapping (other than default-access RoleBindings). So, the number of
+    # BindingMappings that we just removed should be the same as the number of RoleBindings we found.
+
+    if actual_removed != len(binding_uuids):
+        raise AssertionError(f"Expected to delete {len(binding_uuids)} BindingMappings, but removed {actual_removed}")
+
+    # Conversely, for a tenant being migrated, we also expect that all BindingMappings in the tenant have
+    # corresponding RoleBindings. We've just deleted every BindingMapping that corresponds to a RoleBinding within
+    # the tenant, so there should be no BindingMappings left within the tenant. (We can only easily check this for
+    # resources that we locally know to be within the tenant, so that's what we do.)
+
+    remaining_mappings = list(BindingMapping.objects.filter(BindingMapping.filter_known_in_tenant(tenant)))
+
+    if remaining_mappings:
+        raise AssertionError(
+            f"Found BindingMappings unexpectedly remaining within tenant: pks={[m.pk for m in remaining_mappings]}"
+        )
+
+    logger.info(
+        f"Removed {actual_removed} BindingMappings during V2 migration of tenant with org_id {tenant.org_id!r}"
+    )
+
+
+@atomic
 def ensure_v2_write_activated(tenant: Tenant):
     """Mark the tenant as V2-activated if not already. Must be called inside a transaction.
 
@@ -90,16 +138,23 @@ def ensure_v2_write_activated(tenant: Tenant):
     if v2_activated is not None:
         return
 
-    mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
+    mapping: Optional[TenantMapping] = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
+
     if mapping is None:
         raise TenantNotBootstrappedError(
             f"Tenant {tenant.org_id} has no TenantMapping; V2 writes require tenant bootstrapping."
         )
+
     if mapping.v2_write_activated_at is not None:
         return
 
     mapping.v2_write_activated_at = timezone.now()
     mapping.save(update_fields=["v2_write_activated_at"])
+
+    # Once a tenant has been migrated to V2, its BindingMappings are immediately out of date and should no longer be
+    # referenced, so we can remove them.
+    _remove_tenant_binding_mappings(tenant=tenant, tenant_mapping=mapping)
+
     logger.info("Tenant %s activated for V2 writes", tenant.org_id)
 
 

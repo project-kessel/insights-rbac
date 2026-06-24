@@ -23,7 +23,9 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import models
-from django.db.models import signals
+from django.db.models import F, Q, UUIDField, signals
+from django.db.models.functions import Cast
+from django.db.models.lookups import In
 from django.utils import timezone
 from internal.integration import sync_handlers
 from management.cache import AccessCache, skip_purging_cache_for_public_tenant
@@ -31,6 +33,7 @@ from management.models import Permission, Principal
 from management.rbac_fields import AutoDateTimeField
 from management.relation_replicator.types import RelationTuple
 from management.role.user_source import SourceKey
+from management.workspace.model import Workspace
 from migration_tool.models import (
     V2boundresource,
     V2role,
@@ -39,7 +42,7 @@ from migration_tool.models import (
     role_binding_user_subject_tuple,
 )
 
-from api.models import FilterQuerySet, TenantAwareModel
+from api.models import FilterQuerySet, Tenant, TenantAwareModel
 
 if TYPE_CHECKING:
     from management.role.v2_model import RoleV2
@@ -326,6 +329,24 @@ class BindingMapping(models.Model):
             raise TypeError(f"Expected SourceKey, but got: {source!r}")
 
         return source
+
+    @classmethod
+    def filter_known_in_tenant(cls, tenant: Tenant) -> Q:
+        """
+        Return a filter for BindingMappings that are locally known to be in the provided tenant.
+
+        This will only include bindings to the tenant itself and to its workspaces, since those are the only
+        resources we can know are in the tenant while consulting only RBAC's database.
+        """
+        resource_id = tenant.tenant_resource_id()
+
+        if resource_id is None:
+            raise ValueError(f"Tenants without a resource ID are not supported, but got pk={tenant.pk!r}")
+
+        return Q(resource_type_namespace="rbac", resource_type_name="tenant", resource_id=resource_id) | (
+            Q(resource_type_namespace="rbac", resource_type_name="workspace")
+            & In(Cast(F("resource_id"), UUIDField()), Workspace.objects.filter(tenant=tenant).values("id"))
+        )
 
 
 def role_related_obj_change_cache_handler(sender=None, instance=None, using=None, **kwargs):

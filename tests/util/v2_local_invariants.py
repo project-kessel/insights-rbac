@@ -79,7 +79,13 @@ def _assert_v1_v2_system_roles_locally_consistent(test: TestCase):
         for m in BindingMapping.objects.filter(role__system=True).prefetch_related("role").select_related("v2_role")
     }
 
-    role_bindings_by_uuid = {str(b.uuid): b for b in RoleBinding.objects.filter(role__type=RoleV2.Types.SEEDED)}
+    # Role bindings in V2 tenants will not have corresponding BindingMappings, so we exclude them.
+    role_bindings_by_uuid = {
+        str(b.uuid): b
+        for b in RoleBinding.objects.filter(role__type=RoleV2.Types.SEEDED).filter(
+            tenant__tenant_mapping__v2_write_activated_at=None
+        )
+    }
 
     # We should have the same UUIDs for both BindingMappings and RoleBindings.
     test.assertCountEqual(role_bindings_by_uuid.keys(), binding_mappings_by_uuid.keys())
@@ -94,7 +100,13 @@ def _assert_v1_v2_custom_roles_locally_consistent(test: TestCase):
         for m in BindingMapping.objects.filter(role__system=False).prefetch_related("role").select_related("v2_role")
     }
 
-    role_bindings_by_uuid = {str(b.uuid): b for b in RoleBinding.objects.filter(role__type=RoleV2.Types.CUSTOM)}
+    # Role bindings in V2 tenants will not have corresponding BindingMappings, so we exclude them.
+    role_bindings_by_uuid = {
+        str(b.uuid): b
+        for b in RoleBinding.objects.filter(role__type=RoleV2.Types.CUSTOM).filter(
+            tenant__tenant_mapping__v2_write_activated_at=None
+        )
+    }
 
     # We should have the same UUIDs for both BindingMappings and RoleBindings.
     test.assertCountEqual(role_bindings_by_uuid.keys(), binding_mappings_by_uuid.keys())
@@ -102,7 +114,8 @@ def _assert_v1_v2_custom_roles_locally_consistent(test: TestCase):
     for role in Role.objects.filter(system=False):
         _assert_v2_names(test, role)
 
-    for role in CustomRoleV2.objects.all():
+    # Roles in V2 tenants will not necessarily have consistent BindingMappings.
+    for role in CustomRoleV2.objects.filter(tenant__tenant_mapping__v2_write_activated_at=None):
         test.assertIsNotNone(role.v1_source, "All custom roles created through dual-write should have a v1_source.")
 
         _assert_role_mappings_consistent(
