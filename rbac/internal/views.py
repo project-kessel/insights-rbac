@@ -99,6 +99,7 @@ from management.tasks import (
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
     run_seeds_in_worker,
@@ -2729,8 +2730,8 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     Returns 202 with task_id on success.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return JsonResponse({"detail": "DR recovery is disabled (DR_RECOVERY_ENABLED=False)"}, status=403)
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return JsonResponse({"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}, status=403)
 
     try:
         body = load_request_body(request)
@@ -2796,7 +2797,7 @@ def disaster_recovery_reconcile(request):
 
     Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
 
     from datetime import datetime
@@ -2836,6 +2837,56 @@ def disaster_recovery_reconcile(request):
             "restore_timestamp_ms": restore_timestamp_ms,
             "buffer_seconds": buffer_seconds,
             "dry_run": dry_run,
+        },
+        status=202,
+    )
+
+
+def kessel_parity_check(request):
+    """View method for triggering on-demand Kessel-RBAC parity checks.
+
+    POST /_private/api/utils/kessel_parity_check/
+
+    Body: {"org_ids": ["12345", "67890"]}
+
+    Triggers parity checks for the specified org(s) regardless of the
+    PARITY_CHECK_ENABLED setting. The scheduled Celery Beat cron job
+    behavior is unchanged.
+    """
+    if request.method != "POST":
+        return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
+
+    if not request.body:
+        return HttpResponse('Invalid request, must supply "org_ids" in body.', status=400)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponse("Invalid JSON in request body.", status=400)
+
+    org_ids = body.get("org_ids")
+    if not isinstance(org_ids, list) or len(org_ids) == 0:
+        return HttpResponse(
+            'Invalid request: the "org_ids" array in the body must contain at least one org_id.',
+            status=400,
+        )
+
+    # Validate all entries are non-empty strings
+    for entry in org_ids:
+        if not isinstance(entry, str) or not entry.strip():
+            return HttpResponse(
+                'Invalid request: all entries in "org_ids" must be non-empty strings.',
+                status=400,
+            )
+
+    logger.info("On-demand Kessel parity check requested for org_ids: %s", org_ids)
+    task = run_kessel_parity_checks_in_worker.delay(org_ids=org_ids)
+
+    return JsonResponse(
+        {
+            "message": "Kessel parity check enqueued.",
+            "task_id": str(task.id),
+            "org_ids": org_ids,
         },
         status=202,
     )

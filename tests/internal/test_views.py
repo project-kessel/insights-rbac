@@ -5323,3 +5323,141 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, 500)
         response_body = response.json()
         self.assertIn("Unexpected error", response_body["detail"])
+
+
+class KesselParityCheckEndpointTests(BaseInternalViewsetTests):
+    """Tests for the on-demand Kessel parity check endpoint."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        super().setUp()
+
+    def tearDown(self):
+        """Tear down test fixtures."""
+        super().tearDown()
+
+    @patch("internal.views.run_kessel_parity_checks_in_worker")
+    def test_kessel_parity_check_valid_request(self, mock_task):
+        """Test POST with valid org_ids returns 202 and enqueues task."""
+        mock_task.delay.return_value.id = "fake-task-id"
+
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", "67890"]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertEqual(body["message"], "Kessel parity check enqueued.")
+        self.assertEqual(body["task_id"], "fake-task-id")
+        self.assertEqual(body["org_ids"], ["12345", "67890"])
+        mock_task.delay.assert_called_once_with(org_ids=["12345", "67890"])
+
+    @patch("internal.views.run_kessel_parity_checks_in_worker")
+    def test_kessel_parity_check_single_org_id(self, mock_task):
+        """Test POST with a single org_id returns 202."""
+        mock_task.delay.return_value.id = "fake-task-id"
+
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345"]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        mock_task.delay.assert_called_once_with(org_ids=["12345"])
+
+    def test_kessel_parity_check_missing_org_ids(self):
+        """Test POST without org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"something_else": "value"},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_empty_org_ids(self):
+        """Test POST with empty org_ids list returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": []},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_org_ids_not_list(self):
+        """Test POST with org_ids as string returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": "12345"},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_empty_body(self):
+        """Test POST with empty body returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data="",
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_kessel_parity_check_invalid_json(self):
+        """Test POST with invalid JSON returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data="not-json",
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid JSON", response.content.decode())
+
+    def test_kessel_parity_check_get_not_allowed(self):
+        """Test GET method is not allowed."""
+        response = self.client.get(
+            "/_private/api/utils/kessel_parity_check/",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_kessel_parity_check_org_ids_with_empty_strings(self):
+        """Test POST with empty strings in org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", ""]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("non-empty strings", response.content.decode())
+
+    def test_kessel_parity_check_org_ids_with_non_string(self):
+        """Test POST with non-string entries in org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", 67890]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("non-empty strings", response.content.decode())

@@ -209,8 +209,10 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
-          - name: DR_RECONCILE_ENABLED
-            value: ${DR_RECONCILE_ENABLED}
+          - name: DR_RELATIONS_RECONCILE_ENABLED
+            value: ${DR_RELATIONS_RECONCILE_ENABLED}
+          - name: DR_WORKSPACE_RECONCILE_ENABLED
+            value: ${DR_WORKSPACE_RECONCILE_ENABLED}
           - name: CELERY_WORKER_CONCURRENCY
             value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
@@ -537,8 +539,10 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
-          - name: DR_RECONCILE_ENABLED
-            value: ${DR_RECONCILE_ENABLED}
+          - name: DR_RELATIONS_RECONCILE_ENABLED
+            value: ${DR_RELATIONS_RECONCILE_ENABLED}
+          - name: DR_WORKSPACE_RECONCILE_ENABLED
+            value: ${DR_WORKSPACE_RECONCILE_ENABLED}
           - name: CELERY_WORKER_CONCURRENCY
             value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
@@ -1717,7 +1721,10 @@ parameters:
   name: KAFKA_ENABLED
   value: 'False'
 - description: Enable disaster recovery reconciliation endpoint and Celery task
-  name: DR_RECONCILE_ENABLED
+  name: DR_RELATIONS_RECONCILE_ENABLED
+  value: 'False'
+- description: Enable disaster recovery workspace recovery endpoint and Celery task
+  name: DR_WORKSPACE_RECONCILE_ENABLED
   value: 'False'
 - name: EXTERNAL_SYNC_TOPIC
   value: 'platform.rbac.sync'

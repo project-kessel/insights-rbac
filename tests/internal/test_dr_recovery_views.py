@@ -47,7 +47,7 @@ def _build_internal_identity_header(org_id: str = "88888", account_id: str = "99
     return {RH_IDENTITY_HEADER: encoded}
 
 
-@override_settings(DR_RECOVERY_ENABLED=True)
+@override_settings(DR_WORKSPACE_RECONCILE_ENABLED=True)
 class TestRecoverWorkspaceEventsEndpoint(TestCase):
     """Tests for POST /_private/api/disaster_recovery/workspaces/."""
 
@@ -183,7 +183,7 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         response = self.client.get(DR_URL, **self.headers)
         self.assertEqual(response.status_code, 405)
 
-    @override_settings(DR_RECOVERY_ENABLED=False)
+    @override_settings(DR_WORKSPACE_RECONCILE_ENABLED=False)
     def test_disabled_feature_flag_returns_403(self):
         """DR recovery disabled returns 403."""
         response = self.client.post(
@@ -205,17 +205,17 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
-@override_settings(DR_RECOVERY_ENABLED=True)
+@override_settings(DR_WORKSPACE_RECONCILE_ENABLED=True)
 class TestRecoverWorkspaceEventsTask(TestCase):
     """Tests for the Celery task recover_workspace_events_in_worker."""
 
-    @override_settings(DR_RECOVERY_ENABLED=False)
+    @override_settings(DR_WORKSPACE_RECONCILE_ENABLED=False)
     def test_task_returns_early_when_disabled(self):
-        """Task returns message when DR_RECOVERY_ENABLED is False."""
+        """Task returns message when DR_WORKSPACE_RECONCILE_ENABLED is False."""
         from management.tasks import recover_workspace_events_in_worker
 
         result = recover_workspace_events_in_worker("2026-05-28T10:00:00Z")
-        self.assertEqual(result["message"], "DR recovery disabled (DR_RECOVERY_ENABLED=False)")
+        self.assertEqual(result["message"], "DR recovery disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)")
 
     @patch("core.kafka_dr.read_events_by_timestamp")
     def test_task_calls_kafka_reader_with_correct_params(self, mock_read):

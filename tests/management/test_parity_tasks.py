@@ -922,3 +922,69 @@ class ParityCheckTasksTest(IdentityRequest):
         self.assertFalse(tenant_result["passed"])
         self.assertIn("error", tenant_result)
         self.assertIn("gRPC connection timeout", tenant_result["error"])
+
+    @override_settings(PARITY_CHECK_ENABLED=False)
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_parity_check_with_explicit_org_ids_bypasses_enabled_gate(self, mock_check_workspace):
+        """Test that providing org_ids directly bypasses PARITY_CHECK_ENABLED gate."""
+        self.tenant.org_id = "test_org_id"
+        self.tenant.save()
+
+        mock_check_workspace.return_value = True
+
+        # Even though PARITY_CHECK_ENABLED=False, explicit org_ids should work
+        result = run_kessel_parity_checks_in_worker(org_ids=["test_org_id"])
+
+        mock_check_workspace.assert_called_once()
+        self.assertEqual(result["total_tenants"], 1)
+        self.assertEqual(result["passed_tenants"], 1)
+        self.assertEqual(result["failed_tenants"], 0)
+
+    @override_settings(PARITY_CHECK_ENABLED=False)
+    def test_parity_check_without_org_ids_respects_enabled_gate(self):
+        """Test that calling without org_ids still respects PARITY_CHECK_ENABLED."""
+        result = run_kessel_parity_checks_in_worker()
+        self.assertEqual(result, {"message": "Parity checks disabled"})
+
+    @override_settings(PARITY_CHECK_ENABLED=False)
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_parity_check_explicit_org_ids_deduplicates(self, mock_check_workspace):
+        """Test that explicit org_ids are deduplicated."""
+        self.tenant.org_id = "test_org_id"
+        self.tenant.save()
+
+        mock_check_workspace.return_value = True
+
+        result = run_kessel_parity_checks_in_worker(org_ids=["test_org_id", "test_org_id", "test_org_id"])
+
+        # Should only process the tenant once
+        mock_check_workspace.assert_called_once()
+        self.assertEqual(result["total_tenants"], 1)
+        self.assertEqual(len(result["tenants_checked"]), 1)
+
+    @override_settings(PARITY_CHECK_ENABLED=False)
+    def test_parity_check_explicit_empty_org_ids_returns_no_configured(self):
+        """Test that passing empty org_ids list returns no org_ids configured message."""
+        result = run_kessel_parity_checks_in_worker(org_ids=[])
+        self.assertEqual(result, {"message": "No org_ids configured"})
+
+    @override_settings(PARITY_CHECK_ENABLED=False)
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_parity_check_explicit_org_ids_strips_whitespace(self, mock_check_workspace):
+        """Test that explicit org_ids are stripped of whitespace."""
+        self.tenant.org_id = "test_org_id"
+        self.tenant.save()
+
+        mock_check_workspace.return_value = True
+
+        result = run_kessel_parity_checks_in_worker(org_ids=["  test_org_id  "])
+
+        mock_check_workspace.assert_called_once()
+        self.assertEqual(result["total_tenants"], 1)
+        self.assertEqual(result["tenants_checked"][0]["org_id"], "test_org_id")
