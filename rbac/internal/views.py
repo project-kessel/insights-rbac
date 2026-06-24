@@ -99,6 +99,7 @@ from management.tasks import (
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
     run_seeds_in_worker,
@@ -2965,3 +2966,53 @@ def disaster_recovery_reconcile(request):
     if mode == "last_minutes":
         response_data["last_minutes"] = last_minutes
     return JsonResponse(response_data, status=202)
+
+
+def kessel_parity_check(request):
+    """View method for triggering on-demand Kessel-RBAC parity checks.
+
+    POST /_private/api/utils/kessel_parity_check/
+
+    Body: {"org_ids": ["12345", "67890"]}
+
+    Triggers parity checks for the specified org(s) regardless of the
+    PARITY_CHECK_ENABLED setting. The scheduled Celery Beat cron job
+    behavior is unchanged.
+    """
+    if request.method != "POST":
+        return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
+
+    if not request.body:
+        return HttpResponse('Invalid request, must supply "org_ids" in body.', status=400)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponse("Invalid JSON in request body.", status=400)
+
+    org_ids = body.get("org_ids")
+    if not isinstance(org_ids, list) or len(org_ids) == 0:
+        return HttpResponse(
+            'Invalid request: the "org_ids" array in the body must contain at least one org_id.',
+            status=400,
+        )
+
+    # Validate all entries are non-empty strings
+    for entry in org_ids:
+        if not isinstance(entry, str) or not entry.strip():
+            return HttpResponse(
+                'Invalid request: all entries in "org_ids" must be non-empty strings.',
+                status=400,
+            )
+
+    logger.info("On-demand Kessel parity check requested for org_ids: %s", org_ids)
+    task = run_kessel_parity_checks_in_worker.delay(org_ids=org_ids)
+
+    return JsonResponse(
+        {
+            "message": "Kessel parity check enqueued.",
+            "task_id": str(task.id),
+            "org_ids": org_ids,
+        },
+        status=202,
+    )

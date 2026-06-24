@@ -236,18 +236,30 @@ def run_parity_access_checks_in_worker(
 
 
 @shared_task
-def run_kessel_parity_checks_in_worker():
+def run_kessel_parity_checks_in_worker(org_ids=None):
     """
     Celery task to run Kessel-RBAC parity checks for configured tenants.
+
+    Args:
+        org_ids: Optional list of org IDs to check. When provided, skips the
+            PARITY_CHECK_ENABLED gate and uses the given list directly. When None,
+            falls back to current behavior (reads from PARITY_CHECK_ORG_IDS env var
+            and checks PARITY_CHECK_ENABLED gate).
 
     Returns:
         dict: Summary statistics with checks performed, passed, and failed counts.
     """
-    if not getattr(settings, "PARITY_CHECK_ENABLED", False):
-        return {"message": "Parity checks disabled"}
+    if org_ids is None:
+        # Scheduled cron path: respect PARITY_CHECK_ENABLED gate
+        if not getattr(settings, "PARITY_CHECK_ENABLED", False):
+            return {"message": "Parity checks disabled"}
 
-    org_ids_str = settings.PARITY_CHECK_ORG_IDS
-    org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+        org_ids_str = settings.PARITY_CHECK_ORG_IDS
+        org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+    else:
+        # On-demand path: validate and deduplicate provided org_ids
+        org_ids = [org_id.strip() for org_id in org_ids if org_id.strip()]
+
     # Deduplicate org_ids while preserving order to avoid redundant work and double-counting
     org_ids = list(dict.fromkeys(org_ids))
 
