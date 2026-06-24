@@ -13,12 +13,16 @@
 # Usage:
 #   oc logs <pod> -f | ./parse-dr-logs.sh
 #   oc logs <pod> -f | ./parse-dr-logs.sh --json dr-logs.jsonl
-#   ./parse-dr-logs.sh --pods rbac-kafka-consumer       # stream all matching pods
-#   ./parse-dr-logs.sh --pods rbac-worker --json w.jsonl # stream + save
+#   ./parse-dr-logs.sh --pods rbac-kafka-consumer               # stream all matching pods
+#   ./parse-dr-logs.sh --pods rbac-worker --tail 50             # last 50 lines + follow
+#   ./parse-dr-logs.sh --pods rbac-worker --tail 0              # only new logs, no history
+#   ./parse-dr-logs.sh --pods rbac-worker --json w.jsonl        # stream + save
 #   ./parse-dr-logs.sh < logfile.txt
 #   ./parse-dr-logs.sh --no-color logfile.txt
 #
 # --pods <pattern>  Find all pods matching grep pattern, stream all with --prefix.
+# --tail <N>        Only show the last N log lines, then follow new output (--pods mode).
+#                   Use --tail 0 to skip history entirely and only see new logs.
 # --json <file>     Write every parsed record as JSONL for later analysis.
 # --no-color        Disable ANSI colors.
 
@@ -29,6 +33,7 @@ USE_COLOR=true
 JSON_LOG=""
 INPUT_FILE=""
 POD_PATTERN=""
+TAIL_LINES=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,6 +44,9 @@ while [[ $# -gt 0 ]]; do
         --pods)
             [[ $# -lt 2 ]] && echo "Error: --pods requires a pattern" >&2 && exit 1
             POD_PATTERN="$2"; shift 2 ;;
+        --tail)
+            [[ $# -lt 2 ]] && echo "Error: --tail requires a number" >&2 && exit 1
+            TAIL_LINES="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1" >&2; exit 1 ;;
         *)
@@ -90,9 +98,13 @@ if [[ -n "$POD_PATTERN" ]]; then
     }
     trap cleanup_pids EXIT INT TERM
 
+    # Build oc logs flags
+    oc_flags=(-f --prefix)
+    [[ -n "$TAIL_LINES" ]] && oc_flags+=(--tail="$TAIL_LINES")
+
     {
         for pod in $pods; do
-            oc logs -f --prefix "$pod" &
+            oc logs "${oc_flags[@]}" "$pod" &
             oc_pids="$oc_pids $!"
         done
         wait 2>/dev/null || true
