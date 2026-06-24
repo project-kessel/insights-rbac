@@ -1554,16 +1554,16 @@ parameters:
   value: model-access-permissions
 - description: minimum number of pods to use when autoscaling is enabled
   name: MIN_REPLICAS
-  value: '1'
+  value: '0'
 - description: maximum number of pods to use when autoscaling is enabled
   name: MAX_REPLICAS
-  value: '1'
+  value: '0'
 - description: minimum number of pods to use when autoscaling is enabled for worker service
   name: MIN_WORKER_REPLICAS
-  value: '1'
+  value: '0'
 - description: minimum number of pods to use when autoscaling is enabled for scheduler service
   name: MIN_SCHEDULER_REPLICAS
-  value: '1'
+  value: '0'
 - description: target CPU utilization for the service
   name: TARGET_CPU_UTILIZATION
   value: '90'
@@ -1780,7 +1780,7 @@ parameters:
   value: 'False'
 - name: UMB_JOB_ENABLED
   description: Temp env to enable the UMB job
-  value: 'True'
+  value: 'False'
 - name: UMB_HOST
   description: Host of the UMB service
   value: 'localhost'
@@ -1831,7 +1831,7 @@ parameters:
   value: 'rbac:role_binding:view,rbac:role_binding:grant,rbac:role_binding:revoke'
 - name: READ_ONLY_API_MODE
   description: Enforce GET only on RBAC APIs
-  value: 'False'
+  value: 'True'
 - name: S3_AWS_SECRET
   description: The AWS secret for S3
   value: 'crc-rbac-s3'
@@ -1924,7 +1924,7 @@ parameters:
   value: 'connect-relations-sink-connector'
 - name: RBAC_KAFKA_CONSUMER_REPLICAS
   description: The number of replicas for the RBAC Kafka consumer (set to 0 to disable)
-  value: '1'
+  value: '0'
 - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
   description: Custom Kafka broker URL for the RBAC Kafka consumer (if empty, uses default Clowder/localhost configuration)
   value: ''
