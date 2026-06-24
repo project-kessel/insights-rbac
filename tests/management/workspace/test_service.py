@@ -417,14 +417,16 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
             tenant=self.tenant,
         )
 
-        # Create access with resource definition targeting both workspaces
+        # Create access with resource definition targeting both workspaces.
+        # We also include None and an invalid value in order to ensure that they are properly preserved during the
+        # update. (A binding to the Ungrouped Hosts workspace will not be created because REMOVE_NULL_VALUE is False.)
         access = Access.objects.create(role=role, permission=perm, tenant=self.tenant)
         rd = ResourceDefinition.objects.create(
             access=access,
             attributeFilter={
                 "key": "group.id",
                 "operation": "in",
-                "value": [str(workspace_to_delete.id), str(workspace_to_keep.id)],
+                "value": [str(workspace_to_delete.id), str(workspace_to_keep.id), None, 42],
             },
             tenant=self.tenant,
         )
@@ -441,7 +443,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
 
         # Verify resource definition has 2 workspaces
         rd.refresh_from_db()
-        self.assertEqual(len(rd.attributeFilter["value"]), 2, "Should have 2 workspace IDs")
+        self.assertEqual(len(rd.attributeFilter["value"]), 4, "Should have 4 workspace IDs")
         self.assertIn(str(workspace_to_delete.id), rd.attributeFilter["value"])
         self.assertIn(str(workspace_to_keep.id), rd.attributeFilter["value"])
 
@@ -458,8 +460,8 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
         rd.refresh_from_db()
         self.assertEqual(
             len(rd.attributeFilter["value"]),
-            1,
-            "Should have 1 workspace ID after deletion",
+            3,
+            "Should have 3 workspace IDs after deletion",
         )
         self.assertNotIn(
             str(workspace_to_delete.id),
@@ -470,6 +472,16 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
             str(workspace_to_keep.id),
             rd.attributeFilter["value"],
             "Kept workspace should remain",
+        )
+        self.assertIn(
+            None,
+            rd.attributeFilter["value"],
+            "None ID should remain",
+        )
+        self.assertIn(
+            42,
+            rd.attributeFilter["value"],
+            "Invalid ID should remain",
         )
 
         # VERIFY: Bindings were updated - should only have 1 binding now

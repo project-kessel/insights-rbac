@@ -666,12 +666,6 @@ READ_YOUR_WRITES_WORKSPACE_ENABLED = ENVIRONMENT.bool("READ_YOUR_WRITES_WORKSPAC
 READ_YOUR_WRITES_CHANNEL = ENVIRONMENT.get_value("READ_YOUR_WRITES_CHANNEL", default="READ_YOUR_WRITES_CHANNEL")
 READ_YOUR_WRITES_TIMEOUT_SECONDS = ENVIRONMENT.int("READ_YOUR_WRITES_TIMEOUT_SECONDS", default=10)
 
-# Workspace settings
-WORKSPACE_APPLICATION_NAME = ENVIRONMENT.get_value("WORKSPACE_APPLICATION_NAME", default="inventory")
-# Comma-separated list of resource types that should trigger workspace hierarchy
-WORKSPACE_RESOURCE_TYPE = [
-    t.strip() for t in ENVIRONMENT.get_value("WORKSPACE_RESOURCE_TYPE", default="groups,hosts,*").split(",")
-]
 WORKSPACE_ATTRIBUTE_FILTER = ENVIRONMENT.get_value("WORKSPACE_ATTRIBUTE_FILTER", default="group.id")
 WORKSPACE_HIERARCHY_ENABLED = ENVIRONMENT.bool("WORKSPACE_HIERARCHY_ENABLED", False)
 WORKSPACE_ORG_CREATION_LIMIT = ENVIRONMENT.get_value("WORKSPACE_ORG_CREATION_LIMIT", default=3000)
@@ -679,6 +673,8 @@ WORKSPACE_HIERARCHY_DEPTH_LIMIT = ENVIRONMENT.int("WORKSPACE_HIERARCHY_DEPTH_LIM
 WORKSPACE_RESTRICT_DEFAULT_PEERS = ENVIRONMENT.bool("WORKSPACE_RESTRICT_DEFAULT_PEERS", default=False)
 # Enable detailed timing logs for v2 workspace access checks (for performance investigation)
 WORKSPACE_ACCESS_TIMING_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_TIMING_ENABLED", default=False)
+
+SKIP_RESOURCE_BINDING_CHECKS = ENVIRONMENT.bool("DANGEROUSLY_SKIP_RESOURCE_BINDING_CHECKS_FOR_TEST", default=False)
 
 # Permission scope configuration used by management.permission.scope_service.ImplicitResourceService.
 # These can include wildcard patterns (e.g. "rbac:*:read" or "advisor:*:*").

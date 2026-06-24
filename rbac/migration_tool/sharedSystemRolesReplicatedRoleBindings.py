@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import dataclasses
 import logging
 from collections.abc import Callable
-from typing import Any, Iterable, Optional, Tuple, Union
+from typing import Iterable, Optional
 
 import uuid_utils.compat as uuid
 from django.db.models import F
@@ -26,7 +26,9 @@ from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
 from management.permission.scope_service import ImplicitResourceService, Scope
+from management.role.binding_checks import BindingAuthorizationPolicy, UnauthorizedResourceError
 from management.role.model import Role
+from management.role.resource_definitions import parse_attribute_filter
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
 from migration_tool.ingest import add_element
@@ -145,6 +147,7 @@ def v1_role_to_v2_bindings(
     resource_for_scope: ScopeBoundResourceResolver,
     existing_role_bindings: Iterable[BindingMapping],
     existing_v2_roles: Iterable[CustomRoleV2],
+    binding_policy: BindingAuthorizationPolicy,
 ) -> MigrateCustomRoleResult:
     """Convert a V1 role to a set of V2 role bindings.
 
@@ -152,10 +155,7 @@ def v1_role_to_v2_bindings(
     service) to the V2boundresource for permissions without explicit resource
     definitions.
     """
-    from internal.utils import (
-        get_or_create_ungrouped_workspace,
-        get_workspace_ids_from_resource_definition,
-    )
+    from internal.utils import get_or_create_ungrouped_workspace
 
     _scope_service = ImplicitResourceService.from_settings()
 
@@ -172,26 +172,17 @@ def v1_role_to_v2_bindings(
         default = True
         for resource_def in access.resourceDefinitions.all():
             default = False
-            attri_filter = resource_def.attributeFilter
 
-            # Deal with some malformed data in db
-            if attri_filter["operation"] == "in":
-                if not isinstance(attri_filter["value"], list):
-                    # Override operation as "equal" if value is not a list
-                    attri_filter["operation"] = "equal"
-                elif attri_filter["value"] == []:
-                    # Skip empty values
-                    continue
+            parsed_filter = parse_attribute_filter(resource_def.attributeFilter)
 
-            resource_type = attribute_key_to_v2_related_resource_type(attri_filter["key"])
-
-            if resource_type is None:
-                # Resource type not mapped to v2
+            if parsed_filter is None:
                 continue
 
             # validate permission was not added to workspace out of users org for v1 (RHCLOUD-35481)
-            if resource_type == ("rbac", "workspace"):
-                requested_workspace_ids = set(get_workspace_ids_from_resource_definition(attri_filter))
+            if parsed_filter.is_for_workspaces():
+                # We do not need to handle a None ID here; the ungrouped hosts workspace will be created later if
+                # necessary.
+                requested_workspace_ids = set(uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None)
 
                 if len(requested_workspace_ids) > 0:
                     actual_workspace_ids = set(
@@ -207,18 +198,22 @@ def v1_role_to_v2_bindings(
 
                         continue
 
-            for resource_id in values_from_attribute_filter(attri_filter):
-                if resource_id is None:
-                    if resource_type != ("rbac", "workspace"):
-                        raise ValueError(f"Resource ID is None for {resource_def}")
-                    if FEATURE_FLAGS.is_remove_null_value_enabled:
-                        ungrouped_ws = get_or_create_ungrouped_workspace(v1_role.tenant)
-                        resource_id = str(ungrouped_ws.id)
-                    else:
-                        continue
-                elif resource_id == "":
-                    continue
-                add_element(perm_groupings, V2boundresource(resource_type, resource_id), permission, collection=set)
+            all_ids = set(u for u in parsed_filter.valid_ids if u is not None)
+
+            if None in parsed_filter.valid_ids:
+                if not parsed_filter.is_for_workspaces():
+                    raise ValueError(f"Resource ID is None for {parsed_filter.resource_type}")
+
+                # A None ID means the ungrouped hosts workspace (if the flag is enabled).
+                if FEATURE_FLAGS.is_remove_null_value_enabled():
+                    ungrouped_ws = get_or_create_ungrouped_workspace(v1_role.tenant)
+                    all_ids.add(str(ungrouped_ws.id))
+
+            raw_type = parsed_filter.resource_type.as_tuple()
+
+            for resource_id in all_ids:
+                add_element(perm_groupings, V2boundresource(raw_type, resource_id), permission, collection=set)
+
         if default:
             add_element(
                 perm_groupings,
@@ -227,8 +222,13 @@ def v1_role_to_v2_bindings(
                 collection=set,
             )
 
+    invalid_resources = [r for r in perm_groupings if not binding_policy.can_bind_to(r)]
+
+    if invalid_resources:
+        raise UnauthorizedResourceError(invalid_resources)
+
     # Project permission sets to roles per set of resources
-    return permission_groupings_to_v2_role_bindings(
+    return _permission_groupings_to_v2_role_bindings(
         perm_groupings,
         v1_role,
         existing_mappings=existing_role_bindings,
@@ -322,7 +322,7 @@ def _get_or_create_binding(
         return new_mapping, role_binding
 
 
-def permission_groupings_to_v2_role_bindings(
+def _permission_groupings_to_v2_role_bindings(
     perm_groupings: _PermissionGroupings,
     v1_role: Role,
     existing_mappings: Iterable[BindingMapping],
@@ -423,28 +423,7 @@ def permission_groupings_to_v2_role_bindings(
     )
 
 
-def values_from_attribute_filter(attribute_filter: dict[str, Any]) -> list[str]:
-    """Split a resource definition into a list of resource IDs."""
-    op: str = attribute_filter["operation"]
-    resource_id: Union[list[str], str] = attribute_filter["value"]
-
-    if isinstance(resource_id, list):
-        return resource_id
-
-    return resource_id.split(",") if op == "in" else [resource_id]
-
-
 # Maintained for compatibility.
 def v1_perm_to_v2_perm(v1_permission: Permission):
     """Convert a V1 permission to a V2 permission."""
     return v1_permission.v2_string()
-
-
-V2_RESOURCE_BY_ATTRIBUTE = {"group.id": ("rbac", "workspace")}
-
-
-def attribute_key_to_v2_related_resource_type(resourceType: str) -> Optional[Tuple[str, str]]:
-    """Convert a V1 resource type to a V2 resource type."""
-    if resourceType in V2_RESOURCE_BY_ATTRIBUTE:
-        return V2_RESOURCE_BY_ATTRIBUTE[resourceType]
-    return None

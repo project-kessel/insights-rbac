@@ -33,6 +33,7 @@ from management.relation_replicator.relation_replicator import RelationReplicato
 from management.relation_replicator.relation_replicator import ReplicationEvent
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.relation_replicator.types import RelationTuple
+from management.role.binding_checks import BindingAuthorizationPolicy, UnconstrainedBindingAuthorizationPolicy
 from management.role.model import BindingMapping, Role
 from management.role.platform import (
     admin_platform_parent_scope_for_seeded_system_role,
@@ -283,12 +284,15 @@ def _update_by_pk[M: Model](old_by_pk: dict[Any, M], new: Iterable[M]):
 class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
     """Class to handle Dual Write API related operations."""
 
+    _binding_policy: BindingAuthorizationPolicy
+
     def __init__(
         self,
         role: Role,
         event_type: ReplicationEventType,
         replicator: Optional[RelationReplicator] = None,
         tenant: Optional[Tenant] = None,
+        binding_policy: Optional[BindingAuthorizationPolicy] = None,
     ):
         """
         Initialize RelationApiDualWriteHandler.
@@ -332,6 +336,11 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             self.resource_service = ImplicitResourceService.from_settings()
 
             assert_v1_write_allowed(self.tenant)
+
+            if binding_policy is None:
+                binding_policy = UnconstrainedBindingAuthorizationPolicy()
+
+            self._binding_policy = binding_policy
         except Exception as e:
             logger.error(f"Failed to initialize RelationApiDualWriteHandler with error: {e}")
             raise DualWriteException(e)
@@ -441,6 +450,7 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
                 resource_for_scope=bound_resource_resolver_from_map(resource_map),
                 current_bindings=self.binding_mappings.values(),
                 current_v2_roles=self.v2_roles.values(),
+                binding_policy=self._binding_policy,
             )
 
             # Deduplicate role-to-principal permission tuples which are expected when

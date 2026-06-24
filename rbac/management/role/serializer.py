@@ -17,10 +17,12 @@
 
 """Serializer for role management."""
 
+from typing import Any
+
 from django.conf import settings
 from django.utils.translation import gettext as _
 from feature_flags import FEATURE_FLAGS
-from internal.utils import get_or_create_ungrouped_workspace, is_resource_a_workspace
+from internal.utils import get_or_create_ungrouped_workspace
 from management.models import Group, Workspace
 from management.serializer_override_mixin import SerializerCreateOverrideMixin
 from management.utils import (
@@ -29,12 +31,16 @@ from management.utils import (
     is_permission_blocked_for_v1,
     is_valid_uuid,
     validate_and_get_key,
-    value_to_list,
 )
 from rest_framework import serializers
 
 from api.models import Tenant
 from .model import Access, BindingMapping, Permission, ResourceDefinition, Role
+from .resource_definitions import (
+    ParsedAttributeFilter,
+    parse_attribute_filter,
+    updated_attribute_filter_with_ids,
+)
 from ..querysets import ORG_ID_SCOPE, PRINCIPAL_SCOPE, SCOPE_KEY, VALID_SCOPES
 
 ALLOWED_OPERATIONS = ["in", "equal"]
@@ -48,73 +54,82 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
 
     def validate_attributeFilter(self, value):
         """Validate the given attributeFilter."""
+
+        def _make_error(*, key: str, message: str) -> serializers.ValidationError:
+            return serializers.ValidationError({key: [_(message)]})
+
         if value.keys() != FILTER_FIELDS:
-            key = "format"
-            message = f"attributeFilter fields must be {FILTER_FIELDS}"
-            error = {key: [_(message)]}
-            raise serializers.ValidationError(error)
+            raise _make_error(key="format", message=f"attributeFilter fields must be {FILTER_FIELDS}")
 
-        op = value.get("operation")
+        op = value["operation"]
+
         if op not in ALLOWED_OPERATIONS:
-            key = "format"
-            message = f"attributeFilter operation must be one of {ALLOWED_OPERATIONS}"
-            error = {key: [_(message)]}
-            raise serializers.ValidationError(error)
-        else:
-            values = value.get("value")
-            error = False
-            if op == "in" and not isinstance(values, list):
-                key = "format"
-                message = "attributeFilter operation 'in' expects a List value"
-                error = {key: [_(message)]}
-            elif op == "equal" and not isinstance(values, (str, type(None))):
-                key = "format"
-                message = "attributeFilter operation 'equal' expects a String value or None"
-                error = {key: [_(message)]}
-            if error:
-                raise serializers.ValidationError(error)
+            raise _make_error(key="format", message=f"attributeFilter operation must be one of {ALLOWED_OPERATIONS}")
 
-            # Validate that group.id only contains UUIDs or None
-            filter_key = value.get("key")
-            if filter_key == "group.id":
-                if op == "in":
-                    if isinstance(values, list):
-                        invalid_values = [v for v in values if v is not None and not is_valid_uuid(v)]
-                        if invalid_values:
-                            key = "format"
-                            message = (
-                                f"attributeFilter with key 'group.id' must contain only valid UUIDs or None, "
-                                f"invalid values: {invalid_values}"
-                            )
-                            error = {key: [_(message)]}
-                            raise serializers.ValidationError(error)
-                elif op == "equal":
-                    if values is not None and not is_valid_uuid(values):
-                        key = "format"
-                        message = f"attributeFilter with key 'group.id' must be a valid UUID or None, got: {values}"
-                        error = {key: [_(message)]}
-                        raise serializers.ValidationError(error)
+        values = value["value"]
+
+        if op == "in" and not isinstance(values, list):
+            raise _make_error(key="format", message="attributeFilter operation 'in' expects a List value")
+        elif op == "equal" and not isinstance(values, (str, type(None))):
+            raise _make_error(key="format", message="attributeFilter operation 'equal' expects a String value or None")
+
+        parsed_filter = parse_attribute_filter(value)
+
+        # If we recognize the resource type, perform more in-depth validation. (We will still always have checked for
+        # basic validity above.)
+        if parsed_filter is not None:
+            filter_key = value["key"]
+
+            if len(parsed_filter.invalid_ids) > 0:
+                raise _make_error(
+                    key="format",
+                    message=(
+                        f"attributeFilter with key {filter_key!r} has invalid values: {list(parsed_filter.invalid_ids)}"
+                    ),
+                )
 
         return value
 
     def to_representation(self, instance):
         """Convert the ResourceDefinition instance to a dictionary."""
         serialized_data = super().to_representation(instance)
-        if FEATURE_FLAGS.is_remove_null_value_enabled() and instance.attributeFilter["key"] == "group.id":
-            value = instance.attributeFilter["value"]
-            if isinstance(value, list) and None in value:
+        parsed_filter = parse_attribute_filter(instance.attributeFilter)
+
+        if parsed_filter is None:
+            return serialized_data
+
+        # A None ID will be handled below.
+        new_ids: list[Any] = list(x for x in parsed_filter.valid_ids if x is not None) + list(
+            parsed_filter.invalid_ids
+        )
+
+        # Whether to force the operation to be "in" (even if it was previously "equal").
+        force_in_operation: bool = False
+
+        if None in parsed_filter.valid_ids:
+            # This preserves the number of values in the original filter, so we don't need to change the operation.
+            if parsed_filter.is_for_workspaces() and FEATURE_FLAGS.is_remove_null_value_enabled():
                 ungrouped_hosts = get_or_create_ungrouped_workspace(instance.tenant)
-                value = [v for v in value if v is not None]
-                value.append(str(ungrouped_hosts.id))
-            elif value is None:
-                ungrouped_hosts = get_or_create_ungrouped_workspace(instance.tenant)
-                value = str(ungrouped_hosts.id)
-            serialized_data["attributeFilter"]["value"] = value
-        if self._should_add_hierarchy(instance):
-            serialized_data.get("attributeFilter").update(
-                {"operation": "in", "value": self._original_vals_and_descendant_ids(instance)}
-            )
-        return serialized_data
+                new_ids.append(str(ungrouped_hosts.id))
+            else:
+                new_ids.append(None)
+
+        if self._should_add_hierarchy(parsed_filter):
+            # This, however, can add more values than were in the original filter, so we need to ensure the operation
+            # is always "in" (rather than "equal").
+            #
+            # Note that this will also preserve all invalid IDs (and None).
+            new_ids = self._original_vals_and_descendant_ids(tenant_id=instance.tenant_id, ids=new_ids)
+            force_in_operation = True
+
+        return {
+            **serialized_data,
+            "attributeFilter": updated_attribute_filter_with_ids(
+                attribute_filter=serialized_data["attributeFilter"],
+                new_ids=new_ids,
+                force_in_operation=force_in_operation,
+            ),
+        }
 
     class Meta:
         """Metadata for the serializer."""
@@ -122,20 +137,16 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         model = ResourceDefinition
         fields = ("attributeFilter",)
 
-    def _original_vals_and_descendant_ids(self, instance):
-        attr_filter_list = value_to_list(instance.attributeFilter.get("value"))
-        uuids = [val for val in attr_filter_list if is_valid_uuid(val)]
-        non_uuids = [val for val in attr_filter_list if not is_valid_uuid(val)]
-        ids_with_parents = Workspace.objects.descendant_ids_with_parents(uuids, instance.tenant_id)
+    def _original_vals_and_descendant_ids(self, tenant_id: int, ids: list[str | None]):
+        uuids = [val for val in ids if is_valid_uuid(val)]
+        non_uuids = [val for val in ids if not is_valid_uuid(val)]
+        ids_with_parents = Workspace.objects.descendant_ids_with_parents(uuids, tenant_id=tenant_id)
         return list(set(non_uuids + ids_with_parents))
 
-    def _should_add_hierarchy(self, instance):
+    def _should_add_hierarchy(self, parsed_filter: ParsedAttributeFilter):
         hierarchy_enabled = settings.WORKSPACE_HIERARCHY_ENABLED is True
         is_access_request = self.context.get("for_access") is True
-        return hierarchy_enabled and is_access_request and self._is_workspace_filter(instance)
-
-    def _is_workspace_filter(self, instance):
-        return is_resource_a_workspace(instance.application, instance.resource_type, instance.attributeFilter)
+        return hierarchy_enabled and is_access_request and parsed_filter.is_for_workspaces()
 
 
 class AccessListSerializer(serializers.ListSerializer):

@@ -41,6 +41,12 @@ from management.relation_replicator.relation_replicator import (
     RelationReplicator,
     ReplicationEventType,
 )
+from management.role.binding_checks import (
+    BindingAuthorizationPolicy,
+    EnumeratedBindingAuthorizationPolicy,
+    UnauthorizedResourceError,
+    UnconstrainedBindingAuthorizationPolicy,
+)
 from management.role.model import (
     Access,
     BindingMapping,
@@ -2669,6 +2675,95 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         # There should be no binding in the other tenant's workspace because it should be ignored.
         self.assertFalse(BindingMapping.objects.filter(role=role).exists())
         self.assertFalse(RoleBinding.objects.filter(role__v1_source=role).exists())
+
+    def _do_test_binding_authorization_for_access(
+        self,
+        policy: BindingAuthorizationPolicy,
+        access: list[tuple],
+        prohibited_resources: set[V2boundresource] | None,
+    ):
+        role = self.fixture.new_custom_role("custom role", access, self.tenant)
+        handler = RelationApiDualWriteHandler(
+            role,
+            event_type=ReplicationEventType.CREATE_CUSTOM_ROLE,
+            replicator=InMemoryRelationReplicator(self.tuples),
+            binding_policy=policy,
+        )
+
+        if prohibited_resources is None:
+            try:
+                handler.replicate_new_or_updated_role(role)
+            except DualWriteException as e:
+                self.fail(f"Unexpected DualWriteException: {str(e)}")
+        else:
+            with self.assertRaises(DualWriteException) as ctx:
+                handler.replicate_new_or_updated_role(role)
+
+            self.assertIsInstance(ctx.exception.__context__, UnauthorizedResourceError)
+            self.assertCountEqual(prohibited_resources, ctx.exception.__context__.resources)
+
+    def _do_test_binding_authorization(
+        self,
+        policy: BindingAuthorizationPolicy,
+        allowed_workspaces: list[str],
+        prohibited_workspaces: list[str] | None,
+    ):
+        self._do_test_binding_authorization_for_access(
+            policy,
+            self.fixture.workspace_access(
+                **dict.fromkeys(
+                    allowed_workspaces + (prohibited_workspaces if prohibited_workspaces is not None else []),
+                    ["rbac:*:*"],
+                )
+            ),
+            (
+                {V2boundresource(("rbac", "workspace"), w) for w in prohibited_workspaces}
+                if prohibited_workspaces is not None
+                else None
+            ),
+        )
+
+    def test_binding_unconstrained(self):
+        self._do_test_binding_authorization(
+            UnconstrainedBindingAuthorizationPolicy(),
+            allowed_workspaces=[self.default_workspace()],
+            prohibited_workspaces=None,
+        )
+
+    def test_binding_constrained_allowed(self):
+        self._do_test_binding_authorization(
+            EnumeratedBindingAuthorizationPolicy({self.root_workspace_resource()}),
+            allowed_workspaces=[self.root_workspace()],
+            prohibited_workspaces=None,
+        )
+
+    def test_binding_constrained_partial_allowed(self):
+        self._do_test_binding_authorization(
+            EnumeratedBindingAuthorizationPolicy({self.root_workspace_resource()}),
+            allowed_workspaces=[self.root_workspace()],
+            prohibited_workspaces=[self.default_workspace()],
+        )
+
+    def test_binding_constrained_disallowed(self):
+        self._do_test_binding_authorization(
+            EnumeratedBindingAuthorizationPolicy({self.root_workspace_resource()}),
+            allowed_workspaces=[],
+            prohibited_workspaces=[self.default_workspace()],
+        )
+
+    def test_binding_default_allowed(self):
+        self._do_test_binding_authorization_for_access(
+            EnumeratedBindingAuthorizationPolicy([self.default_workspace_resource()]),
+            self.fixture.workspace_access(default=["rbac:*:*"]),
+            prohibited_resources=None,
+        )
+
+    def test_binding_default_disallowed(self):
+        self._do_test_binding_authorization_for_access(
+            EnumeratedBindingAuthorizationPolicy([]),
+            self.fixture.workspace_access(default=["rbac:*:*"]),
+            prohibited_resources={self.default_workspace_resource()},
+        )
 
 
 @override_settings(ROOT_SCOPE_PERMISSIONS="advisor:*:*", TENANT_SCOPE_PERMISSIONS="subscriptions:*:*")

@@ -584,6 +584,19 @@ def validate_uuid(uuid, key="UUID Validation"):
         raise serializers.ValidationError({key: _(message)})
 
 
+def is_str_valid_uuid(uuid_str: str) -> bool:
+    """Check if a string can be converted to a valid UUID."""
+    if not isinstance(uuid_str, str):
+        return False
+    if uuid_str is None or not uuid_str:
+        return False
+    try:
+        uuid.UUID(uuid_str)
+        return True
+    except ValueError:
+        return False
+
+
 def as_uuid(value: str | UUID) -> UUID:
     """
     Convert a string (or UUID) to a UUID.

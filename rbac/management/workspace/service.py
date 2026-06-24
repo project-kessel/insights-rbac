@@ -28,7 +28,6 @@ from django.db import transaction
 from django.db.models import Q
 from feature_flags import FEATURE_FLAGS
 from internal.pg_notify_wait import wait_for_pg_notify
-from internal.utils import get_workspace_ids_from_resource_definition
 from management.atomic_transactions import atomic
 from management.models import ResourceDefinition, Role, Workspace
 from management.relation_replicator.outbox_replicator import OutboxReplicator
@@ -40,11 +39,11 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.role.model import BindingMapping
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.role.resource_definitions import parse_attribute_filter, updated_attribute_filter_with_ids
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from management.v2_filters import v2_name_filter
 from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
 from rest_framework import serializers
 
@@ -180,65 +179,48 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
             rds_to_update = []
 
             for rd in locked_rds:
-                # Double-check that this resource definition is for workspaces.
-                if attribute_key_to_v2_related_resource_type(rd.attributeFilter["key"]) != ("rbac", "workspace"):
+                original_filter = rd.attributeFilter
+                parsed_filter = parse_attribute_filter(original_filter)
+
+                if parsed_filter is None:
                     continue
 
-                # Get workspace IDs from resource definition
-                workspace_ids = get_workspace_ids_from_resource_definition(rd.attributeFilter)
+                if not parsed_filter.is_for_workspaces():
+                    continue
+
+                # Get workspace IDs from resource definition. (A None ID will be restored below if present.)
+                workspace_ids: set[uuid.UUID] = {uuid.UUID(u) for u in parsed_filter.valid_ids if u is not None}
 
                 # Check if this resource definition references the removed workspace
                 if workspace_id not in workspace_ids:
                     continue
 
+                workspace_ids.remove(workspace_id)
+
                 # This resource definition references the removed workspace
                 role_had_updates = True
 
-                # Check if the resource definition has None (for ungrouped workspace)
-                operation = rd.attributeFilter.get("operation")
-                original_value = rd.attributeFilter.get("value")
-                has_none_value = False
+                # We've removed the deleted workspace ID; now we ensure that we preserve None if present (since we
+                # ignored it when parsing valid_ids above) and any invalid IDs.
+                new_ids = (
+                    [str(u) for u in workspace_ids]
+                    + ([None] if None in parsed_filter.valid_ids else [])
+                    + list(parsed_filter.invalid_ids)
+                )
 
-                if operation == "in" and isinstance(original_value, list):
-                    has_none_value = None in original_value
-                elif operation == "equal":
-                    has_none_value = original_value is None
-
-                # Remove the workspace ID from the list
-                remaining_workspace_ids = [ws_id for ws_id in workspace_ids if ws_id != workspace_id]
-
-                # Calculate what the new value should be
-                operation_type = rd.attributeFilter.get("operation")
-                new_value: str | list | None
-
-                if operation_type == "equal":
-                    # For "equal" operation, value should be a single string, None, or empty string
-                    # Preserve None if it existed (for ungrouped workspace reference)
-                    if has_none_value and not remaining_workspace_ids:
-                        new_value = None
-                    else:
-                        new_value = str(remaining_workspace_ids[0]) if remaining_workspace_ids else ""
-                else:
-                    # For "in" operation, value should be a list
-                    # Preserve None value if it existed (for ungrouped workspace reference)
-                    new_value_list: list[str | None] = [str(ws_id) for ws_id in remaining_workspace_ids]
-                    if has_none_value:
-                        new_value_list.append(None)
-                    new_value = new_value_list
+                new_filter = updated_attribute_filter_with_ids(rd.attributeFilter, new_ids)
 
                 # Update resource definition to remove the workspace ID
                 # Create new dict to ensure Django detects the change (JSONField mutation issue)
-                updated_filter = rd.attributeFilter.copy()
-                updated_filter["value"] = new_value
+                rd.attributeFilter = dict(new_filter)
 
-                rd.attributeFilter = updated_filter
                 rds_to_update.append(rd)
                 resource_defs_updated += 1
 
                 logger.info(
                     f"Updated role '{role.name}' (uuid={role.uuid}), "
                     f"removed workspace {workspace_id_str}, "
-                    f"{original_value} -> {new_value}"
+                    f"{original_filter} -> {new_filter}"
                 )
 
             # Bulk update all RDs for this role
