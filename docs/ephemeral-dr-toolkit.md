@@ -9,6 +9,7 @@ Scripts for testing RBAC disaster recovery reconciliation on bonfire ephemeral c
 | `scripts/ephemeral/deploy-ephemeral.sh` | Deploy RBAC + dependencies with DR-ready configuration |
 | `scripts/ephemeral/rbac-dr-toolkit.sh` | DR simulation toolkit (setup → simulate → fix → verify) |
 | `scripts/ephemeral/parse-dr-logs.sh` | Live log parser with color-coded output and JSONL export |
+| `scripts/ephemeral/rbac-parity-toolkit.sh` | Parity check automation (setup, check, results, cleanup) |
 
 ## Prerequisites
 
@@ -195,6 +196,44 @@ With `--json <file>`, every parsed log line is written as a JSON object for late
 ./scripts/ephemeral/parse-dr-logs.sh --pods rbac-worker --json worker.jsonl
 jq 'select(.level == "ERROR")' worker.jsonl
 ```
+
+## Parity Check Toolkit
+
+Validates RBAC-Kessel data consistency by exercising the on-demand parity check API endpoint. Creates representative test data, triggers parity checks, parses results, and reports pass/fail across all 5 sub-checks (workspace hierarchy, custom roles, seeded roles, bootstrap, group-principal).
+
+### Usage
+
+```bash
+# Happy path: create data, wait for sync, run parity check, verify all pass
+./scripts/ephemeral/rbac-parity-toolkit.sh --check
+
+# Failure path: same + introduce DB divergence, verify parity detects it
+./scripts/ephemeral/rbac-parity-toolkit.sh --check --failure
+
+# Fast mode with minimal data
+./scripts/ephemeral/rbac-parity-toolkit.sh --check --fast --minimal-data
+```
+
+### Step-by-Step Execution
+
+```bash
+PARITY_STEP=setup   ./scripts/ephemeral/rbac-parity-toolkit.sh --check
+PARITY_STEP=check   ./scripts/ephemeral/rbac-parity-toolkit.sh --check
+PARITY_STEP=results ./scripts/ephemeral/rbac-parity-toolkit.sh --check
+PARITY_STEP=cleanup ./scripts/ephemeral/rbac-parity-toolkit.sh --check
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PARITY_STEP` | `all` | Phase to run: `setup\|wait\|break\|check\|results\|cleanup\|state\|all` |
+| `PARITY_ORG_ID` | auto-resolved | Org ID to check |
+| `PARITY_SYNC_WAIT` | `30` | Seconds to wait for replication |
+| `PARITY_LOG_WAIT` | `500` | Lines of worker logs to search for results |
+| `PARITY_STATE_FILE` | `/tmp/rbac-parity-state.env` | State file path |
+| `PARITY_FAST` | `false` | Skip waits and auto-confirm |
+| `PARITY_MINIMAL` | `false` | Minimal test data (1 of each resource) |
 
 ## State File
 
