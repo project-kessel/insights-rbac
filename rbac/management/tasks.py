@@ -30,7 +30,7 @@ from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
 from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
-from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
+from internal.migrations.replicate_workspaces import replicate_default_workspaces
 from internal.utils import (
     clean_invalid_workspace_resource_definitions,
     expire_orphaned_cross_account_requests,
