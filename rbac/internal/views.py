@@ -105,6 +105,7 @@ from management.tasks import (
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    replicate_updated_workspaces_in_worker,
     run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
@@ -2205,8 +2206,9 @@ def send_kafka_test_message(request):
         return HttpResponse("Kafka is not enabled", status=400)
 
     try:
-        from core.kafka import RBACProducer
         import uuid
+
+        from core.kafka import RBACProducer
 
         # Create sample test data
         relations_to_add = [
@@ -2694,6 +2696,39 @@ def replicate_default_workspaces(request):
     except Exception as e:
         logger.exception("Error replicating default workspaces", exc_info=True)
         return JsonResponse({"detail": f"Error replicating default workspaces: {str(e)}"}, status=500)
+
+
+@require_http_methods(["POST"])
+def replicate_updated_workspaces(request):
+    """Replicate existing default workspaces.
+
+    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>,exclude_unchanged_default_workspaces=<bool>
+
+    Replicates
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    since = request.GET["since"]
+    exclude_unchanged_default_workspaces = (
+        request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
+    )
+
+    try:
+        replicate_updated_workspaces_in_worker.delay(
+            since=since, exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces
+        )
+        return JsonResponse(
+            {
+                "message": "Replication enqueued in background worker.",
+                "since": since,
+                "exclude_unchanged_default_workspaces": exclude_unchanged_default_workspaces,
+            },
+            status=202,
+        )
+    except Exception as e:
+        logger.exception("Error replicating updated workspaces", exc_info=True)
+        return JsonResponse({"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500)
 
 
 @require_http_methods(["POST"])
