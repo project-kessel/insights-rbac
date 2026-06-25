@@ -12,6 +12,34 @@ then
 
     echo "Running schema migrations <----"
     python /opt/rbac/rbac/manage.py migrate --noinput
+
+    # In Ephemeral, wait for Debezium connector to be streaming before seeds write to outbox
+    if [[ "${REPLICATION_TO_RELATION_ENABLED}" == "True" && "${EPH_ENV}" == "True" ]]; then
+        echo "Waiting for rbac-debezium connector to be RUNNING..."
+        MAX_WAIT=120
+        ELAPSED=0
+        # In ephemeral, the connect instance is the same as the namespace
+        KAFKA_CONNECT_URL="http://kessel-kafka-connect-connect-api:8083"
+        while [[ $ELAPSED -lt $MAX_WAIT ]]; do
+            STATUS=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status" 2>/dev/null \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['connector']['state'])" 2>/dev/null)
+            if [[ "$STATUS" == "RUNNING" ]]; then
+                # Also check task-0 is running
+                TASK_STATUS=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status" \
+                    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['state'])" 2>/dev/null)
+                if [[ "$TASK_STATUS" == "RUNNING" ]]; then
+                    echo "rbac-debezium connector and task are RUNNING."
+                    break
+                fi
+            fi
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+        done
+        if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+            echo "WARNING: Debezium not ready after ${MAX_WAIT}s. Seeds will run but outbox events may be lost."
+        fi
+    fi
+
     echo "Running seeds <-------"
     python /opt/rbac/rbac/manage.py seeds
 else
