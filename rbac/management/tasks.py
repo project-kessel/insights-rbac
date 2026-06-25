@@ -187,6 +187,17 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 
 
 @shared_task
+def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default_workspaces: bool):
+    """Celery task to replicate updated workspaces."""
+    from internal.migrations.replicate_workspaces import replicate_updated_workspaces
+    
+    return replicate_updated_workspaces(
+        since=datetime.datetime.fromisoformat(since),
+        exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
+    )
+
+
+@shared_task
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
     from api.models import Tenant
