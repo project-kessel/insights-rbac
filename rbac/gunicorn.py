@@ -28,3 +28,10 @@ def child_exit(server, worker):
     """Watches for workers to exit and marks them as dead in prometheus."""
     # See: https://prometheus.github.io/client_python/multiprocess/
     multiprocess.mark_process_dead(worker.pid)
+
+
+def worker_exit(server, worker):
+    """Clean up MCP resources when a Gunicorn worker exits."""
+    from management.mcp_views import mcp_shutdown
+
+    mcp_shutdown()

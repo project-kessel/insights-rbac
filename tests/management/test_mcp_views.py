@@ -16,11 +16,13 @@
 #
 """Test the MCP views via _private/_a2s/ path."""
 
+import concurrent.futures
 import inspect
 import json
+import threading
 import time
 from importlib import reload
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
@@ -35,7 +37,9 @@ from management.mcp_views import (
     _execute_with_timeout,
     _permission_matches,
     _sanitize_validation_error,
+    _shutdown_in_progress,
     _validate_tool_arguments,
+    mcp_shutdown,
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
 from management.workspace.model import Workspace
@@ -8237,3 +8241,88 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
         result = _validate_tool_arguments("hello", {"message": 999})
         self.assertIsNotNone(result)
         self.assertIn("string", result)
+
+
+class MCPHealthCheckTests(IdentityRequest):
+    """Test the MCP readiness probe endpoint at /_private/_a2s/mcp/health/."""
+
+    def setUp(self):
+        """Set up health check tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/health/"
+        self.client = APIClient()
+        _shutdown_in_progress.clear()
+
+    def tearDown(self):
+        """Ensure shutdown flag is cleared after each test."""
+        _shutdown_in_progress.clear()
+        super().tearDown()
+
+    def test_health_returns_ok(self):
+        """Positive: readiness endpoint returns 200 when not shutting down."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_health_returns_503_during_shutdown(self):
+        """Negative: readiness endpoint returns 503 when shutdown is in progress."""
+        _shutdown_in_progress.set()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "shutting_down"})
+
+    def test_health_no_auth_required(self):
+        """Positive: readiness endpoint does not require identity headers."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_health_post_allowed(self):
+        """Positive: readiness endpoint responds to POST as well (for flexible probes)."""
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+
+class MCPShutdownTests(IdentityRequest):
+    """Test the mcp_shutdown() function."""
+
+    def setUp(self):
+        """Set up shutdown tests."""
+        super().setUp()
+        _shutdown_in_progress.clear()
+
+    def tearDown(self):
+        """Ensure shutdown flag is cleared after each test."""
+        _shutdown_in_progress.clear()
+        super().tearDown()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._connection_pool")
+    def test_shutdown_sets_flag_and_cleans_up(self, mock_pool, mock_executor):
+        """Positive: mcp_shutdown sets the event flag and calls shutdown/disconnect."""
+        mcp_shutdown()
+
+        self.assertTrue(_shutdown_in_progress.is_set())
+        mock_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
+        mock_pool.disconnect.assert_called_once()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._connection_pool")
+    def test_shutdown_is_idempotent(self, mock_pool, mock_executor):
+        """Edge case: calling mcp_shutdown twice only executes cleanup once."""
+        mcp_shutdown()
+        mcp_shutdown()
+
+        mock_executor.shutdown.assert_called_once()
+        mock_pool.disconnect.assert_called_once()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._connection_pool")
+    def test_shutdown_survives_redis_disconnect_error(self, mock_pool, mock_executor):
+        """Edge case: Redis disconnect failure does not prevent shutdown."""
+        mock_pool.disconnect.side_effect = ConnectionError("pool gone")
+
+        mcp_shutdown()
+
+        self.assertTrue(_shutdown_in_progress.is_set())
+        mock_executor.shutdown.assert_called_once()

@@ -17,8 +17,9 @@
 """URL patterns for the MCP (Model Context Protocol) endpoint."""
 
 from django.urls import path
-from management.mcp_views import MCPView
+from management.mcp_views import MCPView, mcp_health
 
 urlpatterns = [
     path("mcp/", MCPView.as_view(), name="mcp"),
+    path("mcp/health/", mcp_health, name="mcp-health"),
 ]

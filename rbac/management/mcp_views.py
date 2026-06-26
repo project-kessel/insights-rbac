@@ -18,12 +18,14 @@
 """MCP endpoint for RBAC using Anthropic MCP Python SDK for tool registration and schema generation."""
 
 import asyncio
+import atexit
 import concurrent.futures
 import hashlib
 import inspect
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -5785,6 +5787,37 @@ _MCP_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="mcp-tool",
 )
 
+_shutdown_in_progress = threading.Event()
+
+
+def mcp_shutdown() -> None:
+    """Gracefully shut down MCP resources.
+
+    Idempotent — safe to call multiple times (atexit + Gunicorn worker_exit).
+    """
+    if _shutdown_in_progress.is_set():
+        return
+    _shutdown_in_progress.set()
+
+    shutdown_timeout = settings.MCP_SHUTDOWN_TIMEOUT_SECONDS
+    logger.info("mcp: shutting down ThreadPoolExecutor (timeout=%ss)...", shutdown_timeout)
+    t = threading.Thread(target=_MCP_TOOL_EXECUTOR.shutdown, kwargs={"wait": True, "cancel_futures": True})
+    t.start()
+    t.join(timeout=shutdown_timeout)
+    if t.is_alive():
+        logger.warning("mcp: ThreadPoolExecutor shutdown timed out after %ss", shutdown_timeout)
+
+    try:
+        _connection_pool.disconnect()
+    except Exception:
+        logger.debug("mcp: Redis connection pool disconnect failed (non-fatal)", exc_info=True)
+
+    logger.info("mcp: shutdown complete")
+    logging.shutdown()
+
+
+atexit.register(mcp_shutdown)
+
 
 def _execute_with_timeout(fn: Callable[..., Any], timeout: int, *args: Any, **kwargs: Any) -> Any:
     """Execute a tool function with a timeout.
@@ -6030,3 +6063,19 @@ def _success_response(request_id: Any, result: dict[str, Any]) -> JsonResponse:
 def _error_response(request_id: Any, code: int, message: str) -> JsonResponse:
     """Create a JSON-RPC error response."""
     return JsonResponse({"jsonrpc": "2.0", "error": {"code": code, "message": message}, "id": request_id})
+
+
+# --- Health check endpoint (unauthenticated, for Kubernetes probes) ---
+
+
+@csrf_exempt
+def mcp_health(request: HttpRequest) -> JsonResponse:
+    """Readiness probe for the MCP subsystem — no auth required.
+
+    Returns 200 while the subsystem is accepting requests and 503 once
+    shutdown has begun, so Kubernetes removes the pod from Service
+    endpoints and lets in-flight requests drain.
+    """
+    if _shutdown_in_progress.is_set():
+        return JsonResponse({"status": "shutting_down"}, status=503)
+    return JsonResponse({"status": "ok"})
