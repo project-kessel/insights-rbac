@@ -16,7 +16,7 @@
 #
 """Defines the Role Access Permissions class."""
 
-from management.permissions.utils import is_scope_principal
+from management.permissions.utils import check_v2_kessel_access, is_scope_principal
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
@@ -40,6 +40,7 @@ class RoleAccessPermission(permissions.BasePermission):
             role_read = request.user.access.get("role", {}).get("read", [])
             if role_read:
                 return True
+            return check_v2_kessel_access(request)
         else:
             role_write = request.user.access.get("role", {}).get("write", [])
             if role_write:

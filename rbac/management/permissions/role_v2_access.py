@@ -19,6 +19,7 @@
 
 import logging
 
+from management.permissions.utils import KESSEL_READ_RELATION
 from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
 )
@@ -40,7 +41,7 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
     """
 
     RESOURCE_TYPE = "tenant"
-    ROLES_READ_RELATION = "rbac_roles_read"
+    ROLES_READ_RELATION = KESSEL_READ_RELATION
     ROLES_WRITE_RELATION = "rbac_roles_write"
     WRITE_ACTIONS = {"create", "update", "bulk_destroy"}
 
