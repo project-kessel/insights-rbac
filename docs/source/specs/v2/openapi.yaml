@@ -6,7 +6,145 @@ tags:
   - name: Workspaces
   - name: Role Bindings
   - name: Roles
+  - name: Permissions
 paths:
+  /permissions/:
+    get:
+      operationId: Permissions_list
+      summary: By default, responses are sorted in ascending order by permission application.
+      description: List the permissions for a tenant
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Limit'
+            default: 10
+          explode: false
+        - name: offset
+          in: query
+          required: false
+          description: Offset for offset-based pagination.
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Offset'
+            default: 0
+          explode: false
+        - name: application
+          in: query
+          required: false
+          description: Filter by application name. Exact match by default. You may also use a comma-separated list to match on multiple applications.
+          schema:
+            type: string
+          explode: false
+        - name: resource_type
+          in: query
+          required: false
+          description: Filter permissions by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns permissions from all types. You may also use a comma-separated list to match on multiple resource_types.
+          schema:
+            type: string
+          explode: false
+        - name: operation
+          in: query
+          required: false
+          description: Filter by operation (e.g. 'read', 'create', 'delete', 'update'). You may also use a comma-separated list to match on multiple operation types.
+          schema:
+            type: string
+          explode: false
+        - name: fields
+          in: query
+          required: false
+          description: Control which fields are included in the response.
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: application,resource_type,operation
+          explode: false
+        - name: order_by
+          in: query
+          required: false
+          description: "Sort by specified field(s), prefix with '-' for descending order. Allowed fields: application, resource_type, operation."
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/OrderBy'
+            default: application
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Permissions.PermissionListResponse'
+              example:
+                meta:
+                  count: 100
+                  limit: 10
+                  offset: 0
+                links:
+                  first: /api/rbac/v2/permissions/?limit=10&offset=0
+                  next: /api/rbac/v2/permissions/?limit=10&offset=10
+                  previous: null
+                  last: /api/rbac/v2/permissions/?limit=10&offset=90
+                data:
+                  - application: rbac
+                    resource_type: workspace
+                    operation: read
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 401
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    $ref: '#/components/schemas/Problems.ProblemType'
+                  status:
+                    type: number
+                    enum:
+                      - 500
+                  title:
+                    type: string
+                  detail:
+                    type: string
+                  instance:
+                    type: string
+                    format: uri
+      tags:
+        - Permissions
   /role-bindings/:
     get:
       operationId: RoleBindings_list
@@ -2105,6 +2243,54 @@ components:
         application: rbac
         resource_type: workspace
         operation: read
+    Permissions.Pagination:
+      type: object
+      required:
+        - meta
+        - links
+      properties:
+        meta:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
+        links:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
+    Permissions.PermissionListResponse:
+      type: object
+      required:
+        - meta
+        - links
+        - data
+      properties:
+        meta:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
+        links:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+          description: List of permissions
+      example:
+        meta:
+          count: 100
+          limit: 10
+          offset: 0
+        links:
+          first: /api/rbac/v2/permissions/?limit=10&offset=0
+          next: /api/rbac/v2/permissions/?limit=10&offset=10
+          previous: null
+          last: /api/rbac/v2/permissions/?limit=10&offset=90
+        data:
+          - application: rbac
+            resource_type: workspace
+            operation: read
     Problems.Problem400:
       type: object
       required:
