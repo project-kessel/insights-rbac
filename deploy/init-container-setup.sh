@@ -21,13 +21,11 @@ then
         # In ephemeral, the connect instance is the same as the namespace
         KAFKA_CONNECT_URL="http://kessel-kafka-connect-connect-api:8083"
         while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-            STATUS=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status" 2>/dev/null \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['connector']['state'])" 2>/dev/null)
-            if [[ "$STATUS" == "RUNNING" ]]; then
-                # Also check task-0 is running
-                TASK_STATUS=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status" \
-                    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['state'])" 2>/dev/null)
-                if [[ "$TASK_STATUS" == "RUNNING" ]]; then
+            RESPONSE=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status") || true
+            if [[ -n "$RESPONSE" ]]; then
+                STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['connector']['state'])")
+                TASK_STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['state'] if d.get('tasks') else '')")
+                if [[ "$STATUS" == "RUNNING" && "$TASK_STATUS" == "RUNNING" ]]; then
                     echo "rbac-debezium connector and task are RUNNING."
                     break
                 fi
