@@ -134,6 +134,12 @@ def delete_tenant_with_resources(tenant):
     Args:
         tenant: Tenant object to delete
     """
+    # Invalidate workspace cache before deleting
+    if tenant.org_id:
+        from management.cache import WORKSPACE_CACHE
+
+        WORKSPACE_CACHE.delete_workspaces_for_tenant(tenant.org_id)
+
     # Delete workspaces first (handles children-before-parents automatically)
     workspaces = Workspace.objects.filter(tenant=tenant).order_by("id")
     # Delete workspaces without children first (due to PROTECT on parent)
