@@ -39,7 +39,12 @@ then
     fi
 
     echo "Running seeds <-------"
-    python /opt/rbac/rbac/manage.py seeds
+    # TODO: Remove this once we have the above waiting deployed to prod
+    if [[ "${EPH_ENV}" == "True" ]]; then
+        python /opt/rbac/rbac/manage.py seeds --force-create-relationships
+    else
+        python /opt/rbac/rbac/manage.py seeds
+    fi
 else
     echo "Migrations should not be run <----"
 fi
