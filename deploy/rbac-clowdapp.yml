@@ -673,6 +673,8 @@ objects:
             value: ${IT_BYPASS_PERMISSIONS_MODIFY_SERVICE_ACCOUNTS}
           - name: IT_BYPASS_TOKEN_VALIDATION
             value: ${IT_BYPASS_TOKEN_VALIDATION}
+          - name: IT_BYPASS_SYSTEM_USER_ID
+            value: ${IT_BYPASS_SYSTEM_USER_ID}
           - name: IT_SERVICE_BASE_PATH
             value: ${IT_SERVICE_BASE_PATH}
           - name: IT_SERVICE_HOST
@@ -1423,7 +1425,7 @@ objects:
     name: system-users
   data:
     system-users.json: >-
-      ewogICAgImluc2VydF9zdWJfaGVyZSI6IHsKICAgICAgICAiYWRtaW4iOiB0cnVlLAogICAgICAgICJpc19zZXJ2aWNlX2FjY291bnQiOiB0cnVlLAogICAgICAgICJhbGxvd19hbnlfb3JnIjogdHJ1ZQogICAgfQp9Cg==
+      ewogICAgIm1vY2tlZC11c2VyLWlkLWJlY2F1c2UtdG9rZW4tdmFsaWRhdGlvbi1pcy1kaXNhYmxlZCI6IHsKICAgICAgICAiYWRtaW4iOiB0cnVlLAogICAgICAgICJpc19zZXJ2aWNlX2FjY291bnQiOiB0cnVlLAogICAgICAgICJhbGxvd19hbnlfb3JnIjogdHJ1ZQogICAgfQp9Cg==
   type: Opaque
 - apiVersion: v1
   kind: Secret
@@ -1754,6 +1756,11 @@ parameters:
 - name: IT_BYPASS_TOKEN_VALIDATION
   description: Bypass validating the token that the user must provide in the Authorization header for making IT calls?
   value: 'False'
+- name: IT_BYPASS_SYSTEM_USER_ID
+  description: >
+    System user ID used when IT_BYPASS_TOKEN_VALIDATION is enabled.
+    Must match a key in the SYSTEM_USERS secret for s2s auth to succeed.
+  value: 'mocked-user-id-because-token-validation-is-disabled'
 - name: IT_SERVICE_BASE_PATH
   description: Path of the IT service's API
   value: '/auth/realms/redhat-external/apis'

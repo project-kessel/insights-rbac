@@ -223,7 +223,7 @@ class ITSSOTokenValidator(TokenValidator):
         """
         if settings.IT_BYPASS_TOKEN_VALIDATION:
             user = User()
-            user.user_id = "mocked-user-id-because-token-validation-is-disabled"
+            user.user_id = settings.IT_BYPASS_SYSTEM_USER_ID
             user.username = "mocked-username-because-token-validation-is-disabled"
             user.org_id = "mocked-org-id-because-token-validation-is-disabled"
             user.account = "mocked-account-number-because-token-validation-is-disabled"
