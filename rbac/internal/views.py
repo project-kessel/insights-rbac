@@ -501,12 +501,12 @@ def user_lookup(request):
 
     result["groups"] = user_groups
 
-    _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", tenant=user_tenant)
+    _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", principal=principal)
 
     return HttpResponse(json.dumps(result, cls=DjangoJSONEncoder), content_type="application/json", status=200)
 
 
-def _log_user_lookup(caller, description, tenant=None):
+def _log_user_lookup(caller, description, principal=None):
     """Create an audit log entry for a user lookup request."""
     try:
         AuditLog.objects.create(
@@ -514,7 +514,7 @@ def _log_user_lookup(caller, description, tenant=None):
             description=description[:255],
             resource_type=AuditLog.USER,
             action=AuditLog.READ,
-            tenant=tenant,
+            resource_uuid=getattr(principal, "uuid", None),
         )
     except Exception:
         logger.exception("failed to create audit log for user lookup")

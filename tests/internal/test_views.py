@@ -2766,7 +2766,7 @@ class InternalViewsetUserLookupTests(BaseInternalViewsetTests):
     def test_user_lookup_creates_audit_log_on_success(self, _):
         username = "test_user"
         tenant = Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
-        Principal.objects.create(username=username, tenant=tenant)
+        principal = Principal.objects.create(username=username, tenant=tenant)
 
         self.client.get(f"{self.API_PATH}?username={username}", **self.request.META)
 
@@ -2776,7 +2776,8 @@ class InternalViewsetUserLookupTests(BaseInternalViewsetTests):
         self.assertTrue(log.principal_username)
         self.assertIn("found 'test_user'", log.description)
         self.assertIn("username='test_user'", log.description)
-        self.assertEqual(log.tenant, tenant)
+        self.assertIsNone(log.tenant)
+        self.assertEqual(log.resource_uuid, principal.uuid)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
