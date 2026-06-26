@@ -374,9 +374,22 @@ def _call_view_json(
     if response.status_code == 204:
         return json.dumps({"status": "no_content"})
     content = response.content.decode()
-    if response.status_code >= 400:
-        return json.dumps({"error": f"HTTP {response.status_code}", "detail": content})
-    return content
+    if response.status_code >= 500:
+        logger.warning("mcp: _call_view_json got HTTP %d from %s: %s", response.status_code, path, content[:500])
+        detail = "Internal server error"
+    elif response.status_code >= 400:
+        try:
+            parsed = json.loads(content)
+            detail = parsed.get("detail", content) if isinstance(parsed, dict) else content
+        except ValueError:
+            detail = f"HTTP {response.status_code}"
+        if not isinstance(detail, str):
+            detail = json.dumps(detail)
+        if len(detail) > 512:
+            detail = detail[:512]
+    else:
+        return content
+    return json.dumps({"error": f"HTTP {response.status_code}", "detail": detail})
 
 
 def _call_view_write(
@@ -3090,9 +3103,16 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
     try:
         raw = _call_view(request, _access_view, path, query_params)
     except Exception as e:
+        logger.warning(
+            "mcp: check_user_permission failed for user=%s permission=%s application=%s: %s",
+            username,
+            permission,
+            application,
+            e,
+        )
         return json.dumps(
             {
-                "error": f"Failed to check permissions: {e}",
+                "error": "Failed to check permissions",
                 "hint": "Requires org admin or rbac:principal:read permission to check another user.",
             }
         )
@@ -3100,10 +3120,13 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
     data = json.loads(raw)
 
     if "detail" in data:
+        detail = data["detail"]
+        if not isinstance(detail, str) or len(detail) > 256:
+            detail = "Access denied or unexpected error"
         return json.dumps(
             {
                 "allowed": False,
-                "error": data["detail"],
+                "error": detail,
                 "hint": "Requires org admin or rbac:principal:read permission to check another user.",
             }
         )
@@ -4020,7 +4043,7 @@ def investigate_user_access(
             data = json.loads(raw)
             effective_access = data.get("data", [])
         except Exception as e:
-            effective_access_error = str(e)
+            effective_access_error = "Failed to retrieve effective access"
             logger.warning("mcp: failed to get effective access for user=%s app=%s: %s", username, application, e)
 
     # Step 5: Analyze the expected permission
@@ -6004,7 +6027,8 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
     except TypeError as exc:
         if track:
             _record_metric(tool_name, "invalid_params", time.monotonic() - start)
-        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {exc}")
+        logger.warning("mcp: tools/call tool='%s' TypeError: %s", tool_name, exc)
+        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}'")
     except Exception:
         if track:
             _record_metric(tool_name, "error", time.monotonic() - start)
