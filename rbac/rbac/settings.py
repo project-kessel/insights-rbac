@@ -298,16 +298,19 @@ LOGGING = {
         "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter", "filters": ["env_name"]},
     },
     "loggers": {
-        "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL},
+        "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
         "django.server": {"handlers": DEBUG_LOG_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
         "django.request": {"handlers": DEBUG_LOG_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
-        "api": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "internal": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "rbac": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "management": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "migration_tool": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "feature_flags": {"handlers": DEBUG_LOG_HANDLERS, "level": "DEBUG"},
+        "api": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "internal": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "rbac": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "management": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "migration_tool": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "feature_flags": {"handlers": DEBUG_LOG_HANDLERS, "level": "DEBUG", "propagate": False},
     },
+    # Attach default handlers to root so that loggers without explicit
+    # handlers still have a fallback output instead of silently dropping records.
+    "root": {"handlers": LOGGING_HANDLERS, "level": "WARNING"},
 }
 
 if CW_AWS_ACCESS_KEY_ID:
