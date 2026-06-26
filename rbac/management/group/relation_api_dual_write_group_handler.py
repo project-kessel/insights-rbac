@@ -182,13 +182,12 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
             if to_add:
                 self.relations_to_add.append(to_add)
 
-        # Go through current roles
-        # For each binding
-        # Remove all of this subject
-        # Replicate this removal
-        # Add back subject
-        # Replicate this addition
-        for role in roles:
+        # Go through current roles, and, for each binding:
+        # * Remove all of this subject
+        # * Replicate this removal
+        # * Add back subject
+        # * Replicate this addition
+        for role in self._with_system_roles_for_share(roles):
             # When a role has mixed scopes including TENANT, create bindings at each scope
             # so that workspace-scoped permissions are not lost.
             binding_scopes = self._resource_service.binding_scopes_for_role(role)
@@ -249,6 +248,9 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
         # so we always have to check at least the default workspace and the correct resource.
         #
         # In order to handle all these cases, we always attempt to remove the role from all scopes.
+        #
+        # As a consequence of this, we also do not have to lock any system roles here: we don't actually look at
+        # the role's permissions in determining where to remove it.
         for scope in Scope:
             self._update_mapping_for_role(
                 role,

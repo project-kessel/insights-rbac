@@ -105,7 +105,20 @@ def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_ser
         platform_default=data.get("platform_default", False),
         admin_default=data.get("admin_default", False),
     )
-    role, created = Role.objects.get_or_create(name=name, defaults=defaults, tenant=public_tenant)
+
+    # Taking a lock on the role prevents it from being assigned during seeding (since the dual-write handlers lock it
+    # FOR SHARE). Doing this ensures that, once seeding the role has finished, all further assignments will see the
+    # new permissions (and thus use them to compute the relevant scopes).
+    #
+    # This doesn't technically ensure that other processes will use the new scopes in all situations; if the scopes have
+    # changed due to a change in the *settings*, rather than the permissions, then a process with the old settings
+    # will continue using the old scope. We don't have a good way to fix that here. (The obvious ideas for how to fix
+    # it would be using scopes stored in the database during assignment and storing the latest scope settings
+    # themselves in the database. Alternatively, we could just be sure to manually migrate the relevant roles every
+    # time the settings change.)
+    #
+    # TODO: fix the above
+    role, created = Role.objects.select_for_update().get_or_create(name=name, defaults=defaults, tenant=public_tenant)
     updated = False
 
     dual_write_handler = SeedingRelationApiDualWriteHandler(role)
