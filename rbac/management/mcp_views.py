@@ -58,6 +58,7 @@ from management.role.view import RoleViewSet
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.role_binding.view import RoleBindingViewSet
 from management.tenant_mapping.v2_activation import is_v2_write_activated
+from management.utils import is_valid_uuid
 from management.workspace.view import WorkspaceViewSet
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram
@@ -5613,6 +5614,175 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
     return None
 
 
+# --- Semantic write payload validation ---
+
+_MAX_PERMISSIONS_PER_ROLE = 100
+
+
+def _validate_permission_format(permission: str) -> str | None:
+    """Validate a V1 permission string matches 'application:resource_type:verb' format."""
+    parts = permission.split(":")
+    if len(parts) != 3:
+        return (
+            f"Permission '{permission}' is malformed. "
+            "Expected format 'application:resource_type:verb' (e.g. 'cost-management:cost_model:read')."
+        )
+    for i, label in enumerate(("application", "resource_type", "verb")):
+        part = parts[i]
+        if not part or part != part.strip():
+            return (
+                f"Permission '{permission}' has an empty or whitespace-padded {label}. "
+                "Each segment must be a non-empty string with no leading/trailing spaces."
+            )
+    return None
+
+
+def _validate_v2_permission(perm: dict[str, Any], index: int) -> str | None:
+    """Validate a V2 permission dict has non-empty application, resource_type, and operation."""
+    required_keys = ("application", "resource_type", "operation")
+    for key in required_keys:
+        value = perm.get(key)
+        if not value or not isinstance(value, str) or not value.strip():
+            return (
+                f"permissions[{index}] is missing or has empty '{key}'. "
+                f"Each permission needs: {', '.join(required_keys)}."
+            )
+    return None
+
+
+def _validate_uuid_field(value: str, field_name: str) -> str | None:
+    """Validate that a string is a valid UUID format."""
+    if not value:
+        return None
+    if not is_valid_uuid(value):
+        return f"'{field_name}' value '{value}' is not a valid UUID."
+    return None
+
+
+def _validate_write_payload(tool_name: str, arguments: dict[str, Any], request: HttpRequest) -> str | None:
+    """Validate semantic constraints on write tool arguments.
+
+    Runs after JSON schema validation to catch domain-specific issues:
+    - Permission strings match 'application:resource_type:verb' format
+    - UUID arguments are valid UUID format
+    - Permission counts don't exceed limits
+    """
+    if tool_name in ("create_role_v1", "update_role_v1"):
+        if tool_name == "update_role_v1":
+            error = _validate_uuid_field(arguments.get("role_uuid", ""), "role_uuid")
+            if error:
+                return error
+        access_list = arguments.get("access") or []
+        if len(access_list) > _MAX_PERMISSIONS_PER_ROLE:
+            return (
+                f"Role has {len(access_list)} permissions, which exceeds the maximum of "
+                f"{_MAX_PERMISSIONS_PER_ROLE}. Split into multiple roles for better manageability."
+            )
+        for i, entry in enumerate(access_list):
+            perm = entry.get("permission", "") if isinstance(entry, dict) else ""
+            error = _validate_permission_format(perm)
+            if error:
+                return f"access[{i}]: {error}"
+        return None
+
+    if tool_name in ("create_role", "update_role"):
+        if tool_name == "update_role":
+            error = _validate_uuid_field(arguments.get("role_uuid", ""), "role_uuid")
+            if error:
+                return error
+        perms = arguments.get("permissions") or []
+        if len(perms) > _MAX_PERMISSIONS_PER_ROLE:
+            return (
+                f"Role has {len(perms)} permissions, which exceeds the maximum of "
+                f"{_MAX_PERMISSIONS_PER_ROLE}. Split into multiple roles for better manageability."
+            )
+        for i, perm in enumerate(perms):
+            if not isinstance(perm, dict):
+                return f"permissions[{i}] must be an object with application, resource_type, operation."
+            error = _validate_v2_permission(perm, i)
+            if error:
+                return error
+        return None
+
+    if tool_name == "patch_role_v1":
+        return _validate_uuid_field(arguments.get("role_uuid", ""), "role_uuid")
+
+    if tool_name == "add_roles_to_group":
+        for i, role_id in enumerate(arguments.get("roles") or []):
+            error = _validate_uuid_field(role_id, f"roles[{i}]")
+            if error:
+                return error
+        return None
+
+    if tool_name == "create_role_bindings":
+        for i, binding in enumerate(arguments.get("bindings") or []):
+            if not isinstance(binding, dict):
+                continue
+            role_val = binding.get("role", "")
+            if isinstance(role_val, str) and role_val:
+                error = _validate_uuid_field(role_val, f"bindings[{i}].role")
+                if error:
+                    return error
+            resource = binding.get("resource") or {}
+            if isinstance(resource, dict):
+                res_id = resource.get("id", "")
+                if isinstance(res_id, str) and res_id:
+                    error = _validate_uuid_field(res_id, f"bindings[{i}].resource.id")
+                    if error:
+                        return error
+            subject = binding.get("subject") or {}
+            if isinstance(subject, dict):
+                sub_id = subject.get("id", "")
+                if isinstance(sub_id, str) and sub_id:
+                    error = _validate_uuid_field(sub_id, f"bindings[{i}].subject.id")
+                    if error:
+                        return error
+        return None
+
+    if tool_name == "delete_role_v1":
+        return _validate_uuid_field(arguments.get("role_uuid", ""), "role_uuid")
+
+    if tool_name == "bulk_delete_roles":
+        for i, role_id in enumerate(arguments.get("ids") or []):
+            error = _validate_uuid_field(role_id, f"ids[{i}]")
+            if error:
+                return error
+        return None
+
+    if tool_name in ("update_workspace", "move_workspace"):
+        error = _validate_uuid_field(arguments.get("workspace_id", ""), "workspace_id")
+        if error:
+            return error
+        parent = arguments.get("parent_id", "")
+        if parent:
+            error = _validate_uuid_field(parent, "parent_id")
+            if error:
+                return error
+        return None
+
+    if tool_name == "delete_workspace":
+        return _validate_uuid_field(arguments.get("workspace_uuid", ""), "workspace_uuid")
+
+    if tool_name == "update_role_binding":
+        error = _validate_uuid_field(arguments.get("resource_id", ""), "resource_id")
+        if error:
+            return error
+        error = _validate_uuid_field(arguments.get("subject_id", ""), "subject_id")
+        if error:
+            return error
+        for i, role in enumerate(arguments.get("roles") or []):
+            if isinstance(role, dict):
+                error = _validate_uuid_field(role.get("id", ""), f"roles[{i}].id")
+                if error:
+                    return error
+        return None
+
+    if tool_name in ("update_cross_account_request", "patch_cross_account_request"):
+        return _validate_uuid_field(arguments.get("request_id", ""), "request_id")
+
+    return None
+
+
 def _is_v2_available() -> bool:
     """Check whether V2 API routes are mounted."""
     return getattr(settings, "V2_APIS_ENABLED", False)
@@ -5941,6 +6111,12 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
     if validation_error:
         logger.warning("mcp: tools/call tool='%s' schema validation failed: %s", tool_name, validation_error)
         return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {validation_error}")
+
+    if config.write:
+        write_error = _validate_write_payload(tool_name, arguments, request)
+        if write_error:
+            logger.warning("mcp: tools/call tool='%s' write payload validation failed: %s", tool_name, write_error)
+            return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {write_error}")
 
     if config.write and _is_write_confirmation_enabled():
         if confirmation_token:
