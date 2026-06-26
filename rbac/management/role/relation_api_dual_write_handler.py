@@ -201,7 +201,7 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             v2_perm = v1_perm_to_v2_perm(v1_perm)
             v2_permissions.append(v2_perm)
 
-            # When deleting, generate relationships for all possible scopes
+        # When deleting, generate relationships for all possible scopes
         if list_all_possible_scopes_for_removal is True:
             for scope in Scope:
                 relations.extend(
@@ -217,6 +217,17 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
                         self.role, scope, apply_seeded_admin_scope_override=True
                     )
                 )
+
+        # Deduplicate child relations: the admin scope override can map multiple binding
+        # scopes to the same parent (e.g. ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE).
+        seen_child_keys = set()
+        deduplicated_relations = []
+        for rel in relations:
+            key = (str(rel.resource.id), rel.relation, str(rel.subject.subject.id))
+            if key not in seen_child_keys:
+                seen_child_keys.add(key)
+                deduplicated_relations.append(rel)
+        relations = deduplicated_relations
 
         for permission in v2_permissions:
             relations.append(
