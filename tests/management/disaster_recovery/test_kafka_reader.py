@@ -10,6 +10,7 @@ from management.disaster_recovery.kafka_reader import (
     ParsedReplicationEvent,
     _parse_debezium_payload,
     _parse_event,
+    read_events_by_offset,
     read_events_in_window,
 )
 
@@ -265,3 +266,145 @@ class ReadEventsInWindowTest(TestCase):
 
         events = read_events_in_window(1000, 2000)
         self.assertEqual(events, [])
+
+
+class ReadEventsByOffsetTest(TestCase):
+    @override_settings(KAFKA_ENABLED=False)
+    def test_kafka_disabled_raises(self):
+        with self.assertRaises(DisasterRecoveryError) as ctx:
+            read_events_by_offset(0)
+        self.assertIn("not enabled", str(ctx.exception))
+
+    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC=None)
+    def test_no_topic_raises(self):
+        with self.assertRaises(DisasterRecoveryError) as ctx:
+            read_events_by_offset(0)
+        self.assertIn("topic", str(ctx.exception))
+
+    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def test_negative_start_offset_raises(self):
+        with self.assertRaises(DisasterRecoveryError) as ctx:
+            read_events_by_offset(-1)
+        self.assertIn("non-negative", str(ctx.exception))
+
+    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def test_end_offset_not_greater_raises(self):
+        with self.assertRaises(DisasterRecoveryError) as ctx:
+            read_events_by_offset(100, end_offset=50)
+        self.assertIn("greater than", str(ctx.exception))
+
+    @override_settings(
+        KAFKA_ENABLED=True,
+        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+        KAFKA_SERVERS=["localhost:9092"],
+        KAFKA_AUTH={},
+        DR_KAFKA_CONSUMER_GROUP_ID="test-dr-group",
+        DR_MAX_EVENTS_PER_RECONCILE=100,
+    )
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_reads_events_within_offset_range(self, mock_consumer_cls):
+        consumer = MagicMock()
+        mock_consumer_cls.return_value = consumer
+
+        consumer.partitions_for_topic.return_value = {0}
+
+        from kafka import TopicPartition
+
+        tp = TopicPartition("test-topic", 0)
+        consumer.end_offsets.return_value = {tp: 1000}
+
+        rel = _make_relation_dict()
+        msg_in_range = _make_kafka_message(
+            _make_debezium_message(relations_to_add=[rel]),
+            offset=50,
+            partition=0,
+            timestamp=1500,
+        )
+        msg_past_range = _make_kafka_message(
+            _make_debezium_message(relations_to_add=[rel]),
+            offset=200,
+            partition=0,
+            timestamp=2500,
+        )
+
+        consumer.poll.side_effect = [
+            {tp: [msg_in_range, msg_past_range]},
+            {},
+            {},
+            {},
+        ]
+
+        events = read_events_by_offset(0, end_offset=100)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].offset, 50)
+        consumer.seek.assert_called_once_with(tp, 0)
+        consumer.close.assert_called_once()
+
+    @override_settings(
+        KAFKA_ENABLED=True,
+        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+        KAFKA_SERVERS=["localhost:9092"],
+        KAFKA_AUTH={},
+        DR_KAFKA_CONSUMER_GROUP_ID="test-dr-group",
+        DR_MAX_EVENTS_PER_RECONCILE=100,
+    )
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_no_partitions_offset_mode(self, mock_consumer_cls):
+        consumer = MagicMock()
+        mock_consumer_cls.return_value = consumer
+        consumer.partitions_for_topic.return_value = set()
+
+        events = read_events_by_offset(0)
+        self.assertEqual(events, [])
+
+    @override_settings(
+        KAFKA_ENABLED=True,
+        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+        KAFKA_SERVERS=["localhost:9092"],
+        KAFKA_AUTH={},
+        DR_KAFKA_CONSUMER_GROUP_ID="test-dr-group",
+        DR_MAX_EVENTS_PER_RECONCILE=100,
+    )
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_start_offset_past_end_of_partition(self, mock_consumer_cls):
+        consumer = MagicMock()
+        mock_consumer_cls.return_value = consumer
+        consumer.partitions_for_topic.return_value = {0}
+
+        from kafka import TopicPartition
+
+        tp = TopicPartition("test-topic", 0)
+        consumer.end_offsets.return_value = {tp: 50}
+
+        events = read_events_by_offset(100)
+        self.assertEqual(events, [])
+
+    @override_settings(
+        KAFKA_ENABLED=True,
+        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+        KAFKA_SERVERS=["localhost:9092"],
+        KAFKA_AUTH={},
+        DR_KAFKA_CONSUMER_GROUP_ID="test-dr-group",
+        DR_MAX_EVENTS_PER_RECONCILE=2,
+    )
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_max_events_cap_offset_mode(self, mock_consumer_cls):
+        consumer = MagicMock()
+        mock_consumer_cls.return_value = consumer
+        consumer.partitions_for_topic.return_value = {0}
+
+        from kafka import TopicPartition
+
+        tp = TopicPartition("test-topic", 0)
+        consumer.end_offsets.return_value = {tp: 1000}
+
+        rel = _make_relation_dict()
+        messages = [
+            _make_kafka_message(_make_debezium_message(relations_to_add=[rel]), offset=i, timestamp=1000 + i)
+            for i in range(5)
+        ]
+        consumer.poll.side_effect = [{tp: messages}, {}, {}, {}]
+
+        events = read_events_by_offset(0)
+        self.assertEqual(len(events), 2)

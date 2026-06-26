@@ -66,6 +66,10 @@
     {
       "name": "Migration",
       "description": "Operations about migrations."
+    },
+    {
+      "name": "Disaster Recovery",
+      "description": "Disaster recovery corrective operations."
     }
   ],
   "paths": {
@@ -4408,7 +4412,9 @@
                             "type": "string",
                             "format": "uuid"
                           },
-                          "example": ["a8d33564-628f-4eba-bd59-6a2948bfb31e"]
+                          "example": [
+                            "a8d33564-628f-4eba-bd59-6a2948bfb31e"
+                          ]
                         },
                         "relations_correct": {
                           "type": "boolean",
@@ -4424,7 +4430,9 @@
                     "target_org": "12345",
                     "user_id": "user123",
                     "status": "approved",
-                    "roles": ["b9e44675-739g-5fca-ce6a-7b3059cgc42f"],
+                    "roles": [
+                      "b9e44675-739g-5fca-ce6a-7b3059cgc42f"
+                    ],
                     "relations_correct": true
                   }
                 }
@@ -5437,6 +5445,94 @@
         }
       }
     },
+    "/_private/api/disaster_recovery/workspaces/": {
+      "post": {
+        "tags": [
+          "Disaster Recovery"
+        ],
+        "summary": "Trigger corrective workspace event generation",
+        "description": "Trigger corrective workspace event generation after a DB restore. Supports three mutually exclusive modes: timestamp, offset, or last-minutes.",
+        "operationId": "recoverWorkspaceEvents",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "restore_timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601 timestamp of the DB restore point. Mutually exclusive with start_offset and last_minutes."
+                  },
+                  "buffer_minutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 5,
+                    "description": "Minutes to extend the window before restore_timestamp. Only used with restore_timestamp."
+                  },
+                  "start_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Start Kafka offset (inclusive) on each partition. Mutually exclusive with restore_timestamp and last_minutes."
+                  },
+                  "end_offset": {
+                    "type": "integer",
+                    "description": "End Kafka offset (exclusive). Optional; if omitted reads to end of each partition. Only used with start_offset."
+                  },
+                  "last_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Process events from the last N minutes. Mutually exclusive with restore_timestamp and start_offset."
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, analyze but do not write corrective events."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Task enqueued successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "task_id": {
+                      "type": "string",
+                      "description": "Celery task ID."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "enqueued"
+                      ]
+                    },
+                    "dry_run": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters."
+          },
+          "403": {
+            "description": "DR recovery is disabled."
+          },
+          "405": {
+            "description": "Method not allowed."
+          }
+        }
+      }
+    },
     "/api/utils/kessel_parity_check/": {
       "post": {
         "tags": [
@@ -5515,6 +5611,91 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/_private/api/disaster_recovery/reconcile/": {
+      "post": {
+        "tags": [
+          "Disaster Recovery"
+        ],
+        "summary": "Trigger disaster recovery reconciliation for Kessel Relations",
+        "description": "Trigger disaster recovery reconciliation for Kessel Relations. Supports three mutually exclusive modes: timestamp, offset, or last-minutes.",
+        "operationId": "disasterRecoveryReconcile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "restore_timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601 timestamp of the DB restore point. Mutually exclusive with start_offset and last_minutes."
+                  },
+                  "buffer_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 300,
+                    "description": "Seconds to extend the window before restore_timestamp. Only used with restore_timestamp."
+                  },
+                  "start_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Start Kafka offset (inclusive) on each partition. Mutually exclusive with restore_timestamp and last_minutes."
+                  },
+                  "end_offset": {
+                    "type": "integer",
+                    "description": "End Kafka offset (exclusive). Optional; if omitted reads to end of each partition. Only used with start_offset."
+                  },
+                  "last_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Process events from the last N minutes. Mutually exclusive with restore_timestamp and start_offset."
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, analyze but do not write corrective events."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Task enqueued successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "task_id": {
+                      "type": "string",
+                      "description": "Celery task ID."
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "dry_run": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters."
+          },
+          "403": {
+            "description": "DR reconciliation is disabled."
+          },
+          "405": {
+            "description": "Method not allowed."
           }
         }
       }

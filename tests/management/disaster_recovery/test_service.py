@@ -165,11 +165,9 @@ class ReconcileServiceTest(TestCase):
         )
 
         self.assertIn("status", result)
-        self.assertIn("time_window", result)
-        self.assertIn("start_ms", result["time_window"])
-        self.assertIn("end_ms", result["time_window"])
-        self.assertEqual(result["time_window"]["start_ms"], 2000000 - 60000)
-        self.assertEqual(result["time_window"]["end_ms"], 2000000)
+        self.assertIn("window", result)
+        self.assertEqual(result["window"]["start_ms"], 2000000 - 60000)
+        self.assertEqual(result["window"]["end_ms"], 2000000)
         self.assertIn("events_read", result)
         self.assertIn("tuples_processed", result)
         self.assertIn("duration_seconds", result)
@@ -248,3 +246,76 @@ class ReconcileServiceTest(TestCase):
         self.assertEqual(action["source_partition"], 1)
         self.assertEqual(action["source_offset"], 42)
         self.assertIn(fake_id, action["tuple"])
+
+    @patch("management.disaster_recovery.service.read_events_by_offset")
+    def test_offset_mode_empty_window(self, mock_read):
+        mock_read.return_value = []
+        log = InMemoryLog()
+        replicator = OutboxReplicator(log=log)
+
+        result = reconcile(
+            start_offset=100,
+            end_offset=200,
+            replicator=replicator,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["events_read"], 0)
+        self.assertEqual(result["window"]["start_offset"], 100)
+        self.assertEqual(result["window"]["end_offset"], 200)
+        mock_read.assert_called_once_with(100, 200)
+
+    @patch("management.disaster_recovery.service.read_events_by_offset")
+    def test_offset_mode_corrective_delete(self, mock_read):
+        fake_id = str(uuid4())
+        t = _make_tuple(resource_id=fake_id)
+
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=150,
+                partition=0,
+                timestamp_ms=5000,
+                event_type="create_workspace",
+                relations_to_add=[t],
+                relations_to_remove=[],
+            )
+        ]
+
+        log = InMemoryLog()
+        replicator = OutboxReplicator(log=log)
+
+        result = reconcile(
+            start_offset=100,
+            end_offset=200,
+            replicator=replicator,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["corrective_removes"], 1)
+        self.assertEqual(result["window"]["start_offset"], 100)
+
+    @patch("management.disaster_recovery.service.read_events_by_offset")
+    def test_offset_mode_no_end_offset(self, mock_read):
+        mock_read.return_value = []
+        log = InMemoryLog()
+        replicator = OutboxReplicator(log=log)
+
+        result = reconcile(
+            start_offset=50,
+            replicator=replicator,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["window"]["start_offset"], 50)
+        self.assertIsNone(result["window"]["end_offset"])
+        mock_read.assert_called_once_with(50, None)
+
+    def test_neither_timestamp_nor_offset_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            reconcile()
+        self.assertIn("Either restore_timestamp_ms or start_offset", str(ctx.exception))
+
+    def test_both_timestamp_and_offset_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            reconcile(restore_timestamp_ms=1000000, start_offset=100)
+        self.assertIn("Cannot specify both", str(ctx.exception))

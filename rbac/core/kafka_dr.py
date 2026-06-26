@@ -189,3 +189,114 @@ def read_events_by_timestamp(
         consumer.close()
 
     return events
+
+
+def read_events_by_offset(
+    topic: str,
+    start_offset: int,
+    end_offset: int | None = None,
+    event_filter: Callable[[dict[str, Any]], bool] | None = None,
+) -> list[KafkaEvent]:
+    """Read Kafka events from a topic within an offset range.
+
+    Args:
+        topic: The Kafka topic to read from.
+        start_offset: Start offset (inclusive) to seek to on each partition.
+        end_offset: End offset (exclusive). If None, reads to the end of each partition.
+        event_filter: Optional callable to filter events.
+
+    Returns:
+        List of KafkaEvent objects within the offset range, ordered by partition and offset.
+    """
+    if start_offset < 0:
+        raise ValueError(f"start_offset must be non-negative, got {start_offset}")
+    if end_offset is not None and end_offset <= start_offset:
+        raise ValueError(f"end_offset ({end_offset}) must be greater than start_offset ({start_offset})")
+
+    consumer = _create_consumer()
+    events: list[KafkaEvent] = []
+
+    try:
+        partitions = consumer.partitions_for_topic(topic)
+        if not partitions:
+            logger.warning("No partitions found for topic %s", topic)
+            return events
+
+        topic_partitions = [TopicPartition(topic, p) for p in partitions]
+        consumer.assign(topic_partitions)
+
+        end_offsets_map = consumer.end_offsets(topic_partitions)
+
+        active_partitions: list[TopicPartition] = []
+        for tp in topic_partitions:
+            partition_end = end_offsets_map.get(tp, 0)
+            if start_offset >= partition_end:
+                consumer.pause([tp])
+                continue
+            consumer.seek(tp, start_offset)
+            active_partitions.append(tp)
+
+        if not active_partitions:
+            logger.info("No partitions have messages at or after offset %d for topic %s", start_offset, topic)
+            return events
+
+        finished_partitions: set[TopicPartition] = set()
+
+        for message in consumer:
+            tp = TopicPartition(message.topic, message.partition)
+
+            if tp in finished_partitions:
+                continue
+
+            if end_offset is not None and message.offset >= end_offset:
+                finished_partitions.add(tp)
+                consumer.pause([tp])
+                if len(finished_partitions) == len(active_partitions):
+                    break
+                continue
+
+            try:
+                value = message.value
+                if not isinstance(value, dict):
+                    continue
+
+                if event_filter and not event_filter(value):
+                    continue
+
+                events.append(
+                    KafkaEvent(
+                        topic=message.topic,
+                        partition=message.partition,
+                        offset=message.offset,
+                        timestamp_ms=message.timestamp,
+                        value=value,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "Error processing Kafka message at offset %d partition %d", message.offset, message.partition
+                )
+
+        partition_stats: dict[int, list[int]] = {}
+        for ev in events:
+            partition_stats.setdefault(ev.partition, []).append(ev.offset)
+        for part, offsets in sorted(partition_stats.items()):
+            logger.info(
+                "Partition %d: %d events, offsets [%d, %d]",
+                part,
+                len(offsets),
+                min(offsets),
+                max(offsets),
+            )
+        if not events:
+            logger.info(
+                "No events matched in topic %s for offset range [%d, %s)",
+                topic,
+                start_offset,
+                end_offset if end_offset is not None else "END",
+            )
+
+    finally:
+        consumer.close()
+
+    return events

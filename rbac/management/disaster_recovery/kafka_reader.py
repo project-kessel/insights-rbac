@@ -218,3 +218,144 @@ def read_events_in_window(
         consumer.close()
 
     return events
+
+
+def read_events_by_offset(
+    start_offset: int,
+    end_offset: int | None = None,
+    topic: str | None = None,
+) -> list[ParsedReplicationEvent]:
+    """Read replication events from Kafka within an offset range.
+
+    Creates a temporary consumer with a DR-specific consumer group,
+    seeks to start_offset on each partition, and reads messages until
+    end_offset or max events cap.
+
+    Args:
+        start_offset: Start offset (inclusive) to seek to on each partition.
+        end_offset: End offset (exclusive). If None, reads to end of each partition.
+        topic: Kafka topic override; defaults to RBAC_KAFKA_CONSUMER_TOPIC.
+
+    Returns:
+        List of ParsedReplicationEvent objects within the offset range.
+    """
+    if not getattr(settings, "KAFKA_ENABLED", False):
+        raise DisasterRecoveryError("Kafka is not enabled (KAFKA_ENABLED=False)")
+
+    topic = topic or getattr(settings, "RBAC_KAFKA_CONSUMER_TOPIC", None)
+    if not topic:
+        raise DisasterRecoveryError("No Kafka topic configured (RBAC_KAFKA_CONSUMER_TOPIC)")
+
+    if start_offset < 0:
+        raise DisasterRecoveryError(f"start_offset must be non-negative, got {start_offset}")
+    if end_offset is not None and end_offset <= start_offset:
+        raise DisasterRecoveryError(f"end_offset ({end_offset}) must be greater than start_offset ({start_offset})")
+
+    max_events = getattr(settings, "DR_MAX_EVENTS_PER_RECONCILE", 10000)
+    group_id = getattr(settings, "DR_KAFKA_CONSUMER_GROUP_ID", "rbac-dr-consumer-group")
+
+    consumer_kwargs = {
+        "bootstrap_servers": settings.KAFKA_SERVERS,
+        "group_id": group_id,
+        "enable_auto_commit": False,
+        "auto_offset_reset": "earliest",
+        "consumer_timeout_ms": 10000,
+        "value_deserializer": None,
+    }
+
+    kafka_auth = getattr(settings, "KAFKA_AUTH", {})
+    if kafka_auth:
+        for key in ("sasl_plain_username", "sasl_plain_password", "sasl_mechanism", "security_protocol", "ssl_cafile"):
+            if key in kafka_auth:
+                consumer_kwargs[key] = kafka_auth[key]
+
+    consumer = KafkaConsumer(**consumer_kwargs)
+    events: list[ParsedReplicationEvent] = []
+
+    try:
+        partitions = consumer.partitions_for_topic(topic)
+        if not partitions:
+            logger.warning("No partitions found for topic '%s'", topic)
+            return events
+
+        topic_partitions = [TopicPartition(topic, p) for p in partitions]
+        consumer.assign(topic_partitions)
+
+        end_offsets_map = consumer.end_offsets(topic_partitions)
+
+        active_partitions: list[TopicPartition] = []
+        for tp in topic_partitions:
+            partition_end = end_offsets_map.get(tp, 0)
+            if start_offset >= partition_end:
+                consumer.pause([tp])
+                continue
+            consumer.seek(tp, start_offset)
+            active_partitions.append(tp)
+
+        if not active_partitions:
+            logger.info("No partitions have messages at or after offset %d for topic '%s'", start_offset, topic)
+            return events
+
+        poll_timeout_ms = 5000
+        empty_polls = 0
+        max_empty_polls = 3
+        finished_partitions: set[TopicPartition] = set()
+
+        while len(events) < max_events and len(finished_partitions) < len(active_partitions):
+            records = consumer.poll(timeout_ms=poll_timeout_ms)
+
+            if not records:
+                empty_polls += 1
+                if empty_polls >= max_empty_polls:
+                    break
+                continue
+
+            empty_polls = 0
+
+            for tp, messages in records.items():
+                if tp in finished_partitions:
+                    continue
+
+                for message in messages:
+                    if end_offset is not None and message.offset >= end_offset:
+                        finished_partitions.add(tp)
+                        consumer.pause([tp])
+                        break
+
+                    payload = _parse_debezium_payload(message.value)
+                    if payload is None:
+                        continue
+
+                    event = _parse_event(payload, message.offset, message.partition, message.timestamp)
+                    if event.relations_to_add or event.relations_to_remove:
+                        events.append(event)
+
+                    if len(events) >= max_events:
+                        break
+
+                if len(events) >= max_events:
+                    break
+
+        partition_stats: dict[int, list[int]] = {}
+        for ev in events:
+            partition_stats.setdefault(ev.partition, []).append(ev.offset)
+        for part, offsets_list in sorted(partition_stats.items()):
+            logger.info(
+                "DR Kafka reader (offset): partition %d: %d events, offsets [%d, %d]",
+                part,
+                len(offsets_list),
+                min(offsets_list),
+                max(offsets_list),
+            )
+
+        logger.info(
+            "DR Kafka reader: read %d events from topic '%s' in offset range [%d, %s)",
+            len(events),
+            topic,
+            start_offset,
+            end_offset if end_offset is not None else "END",
+        )
+    finally:
+        consumer.close()
+
+    return events
