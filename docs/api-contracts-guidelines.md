@@ -98,7 +98,9 @@ v2 endpoints support a `fields` query parameter for response field masking. The 
 - Subclass per endpoint (e.g., `RoleBindingFieldSelection`, `RoleFieldSelection`).
 - Syntax: `subject(group.name,id),role(name),last_modified`.
 
-For roles, field selection uses simple set-based masking (pop fields from `self.fields` in `__init__`). For role bindings, the `RoleBindingFieldMaskingMixin` provides shared `_build_subject_data`, `_build_role_data`, `_build_resource_data` helpers.
+For roles, field selection uses simple set-based masking (pop fields from `self.fields` in `__init__`). For role bindings, the module-level `_build_subject_response` helper and `RoleBindingFieldMaskingMixin._build_role_data` / `_build_resource_data` methods handle masking.
+
+**Minimum response invariant**: Every entity sub-object (`subject`, `role`, `resource`, `sources`) always includes `id` regardless of `fields` selection. Subject additionally always includes `type` (OpenAPI discriminator for UserSubject/GroupSubject). This matches the API contract -- `fields` controls *extra* detail, not the identity keys. See RHCLOUD-48118 for the bug where subject violated this invariant.
 
 When adding fields parameters: subclass `FieldSelection`, define valid fields, add a `validate_fields` method to the input serializer.
 
@@ -156,6 +158,8 @@ make generate_v2_spec   # Requires TypeSpec installed in docs/source/specs/types
 ```
 
 When changing v2 API contracts, update `main.tsp` first, regenerate the spec, then implement. The TypeSpec file is the contract; the code must match it.
+
+This also applies in reverse: when code changes add fields to default API responses, update default field masks (e.g., `DefaultRoleBindingBySubjectFieldMask`), or remove ordering options, `main.tsp` must be updated to match. The `check-spec-drift` CI job compiles the TypeSpec and diffs the generated OpenAPI against the committed spec -- it catches stale YAML but only after `main.tsp` itself is correct.
 
 ### TypeSpec conventions in `main.tsp`
 - Reusable models: `ListResponse<Item>`, `ItemResponse<Item, StatusCode>`, `ProblemDetails<Status>`.
