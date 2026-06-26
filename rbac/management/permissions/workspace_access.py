@@ -157,6 +157,20 @@ class WorkspaceAccessPermission(permissions.BasePermission):
         # ws_id is the parent workspace ID where the new workspace will be created
         if view.action == "create":
             if not is_user_allowed_v2(request, perm, ws_id):
+                # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+                logger.warning(
+                    "Authorization denied",
+                    extra={
+                        "action": "CREATE",
+                        "resource_type": "workspace",
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "insufficient_permissions_on_parent_workspace",
+                        "endpoint": request.path,
+                        "parent_workspace_id": ws_id,
+                    },
+                )
                 return False
             return True
 
@@ -205,6 +219,20 @@ class WorkspaceAccessPermission(permissions.BasePermission):
 
         op = operation_from_request(request)
         if not is_user_allowed_v1(request, op, ws_id):
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "workspace",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "insufficient_permissions",
+                    "endpoint": request.path,
+                    "workspace_id": ws_id,
+                },
+            )
             return False
 
         # For move operations, also check target workspace access (V1 non-admin only)
@@ -262,6 +290,21 @@ class WorkspaceAccessPermission(permissions.BasePermission):
         # V2: Check 'create' permission on target workspace via Inventory API
         if not is_user_allowed_v2(request, "create", target_workspace_id):
             self.message = TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
+            # Authorization failure on move - SEC-MON-REQ-1 compliance
+            # (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": "MOVE",
+                    "resource_type": "workspace",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "insufficient_permissions_on_target_workspace",
+                    "endpoint": request.path,
+                    "target_workspace_id": target_workspace_id,
+                },
+            )
             return False
 
         return True
@@ -286,6 +329,21 @@ class WorkspaceAccessPermission(permissions.BasePermission):
         # V1: Check 'write' operation on target workspace
         if not is_user_allowed_v1(request, "write", target_workspace_id):
             self.message = TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
+            # Authorization failure on move - SEC-MON-REQ-1 compliance
+            # (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": "MOVE",
+                    "resource_type": "workspace",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "insufficient_permissions_on_target_workspace",
+                    "endpoint": request.path,
+                    "target_workspace_id": target_workspace_id,
+                },
+            )
             return False
 
         return True
@@ -312,6 +370,20 @@ class WorkspaceAccessPermission(permissions.BasePermission):
 
         if not Workspace.objects.filter(id=target_workspace_id, tenant=request.tenant).exists():
             self.message = TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
+            # Authorization failure on move - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": "MOVE",
+                    "resource_type": "workspace",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "target_workspace_not_found",
+                    "endpoint": request.path,
+                    "target_workspace_id": target_workspace_id,
+                },
+            )
             return False
 
         return True

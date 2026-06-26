@@ -242,6 +242,18 @@ def tenant_view(request, org_id):
                 logger.warning(f"Deleting tenant {org_id}. Requested by {request.user.username}")
                 TENANTS.delete_tenant(org_id)
                 tenant_obj.delete()
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+                logger.info(
+                    "Tenant deleted",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "tenant",
+                        "resource_id": org_id,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(status=204)
             else:
                 return HttpResponse("Tenant cannot be deleted.", status=400)
@@ -255,6 +267,17 @@ def run_migrations(request):
     """
     if request.method == "POST":
         logger.info(f"Running migrations: {request.method} {request.user.username}")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Internal API: Run migrations triggered",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "database",
+                "outcome": "in_progress",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
         run_migrations_in_worker.delay()
         return HttpResponse("Migrations are running in a background worker.", status=202)
     return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
@@ -609,6 +632,17 @@ def run_seeds(request):
             )
 
         logger.info(f"Running seeds: {request.method} {request.user.username}")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Internal API: Run seeds triggered",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
         run_seeds_in_worker.delay(args)
 
         return HttpResponse("Seeds are running in a background worker.", status=202)
@@ -830,8 +864,33 @@ def role_removal(request):
                 dual_write_handler = SeedingRelationApiDualWriteHandler(role_obj)
                 dual_write_handler.replicate_deleted_system_role()
                 role_obj.delete()
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+                logger.info(
+                    "System role deleted",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "role",
+                        "resource_id": role_name,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(f"Role '{role_name}' deleted.", status=204)
             except Exception:
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+                logger.error(
+                    "System role deletion failed",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "role",
+                        "resource_id": role_name,
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "deletion_error",
+                    },
+                )
                 return HttpResponse("Role cannot be deleted.", status=400)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
@@ -859,8 +918,33 @@ def permission_removal(request):
             try:
                 logger.warning(f"Deleting permission '{permission}'. Requested by '{request.user.username}'")
                 delete_permission(permission_obj)
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+                logger.info(
+                    "System permission deleted",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "permission",
+                        "resource_id": permission,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(f"Permission '{permission}' deleted.", status=204)
             except Exception as e:
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+                logger.error(
+                    "System permission deletion failed",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "permission",
+                        "resource_id": permission,
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "deletion_error",
+                    },
+                )
                 return HttpResponse(f"Permission cannot be deleted. {str(e)}", status=400)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
@@ -1260,6 +1344,21 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
             return HttpResponse("Destructive operations disallowed.", status=400)
 
         run_reset_imported_tenants.delay({"query": query, "limit": limit, "excluded": excluded})
+
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Bulk tenant deletion initiated",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "resource_id": f"bulk_deletion_limit_{limit}",
+                "outcome": "in_progress",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "limit": limit,
+                "excluded_count": len(excluded) if excluded else 0,
+            },
+        )
 
         return HttpResponse("Tenants deleting in worker.", status=200)
 

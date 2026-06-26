@@ -16,9 +16,13 @@
 #
 """Defines the Permission Access Permissions class."""
 
+import logging
+
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
 
 
 class PermissionAccessPermission(permissions.BasePermission):
@@ -34,4 +38,17 @@ class PermissionAccessPermission(permissions.BasePermission):
             permission_read = request.user.access.get("permission", {}).get("read", [])
             if permission_read:
                 return True
+        # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+        logger.warning(
+            "Authorization denied",
+            extra={
+                "action": request.method,
+                "resource_type": "permission",
+                "outcome": "failure",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "reason": "insufficient_permissions",
+                "endpoint": request.path,
+            },
+        )
         return False
