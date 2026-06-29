@@ -16,7 +16,11 @@
 #
 """Defines the Audit Log Access Permissions class."""
 
+import logging
+
 from rest_framework import permissions
+
+logger = logging.getLogger(__name__)
 
 
 class AuditLogAccessPermission(permissions.BasePermission):
@@ -24,4 +28,19 @@ class AuditLogAccessPermission(permissions.BasePermission):
 
     def has_permission(self, request, view):
         """Check permission based on Account Admin property."""
-        return request.user.admin
+        if not request.user.admin:
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "audit_log",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "not_admin",
+                    "endpoint": request.path,
+                },
+            )
+            return False
+        return True

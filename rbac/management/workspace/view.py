@@ -142,6 +142,18 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         super().perform_create(serializer)
         workspace = serializer.instance
         self._log_audit(self.request, AuditLog.CREATE, workspace, f"Created workspace: {workspace.name}")
+        # CREATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace created",
+            extra={
+                "action": "CREATE",
+                "resource_type": "workspace",
+                "resource_id": str(workspace.id),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def create(self, request, *args, **kwargs):
         """Create a Workspace."""
@@ -205,8 +217,21 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
 
     def perform_destroy(self, instance):
         """Delegate to service for destroy logic and log audit entry."""
+        workspace_id = str(instance.id)
         self._service.destroy(instance)
         self._log_audit(self.request, AuditLog.DELETE, instance, f"Deleted workspace: {instance.name}")
+        # DELETE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace deleted",
+            extra={
+                "action": "DELETE",
+                "resource_type": "workspace",
+                "resource_id": workspace_id,
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def perform_update(self, serializer):
         """Update workspace and log audit entry."""
@@ -217,6 +242,18 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         )
         super().perform_update(serializer)
         self._log_audit(self.request, AuditLog.EDIT, instance, description)
+        # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "workspace",
+                "resource_id": str(instance.id),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     @transaction.atomic()
     def update(self, request, *args, **kwargs):
@@ -247,6 +284,19 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             AuditLog.EDIT,
             workspace,
             f"Moved workspace: {workspace.name} to parent {workspace.parent.name}",
+        )
+        # MOVE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace moved",
+            extra={
+                "action": "MOVE",
+                "resource_type": "workspace",
+                "resource_id": str(workspace.id),
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "target_parent_id": str(target_workspace_id),
+            },
         )
         return result
 

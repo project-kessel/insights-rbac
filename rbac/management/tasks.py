@@ -68,7 +68,41 @@ logger = logging.getLogger(__name__)
 @shared_task
 def principal_cleanup():
     """Celery task to clean up principals no longer existing."""
-    clean_tenants_principals()
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Principal cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "principal",
+            "outcome": "in_progress",
+            "principal": "system:celery:principal_cleanup",
+        },
+    )
+    try:
+        clean_tenants_principals()
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Principal cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "principal",
+                "outcome": "success",
+                "principal": "system:celery:principal_cleanup",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Principal cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "principal",
+                "outcome": "failure",
+                "principal": "system:celery:principal_cleanup",
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -86,7 +120,41 @@ def run_migrations_in_worker():
 @shared_task
 def run_seeds_in_worker(kwargs):
     """Celery task to run seeds."""
-    call_command("seeds", **kwargs)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Seeding task started",
+        extra={
+            "action": "SEED",
+            "resource_type": "permissions_roles_groups",
+            "outcome": "in_progress",
+            "principal": "system:celery:run_seeds_in_worker",
+        },
+    )
+    try:
+        call_command("seeds", **kwargs)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Seeding task completed",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "success",
+                "principal": "system:celery:run_seeds_in_worker",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Seeding task failed",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "failure",
+                "principal": "system:celery:run_seeds_in_worker",
+                "reason": "seeding_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -110,7 +178,41 @@ def run_redis_cache_health():
 @shared_task
 def migrate_data_in_worker(kwargs):
     """Celery task to migrate data from V1 to V2 spiceDB schema."""
-    migrate_data(**kwargs)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Data migration task started",
+        extra={
+            "action": "MIGRATE",
+            "resource_type": "tenant_data",
+            "outcome": "in_progress",
+            "principal": "system:celery:migrate_data_in_worker",
+        },
+    )
+    try:
+        migrate_data(**kwargs)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Data migration task completed",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "tenant_data",
+                "outcome": "success",
+                "principal": "system:celery:migrate_data_in_worker",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Data migration task failed",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "tenant_data",
+                "outcome": "failure",
+                "principal": "system:celery:migrate_data_in_worker",
+                "reason": "migration_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -159,7 +261,46 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
     Returns:
         dict: Results with cleanup counts and migration results
     """
-    return cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Orphan binding cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:cleanup_tenant_orphan_bindings",
+            "org_id": org_id,
+            "dry_run": dry_run,
+        },
+    )
+    try:
+        result = cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Orphan binding cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "success",
+                "principal": "system:celery:cleanup_tenant_orphan_bindings",
+                "org_id": org_id,
+            },
+        )
+        return result
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Orphan binding cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "failure",
+                "principal": "system:celery:cleanup_tenant_orphan_bindings",
+                "org_id": org_id,
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -170,7 +311,45 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
     Args:
         tenant_limit (int): maximum number of tenants to process
     """
-    return call_command("fix_orphan_relations", tenant_limit=tenant_limit)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Bulk orphan binding cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:bulk_cleanup_orphan_bindings",
+            "tenant_limit": tenant_limit,
+        },
+    )
+    try:
+        result = call_command("fix_orphan_relations", tenant_limit=tenant_limit)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Bulk orphan binding cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "success",
+                "principal": "system:celery:bulk_cleanup_orphan_bindings",
+                "tenant_limit": tenant_limit,
+            },
+        )
+        return result
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Bulk orphan binding cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "failure",
+                "principal": "system:celery:bulk_cleanup_orphan_bindings",
+                "tenant_limit": tenant_limit,
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task

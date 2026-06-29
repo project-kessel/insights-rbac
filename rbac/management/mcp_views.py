@@ -5994,6 +5994,22 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
                 {"type": "text", "text": f"IMPORTANT — INCLUDE THESE CAVEATS IN YOUR ANSWER:\n{config.caveats}"}
             )
 
+        # MCP write tool execution - SEC-MON-REQ-1 compliance (EOI-3 admin_action)
+        if config.write:
+            username = getattr(getattr(request, "user", None), "username", None)
+            logger.info(
+                "MCP write tool executed",
+                extra={
+                    "action": "EXECUTE",
+                    "resource_type": "mcp_tool",
+                    "resource_id": tool_name,
+                    "outcome": "success",
+                    "org_id": org_id,
+                    "username": username,
+                    "tool_arguments": list(arguments.keys()),
+                },
+            )
+
         return _success_response(request_id, {"content": content, "isError": False})
     except ToolTimeoutError:
         duration = time.monotonic() - start if track else timeout
