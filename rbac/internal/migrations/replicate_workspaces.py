@@ -6,7 +6,7 @@ import uuid
 from typing import Optional
 
 from django.db.models import F, Q, QuerySet
-from django.db.models.lookups import GreaterThanOrEqual, LessThanOrEqual
+from django.db.models.lookups import LessThanOrEqual
 from management.atomic_transactions import atomic_with_retry
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import (
@@ -42,6 +42,7 @@ def _do_replicate_batch(
     )
 
     for workspace in workspaces:
+        # Paranoidly check that we haven't been provided with a workspace of a type that shouldn't be replicated.
         if workspace.type not in _permitted_types:
             raise AssertionError(f"Unexpected workspace type: {workspace.type}")
 
