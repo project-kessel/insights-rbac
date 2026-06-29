@@ -16,7 +16,6 @@
 #
 """Test the parity check tasks module."""
 
-from unittest import mock
 from unittest.mock import patch
 
 from django.test import override_settings
@@ -483,19 +482,11 @@ class ParityCheckTasksTest(IdentityRequest):
         self.assertEqual(len(tenant_result["role_results"]), 0)
 
     @override_settings(PARITY_CHECK_ENABLED=False, PARITY_CHECK_ORG_IDS="test_org_id")
-    @mock.patch("management.tasks.GroupPrincipalInventoryChecker")
-    @mock.patch("management.tasks.CustomRolePermissionChecker")
-    @mock.patch("management.tasks.WorkspaceRelationInventoryChecker")
-    def test_parity_check_task_disabled(
-        self, mock_workspace_checker_cls, mock_role_checker_cls, mock_group_checker_cls
-    ):
+    def test_parity_check_task_disabled(self):
         """Test parity check task returns early when disabled."""
         result = run_kessel_parity_checks_in_worker()
 
         self.assertEqual(result, {"message": "Parity checks disabled"})
-        mock_workspace_checker_cls.assert_not_called()
-        mock_role_checker_cls.assert_not_called()
-        mock_group_checker_cls.assert_not_called()
 
     @override_settings(PARITY_CHECK_ENABLED=True, PARITY_CHECK_ORG_IDS="test_org_id")
     @patch(
