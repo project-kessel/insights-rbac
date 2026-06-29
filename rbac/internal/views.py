@@ -2702,11 +2702,11 @@ def replicate_default_workspaces(request):
 
 @require_http_methods(["POST"])
 def replicate_updated_workspaces(request):
-    """Replicate existing default workspaces.
+    """Replicate workspaces updated since the provided time.
 
-    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>,exclude_unchanged_default_workspaces=<bool>
+    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>&exclude_unchanged_default_workspaces=<bool>
 
-    Replicates
+    since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
 
     Returns:
         JSON response indicating the task has been queued
@@ -2715,6 +2715,11 @@ def replicate_updated_workspaces(request):
     exclude_unchanged_default_workspaces = (
         request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
     )
+
+    try:
+        datetime.datetime.fromisoformat(since)
+    except ValueError as e:
+        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
     try:
         replicate_updated_workspaces_in_worker.delay(
