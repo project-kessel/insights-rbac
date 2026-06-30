@@ -81,6 +81,18 @@ kafka_messages_failure_total = Counter(
     "Number of Kafka messages that failed to be processed",
 )
 
+# KAFKA Shadow Mode Metrics
+METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "kafka_dry_run_messages_total"
+METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "kafka_dry_run_errors_total"
+kafka_dry_run_messages_total = Counter(
+    METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL,
+    "Number of Kafka messages processed in dry-run/shadow mode",
+)
+kafka_dry_run_errors_total = Counter(
+    METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL,
+    "Number of Kafka messages that would have failed if not in dry-run mode",
+)
+
 
 def clean_tenant_principals(tenant):
     """Check if all the principals in the tenant exist, remove non-existent principals."""
@@ -355,7 +367,7 @@ class MessageProcessingResult(NamedTuple):
 
 
 def process_kafka_message(
-    message, bootstrap_service: TenantBootstrapService, dlq_producer=None
+    message, bootstrap_service: TenantBootstrapService, dlq_producer=None, dry_run: bool = False
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -364,6 +376,7 @@ def process_kafka_message(
         message: Kafka message containing user event data
         bootstrap_service: Service for updating user/tenant state
         dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
+        dry_run: If True, validate message but don't write to database (shadow mode)
 
     Returns:
         MessageProcessingResult with:
@@ -383,18 +396,50 @@ def process_kafka_message(
             canonical_message = message_data.get("CanonicalMessage", message_data)
 
             user = retrieve_user_info_kafka(canonical_message)
-            # By default, only process disabled users.
-            # If the setting is enabled, process all users.
-            if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
-                # If Tenant is not already ready, don't ready it
-                bootstrap_service.update_user(user, ready_tenant=False)
 
-            kafka_messages_success_total.inc()
-            return MessageProcessingResult(should_continue=True, success=True)
+            if dry_run:
+                # DRY RUN MODE: Validate message structure and log what would happen
+                logger.info(
+                    "🔍 DRY RUN: Would process user_id=%s org_id=%s is_active=%s",
+                    user.user_id,
+                    user.org_id,
+                    user.is_active,
+                )
+
+                # Validate message structure is correct but DON'T call update_user (no DB writes)
+                if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
+                    logger.info(
+                        "🔍 DRY RUN: Would call bootstrap_service.update_user() for user %s",
+                        user.username,
+                    )
+
+                kafka_messages_success_total.inc()
+                kafka_dry_run_messages_total.inc()
+                return MessageProcessingResult(should_continue=True, success=True)
+
+            else:
+                # NORMAL MODE: Actually update the database
+                # By default, only process disabled users.
+                # If the setting is enabled, process all users.
+                if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
+                    # If Tenant is not already ready, don't ready it
+                    bootstrap_service.update_user(user, ready_tenant=False)
+
+                kafka_messages_success_total.inc()
+                return MessageProcessingResult(should_continue=True, success=True)
         except Exception as e:
-            logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
+            mode_msg = " (DRY RUN)" if dry_run else ""
+            logger.error(f"process_kafka_message: Error processing Kafka message{mode_msg}: %s", str(e))
             capture_exception(e)
             kafka_messages_failure_total.inc()
+
+            if dry_run:
+                # In dry-run, log error but still commit offset (we're just validating)
+                logger.warning(
+                    "🔍 DRY RUN: Message would have failed in production. " "Committing offset to continue validation."
+                )
+                kafka_dry_run_errors_total.inc()
+                return MessageProcessingResult(should_continue=True, success=True)
 
             # Send to DLQ if configured, similar to UMB's nack behavior
             # This prevents infinite retry loops for malformed or permanently unprocessable messages
@@ -465,9 +510,24 @@ def process_principal_events_from_umb(bootstrap_service: Optional[TenantBootstra
         logger.info("process_tenant_principal_events: Principal event processing finished.")
 
 
-def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootstrapService] = None):
-    """Process principal events from Kafka."""
-    logger.info("process_principal_events_from_kafka: Start processing principal events from Kafka.")
+def process_principal_events_from_kafka(
+    bootstrap_service: Optional[TenantBootstrapService] = None, dry_run: bool = False
+):
+    """
+    Process principal events from Kafka.
+
+    Args:
+        bootstrap_service: Service for tenant/user operations
+        dry_run: If True, process messages but don't write to database (shadow mode)
+    """
+    mode_msg = " (DRY RUN - SHADOW MODE)" if dry_run else ""
+    logger.info(f"process_principal_events_from_kafka: Start processing principal events from Kafka{mode_msg}.")
+
+    if dry_run:
+        logger.warning(
+            "🔍 KAFKA SHADOW MODE: Messages will be processed but NO database writes will occur. "
+            "This is for validation only."
+        )
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
 
     # Validate required configuration
@@ -522,12 +582,14 @@ def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootst
 
         # Process messages
         for message in consumer:
+            mode_suffix = " (DRY RUN)" if dry_run else ""
             logger.info(
-                "process_principal_events_from_kafka: Processing message from partition %d at offset %d",
+                "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
                 message.partition,
                 message.offset,
+                mode_suffix,
             )
-            result = process_kafka_message(message, bootstrap_service, dlq_producer)
+            result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
             if not result.should_continue:
                 # Lock contention - another listener is running, abort this consumer
                 logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
