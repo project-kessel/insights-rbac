@@ -20,6 +20,7 @@
 import datetime
 import json
 import logging
+import uuid
 from typing import Optional
 
 import requests
@@ -55,9 +56,15 @@ from kessel.inventory.v1beta2 import (
     resource_reference_pb2,
     subject_reference_pb2,
 )
-from kessel.relations.v1beta1 import check_pb2, lookup_pb2, relation_tuples_pb2
-from kessel.relations.v1beta1 import check_pb2_grpc, lookup_pb2_grpc, relation_tuples_pb2_grpc
-from kessel.relations.v1beta1 import common_pb2
+from kessel.relations.v1beta1 import (
+    check_pb2,
+    check_pb2_grpc,
+    common_pb2,
+    lookup_pb2,
+    lookup_pb2_grpc,
+    relation_tuples_pb2,
+    relation_tuples_pb2_grpc,
+)
 from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
@@ -71,10 +78,8 @@ from management.models import BindingMapping, Group, Permission, Principal, Reso
 from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
+    PrincipalProxy,
     USER_ENV_HEADER,
-)
-from management.principal.proxy import PrincipalProxy
-from management.principal.proxy import (
     bop_request_status_count,
     bop_request_time_tracking,
 )
@@ -94,11 +99,13 @@ from management.tasks import (
     fix_missing_binding_base_tuples_in_worker,
     migrate_binding_scope_in_worker,
     migrate_data_in_worker,
+    migrate_role_scope_if_changed_in_worker,
     recompute_tenant_role_bindings_in_worker,
     recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
     run_seeds_in_worker,
@@ -2716,6 +2723,35 @@ def recompute_tenant_role_bindings(request, org_id):
 
 
 @require_http_methods(["POST"])
+def migrate_role_scope_if_changed(request, role_uuid):
+    """
+    Migrate existing role bindings for a role if its scope has changed.
+
+    POST /_private/api/utils/migrate_role_scope_if_changed/<role_uuid>/
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    try:
+        parsed_uuid = uuid.UUID(role_uuid)
+    except ValueError:
+        return JsonResponse({"message": f"invalid UUID: {role_uuid}"}, status=400)
+
+    if not Role.objects.public_tenant_only().filter(uuid=role_uuid, system=True).exists():
+        return JsonResponse({"message": f"role does not exist; UUID: {str(parsed_uuid)}"}, status=404)
+
+    try:
+        migrate_role_scope_if_changed_in_worker.delay(role_uuid=str(parsed_uuid))
+        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+    except Exception as e:
+        logger.exception(f"Error migrating scope for role {parsed_uuid}")
+        return JsonResponse(
+            {"detail": f"Error migrating scope for role: {str(e)}"},
+            status=500,
+        )
+
+
+@require_http_methods(["POST"])
 def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     """Trigger corrective workspace event generation after a DB restore.
 
@@ -2729,8 +2765,8 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     Returns 202 with task_id on success.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return JsonResponse({"detail": "DR recovery is disabled (DR_RECOVERY_ENABLED=False)"}, status=403)
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return JsonResponse({"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}, status=403)
 
     try:
         body = load_request_body(request)
@@ -2796,7 +2832,7 @@ def disaster_recovery_reconcile(request):
 
     Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
 
     from datetime import datetime
@@ -2836,6 +2872,56 @@ def disaster_recovery_reconcile(request):
             "restore_timestamp_ms": restore_timestamp_ms,
             "buffer_seconds": buffer_seconds,
             "dry_run": dry_run,
+        },
+        status=202,
+    )
+
+
+def kessel_parity_check(request):
+    """View method for triggering on-demand Kessel-RBAC parity checks.
+
+    POST /_private/api/utils/kessel_parity_check/
+
+    Body: {"org_ids": ["12345", "67890"]}
+
+    Triggers parity checks for the specified org(s) regardless of the
+    PARITY_CHECK_ENABLED setting. The scheduled Celery Beat cron job
+    behavior is unchanged.
+    """
+    if request.method != "POST":
+        return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
+
+    if not request.body:
+        return HttpResponse('Invalid request, must supply "org_ids" in body.', status=400)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponse("Invalid JSON in request body.", status=400)
+
+    org_ids = body.get("org_ids")
+    if not isinstance(org_ids, list) or len(org_ids) == 0:
+        return HttpResponse(
+            'Invalid request: the "org_ids" array in the body must contain at least one org_id.',
+            status=400,
+        )
+
+    # Validate all entries are non-empty strings
+    for entry in org_ids:
+        if not isinstance(entry, str) or not entry.strip():
+            return HttpResponse(
+                'Invalid request: all entries in "org_ids" must be non-empty strings.',
+                status=400,
+            )
+
+    logger.info("On-demand Kessel parity check requested for org_ids: %s", org_ids)
+    task = run_kessel_parity_checks_in_worker.delay(org_ids=org_ids)
+
+    return JsonResponse(
+        {
+            "message": "Kessel parity check enqueued.",
+            "task_id": str(task.id),
+            "org_ids": org_ids,
         },
         status=202,
     )

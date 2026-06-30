@@ -26,40 +26,6 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
-from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
-from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
-from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
-from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
-from internal.utils import (
-    clean_invalid_workspace_resource_definitions,
-    expire_orphaned_cross_account_requests,
-    remove_unassigned_system_binding_mappings,
-    replicate_missing_binding_tuples,
-)
-from management.group.model import Group
-from management.health.healthcheck import redis_health
-from management.inventory_checker.inventory_api_check import (
-    BootstrappedTenantInventoryChecker,
-    CustomRolePermissionChecker,
-    GroupPrincipalInventoryChecker,
-    SeededRoleHierarchyChecker,
-    WorkspaceRelationInventoryChecker,
-    generate_seeded_role_hierarchy_tuples,
-)
-from management.parity_check import run_parity_checks
-from management.permission.scope_service import ImplicitResourceService
-from management.principal.cleaner import (
-    clean_tenants_principals,
-    process_principal_events_from_kafka,
-    process_principal_events_from_umb,
-)
-from management.role.v2_model import CustomRoleV2, SeededRoleV2
-from management.tenant_mapping.model import TenantMapping
-from management.workspace.model import Workspace
-from migration_tool.migrate import migrate_data
-from migration_tool.migrate_binding_scope import migrate_all_role_bindings
-
-from api.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +33,16 @@ logger = logging.getLogger(__name__)
 @shared_task
 def principal_cleanup():
     """Celery task to clean up principals no longer existing."""
+    from management.principal.cleaner import clean_tenants_principals
+
     clean_tenants_principals()
 
 
 @shared_task
 def principal_cleanup_via_umb():
     """Celery task to clean up principals no longer existing."""
+    from management.principal.cleaner import process_principal_events_from_umb
+
     process_principal_events_from_umb()
 
 
@@ -135,18 +105,24 @@ def run_ocm_performance_in_worker():
 @shared_task
 def run_redis_cache_health():
     """Celery task to check health of redis cache."""
+    from management.health.healthcheck import redis_health
+
     redis_health()
 
 
 @shared_task
 def migrate_data_in_worker(kwargs):
     """Celery task to migrate data from V1 to V2 spiceDB schema."""
+    from migration_tool.migrate import migrate_data
+
     migrate_data(**kwargs)
 
 
 @shared_task
 def migrate_binding_scope_in_worker(sources: Optional[list[str]] = None):
     """Celery task to migrate role binding scopes."""
+    from migration_tool.migrate_binding_scope import migrate_all_role_bindings
+
     return migrate_all_role_bindings(sources=set(sources) if sources is not None else None)
 
 
@@ -161,6 +137,8 @@ def fix_missing_binding_base_tuples_in_worker(binding_uuids=None):
     Returns:
         dict: Results with bindings_checked, bindings_fixed, and tuples_added count.
     """
+    from internal.utils import replicate_missing_binding_tuples
+
     return replicate_missing_binding_tuples(binding_uuids=binding_uuids)
 
 
@@ -175,6 +153,8 @@ def clean_invalid_workspace_resource_definitions_in_worker(dry_run=False):
     Returns:
         dict: Results with roles_checked, resource_definitions_fixed, bindings_deleted, and changes list.
     """
+    from internal.utils import clean_invalid_workspace_resource_definitions
+
     return clean_invalid_workspace_resource_definitions(dry_run=dry_run)
 
 
@@ -190,6 +170,8 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
     Returns:
         dict: Results with cleanup counts and migration results
     """
+    from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
+
     return cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
 
 
@@ -207,31 +189,51 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
 @shared_task
 def remove_unassigned_system_binding_mappings_in_worker():
     """Celery to remove unassigned system BindingMappings."""
+    from internal.utils import remove_unassigned_system_binding_mappings
+
     return remove_unassigned_system_binding_mappings()
 
 
 @shared_task
 def expire_orphaned_cross_account_requests_in_worker():
     """Celery task to expire orphaned cross-account requests."""
+    from internal.utils import expire_orphaned_cross_account_requests
+
     return expire_orphaned_cross_account_requests()
 
 
 @shared_task
 def remove_deleted_workspace_bindings_in_worker():
     """Celery task to remove role bindings that reference deleted workspaces."""
+    from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
+
     return remove_deleted_workspace_bindings()
 
 
 @shared_task
 def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
     """Celery task to replicate default workspaces."""
+    from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
+
     return replicate_default_workspaces(limit=limit)
 
 
 @shared_task
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
+    from api.models import Tenant
+    from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
+
     return recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+
+
+@shared_task
+def migrate_role_scope_if_changed_in_worker(role_uuid: str):
+    """Celery task to migrate existing role bindings for a role if its scope has changed."""
+    from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
+    from management.role.model import Role
+
+    return migrate_role_scope_if_changed(v1_role=Role.objects.filter(uuid=role_uuid).get())
 
 
 @shared_task
@@ -252,6 +254,8 @@ def run_parity_access_checks_in_worker(
     Returns:
         dict: Summary of check results including counts and any discrepancies found.
     """
+    from management.parity_check import run_parity_checks
+
     result = run_parity_checks(
         tenant_sample_size=tenant_sample_size,
         principal_sample_size=principal_sample_size,
@@ -269,18 +273,30 @@ def run_parity_access_checks_in_worker(
 
 
 @shared_task
-def run_kessel_parity_checks_in_worker():
+def run_kessel_parity_checks_in_worker(org_ids=None):
     """
     Celery task to run Kessel-RBAC parity checks for configured tenants.
+
+    Args:
+        org_ids: Optional list of org IDs to check. When provided, skips the
+            PARITY_CHECK_ENABLED gate and uses the given list directly. When None,
+            falls back to current behavior (reads from PARITY_CHECK_ORG_IDS env var
+            and checks PARITY_CHECK_ENABLED gate).
 
     Returns:
         dict: Summary statistics with checks performed, passed, and failed counts.
     """
-    if not getattr(settings, "PARITY_CHECK_ENABLED", False):
-        return {"message": "Parity checks disabled"}
+    if org_ids is None:
+        # Scheduled cron path: respect PARITY_CHECK_ENABLED gate
+        if not getattr(settings, "PARITY_CHECK_ENABLED", False):
+            return {"message": "Parity checks disabled"}
 
-    org_ids_str = settings.PARITY_CHECK_ORG_IDS
-    org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+        org_ids_str = settings.PARITY_CHECK_ORG_IDS
+        org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+    else:
+        # On-demand path: validate and deduplicate provided org_ids
+        org_ids = [org_id.strip() for org_id in org_ids if org_id.strip()]
+
     # Deduplicate org_ids while preserving order to avoid redundant work and double-counting
     org_ids = list(dict.fromkeys(org_ids))
 
@@ -289,6 +305,21 @@ def run_kessel_parity_checks_in_worker():
         return {"message": "No org_ids configured"}
 
     logger.info(f"Starting Kessel parity checks for {len(org_ids)} org(s): {org_ids}")
+
+    from api.models import Tenant
+    from management.group.model import Group
+    from management.inventory_checker.inventory_api_check import (
+        BootstrappedTenantInventoryChecker,
+        CustomRolePermissionChecker,
+        GroupPrincipalInventoryChecker,
+        SeededRoleHierarchyChecker,
+        WorkspaceRelationInventoryChecker,
+        generate_seeded_role_hierarchy_tuples,
+    )
+    from management.permission.scope_service import ImplicitResourceService
+    from management.role.v2_model import CustomRoleV2, SeededRoleV2
+    from management.tenant_mapping.model import TenantMapping
+    from management.workspace.model import Workspace
 
     stats = {
         "total_tenants": 0,
@@ -607,8 +638,8 @@ def recover_workspace_events_in_worker(
     Returns:
         dict: Summary statistics of corrective events generated.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return {"message": "DR recovery disabled (DR_RECOVERY_ENABLED=False)"}
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return {"message": "DR recovery disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}
 
     from django.core.cache import cache
 
@@ -684,8 +715,14 @@ def run_disaster_recovery_reconcile(
     Returns:
         dict: Summary with counts of corrective actions taken.
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return {"message": "Disaster recovery reconciliation is disabled"}
+
+    if not getattr(settings, "KAFKA_ENABLED", False):
+        return {"message": "Disaster recovery reconciliation requires Kafka (KAFKA_ENABLED=False)"}
+
+    if not getattr(settings, "RBAC_KAFKA_CONSUMER_TOPIC", None):
+        return {"message": "Disaster recovery reconciliation requires RBAC_KAFKA_CONSUMER_TOPIC to be configured"}
 
     try:
         from management.disaster_recovery.service import reconcile

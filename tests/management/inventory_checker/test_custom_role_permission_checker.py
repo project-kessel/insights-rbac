@@ -18,12 +18,14 @@
 
 from unittest.mock import MagicMock, patch
 
-from kessel.inventory.v1beta2.check_response_pb2 import CheckResponse
 from management.inventory_checker.inventory_api_check import CustomRolePermissionChecker
 from management.models import CustomRoleV2, Permission
 from tests.identity_request import IdentityRequest
 
-INVENTORY_STUB_PATH = "management.inventory_checker.inventory_api_check.inventory_service_pb2_grpc.KesselInventoryServiceStub"  # noqa: E501
+RELATIONS_CHANNEL_PATH = "management.inventory_checker.inventory_api_check.create_client_channel_relation"
+RELATIONS_STUB_PATH = (
+    "management.inventory_checker.inventory_api_check.relation_tuples_pb2_grpc.KesselTupleServiceStub"  # noqa: E501
+)
 
 
 class CustomRolePermissionCheckerTest(IdentityRequest):
@@ -56,21 +58,26 @@ class CustomRolePermissionCheckerTest(IdentityRequest):
 
         self.checker = CustomRolePermissionChecker()
 
-    def _setup_inventory_mocks(self, mock_create_channel, mock_stub_responses):
-        """Helper to set up inventory API mocks.
+    def test_check_custom_role_permissions_no_permissions(self):
+        """Test that check returns True when role has no permissions (empty tuple list)."""
+        # Role has no permissions
+        permission_tuples = []
+        result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
+        self.assertTrue(result)
+
+    def _setup_relations_mocks(self, mock_create_channel, read_tuples_responses):
+        """Helper to set up Relations API mocks for ReadTuples.
 
         Args:
-            mock_create_channel: Mock for create_client_channel_inventory
-            mock_stub_responses: Either a single response or list of responses for stub.Check
+            mock_create_channel: Mock for create_client_channel_relation
+            read_tuples_responses: List of iterables -- one per ReadTuples call.
+                Each iterable yields response objects (non-empty = tuple exists).
 
         Returns:
-            mock_stub: The mocked KesselInventoryServiceStub
+            mock_stub: The mocked KesselTupleServiceStub
         """
         mock_stub = MagicMock()
-        if isinstance(mock_stub_responses, list):
-            mock_stub.Check.side_effect = mock_stub_responses
-        else:
-            mock_stub.Check.return_value = mock_stub_responses
+        mock_stub.ReadTuples.side_effect = read_tuples_responses
 
         mock_channel = MagicMock()
         mock_channel.__enter__.return_value = mock_channel
@@ -79,93 +86,67 @@ class CustomRolePermissionCheckerTest(IdentityRequest):
 
         return mock_stub
 
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
-    @patch("management.inventory_checker.inventory_api_check.json_format.MessageToDict")
-    def test_check_custom_role_permissions_all_exist(self, mock_message_to_dict, mock_create_channel):
-        """Test that check returns True when all permission relations exist in inventory."""
-        # Add permissions to role
+    @patch(RELATIONS_CHANNEL_PATH)
+    def test_wildcard_permissions_all_exist(self, mock_create_channel):
+        """Test that wildcard permission tuples are verified via ReadTuples and pass when all exist."""
         self.role.permissions.add(self.perm1, self.perm2, self.perm3)
 
-        mock_response = MagicMock(spec=CheckResponse)
-        mock_stub = self._setup_inventory_mocks(mock_create_channel, mock_response)
-        mock_message_to_dict.return_value = {"allowed": "ALLOWED_TRUE"}
+        mock_tuple_response = MagicMock()
+        read_responses = [[mock_tuple_response], [mock_tuple_response], [mock_tuple_response]]
+        mock_stub = self._setup_relations_mocks(mock_create_channel, read_responses)
 
-        with patch(INVENTORY_STUB_PATH, return_value=mock_stub):
+        with patch(RELATIONS_STUB_PATH, return_value=mock_stub):
             permission_tuples = [CustomRoleV2._permission_tuple(self.role, p) for p in self.role.permissions.all()]
             result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
 
             self.assertTrue(result)
-            self.assertEqual(mock_stub.Check.call_count, 3)
+            self.assertEqual(mock_stub.ReadTuples.call_count, 3)
 
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
-    @patch("management.inventory_checker.inventory_api_check.json_format.MessageToDict")
-    def test_check_custom_role_permissions_missing_relation(self, mock_message_to_dict, mock_create_channel):
-        """Test that check returns False when a permission relation is missing in inventory."""
-        # Add permissions to role
+    @patch(RELATIONS_CHANNEL_PATH)
+    def test_wildcard_permissions_one_missing(self, mock_create_channel):
+        """Test that wildcard check returns False when one permission relation is missing.
+
+        All tuples are checked (no early return) so operators see all missing relations.
+        """
         self.role.permissions.add(self.perm1, self.perm2, self.perm3)
 
-        mock_responses = [
-            MagicMock(spec=CheckResponse),
-            MagicMock(spec=CheckResponse),
-            MagicMock(spec=CheckResponse),
-        ]
-        mock_stub = self._setup_inventory_mocks(mock_create_channel, mock_responses)
-        # Second permission is missing
-        mock_message_to_dict.side_effect = [
-            {"allowed": "ALLOWED_TRUE"},
-            {"allowed": "ALLOWED_FALSE"},
-            {"allowed": "ALLOWED_TRUE"},
-        ]
+        mock_tuple_response = MagicMock()
+        read_responses = [[mock_tuple_response], [], [mock_tuple_response]]
+        mock_stub = self._setup_relations_mocks(mock_create_channel, read_responses)
 
-        with patch(INVENTORY_STUB_PATH, return_value=mock_stub):
+        with patch(RELATIONS_STUB_PATH, return_value=mock_stub):
             permission_tuples = [CustomRoleV2._permission_tuple(self.role, p) for p in self.role.permissions.all()]
             result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
+
             self.assertFalse(result)
+            self.assertEqual(mock_stub.ReadTuples.call_count, 3)
 
-    def test_check_custom_role_permissions_no_permissions(self):
-        """Test that check returns True when role has no permissions (empty tuple list)."""
-        # Role has no permissions
-        permission_tuples = []
-        result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
-        self.assertTrue(result)
-
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
-    @patch("management.inventory_checker.inventory_api_check.json_format.MessageToDict")
-    def test_check_custom_role_permissions_single_permission(self, mock_message_to_dict, mock_create_channel):
-        """Test checking a role with a single permission."""
-        # Add one permission
-        self.role.permissions.add(self.perm1)
-
-        mock_response = MagicMock(spec=CheckResponse)
-        mock_stub = self._setup_inventory_mocks(mock_create_channel, mock_response)
-        mock_message_to_dict.return_value = {"allowed": "ALLOWED_TRUE"}
-
-        with patch(INVENTORY_STUB_PATH, return_value=mock_stub):
-            permission_tuples = [CustomRoleV2._permission_tuple(self.role, p) for p in self.role.permissions.all()]
-            result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
-
-            self.assertTrue(result)
-            self.assertEqual(mock_stub.Check.call_count, 1)
-
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
-    @patch("management.inventory_checker.inventory_api_check.json_format.MessageToDict")
-    def test_check_custom_role_permissions_all_missing(self, mock_message_to_dict, mock_create_channel):
-        """Test that check returns False when all permission relations are missing."""
-        # Add permissions to role
+    @patch(RELATIONS_CHANNEL_PATH)
+    def test_wildcard_permissions_all_missing(self, mock_create_channel):
+        """Test that wildcard check returns False when all permission relations are missing."""
         self.role.permissions.add(self.perm1, self.perm2)
 
-        mock_responses = [
-            MagicMock(spec=CheckResponse),
-            MagicMock(spec=CheckResponse),
-        ]
-        mock_stub = self._setup_inventory_mocks(mock_create_channel, mock_responses)
-        # All permissions are missing
-        mock_message_to_dict.side_effect = [
-            {"allowed": "ALLOWED_FALSE"},
-            {"allowed": "ALLOWED_FALSE"},
-        ]
+        read_responses = [[], []]
+        mock_stub = self._setup_relations_mocks(mock_create_channel, read_responses)
 
-        with patch(INVENTORY_STUB_PATH, return_value=mock_stub):
+        with patch(RELATIONS_STUB_PATH, return_value=mock_stub):
             permission_tuples = [CustomRoleV2._permission_tuple(self.role, p) for p in self.role.permissions.all()]
             result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
+
             self.assertFalse(result)
+
+    @patch(RELATIONS_CHANNEL_PATH)
+    def test_wildcard_single_permission_exists(self, mock_create_channel):
+        """Test wildcard check with a single permission that exists."""
+        self.role.permissions.add(self.perm1)
+
+        mock_tuple_response = MagicMock()
+        read_responses = [[mock_tuple_response]]
+        mock_stub = self._setup_relations_mocks(mock_create_channel, read_responses)
+
+        with patch(RELATIONS_STUB_PATH, return_value=mock_stub):
+            permission_tuples = [CustomRoleV2._permission_tuple(self.role, p) for p in self.role.permissions.all()]
+            result = self.checker.check_custom_role_permissions(permission_tuples, str(self.role.uuid))
+
+            self.assertTrue(result)
+            self.assertEqual(mock_stub.ReadTuples.call_count, 1)

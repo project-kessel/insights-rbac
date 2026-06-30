@@ -18,10 +18,10 @@
 Tests for permission scope functionality.
 """
 
-from django.test import TestCase, override_settings
+from collections.abc import Iterable
 from typing import Tuple
 
-from api.models import Tenant
+from django.test import TestCase, override_settings
 from management.models import Permission, Role
 from management.permission.scope_service import (
     ImplicitResourceService,
@@ -29,6 +29,8 @@ from management.permission.scope_service import (
     Scope,
     scopes_for_resource_type,
 )
+
+from api.models import Tenant
 from .test_model import INVALID_PERMISSIONS_V1
 
 DEFAULT_APPS = [
@@ -674,8 +676,8 @@ class RoleTests(TestCase):
             permission="tenant:resource:verb",
         )
 
-    def _assert_role_scope(self, scope: Scope):
-        self.assertEqual(scope, self.service.scope_for_role(self.role))
+    def _assert_role_scopes(self, scopes: Iterable[Scope]):
+        self.assertCountEqual(scopes, self.service.binding_scopes_for_role(self.role))
 
     def _create_access(self, permission: Permission, attribute_filter: dict = None):
         access = self.role.access.create(tenant=self.public_tenant, permission=permission)
@@ -685,25 +687,31 @@ class RoleTests(TestCase):
 
     def test_empty(self):
         """Test that the correct scope is returned for a role with no permissions."""
-        self._assert_role_scope(Scope.DEFAULT)
+        self._assert_role_scopes({Scope.DEFAULT})
 
     def test_default_scope(self):
-        """Test that the correct scope is returned for a role with a default-scope permissions."""
+        """Test that the correct scope is returned for a role with only a default-scope permissions."""
         self._create_access(self.default_permission)
-        self._assert_role_scope(Scope.DEFAULT)
+        self._assert_role_scopes({Scope.DEFAULT})
 
     def test_root_scope(self):
-        """Test that the correct scope is returned for a role with a root-scope permission."""
+        """Test that the correct scope is returned for a role with root- and default-scope permissions."""
         self._create_access(self.default_permission)
         self._create_access(self.root_permission)
-        self._assert_role_scope(Scope.ROOT)
+        self._assert_role_scopes({Scope.ROOT})
 
-    def test_tenant_scope(self):
-        """Test that the correct scope is returned for a role with a tenant-scope permission."""
+    def test_tenant_default_scope(self):
+        """Test that the correct scopes are returned for a role with tenant-scope and default-scope permissions."""
+        self._create_access(self.default_permission)
+        self._create_access(self.tenant_permission)
+        self._assert_role_scopes({Scope.TENANT, Scope.DEFAULT})
+
+    def test_tenant_root_scope(self):
+        """Test that the correct scopes are returned for a role with tenant-scope and root-scope permissions."""
         self._create_access(self.default_permission)
         self._create_access(self.root_permission)
         self._create_access(self.tenant_permission)
-        self._assert_role_scope(Scope.TENANT)
+        self._assert_role_scopes({Scope.TENANT, Scope.ROOT})
 
     def test_resource_definition(self):
         """Test that resource definitions do not affect the scope of a role."""
@@ -711,7 +719,7 @@ class RoleTests(TestCase):
             self.root_permission, attribute_filter={"key": "service", "operation": "equal", "value": "something"}
         )
 
-        self._assert_role_scope(Scope.ROOT)
+        self._assert_role_scopes({Scope.ROOT})
 
 
 class ExplicitlyScopedTest(TestCase):

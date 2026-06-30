@@ -416,6 +416,121 @@ class RoleBindingInvalidResourceTypeTests(RoleBindingAccessTestMixin, Transactio
 
 
 @override_settings(V2_APIS_ENABLED=True)
+class RoleBindingNonExistentWorkspaceTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
+    """Tests for non-existent workspace resource_id returning 404 instead of 403."""
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_nonexistent_workspace_returns_404_by_subject(self, mock_inventory_client):
+        """GET by-subject with non-existent workspace resource_id should return 404."""
+        self._setup_kessel_mock(mock_inventory_client)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mock_inventory_client.assert_not_called()
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_nonexistent_workspace_returns_404_list(self, mock_inventory_client):
+        """GET list with non-existent workspace resource_id should return 404."""
+        self._setup_kessel_mock(mock_inventory_client)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        url = self._get_list_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mock_inventory_client.assert_not_called()
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_existing_workspace_still_checks_kessel(self, mock_inventory_client):
+        """GET with existing workspace resource_id should proceed to Kessel check."""
+        self._setup_kessel_mock(mock_inventory_client, allowed_pb2.Allowed.ALLOWED_TRUE)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_inventory_client.assert_called()
+
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_nonexistent_workspace_unit_raises_not_found(self, mock_checker_class, mock_get_principal_id):
+        """Unit test: non-existent workspace should raise NotFound before Kessel call."""
+        from rest_framework.exceptions import NotFound
+
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        mock_request = Mock()
+        mock_request.user.system = False
+        mock_request.user.admin = False
+        mock_request.tenant = self.tenant
+        mock_request.query_params = {
+            "resource_id": nonexistent_uuid,
+            "resource_type": "workspace",
+        }
+
+        mock_view = Mock()
+        mock_view.action = "by_subject"
+
+        with self.assertRaises(NotFound):
+            permission.has_permission(mock_request, mock_view)
+
+        mock_checker_class.return_value.check_resource_access.assert_not_called()
+
+    def test_nonexistent_workspace_returns_404_for_org_admin(self):
+        """Org admin with non-existent workspace should also get 404."""
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=True)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_tenant_resource_type_unaffected_by_workspace_check(self):
+        """resource_type=tenant should not trigger workspace existence check."""
+        tenant_resource_id = self.tenant.tenant_resource_id()
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=True)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={tenant_resource_id}&resource_type=tenant",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+@override_settings(V2_APIS_ENABLED=True)
 class RoleBindingSystemUserPermissionTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
     """Unit tests for RoleBindingSystemUserAccessPermission."""
 

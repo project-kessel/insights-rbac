@@ -1150,6 +1150,16 @@
             "explode": false
           },
           {
+            "name": "permission",
+            "in": "query",
+            "required": false,
+            "description": "Filter by permission string(s). Comma-separated exact match (e.g. 'inventory:hosts:read' or 'inventory:hosts:read,rbac:workspace:write').",
+            "schema": {
+              "type": "string"
+            },
+            "explode": false
+          },
+          {
             "name": "order_by",
             "in": "query",
             "required": false,

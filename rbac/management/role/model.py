@@ -22,8 +22,9 @@ from typing import Optional, TYPE_CHECKING, Union
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
-from django.db.models import signals
+from django.db.models import BooleanField, IntegerField, OneToOneField, signals
 from django.utils import timezone
 from internal.integration import sync_handlers
 from management.cache import AccessCache, skip_purging_cache_for_public_tenant
@@ -60,6 +61,7 @@ class Role(TenantAwareModel):
     created = models.DateTimeField(default=timezone.now)
     modified = AutoDateTimeField(default=timezone.now)
     admin_default = models.BooleanField(default=False)
+
     objects = FilterQuerySet.as_manager()
 
     @property
@@ -326,6 +328,23 @@ class BindingMapping(models.Model):
             raise TypeError(f"Expected SourceKey, but got: {source!r}")
 
         return source
+
+
+class RoleScopeState(models.Model):
+    """
+    Data concerning a system role's scopes.
+
+    version and computed_scopes are to be updated during seeding to reflect the scopes computed at that time.
+    migrated should be set to False on any change and only updated to True when any bindings to previous scopes have
+    been successfully migrated to the new scopes.
+
+    This should only be updated in a SERIALIZABLE transaction for synchronization reasons.
+    """
+
+    role = OneToOneField(Role, on_delete=models.CASCADE, related_name="scope_state", null=False)
+    version = IntegerField(default=0)
+    computed_scopes = ArrayField(models.IntegerField(), null=False)
+    migrated = BooleanField(default=False)
 
 
 def role_related_obj_change_cache_handler(sender=None, instance=None, using=None, **kwargs):
