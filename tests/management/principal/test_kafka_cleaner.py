@@ -531,7 +531,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Verify error metric was incremented
         self.assertTrue((before_errors is None and after_errors == 1) or (after_errors == before_errors + 1))
 
-    @patch("management.principal.cleaner.bootstrap_service")
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock):
@@ -552,7 +552,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Verify update_user was NOT called
         mock_service.update_user.assert_not_called()
 
-    @patch("management.principal.cleaner.bootstrap_service")
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_normal_mode_calls_update_user(self, consumer_mock, bootstrap_mock):
