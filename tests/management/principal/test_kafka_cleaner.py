@@ -479,9 +479,16 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue((before + 1 == after) or (before is None and after == 1))
         self.assertTrue(success_before == success_after or (success_before is None and success_after is None))
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_does_not_modify_database(self, consumer_mock):
+    def test_dry_run_mode_does_not_modify_database(self, consumer_mock, proxy_mock):
         """Test that dry-run mode processes messages but doesn't modify the database."""
         principal_name = "principal-test-dry-run"
         self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
@@ -517,9 +524,16 @@ class PrincipalKafkaTests(IdentityRequest):
             f"Expected dry-run metric to increment by 1, but went from {before_dry_run} to {after_dry_run}",
         )
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock):
+    def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock, proxy_mock):
         """Test that dry-run mode handles malformed messages without retrying."""
         # Mock consumer with malformed message
         mock_message = create_mock_kafka_message(b'{"invalid": "json without required fields"}')
@@ -539,10 +553,17 @@ class PrincipalKafkaTests(IdentityRequest):
             f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
         )
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock):
+    def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that dry-run mode does not call bootstrap_service.update_user()."""
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
@@ -560,10 +581,17 @@ class PrincipalKafkaTests(IdentityRequest):
         # Verify update_user was NOT called
         mock_service.update_user.assert_not_called()
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_normal_mode_calls_update_user(self, consumer_mock, bootstrap_mock):
+    def test_normal_mode_calls_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that normal mode (not dry-run) calls bootstrap_service.update_user()."""
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
