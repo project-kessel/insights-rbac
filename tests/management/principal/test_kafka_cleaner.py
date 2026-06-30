@@ -500,9 +500,9 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_mock.return_value = consumer_instance
 
         # Run in dry-run mode
-        before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total")
+        before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
         process_principal_events_from_kafka(dry_run=True)
-        after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total")
+        after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
 
         # Verify principal still exists (dry-run didn't delete it)
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
@@ -511,7 +511,11 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue(self.group.principals.filter(username=principal_name).exists())
 
         # Verify dry-run metric was incremented
-        self.assertTrue((before_dry_run is None and after_dry_run == 1) or (after_dry_run == before_dry_run + 1))
+        self.assertEqual(
+            after_dry_run,
+            before_dry_run + 1,
+            f"Expected dry-run metric to increment by 1, but went from {before_dry_run} to {after_dry_run}",
+        )
 
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
@@ -524,12 +528,16 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_mock.return_value = consumer_instance
 
         # Run in dry-run mode
-        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total")
+        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
         process_principal_events_from_kafka(dry_run=True)
-        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total")
+        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
 
         # Verify error metric was incremented
-        self.assertTrue((before_errors is None and after_errors == 1) or (after_errors == before_errors + 1))
+        self.assertEqual(
+            after_errors,
+            before_errors + 1,
+            f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
+        )
 
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
