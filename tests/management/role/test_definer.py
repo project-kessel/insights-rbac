@@ -38,7 +38,7 @@ from management.relation_replicator.relation_replicator import ReplicationEvent,
 from management.role.definer import _seed_platform_roles, seed_permissions, seed_roles
 from management.role.platform import (
     ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
-    admin_platform_parent_scope_for_seeded_system_role,
+    admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
 )
 from management.role.relation_api_dual_write_handler import (
@@ -867,30 +867,17 @@ class RoleDefinerTests(IdentityRequest):
         """Test that all roles in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE are overridden to ROOT."""
         for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
             for derived_scope in Scope:
-                result = admin_platform_parent_scope_for_seeded_system_role(
-                    role_name, derived_scope, apply_override=True
-                )
+                result = admin_platform_parent_scopes_for_seeded_system_role(role_name, {derived_scope})
                 self.assertEqual(
                     result,
-                    Scope.ROOT,
+                    {Scope.ROOT},
                     f"{role_name!r} with derived scope {derived_scope.name} should be forced to ROOT",
                 )
 
-    def test_admin_default_force_root_does_not_apply_without_override(self):
-        """Test that the ROOT override is skipped when apply_override=False."""
-        for role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
-            for derived_scope in Scope:
-                result = admin_platform_parent_scope_for_seeded_system_role(
-                    role_name, derived_scope, apply_override=False
-                )
-                self.assertEqual(result, derived_scope)
-
     def test_admin_default_force_root_does_not_apply_to_other_roles(self):
         """Test that ordinary admin_default roles are NOT forced to ROOT."""
-        result = admin_platform_parent_scope_for_seeded_system_role(
-            "Some Other Role", Scope.DEFAULT, apply_override=True
-        )
-        self.assertEqual(result, Scope.DEFAULT)
+        result = admin_platform_parent_scopes_for_seeded_system_role("Some Other Role", {Scope.DEFAULT})
+        self.assertEqual(result, {Scope.DEFAULT})
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

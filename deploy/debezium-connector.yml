@@ -31,6 +31,7 @@ objects:
       heartbeat.interval.ms: ${DEBEZIUM_HEARTBEAT_INTERVAL_MS}
       heartbeat.action.query: ${DEBEZIUM_ACTION_QUERY}
       topic.heartbeat.prefix: ${TOPIC_HEARTBEAT_PREFIX}
+      snapshot.mode: ${SNAPSHOT_MODE}
 parameters:
 - name: DB_SERVERNAME
   required: true
@@ -77,3 +78,6 @@ parameters:
 - name: DEBEZIUM_HEARTBEAT_INTERVAL_MS
   value: "300000"
   description: The interval for the Debezium heartbeat in ms
+- name: SNAPSHOT_MODE
+  value: "initial"
+  description: The snapshot mode for the connector

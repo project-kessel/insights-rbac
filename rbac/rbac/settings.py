@@ -583,6 +583,9 @@ IT_BYPASS_PERMISSIONS_MODIFY_SERVICE_ACCOUNTS = ENVIRONMENT.bool(
 )
 IT_BYPASS_IT_CALLS = ENVIRONMENT.bool("IT_BYPASS_IT_CALLS", default=False)
 IT_BYPASS_TOKEN_VALIDATION = ENVIRONMENT.bool("IT_BYPASS_TOKEN_VALIDATION", default=False)
+IT_BYPASS_SYSTEM_USER_ID = ENVIRONMENT.get_value(
+    "IT_BYPASS_SYSTEM_USER_ID", default="mocked-user-id-because-token-validation-is-disabled"
+)
 IT_SERVICE_BASE_PATH = ENVIRONMENT.get_value("IT_SERVICE_BASE_PATH", default="/auth/realms/redhat-external/apis")
 IT_SERVICE_HOST = ENVIRONMENT.get_value("IT_SERVICE_HOST", default="localhost")
 IT_SERVICE_PORT = ENVIRONMENT.int("IT_SERVICE_PORT", default="443")
