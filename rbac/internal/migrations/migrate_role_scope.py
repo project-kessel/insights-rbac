@@ -63,7 +63,7 @@ def _check_migration(
     role = Role.objects.filter(pk=role.pk).first()
 
     if role is None:
-        logger.info(f"System role {role.name!r} concurrently deleted; not updating binding scopes.")
+        logger.info(f"System role concurrently deleted; not updating binding scopes.")
         return _CheckResult.failed()
 
     if not role.system:
@@ -183,10 +183,10 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
             role=v1_role, resource_service=resource_service, expected_version=initial_check.scope_state.version
         )
 
-        # Convince mypy.
-        assert final_check.scope_state is not None
+        if final_check.can_migrate:
+            # Convince mypy.
+            assert final_check.scope_state is not None
 
-        if final_check:
             final_check.scope_state.migrated = True
             final_check.scope_state.save(force_update=True, update_fields=["migrated"])
 
