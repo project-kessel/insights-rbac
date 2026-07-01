@@ -17,10 +17,12 @@
 
 """Handler for system defined roles."""
 
+import dataclasses
+import itertools
 import logging
 from typing import Optional
 
-from management.atomic_transactions import atomic_with_retry
+from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
 from management.relation_replicator.outbox_replicator import OutboxReplicator
@@ -33,7 +35,109 @@ from api.cross_access.model import CrossAccountRequest
 logger = logging.getLogger(__name__)
 
 
-@atomic_with_retry(retries=5)
+@dataclasses.dataclass(frozen=True)
+class _CheckResult:
+    can_migrate: bool
+    scope_state: Optional[RoleScopeState]
+
+    def __post_init__(self):
+        if self.can_migrate != (self.scope_state is not None):
+            raise TypeError(f"Expected a scope state to be present iff can_migrate is true.")
+
+    @classmethod
+    def failed(cls):
+        return _CheckResult(can_migrate=False, scope_state=None)
+
+
+def _check_migration(
+    role: Role, resource_service: ImplicitResourceService, expected_version: Optional[int]
+) -> _CheckResult:
+    """
+    Return whether we can continue to migrate the scope for the provided role.
+
+    This should be run in the same SERIALIZABLE transaction as the actual migration (otherwise, the results of the
+    check will be out of date).
+    """
+    # We do not need to lock to prevent updates from concurrent seeding, since both this and seeding are in
+    # SERIALIZABLE transactions.
+    role = Role.objects.filter(pk=role.pk).first()
+
+    if role is None:
+        logger.info(f"System role {role.name!r} concurrently deleted; not updating binding scopes.")
+        return _CheckResult.failed()
+
+    if not role.system:
+        raise AssertionError(f"System role became a non-system role: {role.name!r}")
+
+    scope_state: RoleScopeState = RoleScopeState.objects.filter(role=role).first()
+    expected_scopes = resource_service.binding_scopes_for_role(role)
+
+    if scope_state is None:
+        logger.warning(
+            f"Not migrating binding scopes for system role {role.name!r} without a RoleScopeState. "
+            f"If migration is necessary, ensure that seeding has run for the role."
+        )
+
+        return _CheckResult.failed()
+
+    if set(scope_state.computed_scopes) != set(expected_scopes):
+        logger.warning(
+            f"Not migrating binding scopes for system role {role.name!r}; either it has changed "
+            f"concurrently or the current scope settings do not match those used to compute the most recent "
+            f"scopes."
+        )
+
+        return _CheckResult.failed()
+
+    if scope_state.migrated:
+        logger.info(f"Not migrating binding scopes for system role {role.name!r} already marked as migrated.")
+        return _CheckResult.failed()
+
+    if expected_version is not None:
+        if scope_state.version != expected_version:
+            logger.info(
+                f"Not migrating binding scopes for system role {role.name!r} whose scope state version has changed."
+            )
+
+            return _CheckResult.failed()
+
+    return _CheckResult(can_migrate=True, scope_state=scope_state)
+
+
+@dataclasses.dataclass(frozen=True)
+class _MigrateContext:
+    """
+    A bundle of all of the resources required to migrate a role's scope.
+
+    This isn't a particularly meaningful class, but it's clearer than passing around everything separately,
+    and it allows us to do type checking in exactly one place.
+    """
+
+    role: Role
+    replicator: RelationReplicator
+    resource_service: ImplicitResourceService
+    expected_state_version: int
+
+    def __post_init__(self):
+        if not self.role.system:
+            raise ValueError("Expected system role")
+
+        if not isinstance(self.expected_state_version, int):
+            raise TypeError(f"Expected expected_state_version to be an int, but got: {self.expected_state_version!r}")
+
+    def assert_can_migrate(self):
+        """
+        Raise an exception if the role to migrate has changed concurrently such that it can no longer be migrated.
+
+        This must be called at the start of each transaction in order to re-establish the invariants that permit us
+        to run the migration. Each such transaction must also be SERIALIZABLE.
+        """
+        if not _check_migration(
+            role=self.role, resource_service=self.resource_service, expected_version=self.expected_state_version
+        ).can_migrate:
+            raise RuntimeError(f"Cannot continue migrating changed role {self.role.name!r}")
+
+
 def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationReplicator] = None):
     """
     Log scope change and trigger binding migration if scope has changed.
@@ -46,74 +150,59 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     if replicator is None:
         replicator = OutboxReplicator()
 
-    # We do not need to lock to prevent updates from concurrent seeding, since both this and seeding are in
-    # SERIALIZABLE transactions.
-    v1_role = Role.objects.filter(pk=v1_role.pk).first()
-
-    if v1_role is None:
-        logger.info(f"System role {v1_role.name!r} concurrently deleted; not updating binding scopes.")
-        return
-
-    if not v1_role.system:
-        raise ValueError(f"Expected system role, but got pk={v1_role.pk!r}")
-
     resource_service = ImplicitResourceService.from_settings()
 
-    scope_state: RoleScopeState = RoleScopeState.objects.filter(role=v1_role).first()
-    expected_scopes = resource_service.binding_scopes_for_role(v1_role)
+    with atomic_block():
+        initial_check = _check_migration(role=v1_role, resource_service=resource_service, expected_version=None)
 
-    if scope_state is None:
-        logger.warning(
-            f"Not migrating binding scopes for system role {v1_role.name!r} without a RoleScopeState. "
-            f"If migration is necessary, ensure that seeding has run for the role."
+        if not initial_check.can_migrate:
+            logger.info(f"Determined that we cannot migrate role {v1_role.name} early; not migrating.")
+            return
+
+    logger.info(
+        f"Migrating binding scopes for system role {v1_role.name!r} "
+        f"(scopes: {initial_check.scope_state.computed_scopes}, state version: {initial_check.scope_state.version})."
+    )
+
+    context = _MigrateContext(
+        role=v1_role,
+        replicator=replicator,
+        resource_service=resource_service,
+        expected_state_version=initial_check.scope_state.version,
+    )
+
+    _migrate_bindings_for_scope_change(context)
+
+    # If it's still the case that nothing has changed out from under us, we can update the scope state to show that
+    # the role was migrated to the relevant scopes.
+    with atomic_block():
+        final_check = _check_migration(
+            role=v1_role, resource_service=resource_service, expected_version=initial_check.scope_state.version
         )
 
-        return
+        if final_check:
+            final_check.scope_state.migrated = True
+            final_check.scope_state.save(force_update=True, update_fields=["migrated"])
 
-    if set(scope_state.computed_scopes) != set(expected_scopes):
-        logger.warning(
-            f"Not migrating binding scopes for system role {v1_role.name!r}; either it has changed "
-            f"concurrently or the current scope settings do not match those used to compute the most recent "
-            f"scopes."
-        )
-
-        return
-
-    if scope_state.migrated:
-        logger.info(f"Not migrating binding scopes for system role {v1_role.name!r} already marked as migrated.")
-        return
-
-    logger.info(f"Migrating binding scopes for system role {v1_role.name!r} to scopes: {expected_scopes}.")
-
-    _migrate_bindings_for_scope_change(v1_role, replicator)
-
-    # RoleScopeState is only updated in SERIALIZABLE transactions, so the state cannot have changed out from under us.
-    scope_state.migrated = True
-    scope_state.save(force_update=True, update_fields=["migrated"])
+    logger.info(f"Successfully migrated binding scopes for system role {v1_role.name!r}.")
 
 
-def _migrate_bindings_for_scope_change(v1_role: Role, replicator: RelationReplicator):
+def _migrate_bindings_for_scope_change(context: _MigrateContext):
     """
     Migrate bindings for a system role when its scope has changed during seeding.
 
     This functions in the same way as the regular binding scope migration (see
     rbac/migration_tool/migrate_binding_scope.py), except that it only migrates groups and CARs with the provided
     role.
-
-    Args:
-        v1_role: The V1 system role whose scope has changed
     """
-    if not v1_role.system:
-        raise ValueError("Expected system role")
+    v1_role = context.role
 
-    # Find all groups (non-public tenant) that have this system role assigned
-    groups_with_role = Group.objects.filter(policies__roles=v1_role).exclude(tenant__tenant_name="public").distinct()
-
-    # Find all approved CARs that have this system role
-    cars_with_role = CrossAccountRequest.objects.filter(roles=v1_role, status="approved")
-
-    groups = list(groups_with_role)
-    cars = list(cars_with_role)
+    # Find all groups and CARs that have this system role assigned. (This does not need to be in a SERIALIZABLE
+    # transaction, since the migration will always leave the group/CAR in a valid state, regardless of if it still
+    # has the role. We assume all roles assigned after this point will have the correct scope, so we don't need to
+    # worry about including them.)
+    groups = list(Group.objects.filter(policies__roles=v1_role).exclude(tenant__tenant_name="public").distinct())
+    cars = list(CrossAccountRequest.objects.filter(roles=v1_role, status="approved"))
 
     if not groups and not cars:
         logger.info("No groups or CARs found with role %s, skipping binding migration", v1_role.name)
@@ -122,46 +211,11 @@ def _migrate_bindings_for_scope_change(v1_role: Role, replicator: RelationReplic
     migrated_groups = 0
     migrated_cars = 0
 
-    # Migrate group bindings
-    for group in groups:
-        try:
-            # Use the existing migration function to migrate bindings for this group
-            # This will update all system role bindings for the group to the correct scope
-            result = migrate_system_role_bindings_for_group(group, replicator)
-            if result > 0:
-                migrated_groups += 1
-                logger.debug(
-                    "Migrated bindings for group %s (uuid=%s) with system role %s",
-                    group.name,
-                    group.uuid,
-                    v1_role.name,
-                )
-        except Exception:
-            logger.error(
-                "Failed to migrate bindings for group %s with role %s",
-                group.uuid,
-                v1_role.name,
-                exc_info=True,
-            )
+    for group_batch in itertools.batched(groups, 20):
+        migrated_groups += _migrate_group_batch(context=context, groups=list(group_batch))
 
-    # Migrate CAR bindings
-    for car in cars:
-        try:
-            result = migrate_car_bindings(car, replicator)
-            if result > 0:
-                migrated_cars += 1
-                logger.debug(
-                    "Migrated bindings for CAR %s with system role %s",
-                    car.request_id,
-                    v1_role.name,
-                )
-        except Exception:
-            logger.error(
-                "Failed to migrate bindings for CAR %s with role %s",
-                car.request_id,
-                v1_role.name,
-                exc_info=True,
-            )
+    for car_batch in itertools.batched(cars, 20):
+        migrated_cars += _migrate_car_batch(context=context, cars=list(car_batch))
 
     logger.info(
         "Completed binding migration for system role %s: %d groups and %d CARs migrated successfully",
@@ -169,3 +223,60 @@ def _migrate_bindings_for_scope_change(v1_role: Role, replicator: RelationReplic
         migrated_groups,
         migrated_cars,
     )
+
+
+@atomic_with_retry(retries=5)
+def _migrate_group_batch(context: _MigrateContext, groups: list[Group]) -> int:
+    context.assert_can_migrate()
+
+    migrated_groups = 0
+
+    for group in groups:
+        try:
+            result = migrate_system_role_bindings_for_group(group, context.replicator)
+
+            if result > 0:
+                migrated_groups += 1
+                logger.debug(
+                    "Migrated bindings for group %s (uuid=%s) with system role %s",
+                    group.name,
+                    group.uuid,
+                    context.role.name,
+                )
+        except Exception:
+            logger.error(
+                "Failed to migrate bindings for group %s with role %s",
+                group.uuid,
+                context.role.name,
+                exc_info=True,
+            )
+
+    return migrated_groups
+
+
+@atomic_with_retry(retries=5)
+def _migrate_car_batch(context: _MigrateContext, cars: list[CrossAccountRequest]) -> int:
+    context.assert_can_migrate()
+
+    migrated_cars = 0
+
+    for car in cars:
+        try:
+            result = migrate_car_bindings(car, context.replicator)
+
+            if result > 0:
+                migrated_cars += 1
+                logger.debug(
+                    "Migrated bindings for CAR %s with system role %s",
+                    car.request_id,
+                    context.role.name,
+                )
+        except Exception:
+            logger.error(
+                "Failed to migrate bindings for CAR %s with role %s",
+                car.request_id,
+                context.role.name,
+                exc_info=True,
+            )
+
+    return migrated_cars
