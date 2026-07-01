@@ -161,7 +161,7 @@
                   "$ref": "#/components/schemas/FieldMask"
                 }
               ],
-              "default": "resource(id),role(id),subject(id,type),sources(id)"
+              "default": "resource(id),role(id,created,modified),subject(id,type),sources(id)"
             },
             "explode": false
           },
@@ -715,7 +715,7 @@
                   "$ref": "#/components/schemas/FieldMask"
                 }
               ],
-              "default": "resource(id),subject(id,type),roles(id)"
+              "default": "resource(id),subject(id,type),roles(id,created,modified)"
             },
             "explode": false
           }
@@ -3459,10 +3459,20 @@
             "format": "int32",
             "description": "Number of permissions assigned to this role"
           },
-          "last_modified": {
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of when the role was created"
+          },
+          "modified": {
             "type": "string",
             "format": "date-time",
             "description": "Timestamp of when the role was last modified"
+          },
+          "last_modified": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of when the role was last modified (deprecated, use modified)"
           },
           "org_id": {
             "type": "string",

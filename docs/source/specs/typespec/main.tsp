@@ -78,7 +78,11 @@ model Role {
     permissions?: KesselRBAC.Permission[];
     @doc("Number of permissions assigned to this role")
     permissions_count?: int32;
+    @doc("Timestamp of when the role was created")
+    created?: offsetDateTime;
     @doc("Timestamp of when the role was last modified")
+    modified?: offsetDateTime;
+    @doc("Timestamp of when the role was last modified (deprecated, use modified)")
     last_modified?: offsetDateTime;
     @doc("ID of the organization that owns this role. Will not be populated if roles belong to the Public Tenant.")
     org_id?: string;
@@ -712,7 +716,7 @@ namespace Workspaces {
 @tag("Role Bindings")
 @doc("Operations about role bindings")
 namespace RoleBindings {
-    const DefaultRoleBindingBySubjectFieldMask: FieldMask = "resource(id),subject(id,type),roles(id)";
+    const DefaultRoleBindingBySubjectFieldMask: FieldMask = "resource(id),subject(id,type),roles(id,created,modified)";
 
     @doc("Subject kind for create/batch, by-subject, and list filters on the binding's subject (group UUID or user/principal UUID). Does not include principal as a separate type string; for external user ID use GET /role-bindings/ with granted_subject_type=principal and granted_subject.principal.user_id.")
     enum BindingSubjectType {
@@ -1289,7 +1293,7 @@ namespace RoleBindings {
         @query("granted_subject.principal.user_id") granted_subject_principal_user_id?: string;
 
         @doc("Control which fields are included in the response to optimize payload size.")
-        @query fields?: FieldMask = "resource(id),role(id),subject(id,type),sources(id)";
+        @query fields?: FieldMask = "resource(id),role(id,created,modified),subject(id,type),sources(id)";
 
         @doc("Default sort is by the time the role was first created. Prefix with '-' for descending order.")
         @query order_by?: OrderBy = "role.id";
