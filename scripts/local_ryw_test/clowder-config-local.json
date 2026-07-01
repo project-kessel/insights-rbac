@@ -1,0 +1,42 @@
+{
+  "webPort": 8000,
+  "metricsPort": 9100,
+  "metricsPath": "/metrics",
+  "logging": {
+    "type": "null",
+    "cloudwatch": {
+      "accessKeyId": "",
+      "secretAccessKey": "",
+      "region": "",
+      "logGroup": ""
+    }
+  },
+  "kafka": {
+    "brokers": [
+      {
+        "hostname": "localhost",
+        "port": 29092
+      }
+    ],
+    "topics": []
+  },
+  "database": {
+    "hostname": "localhost",
+    "port": 15432,
+    "name": "postgres",
+    "username": "postgres",
+    "password": "postgres",
+    "sslMode": "disable"
+  },
+  "inMemoryDb": {
+    "hostname": "localhost",
+    "port": 6379
+  },
+  "featureFlags": null,
+  "endpoints": [],
+  "metadata": {
+    "name": "rbac-local-test"
+  },
+  "tlsCAPath": "",
+  "privatePort": 10000
+}

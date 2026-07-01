@@ -1,0 +1,3 @@
+.pids/
+*.log
+init_results.json
