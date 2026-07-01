@@ -621,6 +621,49 @@ class PrincipalKafkaTests(IdentityRequest):
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    def test_kafka_consumer_handles_xml_messages_from_bridge(self, consumer_mock, bootstrap_mock, proxy_mock):
+        """Test that Kafka consumer can process XML messages from UMB->Kafka bridge."""
+        # XML message from UMB bridge (raw UMB message body copied to Kafka)
+        xml_message = (
+            b'<?xml version="1.0" encoding="UTF-8"?>'
+            b"<CanonicalMessage>"
+            b"<Header><InstanceId>test123</InstanceId></Header>"
+            b"<Payload><Sync><User>"
+            b"<Identifiers>"
+            b'<Identifier system="WEB" entity-name="User" qualifier="id">56780000</Identifier>'
+            b'<Reference system="WEB" entity-name="Customer" qualifier="id">17685860</Reference>'
+            b"</Identifiers>"
+            b'<Status primary="true"><State>Inactive</State></Status>'
+            b"<Person><Credentials><Login>test-user</Login></Credentials></Person>"
+            b"</User></Sync></Payload>"
+            b"</CanonicalMessage>"
+        )
+
+        mock_message = create_mock_kafka_message(xml_message)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        # Mock bootstrap service
+        mock_service = MagicMock()
+        bootstrap_mock.return_value = mock_service
+
+        # Run in normal mode - should parse XML and call update_user
+        process_principal_events_from_kafka(dry_run=False)
+
+        # Verify update_user was called (XML message was successfully parsed)
+        mock_service.update_user.assert_called()
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that dry-run mode does not call bootstrap_service.update_user()."""
         # Mock consumer with one message
