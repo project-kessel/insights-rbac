@@ -4821,7 +4821,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         mock_stub = MagicMock()
         mock_stub.Check.return_value = "true"
 
-        mock_check_workspace_relation.return_value = mock_stub.Check.return_value
+        mock_check_workspace_relation.return_value = (True, [])
         mock_workspace_view.return_value = (
             {
                 "org_id": self.root_workspace.tenant.org_id,
@@ -4848,7 +4848,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         # Check response
         self.assertEqual(response_body["org_id"], self.root_workspace.tenant.org_id)
         self.assertEqual(response_body["workspace_id"], str(self.root_workspace.id))
-        self.assertEqual(response_body["workspace_descendants_correct"], "true")
+        self.assertTrue(response_body["workspace_descendants_correct"])
 
     @patch(
         "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace",

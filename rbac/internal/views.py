@@ -1993,7 +1993,9 @@ def check_workspace_relation(request, workspace_uuid):
         try:
             if workspace_pairs:
                 workspace_uuid = str(workspace_uuid)
-                workspace_descendants_correct = WorkspaceRelationChecker.check_workspace_descendants(workspace_pairs)
+                workspace_descendants_correct, _ = WorkspaceRelationChecker.check_workspace_descendants(
+                    workspace_pairs
+                )
                 response = {
                     "org_id": workspace.tenant.org_id,
                     "workspace_id": workspace_uuid,
