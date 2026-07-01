@@ -181,9 +181,20 @@ def remove_deleted_workspace_bindings_in_worker():
 @shared_task
 def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
     """Celery task to replicate default workspaces."""
-    from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
+    from internal.migrations.replicate_workspaces import replicate_default_workspaces
 
     return replicate_default_workspaces(limit=limit)
+
+
+@shared_task
+def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default_workspaces: bool):
+    """Celery task to replicate updated workspaces."""
+    from internal.migrations.replicate_workspaces import replicate_updated_workspaces
+
+    return replicate_updated_workspaces(
+        since=datetime.datetime.fromisoformat(since),
+        exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
+    )
 
 
 @shared_task
