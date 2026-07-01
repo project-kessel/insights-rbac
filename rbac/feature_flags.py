@@ -43,6 +43,8 @@ class FeatureFlags:
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
     # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # When enabled, use Kafka for principal cleanup; when disabled, use UMB.
+    TOGGLE_USE_KAFKA_CLEANUP = "rbac.principal-cleanup.use-kafka.enabled"
 
     def __init__(self):
         """Add attributes."""
@@ -89,7 +91,7 @@ class FeatureFlags:
         self,
         feature_name: str,
         context: Optional[dict] = None,
-        fallback_function: Optional[Callable[[str, Optional[dict]], None]] = None,
+        fallback_function: Optional[Callable[[str, Optional[dict]], bool]] = None,
     ):
         """Override of is_enabled for checking flag values."""
         if self.client is None:
@@ -181,6 +183,73 @@ class FeatureFlags:
             context={"orgId": str(org_id)},
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
         )
+
+    def is_kafka_principal_cleanup_enabled(self):
+        """Check whether to use Kafka for principal cleanup.
+
+        DEPRECATED: Use get_principal_cleanup_mode() instead for 3-state control.
+
+        When enabled (True), use Kafka for principal cleanup.
+        When disabled (False), use UMB for principal cleanup.
+        Falls back to False (UMB) if Unleash is unavailable - UMB is the proven original method.
+        """
+        return self.is_enabled(
+            feature_name=self.TOGGLE_USE_KAFKA_CLEANUP,
+            fallback_function=lambda ignored_toggle_name, ignored_context: False,
+        )
+
+    def get_principal_cleanup_mode(self) -> str:
+        """
+        Get the principal cleanup mode using the feature flag.
+
+        This method supports 3 modes controlled by the Unleash flag value:
+        - 'umb_only' (flag disabled): Only UMB consumer runs and writes to DB
+        - 'kafka_shadow' (flag enabled with variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
+        - 'kafka_active' (flag enabled, default): Only Kafka consumer runs and writes to DB
+
+        Returns:
+            str: One of 'umb_only', 'kafka_shadow', or 'kafka_active'
+        """
+        if self.client is None:
+            self.initialize()
+
+        if self.client is None:
+            logger.warning("FeatureFlags not initialized, defaulting to umb_only mode")
+            return "umb_only"
+
+        # First check if the toggle is enabled
+        is_enabled = self.is_enabled(
+            feature_name=self.TOGGLE_USE_KAFKA_CLEANUP,
+            fallback_function=lambda ignored_toggle_name, ignored_context: False,
+        )
+
+        if not is_enabled:
+            # Flag is disabled -> UMB only mode
+            return "umb_only"
+
+        # Flag is enabled -> check for variant to determine kafka_shadow vs kafka_active
+        try:
+            variant = self.client.get_variant(
+                self.TOGGLE_USE_KAFKA_CLEANUP,
+                fallback_variant={"name": "kafka_active", "enabled": True},
+            )
+
+            mode = variant.get("name", "kafka_active")
+
+            # Validate mode - only kafka_shadow and kafka_active are valid when flag is enabled
+            if mode == "kafka_shadow":
+                return "kafka_shadow"
+            else:
+                # Default to kafka_active for any other variant
+                return "kafka_active"
+
+        except Exception as e:
+            logger.warning(f"Error getting variant for principal cleanup mode: {e}, defaulting to kafka_active")
+            return "kafka_active"
+
+    def is_kafka_shadow_mode_enabled(self) -> bool:
+        """Check if Kafka is in shadow/dry-run mode."""
+        return self.get_principal_cleanup_mode() == "kafka_shadow"
 
 
 FEATURE_FLAGS = FeatureFlags()

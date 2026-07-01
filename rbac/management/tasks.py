@@ -26,6 +26,11 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
+from management.principal.cleaner import (
+    clean_tenants_principals,
+    process_principal_events_from_kafka,
+    process_principal_events_from_umb,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +38,78 @@ logger = logging.getLogger(__name__)
 @shared_task
 def principal_cleanup():
     """Celery task to clean up principals no longer existing."""
-    from management.principal.cleaner import clean_tenants_principals
-
     clean_tenants_principals()
 
 
 @shared_task
 def principal_cleanup_via_umb():
     """Celery task to clean up principals no longer existing."""
-    from management.principal.cleaner import process_principal_events_from_umb
-
     process_principal_events_from_umb()
+
+
+@shared_task
+def principal_cleanup_via_kafka():
+    """Celery task to clean up principals via Kafka messages."""
+    process_principal_events_from_kafka()
+
+
+@shared_task
+def principal_cleanup_via_message_bus():
+    """
+    Dispatcher task that checks Unleash flag at runtime to route principal cleanup.
+
+    This task is scheduled when both PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB and
+    PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA are enabled. It allows runtime switching
+    between message bus implementations via Unleash flag without requiring worker restart.
+
+    Supported modes (controlled by rbac.principal-cleanup.use-kafka.enabled flag):
+    - 'umb_only' (flag disabled): Only UMB consumer runs and writes to DB
+    - 'kafka_shadow' (flag enabled with variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
+    - 'kafka_active' (flag enabled, default): Only Kafka consumer runs and writes to DB
+    """
+    from feature_flags import FEATURE_FLAGS
+
+    mode = FEATURE_FLAGS.get_principal_cleanup_mode()
+    logger.info(f"Principal cleanup mode: {mode}")
+
+    if mode == "umb_only":
+        # UMB-only mode: Only UMB processes and writes to DB
+        if settings.UMB_JOB_ENABLED:
+            logger.info("UMB-only mode: processing via UMB")
+            process_principal_events_from_umb()
+        else:
+            logger.warning("UMB mode selected but UMB_JOB_ENABLED is False")
+
+    elif mode == "kafka_shadow":
+        # Shadow mode: Both run, Kafka in dry-run (no DB writes)
+        logger.info("Shadow mode: processing via UMB (active) and Kafka (dry-run)")
+
+        if settings.UMB_JOB_ENABLED:
+            logger.info("Shadow mode: Running UMB consumer (active - writes to DB)")
+            process_principal_events_from_umb()
+        else:
+            logger.warning("Shadow mode requires UMB but UMB_JOB_ENABLED is False")
+
+        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
+            logger.info("Shadow mode: Running Kafka consumer (dry-run - no DB writes)")
+            process_principal_events_from_kafka(dry_run=True)
+        else:
+            logger.warning("Shadow mode requires Kafka but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
+
+    elif mode == "kafka_active":
+        # Kafka-active mode: Only Kafka processes and writes to DB
+        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
+            logger.info("Kafka-active mode: processing via Kafka")
+            process_principal_events_from_kafka(dry_run=False)
+        else:
+            logger.warning("Kafka mode selected but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
+
+    else:
+        logger.error(f"Unknown principal cleanup mode: {mode}, defaulting to UMB")
+        if settings.UMB_JOB_ENABLED:
+            process_principal_events_from_umb()
+        else:
+            logger.warning("Fallback to UMB failed: UMB_JOB_ENABLED is False")
 
 
 @shared_task
