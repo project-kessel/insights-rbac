@@ -195,17 +195,17 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
     rbac/migration_tool/migrate_binding_scope.py), except that it only migrates groups and CARs with the provided
     role.
     """
-    v1_role = context.role
+    role = context.role
 
     # Find all groups and CARs that have this system role assigned. (This does not need to be in a SERIALIZABLE
     # transaction, since the migration will always leave the group/CAR in a valid state, regardless of if it still
     # has the role. We assume all roles assigned after this point will have the correct scope, so we don't need to
     # worry about including them.)
-    groups = list(Group.objects.filter(policies__roles=v1_role).exclude(tenant__tenant_name="public").distinct())
-    cars = list(CrossAccountRequest.objects.filter(roles=v1_role, status="approved"))
+    groups = list(Group.objects.filter(policies__roles=role).exclude(tenant__tenant_name="public").distinct())
+    cars = list(CrossAccountRequest.objects.filter(roles=role, status="approved"))
 
     if not groups and not cars:
-        logger.info("No groups or CARs found with role %s, skipping binding migration", v1_role.name)
+        logger.info("No groups or CARs found with role %s, skipping binding migration", role.name)
         return
 
     migrated_groups = 0
@@ -219,7 +219,7 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
 
     logger.info(
         "Completed binding migration for system role %s: %d groups and %d CARs migrated successfully",
-        v1_role.name,
+        role.name,
         migrated_groups,
         migrated_cars,
     )
