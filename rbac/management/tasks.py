@@ -190,7 +190,7 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default_workspaces: bool):
     """Celery task to replicate updated workspaces."""
     from internal.migrations.replicate_workspaces import replicate_updated_workspaces
-    
+
     return replicate_updated_workspaces(
         since=datetime.datetime.fromisoformat(since),
         exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
