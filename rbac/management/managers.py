@@ -43,19 +43,46 @@ class WorkspaceManager(models.Manager):
 
         return tenant_id
 
+    @staticmethod
+    def _resolve_org_id(tenant=None):
+        """Resolve org_id from a tenant object for cache lookup."""
+        return getattr(tenant, "org_id", None) or None
+
     def get_queryset(self):
         """Attach the custom queryset."""
         return WorkspaceQuerySet(self.model, using=self._db)
 
+    def _get_cached_built_in_workspace(self, tenant, tenant_id, ws_type):
+        """Fetch a built-in workspace, using the cache when an org_id is available.
+
+        :param tenant: Optional Tenant object.
+        :param tenant_id: Optional tenant PK (int) or Tenant object.
+        :param ws_type: Workspace.Types value (ROOT or DEFAULT).
+        :returns: The Workspace instance.
+        """
+        from management.cache import WORKSPACE_CACHE
+
+        org_id = self._resolve_org_id(tenant=tenant)
+        if org_id:
+            cached = WORKSPACE_CACHE.get_workspace(org_id, ws_type)
+            if cached is not None:
+                return cached
+
+        resolved_tenant_id = self._get_tenant_id(tenant=tenant, tenant_id=tenant_id)
+        workspace = self.get(tenant_id=resolved_tenant_id, type=ws_type)
+
+        if org_id:
+            WORKSPACE_CACHE.cache_workspace(org_id, workspace)
+
+        return workspace
+
     def root(self, tenant=None, tenant_id=None):
-        """Return the root workspace for a tenant."""
-        tenant_id = self._get_tenant_id(tenant=tenant, tenant_id=tenant_id)
-        return self.get(tenant_id=tenant_id, type=self.model.Types.ROOT)
+        """Return the root workspace for a tenant, using cache when available."""
+        return self._get_cached_built_in_workspace(tenant, tenant_id, self.model.Types.ROOT)
 
     def default(self, tenant=None, tenant_id=None):
-        """Return the default workspace for a tenant."""
-        tenant_id = self._get_tenant_id(tenant=tenant, tenant_id=tenant_id)
-        return self.get(tenant_id=tenant_id, type=self.model.Types.DEFAULT)
+        """Return the default workspace for a tenant, using cache when available."""
+        return self._get_cached_built_in_workspace(tenant, tenant_id, self.model.Types.DEFAULT)
 
     def built_in(self, tenant=None, tenant_id=None):
         """Delegate call to the WorkspaceQuerySet."""

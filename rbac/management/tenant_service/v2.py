@@ -709,6 +709,13 @@ class V2TenantBootstrapService:
 
         Workspace.objects.bulk_create([*default_workspaces, *root_workspaces])
 
+        # Invalidate workspace cache for each bootstrapped tenant
+        from management.cache import WORKSPACE_CACHE
+
+        for tenant in tenants:
+            if tenant.org_id:
+                WORKSPACE_CACHE.delete_workspaces_for_tenant(tenant.org_id)
+
         mappings = TenantMapping.objects.bulk_create(mappings_to_create)
         tenant_mappings = {mapping.tenant_id: mapping for mapping in mappings}
         bootstrapped_tenants = []

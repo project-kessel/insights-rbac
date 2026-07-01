@@ -26,6 +26,7 @@ from django_filters import rest_framework as filters
 from management.atomic_transactions import atomic_with_retry
 from management.audit_log.model import AuditLog
 from management.base_viewsets import BaseV2ViewSet
+from management.cache import WORKSPACE_CACHE
 from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
 from management.utils import validate_and_get_key
@@ -47,6 +48,51 @@ INCLUDE_ANCESTRY_KEY = "include_ancestry"
 VALID_BOOLEAN_VALUES = ["true", "false"]
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+
+def _workspace_retrieve_cache_key(pk: str, include_ancestry: str = "false") -> str:
+    """Build response cache key for a workspace retrieve.
+
+    Includes include_ancestry so that requests with/without ancestry data
+    are cached independently (different serializers produce different payloads).
+    """
+    return f"retrieve::{pk}::ancestry={include_ancestry}"
+
+
+def _workspace_list_cache_key(ws_type: str, offset: str, limit: str, order_by: str = "name") -> str:
+    """Build response cache key for a workspace list filtered by built-in type.
+
+    Includes order_by for correctness even though built-in type filters (root, default)
+    currently return at most one workspace per tenant, making ordering irrelevant in practice.
+    """
+    return f"list::{ws_type}::{offset}::{limit}::{order_by}"
+
+
+def _get_cached_response(org_id: str, key: str):
+    """Return a cached workspace API response or None."""
+    return WORKSPACE_CACHE.get_response(org_id, key)
+
+
+def _set_cached_response(org_id: str, key: str, data: dict):
+    """Write a workspace API response to cache."""
+    WORKSPACE_CACHE.cache_response(org_id, key, data)
+
+
+def is_cacheable_builtin_type(validated_params):
+    """Check if a workspace list request filters for exactly one built-in type with no other filters.
+
+    Returns the workspace type string ('root' or 'default') if cacheable, None otherwise.
+    """
+    if validated_params.get("name") or validated_params.get("parent_id") or validated_params.get("ids"):
+        return None
+
+    type_filter = validated_params.get("type")
+    if type_filter and len(type_filter) == 1:
+        ws_type = type_filter[0]
+        if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+            return ws_type
+
+    return None
 
 
 class WorkspacePagination(V2ResultsSetPagination):
@@ -171,9 +217,42 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 raise serializers.ValidationError(message)
             raise
 
+    @staticmethod
+    def _get_org_id(request):
+        """Resolve org_id from the request tenant."""
+        tenant = getattr(request, "tenant", None)
+        return getattr(tenant, "org_id", None) if tenant else None
+
     def retrieve(self, request, *args, **kwargs):
-        """Get a workspace."""
-        return super().retrieve(request=request, args=args, kwargs=kwargs)
+        """Get a workspace, with response caching for built-in workspaces.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch() before this
+        method is called. The queryset-level WorkspaceAccessFilterBackend is intentionally
+        bypassed on cache hit because root/default workspaces are never access-restricted
+        within a tenant — every authenticated user in the org can read them.
+        """
+        org_id = self._get_org_id(request)
+        pk = kwargs.get("pk")
+        include_ancestry = validate_and_get_key(
+            request.query_params, INCLUDE_ANCESTRY_KEY, VALID_BOOLEAN_VALUES, "false"
+        )
+
+        if org_id and pk:
+            key = _workspace_retrieve_cache_key(pk, include_ancestry)
+            cached = _get_cached_response(org_id, key)
+            if cached is not None:
+                return Response(cached)
+
+        response = super().retrieve(request, *args, **kwargs)
+
+        if org_id and pk and response.status_code == 200:
+            ws_type = response.data.get("type")
+            if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+                _set_cached_response(org_id, _workspace_retrieve_cache_key(pk, include_ancestry), response.data)
+
+        return response
 
     def list(self, request, *args, **kwargs):
         """Get a list of workspaces.
@@ -182,17 +261,46 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         Ordering is handled by OrderingFilter (supports ?order_by=name or ?order_by=-name).
         Domain filters (type, name, parent_id, ids) are validated by
         WorkspaceListInputSerializer and applied by WorkspaceService.list().
+
+        Responses for built-in workspace types (root, default) are cached when requested
+        as a single type filter with no other filters. The cache key includes pagination
+        parameters (offset, limit) and order_by so different pages/orderings are cached
+        independently.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch(). The
+        queryset-level WorkspaceAccessFilterBackend is intentionally bypassed on cache hit
+        because root/default workspaces are never access-restricted within a tenant.
         """
         input_serializer = WorkspaceListInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
         validated_params = input_serializer.validated_data
+
+        org_id = self._get_org_id(request)
+        cacheable_type = is_cacheable_builtin_type(validated_params)
+
+        cache_key = None
+        if org_id and cacheable_type:
+            offset = request.query_params.get("offset", "0")
+            limit = request.query_params.get("limit", "10")
+            order_by = request.query_params.get("order_by", "name")
+            cache_key = _workspace_list_cache_key(cacheable_type, offset, limit, order_by)
+            cached = _get_cached_response(org_id, cache_key)
+            if cached is not None:
+                return Response(cached)
 
         queryset = self.filter_queryset(self.get_queryset())
         queryset = self._service.list(queryset, validated_params)
 
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        response = self.get_paginated_response(serializer.data)
+
+        if cache_key:
+            _set_cached_response(org_id, cache_key, response.data)
+
+        return response
 
     @atomic_with_retry(retries=3)
     def destroy(self, request, *args, **kwargs):
@@ -209,7 +317,12 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         self._log_audit(self.request, AuditLog.DELETE, instance, f"Deleted workspace: {instance.name}")
 
     def perform_update(self, serializer):
-        """Update workspace and log audit entry."""
+        """Update workspace and log audit entry.
+
+        Invalidates workspace cache for built-in types (default) to prevent
+        serving stale data. ROOT workspaces are blocked at the service layer,
+        but we guard both types defensively.
+        """
         instance = serializer.instance
         audit_log = AuditLog()
         description = audit_log.find_edited_field(
@@ -217,6 +330,11 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         )
         super().perform_update(serializer)
         self._log_audit(self.request, AuditLog.EDIT, instance, description)
+
+        if instance.type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+            org_id = self._get_org_id(self.request)
+            if org_id:
+                WORKSPACE_CACHE.delete_workspaces_for_tenant(org_id)
 
     @transaction.atomic()
     def update(self, request, *args, **kwargs):
