@@ -1163,7 +1163,7 @@ class RoleBindingSerializerTests(IdentityRequest):
     def test_field_selection_filters_subject_fields(self):
         """Test that field selection filters subject group fields.
 
-        Only subject.type is always included. Other fields require explicit request.
+        subject.type and subject.id are always included. Other fields require explicit request.
         """
         field_selection = RoleBindingFieldSelection.parse("subject(group.name)")
         context = {**self.context, "field_selection": field_selection}
@@ -1172,10 +1172,9 @@ class RoleBindingSerializerTests(IdentityRequest):
         data = serializer.data
 
         subject = data["subject"]
-        # type is always included
+        # type and id are always included
         self.assertIn("type", subject)
-        # id is NOT included unless explicitly requested
-        self.assertNotIn("id", subject)
+        self.assertIn("id", subject)
 
         group = subject["group"]
         self.assertIn("name", group)
