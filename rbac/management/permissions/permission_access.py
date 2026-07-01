@@ -16,13 +16,14 @@
 #
 """Defines the Permission Access Permissions class."""
 
+from management.permissions.utils import check_v2_kessel_access
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
 
 
 class PermissionAccessPermission(permissions.BasePermission):
-    """Determines if a user has access to Role APIs."""
+    """Determines if a user has access to Permission APIs."""
 
     def has_permission(self, request, view):
         """Check permission based on the defined access."""
@@ -34,4 +35,5 @@ class PermissionAccessPermission(permissions.BasePermission):
             permission_read = request.user.access.get("permission", {}).get("read", [])
             if permission_read:
                 return True
+            return check_v2_kessel_access(request)
         return False

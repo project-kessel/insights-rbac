@@ -16,7 +16,7 @@
 #
 """Defines the Group Access Permissions class."""
 
-from management.permissions.utils import is_scope_principal
+from management.permissions.utils import check_v2_kessel_access, is_scope_principal
 from rest_framework import permissions
 from rest_framework.request import Request
 
@@ -45,6 +45,7 @@ class GroupAccessPermission(permissions.BasePermission):
                     return username == request.user.username
                 if not username and is_scope_principal(request):
                     return True
+            return check_v2_kessel_access(request)
         else:
             group_write = request.user.access.get("group", {}).get("write", [])
 
