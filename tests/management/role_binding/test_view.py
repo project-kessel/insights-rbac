@@ -1296,15 +1296,6 @@ class RoleBindingListViewSetTest(IdentityRequest):
         platform_group = Group.objects.create(name="platform_group", tenant=self.tenant)
         RoleBindingGroup.objects.create(group=platform_group, binding=platform_binding)
 
-        # Register cleanup so resources are freed even if assertions fail
-        self.addCleanup(RoleBindingGroup.objects.filter(binding=platform_binding).delete)
-        self.addCleanup(platform_binding.delete)
-        self.addCleanup(platform_group.delete)
-        self.addCleanup(platform_role.children.clear)
-        self.addCleanup(child_role_1.delete)
-        self.addCleanup(child_role_2.delete)
-        self.addCleanup(platform_role.delete)
-
         url = self._get_list_url()
         response = self.client.get(
             f"{url}?fields=role(id,name),subject(id,type),resource(id)&limit=100",
@@ -1325,6 +1316,42 @@ class RoleBindingListViewSetTest(IdentityRequest):
         # The platform role itself should NOT appear
         platform_entries = [item for item in response.data["data"] if item["role"]["id"] == platform_role.uuid]
         self.assertEqual(len(platform_entries), 0)
+
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
+        return_value=True,
+    )
+    def test_list_platform_role_expansion_respects_limit(self, mock_permission):
+        """Test that limit is respected even when platform roles expand to many children."""
+        public_tenant, _ = Tenant.objects.get_or_create(tenant_name="public")
+
+        # Create a platform role with several children
+        platform_role = PlatformRoleV2.objects.create(name="Platform Big", tenant=public_tenant)
+        children = []
+        for i in range(5):
+            child = SeededRoleV2.objects.create(name=f"Child {i}", tenant=public_tenant)
+            children.append(child)
+        platform_role.children.add(*children)
+
+        binding = RoleBinding.objects.create(
+            role=platform_role,
+            resource_type="workspace",
+            resource_id=str(self.workspace.id),
+            tenant=self.tenant,
+        )
+        group = Group.objects.create(name="platform_limit_group", tenant=self.tenant)
+        RoleBindingGroup.objects.create(group=group, binding=binding)
+
+        url = self._get_list_url()
+        response = self.client.get(
+            f"{url}?fields=role(id,name)&limit=3",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Before the fix, limit=3 would return many more items because
+        # platform role expansion happened after pagination.
+        self.assertLessEqual(len(response.data["data"]), 3)
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",

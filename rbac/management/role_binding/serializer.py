@@ -21,6 +21,7 @@ This module contains:
 - Output serializers: For serializing response data
 """
 
+import logging
 import uuid
 from typing import Optional
 
@@ -36,6 +37,8 @@ from management.utils import FieldSelection, FieldSelectionValidationError, norm
 from rest_framework import serializers
 
 from api.models import Tenant
+
+logger = logging.getLogger(__name__)
 
 _SUBJECT_TYPE_GROUP = "group"
 _SUBJECT_TYPE_USER = "user"
@@ -811,17 +814,47 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
 
         return {"type": _SUBJECT_TYPE_GROUP}
 
+    def _get_effective_role(self, obj: RoleBinding):
+        """Return the effective role for this binding.
+
+        For expanded platform-role bindings (annotated by
+        ``with_expanded_platform_roles``), the effective role is one of
+        the platform role's children.  For regular bindings the effective
+        role is the binding's own role.
+        """
+        effective_uuid = getattr(obj, "effective_role_uuid", None)
+        if effective_uuid is not None and obj.role:
+            # Normalize to UUID for direct comparison (annotation may return str or UUID)
+            if not isinstance(effective_uuid, uuid.UUID):
+                effective_uuid = uuid.UUID(str(effective_uuid))
+            if obj.role.uuid != effective_uuid:
+                # Platform binding expanded to child — look up from prefetch cache.
+                for child in obj.role.children.all():
+                    if child.uuid == effective_uuid:
+                        return child
+                # effective_role_uuid doesn't match any child — data integrity issue.
+                logger.warning(
+                    "RoleBinding %s: effective_role_uuid %s not found among children of platform role %s (%s). "
+                    "Falling back to the platform role itself.",
+                    obj.uuid,
+                    effective_uuid,
+                    obj.role.uuid,
+                    obj.role.name,
+                )
+        return obj.role
+
     def get_role(self, obj: RoleBinding):
         """Extract role information from the RoleBinding.
 
         Default (no fields param): Returns only role id.
         With fields param: id is always included, plus explicitly requested fields.
         """
-        if not obj.role:
+        role = self._get_effective_role(obj)
+        if not role:
             return None
 
         field_selection = self._get_field_selection()
-        return self._build_role_data(obj.role, field_selection)
+        return self._build_role_data(role, field_selection)
 
     def get_resource(self, obj: RoleBinding):
         """Extract resource information from the RoleBinding.
