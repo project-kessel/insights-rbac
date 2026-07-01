@@ -19,17 +19,6 @@ class MigrateRoleScopeTest(DualWriteTestCase):
     def _do_migrate(self):
         migrate_role_scope_if_changed(self.role, InMemoryRelationReplicator(self.tuples))
 
-    def test_migrate_new_role(self):
-        self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())
-
-        with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
-            self._do_migrate()
-
-        self.assertTrue(RoleScopeState.objects.filter(role=self.role).exists())
-        self.assertEqual(self.role.scope_state.version, 0)
-        self.assertEqual(self.role.scope_state.computed_scopes, [Scope.DEFAULT])
-        self.assertTrue(self.role.scope_state.migrated)
-
     @override_settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="rbac:*:*")
     def test_migrate_unmigrated_role(self):
         self.expect_1_role_binding_to_workspace(
@@ -99,3 +88,11 @@ class MigrateRoleScopeTest(DualWriteTestCase):
             for_v2_roles=[str(self.role.uuid)],
             for_groups=[str(self.group.uuid)],
         )
+
+    def test_no_migrate_new_role(self):
+        self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())
+
+        with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
+            self._do_migrate()
+
+        self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())

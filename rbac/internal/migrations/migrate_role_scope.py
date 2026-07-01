@@ -62,33 +62,28 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     scope_state: RoleScopeState = RoleScopeState.objects.filter(role=v1_role).first()
     expected_scopes = resource_service.binding_scopes_for_role(v1_role)
 
-    if scope_state is not None:
-        if set(scope_state.computed_scopes) != set(expected_scopes):
-            logger.warning(
-                f"Not migrating binding scopes for system role {v1_role.name!r}; either it has changed "
-                f"concurrently or the current scope settings do not match those used to compute the most recent "
-                f"scopes."
-            )
-
-            return
-
-        if scope_state.migrated:
-            logger.info(f"Not migrating binding scopes for system role {v1_role.name!r} already marked as migrated.")
-            return
-
-        logger.info(f"Migrating binding scopes for system role {v1_role.name!r} to scopes: {expected_scopes}.")
-    else:
-        logger.info(
-            f"No scope state exists for system role {v1_role.name!r}; migrating binding scopes and "
-            f"creating initial scope state."
+    if scope_state is None:
+        logger.warning(
+            f"Not migrating binding scopes for system role {v1_role.name!r} without a RoleScopeState. "
+            f"If migration is necessary, ensure that seeding has run for the role."
         )
 
-        scope_state = RoleScopeState.objects.create(
-            role=v1_role,
-            version=0,
-            computed_scopes=list(expected_scopes),
-            migrated=False,
+        return
+
+    if set(scope_state.computed_scopes) != set(expected_scopes):
+        logger.warning(
+            f"Not migrating binding scopes for system role {v1_role.name!r}; either it has changed "
+            f"concurrently or the current scope settings do not match those used to compute the most recent "
+            f"scopes."
         )
+
+        return
+
+    if scope_state.migrated:
+        logger.info(f"Not migrating binding scopes for system role {v1_role.name!r} already marked as migrated.")
+        return
+
+    logger.info(f"Migrating binding scopes for system role {v1_role.name!r} to scopes: {expected_scopes}.")
 
     _migrate_bindings_for_scope_change(v1_role, replicator)
 
