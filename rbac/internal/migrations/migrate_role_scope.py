@@ -190,7 +190,9 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
             final_check.scope_state.migrated = True
             final_check.scope_state.save(force_update=True, update_fields=["migrated"])
 
-    logger.info(f"Successfully migrated binding scopes for system role {v1_role.name!r}.")
+            logger.info(f"Successfully migrated binding scopes for system role {v1_role.name!r}.")
+        else:
+            logger.info(f"Aborted migrating scopes for system role {v1_role.name!r} immediately before committing.")
 
 
 def _migrate_bindings_for_scope_change(context: _MigrateContext):
