@@ -159,6 +159,9 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
             logger.info(f"Determined that we cannot migrate role {v1_role.name} early; not migrating.")
             return
 
+    # Convince mypy.
+    assert initial_check.scope_state is not None
+
     logger.info(
         f"Migrating binding scopes for system role {v1_role.name!r} "
         f"(scopes: {initial_check.scope_state.computed_scopes}, state version: {initial_check.scope_state.version})."
@@ -179,6 +182,9 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
         final_check = _check_migration(
             role=v1_role, resource_service=resource_service, expected_version=initial_check.scope_state.version
         )
+
+        # Convince mypy.
+        assert final_check.scope_state is not None
 
         if final_check:
             final_check.scope_state.migrated = True
