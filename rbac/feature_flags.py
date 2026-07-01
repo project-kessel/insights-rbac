@@ -91,7 +91,7 @@ class FeatureFlags:
         self,
         feature_name: str,
         context: Optional[dict] = None,
-        fallback_function: Optional[Callable[[str, Optional[dict]], None]] = None,
+        fallback_function: Optional[Callable[[str, Optional[dict]], bool]] = None,
     ):
         """Override of is_enabled for checking flag values."""
         if self.client is None:
