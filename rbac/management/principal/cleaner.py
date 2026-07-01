@@ -391,11 +391,24 @@ def process_kafka_message(
             return MessageProcessingResult(should_continue=False, success=False)
 
         try:
-            # Parse JSON message
-            message_data = json.loads(message.value)
-            canonical_message = message_data.get("CanonicalMessage", message_data)
+            # Parse message - handle both XML (from UMB bridge) and JSON (from native Kafka producer)
+            # The messaging bridge copies raw UMB message bodies (XML) to Kafka during migration
+            message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
 
-            user = retrieve_user_info_kafka(canonical_message)
+            # Detect format: XML starts with '<' or '<?xml', JSON starts with '{' or '['
+            message_value_stripped = message_value.strip()
+            if message_value_stripped.startswith("<"):
+                # XML format (from UMB bridge) - parse same as UMB consumer
+                data_dict = xmltodict.parse(message_value)
+                canonical_message = data_dict.get("CanonicalMessage")
+                # Use UMB retrieval logic for XML-parsed messages (handles @ and #text attributes)
+                user = retrieve_user_info_umb(canonical_message)
+            else:
+                # JSON format (native Kafka producer) - parse as JSON
+                message_data = json.loads(message_value)
+                canonical_message = message_data.get("CanonicalMessage", message_data)
+                # Use Kafka retrieval logic for JSON messages (plain keys, no @ or # prefixes)
+                user = retrieve_user_info_kafka(canonical_message)
 
             if dry_run:
                 # DRY RUN MODE: Validate message structure and log what would happen
