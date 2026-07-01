@@ -400,7 +400,7 @@ def process_kafka_message(
             if dry_run:
                 # DRY RUN MODE: Validate message structure and log what would happen
                 logger.info(
-                    "🔍 DRY RUN: Would process user_id=%s org_id=%s is_active=%s",
+                    "DRY RUN: Would process user_id=%s org_id=%s is_active=%s",
                     user.user_id,
                     user.org_id,
                     user.is_active,
@@ -409,7 +409,7 @@ def process_kafka_message(
                 # Validate message structure is correct but DON'T call update_user (no DB writes)
                 if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
                     logger.info(
-                        "🔍 DRY RUN: Would call bootstrap_service.update_user() for user %s",
+                        "DRY RUN: Would call bootstrap_service.update_user() for user %s",
                         user.username,
                     )
 
@@ -436,7 +436,7 @@ def process_kafka_message(
             if dry_run:
                 # In dry-run, log error but still commit offset (we're just validating)
                 logger.warning(
-                    "🔍 DRY RUN: Message would have failed in production. " "Committing offset to continue validation."
+                    "DRY RUN: Message would have failed in production. Committing offset to continue validation."
                 )
                 kafka_dry_run_errors_total.inc()
                 return MessageProcessingResult(should_continue=True, success=True)
@@ -525,7 +525,7 @@ def process_principal_events_from_kafka(
 
     if dry_run:
         logger.warning(
-            "🔍 KAFKA SHADOW MODE: Messages will be processed but NO database writes will occur. "
+            "KAFKA SHADOW MODE: Messages will be processed but NO database writes will occur. "
             "This is for validation only."
         )
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
