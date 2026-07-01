@@ -164,21 +164,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -190,21 +176,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Role Bindings
   /role-bindings/by-subject/:
@@ -371,21 +343,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -397,21 +355,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Role Bindings
     put:
@@ -496,21 +440,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -528,21 +458,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Role Bindings
       requestBody:
@@ -605,21 +521,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -631,21 +533,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Role Bindings
       requestBody:
@@ -801,21 +689,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -827,21 +701,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Roles
     post:
@@ -896,21 +756,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -922,21 +768,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Roles
       requestBody:
@@ -1008,21 +840,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1040,21 +858,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Roles
     put:
@@ -1110,21 +914,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1142,21 +932,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Roles
       requestBody:
@@ -1197,21 +973,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1229,21 +991,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Roles
       requestBody:
@@ -1354,21 +1102,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1380,21 +1114,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
     post:
@@ -1429,21 +1149,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1455,21 +1161,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
       requestBody:
@@ -1541,21 +1233,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1573,21 +1251,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
     put:
@@ -1622,43 +1286,13 @@ paths:
           content:
             application/problem+json:
               schema:
-                anyOf:
-                  - $ref: '#/components/schemas/Problems.Problem400'
-                  - type: object
-                    properties:
-                      type:
-                        $ref: '#/components/schemas/Problems.ProblemType'
-                      status:
-                        type: number
-                        enum:
-                          - 400
-                      title:
-                        type: string
-                      detail:
-                        type: string
-                      instance:
-                        type: string
-                        format: uri
+                $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
         '401':
           description: Access is unauthorized.
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1670,21 +1304,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
       requestBody:
@@ -1727,43 +1347,13 @@ paths:
           content:
             application/problem+json:
               schema:
-                anyOf:
-                  - $ref: '#/components/schemas/Problems.Problem400'
-                  - type: object
-                    properties:
-                      type:
-                        $ref: '#/components/schemas/Problems.ProblemType'
-                      status:
-                        type: number
-                        enum:
-                          - 400
-                      title:
-                        type: string
-                      detail:
-                        type: string
-                      instance:
-                        type: string
-                        format: uri
+                $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
         '401':
           description: Access is unauthorized.
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1775,21 +1365,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
       requestBody:
@@ -1828,21 +1404,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1854,21 +1416,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
   /workspaces/{id}/move/:
@@ -1904,21 +1452,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 401
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem401'
         '403':
           description: Access is forbidden.
           content:
@@ -1936,21 +1470,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                type: object
-                properties:
-                  type:
-                    $ref: '#/components/schemas/Problems.ProblemType'
-                  status:
-                    type: number
-                    enum:
-                      - 500
-                  title:
-                    type: string
-                  detail:
-                    type: string
-                  instance:
-                    type: string
-                    format: uri
+                $ref: '#/components/schemas/Problems.Problem500'
       tags:
         - Workspaces
       requestBody:
@@ -2115,9 +1635,14 @@ components:
     Problems.Problem400:
       type: object
       required:
+        - type
         - title
         - detail
       properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/invalid-request
         title:
           type: string
           enum:
@@ -2134,6 +1659,66 @@ components:
               type: number
               enum:
                 - 400
+            title:
+              type: string
+            detail:
+              type: string
+            instance:
+              type: string
+              format: uri
+    Problems.Problem400AlreadyExists:
+      type: object
+      required:
+        - type
+        - title
+      properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/already-exists
+        title:
+          type: string
+          enum:
+            - The resource already exists.
+      allOf:
+        - type: object
+          properties:
+            type:
+              $ref: '#/components/schemas/Problems.ProblemType'
+            status:
+              type: number
+              enum:
+                - 400
+            title:
+              type: string
+            detail:
+              type: string
+            instance:
+              type: string
+              format: uri
+    Problems.Problem401:
+      type: object
+      required:
+        - type
+        - title
+      properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/unauthenticated
+        title:
+          type: string
+          enum:
+            - Authentication credentials were not provided or are invalid.
+      allOf:
+        - type: object
+          properties:
+            type:
+              $ref: '#/components/schemas/Problems.ProblemType'
+            status:
+              type: number
+              enum:
+                - 401
             title:
               type: string
             detail:
@@ -2174,9 +1759,14 @@ components:
     Problems.Problem404:
       type: object
       required:
+        - type
         - title
         - detail
       properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/not-found
         title:
           type: string
           enum:
@@ -2200,15 +1790,56 @@ components:
             instance:
               type: string
               format: uri
+    Problems.Problem500:
+      type: object
+      required:
+        - type
+        - title
+      properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/internal-error
+        title:
+          type: string
+          enum:
+            - Unexpected error occurred.
+      allOf:
+        - type: object
+          properties:
+            type:
+              $ref: '#/components/schemas/Problems.ProblemType'
+            status:
+              type: number
+              enum:
+                - 500
+            title:
+              type: string
+            detail:
+              type: string
+            instance:
+              type: string
+              format: uri
     Problems.ProblemType:
       type: string
       enum:
         - http://project-kessel.org/problems/insufficient-permission
+        - http://project-kessel.org/problems/unauthenticated
+        - http://project-kessel.org/problems/not-found
+        - http://project-kessel.org/problems/internal-error
+        - http://project-kessel.org/problems/invalid-request
+        - http://project-kessel.org/problems/already-exists
+        - http://project-kessel.org/problems/workspace-not-empty
     Problems.Workspace.Problem400WorkspaceNotEmpty:
       type: object
       required:
+        - type
         - title
       properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/workspace-not-empty
         title:
           type: string
           enum:
