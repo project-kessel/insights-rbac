@@ -433,15 +433,41 @@ def process_kafka_message(
             capture_exception(e)
             kafka_messages_failure_total.inc()
 
-            if dry_run:
-                # In dry-run, send to DLQ for observability and validation
-                # This allows operators to monitor what would fail in production
-                logger.warning("DRY RUN: Message would have failed in production. Sending to DLQ for inspection.")
-                kafka_dry_run_errors_total.inc()
-                # Fall through to DLQ logic below
+            # Determine if this is a permanent error (unprocessable message) or transient error (retry later)
+            # Permanent errors: JSON parsing, missing fields, schema violations
+            # Transient errors: Network issues, DB connection problems, temporary service unavailability
+            is_permanent_error = isinstance(
+                e,
+                (
+                    json.JSONDecodeError,  # Malformed JSON
+                    KeyError,  # Missing required field in message
+                    ValueError,  # Invalid data format
+                    UnicodeDecodeError,  # Invalid message encoding
+                ),
+            )
 
-            # Send to DLQ if configured, similar to UMB's nack behavior
-            # This prevents infinite retry loops for malformed or permanently unprocessable messages
+            if dry_run:
+                # In dry-run, track errors and send permanent errors to DLQ for inspection
+                kafka_dry_run_errors_total.inc()
+                if is_permanent_error:
+                    logger.warning("DRY RUN: Permanent error detected - message would be sent to DLQ in production.")
+                    # Fall through to DLQ logic below
+                else:
+                    logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
+                    # In dry-run, still commit offset to continue validation (not blocking on retries)
+                    return MessageProcessingResult(should_continue=True, success=True)
+
+            # For production mode, only send permanent errors to DLQ
+            # Transient errors will not commit offset and will retry
+            if not is_permanent_error:
+                logger.warning(
+                    "process_kafka_message: Transient error at offset %d. "
+                    "Will not commit offset - message will be retried on next consumer run.",
+                    message.offset,
+                )
+                return MessageProcessingResult(should_continue=True, success=False)
+
+            # Send permanent errors to DLQ if configured
             if dlq_producer and hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
                 dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
                 if dlq_topic:
