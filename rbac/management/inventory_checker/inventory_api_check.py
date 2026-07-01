@@ -306,9 +306,8 @@ class WorkspaceRelationInventoryChecker(InventoryApiBaseChecker):
     """Subclass to check workspace parent relations are correct on inventory api."""
 
     def check_workspace_descendants(self, workspace_pairs):
-        """Core logic to check workspace descendant relations on inventory api."""
+        """Check workspace parent relations on inventory api, returning per-pair results."""
         checks = []
-        # Build the check requests for checking parent-child workspace relationship
         for workspace_uuid, workspace_parent_uuid in workspace_pairs:
             check_request = CheckRequest(
                 object=resource_reference_pb2.ResourceReference(
@@ -326,12 +325,19 @@ class WorkspaceRelationInventoryChecker(InventoryApiBaseChecker):
                 ),
             )
             checks.append(check_request)
-        workspace_check = self.check_inventory_core(checks)
-        if not workspace_check:
-            logger.warning(f"{workspace_uuid} does not have the expected parent workspace.")
+
+        results_list = self._check_inventory_batch(checks)
+        pair_results = []
+        for (ws_id, parent_id), exists in zip(workspace_pairs, results_list):
+            pair_results.append({"workspace_id": ws_id, "parent_id": parent_id, "exists": exists})
+
+        all_passed = all(r["exists"] for r in pair_results)
+        if all_passed:
+            logger.info(f"All {len(workspace_pairs)} workspace parent relations exist.")
         else:
-            logger.info(f"{workspace_uuid} has the correct parent workspace.")
-        return workspace_check
+            missing = [r for r in pair_results if not r["exists"]]
+            logger.warning(f"{len(missing)} of {len(workspace_pairs)} workspace parent relations missing.")
+        return all_passed, pair_results
 
     def check_workspace(self, workspace_id, workspace_parent_id):
         """Core logic to check workspace relation on inventory api."""

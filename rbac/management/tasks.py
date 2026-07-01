@@ -406,9 +406,12 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
             workspace_pairs = [(str(w_id), str(parent_id)) for (w_id, parent_id) in workspaces]
             pairs_count = len(workspace_pairs)
 
+            workspace_pair_results = []
             if workspace_pairs:
                 logger.info(f"Checking {pairs_count} workspace parent relations for tenant {org_id}")
-                workspace_check_passed = workspace_checker.check_workspace_descendants(workspace_pairs)
+                workspace_check_passed, workspace_pair_results = workspace_checker.check_workspace_descendants(
+                    workspace_pairs
+                )
             else:
                 logger.warning(f"No workspace pairs to check for tenant {org_id} — missing default workspace?")
                 workspace_check_passed = False
@@ -508,6 +511,56 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
                 stats["failed_tenants"] += 1
                 logger.warning(f"Parity check FAILED for tenant {org_id}")
 
+            sub_check_log = logger.info if tenant_passed else logger.warning
+
+            detail_lines = []
+            detail_lines.append(f"  Sub-check results for tenant {org_id}:")
+            detail_lines.append(
+                f"    Workspace hierarchy: {'PASSED' if workspace_check_passed else 'FAILED'}"
+                f" ({pairs_count} pairs)"
+            )
+            if not workspace_check_passed and workspace_pair_results:
+                missing = [r for r in workspace_pair_results if not r["exists"]]
+                for r in missing[:20]:
+                    detail_lines.append(f"      - MISSING: workspace {r['workspace_id']} -> parent {r['parent_id']}")
+                if len(missing) > 20:
+                    detail_lines.append(f"      ... and {len(missing) - 20} more")
+
+            detail_lines.append(
+                f"    Custom roles:        {'PASSED' if custom_role_check_passed else 'FAILED'}"
+                f" ({len(role_results)} roles)"
+            )
+            if not custom_role_check_passed:
+                failed_roles = [r for r in role_results if not r["passed"]]
+                for r in failed_roles[:20]:
+                    detail_lines.append(f"      - FAILED: role {r['role_name']} ({r['role_uuid']})")
+                if len(failed_roles) > 20:
+                    detail_lines.append(f"      ... and {len(failed_roles) - 20} more")
+
+            detail_lines.append(
+                f"    Bootstrap:           {'PASSED' if bootstrap_check_passed else 'FAILED'}"
+                f" ({len(bootstrap_details)} checks)"
+            )
+            if not bootstrap_check_passed and bootstrap_details:
+                missing = [d for d in bootstrap_details if not d["exists"]]
+                for d in missing[:20]:
+                    detail_lines.append(f"      - MISSING: {d['name']} ({d.get('check', '')})")
+                if len(missing) > 20:
+                    detail_lines.append(f"      ... and {len(missing) - 20} more")
+
+            detail_lines.append(
+                f"    Group-principal:     {'PASSED' if group_principal_check_passed else 'FAILED'}"
+                f" ({len(group_results)} groups, {tenant_group_principal_relations} relations)"
+            )
+            if not group_principal_check_passed:
+                failed_groups = [g for g in group_results if not g["passed"]]
+                for g in failed_groups[:20]:
+                    detail_lines.append(f"      - FAILED: group {g['group_name']} ({g['group_uuid']})")
+                if len(failed_groups) > 20:
+                    detail_lines.append(f"      ... and {len(failed_groups) - 20} more")
+
+            sub_check_log("\n".join(detail_lines))
+
             tenant_elapsed = time.monotonic() - tenant_start
             tenant_durations.append(tenant_elapsed)
             logger.info(f"Tenant {org_id} parity check took {tenant_elapsed:.3f}s")
@@ -581,7 +634,9 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
         f"Total seeded roles: {stats['total_seeded_roles_checked']}, "
         f"Total bootstrap checks: {stats['total_bootstrap_checks']}, "
         f"Total groups: {stats['total_groups_checked']}, "
-        f"Total group-principal relations: {stats['total_group_principal_relations_checked']}"
+        f"Total group-principal relations: {stats['total_group_principal_relations_checked']}, "
+        f"Seeded role hierarchy: {'PASSED' if seeded_hierarchy_passed else 'FAILED'}"
+        f" ({stats['total_seeded_roles_checked']} roles)"
     )
 
     stats["timing"] = timing_stats
