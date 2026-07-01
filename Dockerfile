@@ -60,7 +60,7 @@ RUN python3.12 -m venv /pipenv-venv
 ENV PATH="/pipenv-venv/bin:$PATH"
 # Install pipenv into the virtual env
 RUN \
-    pip install --upgrade "pip>=26.0" && \
+    pip install --upgrade "pip>=26.1.2" && \
     pip install pipenv
 
 WORKDIR ${APP_ROOT}
