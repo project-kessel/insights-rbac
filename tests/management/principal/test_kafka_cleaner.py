@@ -531,15 +531,21 @@ class PrincipalKafkaTests(IdentityRequest):
             "data": [],
         },
     )
+    @patch("management.principal.cleaner.RBACProducer")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock, proxy_mock):
-        """Test that dry-run mode handles malformed messages without retrying."""
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
+    def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock, dlq_producer_mock, proxy_mock):
+        """Test that dry-run mode sends malformed messages to DLQ for inspection."""
         # Mock consumer with malformed message
         mock_message = create_mock_kafka_message(b'{"invalid": "json without required fields"}')
         consumer_instance = MagicMock()
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
+
+        # Mock DLQ producer
+        mock_dlq_instance = MagicMock()
+        dlq_producer_mock.return_value = mock_dlq_instance
 
         # Run in dry-run mode
         before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
@@ -552,6 +558,14 @@ class PrincipalKafkaTests(IdentityRequest):
             before_errors + 1,
             f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
         )
+
+        # Verify message was sent to DLQ for inspection
+        mock_dlq_instance.send_kafka_message.assert_called_once()
+        dlq_call_args = mock_dlq_instance.send_kafka_message.call_args
+        self.assertEqual(dlq_call_args[0][0], "test-dlq-topic")  # First positional arg is topic
+        dlq_message = dlq_call_args[0][1]  # Second positional arg is the message
+        self.assertTrue(dlq_message["dry_run"])  # Should be marked as dry-run
+        self.assertIn("error", dlq_message)  # Should contain error details
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",

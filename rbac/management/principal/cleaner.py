@@ -434,12 +434,11 @@ def process_kafka_message(
             kafka_messages_failure_total.inc()
 
             if dry_run:
-                # In dry-run, log error but still commit offset (we're just validating)
-                logger.warning(
-                    "DRY RUN: Message would have failed in production. Committing offset to continue validation."
-                )
+                # In dry-run, send to DLQ for observability and validation
+                # This allows operators to monitor what would fail in production
+                logger.warning("DRY RUN: Message would have failed in production. Sending to DLQ for inspection.")
                 kafka_dry_run_errors_total.inc()
-                return MessageProcessingResult(should_continue=True, success=True)
+                # Fall through to DLQ logic below
 
             # Send to DLQ if configured, similar to UMB's nack behavior
             # This prevents infinite retry loops for malformed or permanently unprocessable messages
@@ -457,13 +456,16 @@ def process_kafka_message(
                             "partition": message.partition,
                             "offset": message.offset,
                             "timestamp": message.timestamp,
+                            "dry_run": dry_run,  # Mark if this is from shadow mode validation
                         }
+                        dlq_mode = " (DRY RUN)" if dry_run else ""
                         dlq_producer.send_kafka_message(dlq_topic, dlq_message)
                         logger.info(
-                            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+                            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)%s",
                             dlq_topic,
                             message.partition,
                             message.offset,
+                            dlq_mode,
                         )
                         # Return success=True so offset gets committed (message moved to DLQ)
                         return MessageProcessingResult(should_continue=True, success=True)
