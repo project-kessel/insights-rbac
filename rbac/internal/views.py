@@ -65,6 +65,7 @@ from kessel.relations.v1beta1 import (
     relation_tuples_pb2,
     relation_tuples_pb2_grpc,
 )
+from management.audit_log.model import AuditLog
 from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
@@ -427,6 +428,8 @@ def user_lookup(request):
 
     username = request.GET.get("username")
     email = request.GET.get("email")
+    search_param = f"username='{username}'" if username else f"email='{email}'"
+    caller = getattr(getattr(request, "user", None), "username", "internal-service")
 
     try:
         validate_user_lookup_input(username, email)
@@ -436,8 +439,10 @@ def user_lookup(request):
     try:
         user = get_user_from_bop(username, email)
     except UserNotFoundError as err:
+        _log_user_lookup(caller, f"User lookup: not found ({search_param})")
         return handle_error(f"Not found - {err}", 404)
     except Exception as err:
+        _log_user_lookup(caller, f"User lookup: error querying bop ({search_param})")
         return handle_error(f"Internal error - couldn't get user from bop: {err}", 500)
 
     username = user["username"]
@@ -453,12 +458,14 @@ def user_lookup(request):
         logger.debug("queried rbac db for tenant: '%s' based on org_id: '%s'", user_tenant, user_org_id)
     except Exception as err:
         logger.error(f"error querying for tenant with org_id: '{user_org_id}' in rbac, err: {err}")
+        _log_user_lookup(caller, f"User lookup: error resolving tenant ({search_param})")
         return handle_error(f"Internal error - failed to query rbac for tenant with org_id: '{user_org_id}'", 500)
 
     try:
         principal = get_principal(username, request, verify_principal=False, from_query=False, user_tenant=user_tenant)
     except Exception as err:
         logger.error(f"error querying for principal with username: '{username}' in rbac, err: {err}")
+        _log_user_lookup(caller, f"User lookup: error resolving principal ({search_param})")
         return handle_error(f"Internal error - failed to query rbac for user: '{username}'", 500)
 
     groups = groups_for_principal(principal, user_tenant, is_org_admin=user["is_org_admin"])
@@ -494,7 +501,23 @@ def user_lookup(request):
 
     result["groups"] = user_groups
 
+    _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", principal=principal)
+
     return HttpResponse(json.dumps(result, cls=DjangoJSONEncoder), content_type="application/json", status=200)
+
+
+def _log_user_lookup(caller, description, principal=None):
+    """Create an audit log entry for a user lookup request."""
+    try:
+        AuditLog.objects.create(
+            principal_username=caller,
+            description=description[:255],
+            resource_type=AuditLog.USER,
+            action=AuditLog.READ,
+            resource_uuid=getattr(principal, "uuid", None),
+        )
+    except Exception:
+        logger.exception("failed to create audit log for user lookup")
 
 
 def validate_user_lookup_input(username, email):

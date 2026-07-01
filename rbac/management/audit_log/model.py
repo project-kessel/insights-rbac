@@ -54,12 +54,14 @@ class AuditLog(TenantAwareModel):
     EDIT = "edit"
     CREATE = "create"
     REMOVE = "remove"
+    READ = "read"
     ACTION_CHOICES = (
         (DELETE, "Delete"),
         (ADD, "Add"),
         (EDIT, "Edit"),
         (CREATE, "Create"),
         (REMOVE, "Remove"),
+        (READ, "Read"),
     )
 
     SOURCE_AI_ASSISTANT = "ai_assistant"
