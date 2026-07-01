@@ -567,6 +567,50 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue(dlq_message["dry_run"])  # Should be marked as dry-run
         self.assertIn("error", dlq_message)  # Should contain error details
 
+    @patch("management.principal.cleaner.retrieve_user_info_kafka")
+    @patch(
+        "management.principal.proxy.PrincipalProxy._request_principals",
+        return_value={
+            "status_code": status.HTTP_200_OK,
+            "data": [],
+        },
+    )
+    @patch("management.principal.cleaner.RBACProducer")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
+    def test_dry_run_mode_handles_transient_errors(
+        self, consumer_mock, dlq_producer_mock, proxy_mock, retrieve_user_mock
+    ):
+        """Test that dry-run mode does NOT send transient errors to DLQ."""
+        # Mock consumer with valid message
+        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_mock.return_value = consumer_instance
+
+        # Mock DLQ producer
+        mock_dlq_instance = MagicMock()
+        dlq_producer_mock.return_value = mock_dlq_instance
+
+        # Mock a transient error (e.g., network timeout when calling BOP)
+        retrieve_user_mock.side_effect = ConnectionError("Network timeout")
+
+        # Run in dry-run mode
+        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+        process_principal_events_from_kafka(dry_run=True)
+        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+
+        # Verify error metric was incremented
+        self.assertEqual(
+            after_errors,
+            before_errors + 1,
+            f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
+        )
+
+        # Verify message was NOT sent to DLQ (transient errors should retry, not go to DLQ)
+        mock_dlq_instance.send_kafka_message.assert_not_called()
+
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
         return_value={
