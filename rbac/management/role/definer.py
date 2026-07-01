@@ -25,7 +25,7 @@ import os
 from core.utils import destructive_ok
 from django.conf import settings
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import F, QuerySet
 from django.utils import timezone
 from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from management.atomic_transactions import atomic, atomic_with_retry
@@ -399,9 +399,7 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
         # changes to the role itself).
         if existing_scope_state is not None:
             if set(existing_scope_state.computed_scopes) != set(binding_scopes):
-                # We don't need to worry about updates being lost here, since we will only update this in a
-                # SERIALIZABLE transaction.
-                existing_scope_state.version = existing_scope_state.version + 1
+                existing_scope_state.version = F("version") + 1
                 existing_scope_state.computed_scopes = list(binding_scopes)
                 existing_scope_state.migrated = False
                 existing_scope_state.save()
