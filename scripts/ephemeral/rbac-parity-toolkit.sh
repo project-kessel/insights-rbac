@@ -404,7 +404,7 @@ phase_setup() {
   echo ""
   echo -e "${BOLD}=== Phase: SETUP ===${NC}"
   echo ""
-  echo "  Creating test data to exercise all parity sub-checks."
+  echo "  Creating test data via Django ORM (bypasses V2 API permission checks)."
   echo "  Run tag: ${run_tag}"
   echo ""
 
@@ -415,145 +415,69 @@ phase_setup() {
 
   state_save PARITY_RUN_TAG "${run_tag}"
 
-  # ── 1. Workspaces (exercises workspace hierarchy check) ──────────────────
-  echo ""
-  echo -e "${BOLD}--- Creating workspaces ---${NC}"
-  echo ""
-
-  local ws_count=2
-  [[ "${PARITY_MINIMAL}" == "true" ]] && ws_count=1
-
-  local ws_ids=()
-  for i in $(seq 1 "${ws_count}"); do
-    local ws_name="parity-ws-${i}-${run_tag}"
-    local ws_resp
-    ws_resp=$(exec_api_curl POST "/api/rbac/v2/workspaces/" \
-      -H "Content-Type: application/json" \
-      -d "{\"name\": \"${ws_name}\"}") || return 1
-    local ws_id
-    ws_id=$(echo "${ws_resp}" | jq -r '.id')
-    ws_ids+=("${ws_id}")
-    good "Created workspace: ${ws_name} (${ws_id})"
-  done
-
-  local ws_ids_csv
-  ws_ids_csv=$(IFS=,; echo "${ws_ids[*]}")
-  state_save PARITY_WORKSPACE_IDS "${ws_ids_csv}"
-
-  # ── 2. Custom role with permissions (exercises custom role check) ────────
-  echo ""
-  echo -e "${BOLD}--- Creating custom role ---${NC}"
-  echo ""
-
-  local role_name="parity-role-${run_tag}"
-  local perms_json perm_count
-  if [[ "${PARITY_MINIMAL}" == "true" ]]; then
-    perm_count=1
-    perms_json='[{"application":"inventory","resource_type":"hosts","operation":"read"}]'
-  else
-    perm_count=2
-    perms_json='[{"application":"inventory","resource_type":"hosts","operation":"read"},{"application":"inventory","resource_type":"groups","operation":"write"}]'
-  fi
-
-  local role_body
-  role_body=$(jq -nc \
-    --arg name "${role_name}" \
-    --argjson perms "${perms_json}" \
-    '{name: $name, permissions: $perms}')
-
-  local role_resp
-  role_resp=$(exec_api_curl POST "/api/rbac/v2/roles/" \
-    -H "Content-Type: application/json" \
-    -d "${role_body}") || return 1
-  local role_uuid
-  role_uuid=$(echo "${role_resp}" | jq -r '.id')
-  state_save PARITY_ROLE_UUID "${role_uuid}"
-  good "Created role: ${role_name} (${role_uuid}) with ${perm_count} permission(s)"
-
-  # ── 3. Group with principal (exercises group-principal check) ─────────────
-  echo ""
-  echo -e "${BOLD}--- Creating group with principal ---${NC}"
-  echo ""
-
-  # Find an existing principal to add.
-  local test_username
-  test_username=$(exec_api_curl GET "/api/rbac/v1/principals/?limit=1&type=user" \
-    2>/dev/null | jq -r '.data[0].username // empty' 2>/dev/null)
-  if [[ -z "${test_username}" ]]; then
-    test_username="${BENTO_BASIC_AUTH_CONSOLE_DOT_USERNAME}"
-  fi
-  state_save PARITY_TEST_USERNAME "${test_username}"
-  info "Using principal: ${test_username}"
-
-  local group_count=2
-  [[ "${PARITY_MINIMAL}" == "true" ]] && group_count=1
-
-  local group_ids=()
-  for i in $(seq 1 "${group_count}"); do
-    local group_name="parity-group-${i}-${run_tag}"
-    local g_resp
-    g_resp=$(exec_api_curl POST "/api/rbac/v1/groups/" \
-      -H "Content-Type: application/json" \
-      -d "{\"name\": \"${group_name}\"}") || return 1
-    local group_uuid
-    group_uuid=$(echo "${g_resp}" | jq -r '.uuid')
-    group_ids+=("${group_uuid}")
-    good "Created group: ${group_name} (${group_uuid})"
-
-    # Add principal to the group.
-    if exec_api_curl POST "/api/rbac/v1/groups/${group_uuid}/principals/" \
-      -H "Content-Type: application/json" \
-      -d "{\"principals\": [{\"username\": \"${test_username}\"}]}" >/dev/null 2>&1; then
-      good "  Added principal '${test_username}' to group"
-    else
-      warn "  Failed to add principal"
-    fi
-  done
-
-  local group_ids_csv
-  group_ids_csv=$(IFS=,; echo "${group_ids[*]}")
-  state_save PARITY_GROUP_IDS "${group_ids_csv}"
-
-  # ── 4. Role binding (ties role+group+workspace together) ─────────────────
-  echo ""
-  echo -e "${BOLD}--- Creating role bindings ---${NC}"
-  echo ""
-
-  local rb_requests=""
-  for ws_id in "${ws_ids[@]}"; do
-    [[ -n "${rb_requests}" ]] && rb_requests="${rb_requests},"
-    rb_requests="${rb_requests}{\"resource\":{\"id\":\"${ws_id}\",\"type\":\"workspace\"},\"subject\":{\"id\":\"${group_ids[0]}\",\"type\":\"group\"},\"role\":{\"id\":\"${role_uuid}\"}}"
-  done
-
-  local rb_ok=false
-  for attempt in 1 2 3; do
-    exec_api_curl POST "/api/rbac/v2/role-bindings:batchCreate/" \
-      -H "Content-Type: application/json" \
-      -d "{\"requests\": [${rb_requests}]}" >/dev/null 2>&1 && { rb_ok=true; break; }
-    warn "Role binding batch create attempt ${attempt}/3 failed, retrying in 5s..."
-    sleep 5
-  done
-
-  if [[ "${rb_ok}" != "true" ]]; then
-    err "Failed to create role bindings after 3 attempts"
+  local svc_pod
+  svc_pod=$(get_pod_by_label "${RBAC_SERVICE_POD_LABEL}")
+  if [[ -z "${svc_pod}" ]]; then
+    err "No running RBAC service pod found"
     return 1
   fi
-  good "Created ${#ws_ids[@]} role binding(s)"
 
-  # ── 5. Bootstrap + seeded roles (already exist from bootstrap/seeds) ─────
-  echo ""
-  info "Bootstrap and seeded role data already exist from tenant bootstrap."
-  info "No additional setup needed for those sub-checks."
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  info "Copying parity_data_setup.py to pod ${svc_pod}..."
+  oc cp "${script_dir}/parity_data_setup.py" "${svc_pod}:/tmp/parity_data_setup.py" || {
+    err "Failed to copy setup script to pod"
+    return 1
+  }
 
-  # ── Summary ──────────────────────────────────────────────────────────────
+  local setup_cmd="cd /opt/rbac/rbac && DJANGO_SETTINGS_MODULE=rbac.settings /opt/rbac/.venv/bin/python /tmp/parity_data_setup.py setup --org-id=${PARITY_ORG_ID} --run-tag=${run_tag}"
+  [[ "${PARITY_MINIMAL}" == "true" ]] && setup_cmd="${setup_cmd} --minimal"
+
+  info "Running ORM-based data setup on pod..."
+  local raw_output
+  raw_output=$(oc exec "${svc_pod}" -- sh -c "${setup_cmd}" 2>&1)
+
+  local setup_output
+  setup_output=$(echo "${raw_output}" | grep -v '^Defaulted' | tail -1)
+
+  local setup_error
+  setup_error=$(echo "${setup_output}" | jq -r '.error // empty' 2>/dev/null)
+  if [[ -n "${setup_error}" ]]; then
+    err "Setup script failed: ${setup_error}"
+    err "Full output: ${raw_output}"
+    return 1
+  fi
+
+  local ws_ids_csv role_uuid group_ids_csv test_username binding_count role_perm_count
+  ws_ids_csv=$(echo "${setup_output}" | jq -r '.workspace_ids | join(",")')
+  role_uuid=$(echo "${setup_output}" | jq -r '.role_uuid')
+  group_ids_csv=$(echo "${setup_output}" | jq -r '.group_ids | join(",")')
+  test_username=$(echo "${setup_output}" | jq -r '.test_username')
+  binding_count=$(echo "${setup_output}" | jq -r '.binding_count')
+  role_perm_count=$(echo "${setup_output}" | jq -r '.role_perm_count')
+
+  if [[ -z "${ws_ids_csv}" || "${ws_ids_csv}" == "null" ]]; then
+    err "Setup script returned no workspace IDs"
+    err "Output: ${raw_output}"
+    return 1
+  fi
+
+  state_save PARITY_WORKSPACE_IDS "${ws_ids_csv}"
+  state_save PARITY_ROLE_UUID "${role_uuid}"
+  state_save PARITY_GROUP_IDS "${group_ids_csv}"
+  state_save PARITY_TEST_USERNAME "${test_username}"
+
+  local ws_count group_count
+  ws_count=$(echo "${ws_ids_csv}" | tr ',' '\n' | wc -l | tr -d ' ')
+  group_count=$(echo "${group_ids_csv}" | tr ',' '\n' | wc -l | tr -d ' ')
+
   echo ""
   echo -e "${BOLD}=== Setup Summary ===${NC}"
   echo ""
-  echo "  Org ID:      ${PARITY_ORG_ID}"
-  echo "  Workspaces:  ${ws_count} created (${ws_ids_csv})"
-  echo "  Role:        ${role_name} (${role_uuid})"
-  echo "  Groups:      ${group_count} with principal '${test_username}'"
-  echo "  Bindings:    ${#ws_ids[@]} (role -> group -> workspace)"
+  good "Workspaces:  ${ws_count} created (${ws_ids_csv})"
+  good "Role:        parity-role-${run_tag} (${role_uuid}) with ${role_perm_count} permission(s)"
+  good "Groups:      ${group_count} with principal '${test_username}'"
+  good "Bindings:    ${binding_count} (role -> group -> workspace)"
   echo "  Bootstrap:   pre-existing"
   echo "  Seeded roles: pre-existing"
   echo ""
@@ -831,62 +755,44 @@ phase_cleanup() {
   echo ""
 
   state_load
-  _db_creds || return 1
 
-  local cleaned=0
+  local svc_pod
+  svc_pod=$(get_pod_by_label "${RBAC_SERVICE_POD_LABEL}")
+  if [[ -z "${svc_pod}" ]]; then
+    err "No running RBAC service pod found"
+    return 1
+  fi
 
-  # Delete role bindings first (FK constraints).
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  oc cp "${script_dir}/parity_data_setup.py" "${svc_pod}:/tmp/parity_data_setup.py" 2>/dev/null || true
+
+  local cleanup_cmd="cd /opt/rbac/rbac && DJANGO_SETTINGS_MODULE=rbac.settings /opt/rbac/.venv/bin/python /tmp/parity_data_setup.py cleanup --org-id=${PARITY_ORG_ID:-}"
+
+  local ws_ids="${PARITY_WORKSPACE_IDS:-}"
   local role_uuid="${PARITY_ROLE_UUID:-}"
-  if [[ -n "${role_uuid}" ]]; then
-    info "Removing role bindings for role ${role_uuid}..."
-    _db_query "DELETE FROM management_rolebinding
-      WHERE role_id = (SELECT id FROM management_rolev2 WHERE uuid='${role_uuid}');" >/dev/null 2>&1 || true
-    cleaned=$((cleaned + 1))
+  local group_ids="${PARITY_GROUP_IDS:-}"
+
+  [[ -n "${ws_ids}" ]] && cleanup_cmd="${cleanup_cmd} --workspace-ids=${ws_ids}"
+  [[ -n "${role_uuid}" ]] && cleanup_cmd="${cleanup_cmd} --role-uuid=${role_uuid}"
+  [[ -n "${group_ids}" ]] && cleanup_cmd="${cleanup_cmd} --group-ids=${group_ids}"
+
+  if [[ -z "${ws_ids}" && -z "${role_uuid}" && -z "${group_ids}" ]]; then
+    info "No resources to clean up (state file empty or missing)."
+    rm -f "${PARITY_STATE_FILE}"
+    return 0
   fi
 
-  # Delete workspaces.
-  local ws_ids_csv="${PARITY_WORKSPACE_IDS:-}"
-  if [[ -n "${ws_ids_csv}" ]]; then
-    info "Removing test workspaces..."
-    IFS=',' read -ra ws_ids <<< "${ws_ids_csv}"
-    for ws_id in "${ws_ids[@]}"; do
-      _db_query "DELETE FROM management_workspace WHERE id = '${ws_id}';" >/dev/null 2>&1 || true
-      good "  Deleted workspace ${ws_id}"
-    done
-    cleaned=$((cleaned + ${#ws_ids[@]}))
-  fi
+  info "Running ORM-based cleanup on pod..."
+  local raw_output
+  raw_output=$(oc exec "${svc_pod}" -- sh -c "${cleanup_cmd}" 2>&1)
 
-  # Delete the role.
-  if [[ -n "${role_uuid}" ]]; then
-    info "Removing test role..."
-    # Delete role permissions first, then the role itself.
-    local role_pk
-    role_pk=$(_db_query "SELECT id FROM management_rolev2 WHERE uuid='${role_uuid}';" 2>/dev/null)
-    if [[ -n "${role_pk}" ]]; then
-      _db_query "DELETE FROM management_rolev2_permissions WHERE rolev2_id = ${role_pk};" >/dev/null 2>&1 || true
-      _db_query "DELETE FROM management_rolev2 WHERE id = ${role_pk};" >/dev/null 2>&1 || true
-      good "  Deleted role ${role_uuid}"
-      cleaned=$((cleaned + 1))
-    fi
-  fi
+  local cleanup_output
+  cleanup_output=$(echo "${raw_output}" | grep -v '^Defaulted' | tail -1)
 
-  # Delete groups.
-  local group_ids_csv="${PARITY_GROUP_IDS:-}"
-  if [[ -n "${group_ids_csv}" ]]; then
-    info "Removing test groups..."
-    IFS=',' read -ra group_ids <<< "${group_ids_csv}"
-    for gid in "${group_ids[@]}"; do
-      # Remove principals from group first.
-      _db_query "DELETE FROM management_group_principals WHERE group_id = (SELECT id FROM management_group WHERE uuid='${gid}');" >/dev/null 2>&1 || true
-      # Remove policies referencing this group.
-      _db_query "DELETE FROM management_policy_group WHERE group_id = (SELECT id FROM management_group WHERE uuid='${gid}');" >/dev/null 2>&1 || true
-      _db_query "DELETE FROM management_group WHERE uuid = '${gid}';" >/dev/null 2>&1 || true
-      good "  Deleted group ${gid}"
-    done
-    cleaned=$((cleaned + ${#group_ids[@]}))
-  fi
+  local cleaned
+  cleaned=$(echo "${cleanup_output}" | jq -r '.cleaned // 0' 2>/dev/null)
 
-  # Clear state file.
   rm -f "${PARITY_STATE_FILE}"
 
   echo ""
