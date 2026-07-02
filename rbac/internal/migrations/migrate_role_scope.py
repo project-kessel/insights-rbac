@@ -174,7 +174,13 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
         expected_state_version=initial_check.scope_state.version,
     )
 
-    _migrate_bindings_for_scope_change(context)
+    try:
+        _migrate_bindings_for_scope_change(context)
+    except Exception:
+        # We exit here and leave migrated unchanged, thus ensuring that we will try again if the migration is re-run
+        # (unless migrated is set to true by another instance of the job).
+        logger.error(f"Failed to migrate bindings for role {v1_role.name!r}", exc_info=True)
+        return
 
     # If it's still the case that nothing has changed out from under us, we can update the scope state to show that
     # the role was migrated to the relevant scopes.
@@ -240,23 +246,15 @@ def _migrate_group_batch(context: _MigrateContext, groups: list[Group]) -> int:
     migrated_groups = 0
 
     for group in groups:
-        try:
-            result = migrate_system_role_bindings_for_group(group, context.replicator)
+        result = migrate_system_role_bindings_for_group(group, context.replicator)
 
-            if result > 0:
-                migrated_groups += 1
-                logger.debug(
-                    "Migrated bindings for group %s (uuid=%s) with system role %s",
-                    group.name,
-                    group.uuid,
-                    context.role.name,
-                )
-        except Exception:
-            logger.error(
-                "Failed to migrate bindings for group %s with role %s",
+        if result > 0:
+            migrated_groups += 1
+            logger.debug(
+                "Migrated bindings for group %s (uuid=%s) with system role %s",
+                group.name,
                 group.uuid,
                 context.role.name,
-                exc_info=True,
             )
 
     return migrated_groups
@@ -269,22 +267,14 @@ def _migrate_car_batch(context: _MigrateContext, cars: list[CrossAccountRequest]
     migrated_cars = 0
 
     for car in cars:
-        try:
-            result = migrate_car_bindings(car, context.replicator)
+        result = migrate_car_bindings(car, context.replicator)
 
-            if result > 0:
-                migrated_cars += 1
-                logger.debug(
-                    "Migrated bindings for CAR %s with system role %s",
-                    car.request_id,
-                    context.role.name,
-                )
-        except Exception:
-            logger.error(
-                "Failed to migrate bindings for CAR %s with role %s",
+        if result > 0:
+            migrated_cars += 1
+            logger.debug(
+                "Migrated bindings for CAR %s with system role %s",
                 car.request_id,
                 context.role.name,
-                exc_info=True,
             )
 
     return migrated_cars
