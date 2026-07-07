@@ -171,7 +171,6 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             except DefaultGroupNotAvailableError:
                 # Default groups may not exist yet during seeding, skip parent relationship
                 logging.warning(f"Default groups may not exist yet during seeding for admin scope {role_scope}")
-                pass
 
         if role.platform_default:
             try:
@@ -186,7 +185,6 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             except DefaultGroupNotAvailableError:
                 # Default groups may not exist yet during seeding, skip parent relationship
                 logging.warning(f"Default groups may not exist yet during seeding for platform scope {role_scope}")
-                pass
 
         return create_relations
 

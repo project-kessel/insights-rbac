@@ -51,7 +51,7 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     v1_role = Role.objects.filter(pk=v1_role.pk).first()
 
     if v1_role is None:
-        logger.info(f"System role {v1_role.name!r} concurrently deleted; not updating binding scopes.")
+        logger.info("System role concurrently deleted; not updating binding scopes.")
         return
 
     if not v1_role.system:
