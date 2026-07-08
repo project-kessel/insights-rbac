@@ -1577,3 +1577,94 @@ namespace Roles {
         @body body: BatchDeleteRolesRequest
     ): BatchDeleteRolesResponse | Problems.CommonProblems | Problems.Problem404;
 }
+
+@route("/permissions/")
+@tag("Permissions")
+@doc("Operations about permissions")
+namespace Permissions {
+
+    model Pagination {
+        @doc("Pagination metadata")
+        meta: OffsetPaginationMeta;
+
+        @doc("Pagination links")
+        links: OffsetPaginationLinks;
+    }
+
+    @example(#{
+        meta: #{
+            count: 100,
+            limit: 10,
+            offset: 0
+        },
+        links: #{
+            first: "/api/rbac/v2/permissions/?limit=10&offset=0",
+            next: "/api/rbac/v2/permissions/?limit=10&offset=10",
+            previous: null,
+            last: "/api/rbac/v2/permissions/?limit=10&offset=90"
+        },
+        data: #[
+            #{
+                application: "rbac",
+                resource_type: "workspace",
+                operation: "read"
+            }
+        ]
+    })
+    model PermissionListResponse {
+        ...Pagination;
+
+        @doc("List of permissions")
+        data: Permission[];
+    }
+
+    @doc("List the permissions for a tenant")
+    @summary("By default, responses are sorted in ascending order by permission application.")
+    @opExample(#{
+        parameters: #{
+            limit: 10,
+            offset: 0
+        },
+        returnType: #{
+            meta: #{
+                count: 100,
+                limit: 10,
+                offset: 0
+            },
+            links: #{
+                first: "/api/rbac/v2/permissions/?limit=10&offset=0",
+                next: "/api/rbac/v2/permissions/?limit=10&offset=10",
+                previous: null,
+                last: "/api/rbac/v2/permissions/?limit=10&offset=90"
+            },
+            data: #[
+                #{
+                    application: "rbac",
+                    resource_type: "workspace",
+                    operation: "read"
+                }
+            ]
+        }
+    })
+    @get op list(
+        @query limit?: Limit = DefaultLimit;
+
+        @doc("Offset for offset-based pagination.")
+        @query offset?: Offset = DefaultOffset;
+
+        @doc("Filter by application name. Exact match by default. You may also use a comma-separated list to match on multiple applications.")
+        @query application?: string;
+
+        @doc("Filter permissions by the resource type (e.g. 'tenant', 'workspace'). When omitted, returns permissions from all types. You may also use a comma-separated list to match on multiple resource_types.")
+        @query resource_type?: string;
+
+        @doc("Filter by operation (e.g. 'read', 'create', 'delete', 'update'). You may also use a comma-separated list to match on multiple operation types.")
+        @query operation?: string;
+
+        @doc("Control which fields are included in the response.")
+        @query fields?: FieldMask = "application,resource_type,operation";
+
+        @doc("Sort by specified field(s), prefix with '-' for descending order. Allowed fields: application, resource_type, operation.")
+        @query order_by?: OrderBy = "application";
+    ): PermissionListResponse | Problems.CommonProblems | Problems.Problem400;
+}
