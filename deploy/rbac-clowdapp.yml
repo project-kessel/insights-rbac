@@ -291,6 +291,8 @@ objects:
             value: ${TENANT_SCOPE_PERMISSIONS}
           - name: DEFAULT_SCOPE_PERMISSIONS
             value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+            value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
           ####### Following envs are for scheduler, doesn't hurt to put in worker
           - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB}
@@ -607,6 +609,8 @@ objects:
             value: ${TENANT_SCOPE_PERMISSIONS}
           - name: DEFAULT_SCOPE_PERMISSIONS
             value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+            value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
           - name: WORKSPACE_ACCESS_TIMING_ENABLED
             value: ${WORKSPACE_ACCESS_TIMING_ENABLED}
           - name: RBAC_KAFKA_CONSUMER_TOPIC
@@ -723,6 +727,8 @@ objects:
             value: ${TENANT_SCOPE_PERMISSIONS}
           - name: DEFAULT_SCOPE_PERMISSIONS
             value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+            value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
           - name: PARITY_CHECK_ENABLED
             value: ${PARITY_CHECK_ENABLED}
           - name: PARITY_CHECK_INTERVAL_SECONDS
@@ -820,6 +826,8 @@ objects:
             value: ${TENANT_SCOPE_PERMISSIONS}
           - name: DEFAULT_SCOPE_PERMISSIONS
             value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+            value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
           - name: REDHAT_SSO
             value: ${REDHAT_SSO}
         livenessProbe:
@@ -1284,6 +1292,8 @@ objects:
               value: ${TENANT_SCOPE_PERMISSIONS}
             - name: DEFAULT_SCOPE_PERMISSIONS
               value: ${DEFAULT_SCOPE_PERMISSIONS}
+            - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+              value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
             ######## Following envs are different from worker
             - name: S3_AWS_ACCESS_KEY_ID
               valueFrom:
@@ -1960,6 +1970,12 @@ parameters:
 - name: DEFAULT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to default workspace scope (more specific patterns override broader TENANT_SCOPE_PERMISSIONS entries)
   value: ''
+- name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+  description: |
+    Enable automatic migration of system roles whose scope has changed during seeding. (On a deployment where system
+    roles already exist, this should only be enabled after manually ensuring each role is migrated through the internal
+    API. It is safe to enable this on a new deployment.)
+  value: 'False'
 - name: WORKSPACE_ACCESS_TIMING_ENABLED
   description: Enable detailed timing logs for v2 workspace access checks (for performance investigation)
   value: 'False'
