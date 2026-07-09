@@ -22,6 +22,8 @@ import itertools
 import logging
 from typing import Optional
 
+from django.conf import settings
+
 from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
@@ -147,6 +149,10 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     ImplicitResourceService) would not match the expected scopes in the RoleScopeState (likely because the
     RoleScopeState was updated by an instance with different scope settings).
     """
+    if not settings.REPLICATION_TO_RELATION_ENABLED:
+        logger.info("Not migrating role scope when replication is disabled.")
+        return
+
     if replicator is None:
         replicator = OutboxReplicator()
 
