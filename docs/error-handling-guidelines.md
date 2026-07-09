@@ -29,6 +29,7 @@ v2 uses `application/problem+json` content type. Built by `v2response_error_from
 {
   "status": 400,
   "title": "The request payload contains invalid syntax.",
+  "type": "http://project-kessel.org/problems/invalid-request",
   "detail": "A role with name 'foo' already exists for this tenant.",
   "errors": [
     {"message": "...", "field": "name"}
@@ -38,6 +39,7 @@ v2 uses `application/problem+json` content type. Built by `v2response_error_from
 ```
 
 Rules:
+- `type` comes from the `PROBLEM_TYPES` dict (keyed by HTTP status code). Uses RFC 9457 problem type URIs from the TypeSpec `ProblemType` enum (e.g. `http://project-kessel.org/problems/invalid-request`). Omitted when no URI is defined for the status code (e.g. 409). Can be overridden via the `problem_type` parameter for specialized types like `already-exists` or `workspace-not-empty`.
 - `title` comes from the `PROBLEM_TITLES` dict (keyed by HTTP status code: 400, 401, 403, 404, 409, 500).
 - `instance` is included only for PUT/PATCH/DELETE requests.
 - `errors` array is included only when field-level errors exist.

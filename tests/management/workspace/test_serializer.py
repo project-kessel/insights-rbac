@@ -326,3 +326,29 @@ class WorkspaceListInputSerializerTest(TestCase):
         s = WorkspaceListInputSerializer(data={"ids": "abc\x00def"})
         self.assertFalse(s.is_valid())
         self.assertIn("ids", s.errors)
+
+    # --- with_ancestry ---
+
+    def test_with_ancestry_omitted_defaults_to_false(self):
+        """Test that omitting with_ancestry defaults to false."""
+        s = WorkspaceListInputSerializer(data={})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertFalse(s.validated_data["with_ancestry"])
+
+    def test_with_ancestry_true_string(self):
+        """Test that with_ancestry=true is accepted."""
+        s = WorkspaceListInputSerializer(data={"with_ancestry": "true"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertTrue(s.validated_data["with_ancestry"])
+
+    def test_with_ancestry_false_string(self):
+        """Test that with_ancestry=false is accepted."""
+        s = WorkspaceListInputSerializer(data={"with_ancestry": "false"})
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertFalse(s.validated_data["with_ancestry"])
+
+    def test_with_ancestry_invalid_value(self):
+        """Test that invalid with_ancestry values are rejected."""
+        s = WorkspaceListInputSerializer(data={"with_ancestry": "maybe"})
+        self.assertFalse(s.is_valid())
+        self.assertIn("with_ancestry", s.errors)

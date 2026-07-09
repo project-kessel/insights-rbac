@@ -8,6 +8,7 @@
 !tox.ini
 !rbac/
 !docs/source/specs/
+docs/source/specs/typespec/node_modules/
 !scripts/
 !deploy/
 !tests/

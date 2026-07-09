@@ -17,13 +17,13 @@
 """Test tuple changes for RBAC operations."""
 
 from datetime import timedelta
+from typing import Callable, Iterable, Optional, Tuple
+from unittest.mock import patch
 
-from django.utils import timezone
-from typing import Callable, Optional, Tuple, Iterable
-from django.test import TestCase, override_settings
-from django.db.models import Q
 from django.conf import settings
-
+from django.db.models import Q
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from management.group.definer import seed_group, set_system_flag_before_update
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
@@ -56,11 +56,10 @@ from management.role.relation_api_dual_write_handler import (
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.role_binding.service import RoleBindingService
-from management.tenant_mapping.model import TenantMapping, DefaultAccessType
+from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
-from management.tenant_service.tenant_service import BootstrappedTenant
+from management.tenant_service.tenant_service import BootstrappedTenant, TenantBootstrapService
 from management.tenant_service.v2 import V2TenantBootstrapService
-from management.tenant_service.tenant_service import TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
@@ -73,7 +72,10 @@ from migration_tool.in_memory_tuples import (
     subject,
     subject_type,
 )
+from migration_tool.models import V2boundresource
 from migration_tool.utils import create_relationship
+from tests.util import assert_v1_v2_locally_consistent, assert_v1_v2_tuples_fully_consistent
+from tests.v2_util import bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
 
 from api.cross_access.model import CrossAccountRequest
 from api.cross_access.relation_api_dual_write_cross_access_handler import (
@@ -81,11 +83,6 @@ from api.cross_access.relation_api_dual_write_cross_access_handler import (
 )
 from api.cross_access.util import create_cross_principal
 from api.models import Tenant, User
-from unittest.mock import patch
-
-from migration_tool.models import V2boundresource
-from tests.util import assert_v1_v2_locally_consistent, assert_v1_v2_tuples_fully_consistent
-from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
 
 @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
@@ -2909,17 +2906,38 @@ class DualWriteCrossAccountReqeustTestCase(DualWriteTestCase):
         ensure_v2_write_activated(self.tenant)
         self._do_test_scope_assignment()
 
+    @override_settings(ROOT_SCOPE_PERMISSIONS="inventory:*:*", TENANT_SCOPE_PERMISSIONS="rbac:*:*")
+    def _do_test_binding_multiple_scopes(self):
+        system_role = self.given_v1_system_role("test", permissions=["rbac:resource:verb", "inventory:resource:verb"])
+        car = self.given_car(self.user_id, [system_role])
+
+        self._expect_user_root_count(1, system_role)
+        self._expect_user_tenant_count(1, system_role)
+
+    def test_binding_multiple_scopes(self):
+        self._do_test_binding_multiple_scopes()
+
+    def test_v2_binding_multiple_scopes(self):
+        ensure_v2_write_activated(self.tenant)
+        self._do_test_binding_multiple_scopes()
+
     def _do_test_scope_removal(self):
         system_role = self.given_v1_system_role("test", permissions=["app:resource:verb"])
 
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS="app:resource:verb"):
             car = self.given_car(self.user_id, [system_role])
+
             self._expect_user_tenant_count(1, system_role)
+            self._expect_user_root_count(0, system_role)
+            self._expect_user_default_count(0, system_role)
 
         # Expiring the CAR should remove the role binding even if the role's scope has changed in the interim.
         with self.settings(ROOT_SCOPE_PERMISSIONS="", TENANT_SCOPE_PERMISSIONS=""):
             self.given_car_expired(car)
+
+            self._expect_user_tenant_count(0, system_role)
             self._expect_user_root_count(0, system_role)
+            self._expect_user_default_count(0, system_role)
 
     def test_scope_removal(self):
         self._do_test_scope_removal()

@@ -48,6 +48,11 @@ class WorkspaceListInputSerializer(serializers.Serializer):
     )
     parent_id = serializers.CharField(required=False, allow_blank=True, help_text="Filter by parent workspace ID")
     ids = serializers.CharField(required=False, allow_blank=True, help_text="Filter by comma-separated workspace IDs")
+    with_ancestry = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Include ancestor and fallback workspaces (root, default, ungrouped) in the response.",
+    )
 
     def to_internal_value(self, data):
         """Reject NUL bytes in query parameters."""

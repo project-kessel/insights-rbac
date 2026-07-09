@@ -16,11 +16,13 @@
 #
 """Test the MCP views via _private/_a2s/ path."""
 
+import concurrent.futures
 import inspect
 import json
+import threading
 import time
 from importlib import reload
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
@@ -29,13 +31,21 @@ from management.mcp_views import (
     ApiVersion,
     ToolConfig,
     ToolTimeoutError,
+    _MAX_PERMISSIONS_PER_ROLE,
     _TOOL_CONFIG,
     _check_kessel_access,
     _check_v1_access,
     _execute_with_timeout,
     _permission_matches,
     _sanitize_validation_error,
+    _shutdown_in_progress,
+    _validate_permission_format,
     _validate_tool_arguments,
+    _validate_uuid_field,
+    _validate_uuid_list,
+    _validate_v2_permission,
+    _validate_write_payload,
+    mcp_shutdown,
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
 from management.workspace.model import Workspace
@@ -8237,3 +8247,505 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
         result = _validate_tool_arguments("hello", {"message": 999})
         self.assertIsNotNone(result)
         self.assertIn("string", result)
+
+
+class MCPWritePayloadValidationUnitTests(IdentityRequest):
+    """Unit tests for write payload validation helper functions."""
+
+    _VALID_UUID = "550e8400-e29b-41d4-a716-446655440000"
+    _VALID_UUID2 = "550e8400-e29b-41d4-a716-446655440001"
+    _VALID_UUID3 = "550e8400-e29b-41d4-a716-446655440002"
+
+    # --- _validate_permission_format ---
+
+    def test_valid_permission_format(self):
+        """Valid 'app:resource:verb' permission passes."""
+        self.assertIsNone(_validate_permission_format("cost-management:cost_model:read"))
+
+    def test_valid_permission_with_wildcard(self):
+        """Wildcard permission passes."""
+        self.assertIsNone(_validate_permission_format("cost-management:*:*"))
+
+    def test_permission_missing_colon(self):
+        """Permission with fewer than 3 parts is rejected."""
+        result = _validate_permission_format("cost-management:cost_model")
+        self.assertIsNotNone(result)
+        self.assertIn("malformed", result)
+        self.assertIn("application:resource_type:verb", result)
+
+    def test_permission_too_many_parts(self):
+        """Permission with more than 3 parts is rejected."""
+        result = _validate_permission_format("a:b:c:d")
+        self.assertIsNotNone(result)
+        self.assertIn("malformed", result)
+
+    def test_permission_empty_part(self):
+        """Permission with empty segment is rejected."""
+        result = _validate_permission_format("cost-management::read")
+        self.assertIsNotNone(result)
+        self.assertIn("empty", result)
+
+    def test_permission_whitespace_padded(self):
+        """Permission with whitespace-padded segment is rejected."""
+        result = _validate_permission_format("cost-management: cost_model:read")
+        self.assertIsNotNone(result)
+        self.assertIn("whitespace", result)
+
+    def test_permission_single_string(self):
+        """Permission with no colons is rejected."""
+        result = _validate_permission_format("readall")
+        self.assertIsNotNone(result)
+        self.assertIn("malformed", result)
+
+    # --- _validate_v2_permission ---
+
+    def test_valid_v2_permission(self):
+        """V2 permission with all required fields passes."""
+        perm = {"application": "cost-management", "resource_type": "cost_model", "operation": "read"}
+        self.assertIsNone(_validate_v2_permission(perm, 0))
+
+    def test_v2_permission_missing_operation(self):
+        """V2 permission missing 'operation' is rejected."""
+        perm = {"application": "cost-management", "resource_type": "cost_model"}
+        result = _validate_v2_permission(perm, 0)
+        self.assertIsNotNone(result)
+        self.assertIn("operation", result)
+        self.assertIn("permissions[0]", result)
+
+    def test_v2_permission_empty_application(self):
+        """V2 permission with empty application is rejected."""
+        perm = {"application": "", "resource_type": "cost_model", "operation": "read"}
+        result = _validate_v2_permission(perm, 1)
+        self.assertIsNotNone(result)
+        self.assertIn("application", result)
+        self.assertIn("permissions[1]", result)
+
+    def test_v2_permission_whitespace_only(self):
+        """V2 permission with whitespace-only resource_type is rejected."""
+        perm = {"application": "app", "resource_type": "   ", "operation": "read"}
+        result = _validate_v2_permission(perm, 0)
+        self.assertIsNotNone(result)
+        self.assertIn("resource_type", result)
+
+    # --- _validate_uuid_field ---
+
+    def test_valid_uuid(self):
+        """Valid UUID passes."""
+        self.assertIsNone(_validate_uuid_field(self._VALID_UUID, "role_uuid"))
+
+    def test_invalid_uuid(self):
+        """Non-UUID string is rejected."""
+        result = _validate_uuid_field("not-a-uuid", "role_uuid")
+        self.assertIsNotNone(result)
+        self.assertIn("role_uuid", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_empty_uuid_passes(self):
+        """Empty string UUID passes (optional field)."""
+        self.assertIsNone(_validate_uuid_field("", "role_uuid"))
+
+    # --- _validate_uuid_list ---
+
+    def test_uuid_list_valid(self):
+        """List of valid UUIDs passes."""
+        self.assertIsNone(_validate_uuid_list([self._VALID_UUID, self._VALID_UUID2], "ids"))
+
+    def test_uuid_list_invalid_at_index_zero(self):
+        """Invalid UUID at index 0 returns error naming ids[0]."""
+        result = _validate_uuid_list(["bad-uuid", self._VALID_UUID], "ids")
+        self.assertIsNotNone(result)
+        self.assertIn("ids[0]", result)
+
+    def test_uuid_list_invalid_at_later_index(self):
+        """Invalid UUID at a later position includes the correct index in the error."""
+        result = _validate_uuid_list([self._VALID_UUID, "bad-uuid"], "ids")
+        self.assertIsNotNone(result)
+        self.assertIn("ids[1]", result)
+
+    def test_uuid_list_empty_passes(self):
+        """Empty list passes."""
+        self.assertIsNone(_validate_uuid_list([], "ids"))
+
+    def test_uuid_list_none_passes(self):
+        """None passes (treated as empty)."""
+        self.assertIsNone(_validate_uuid_list(None, "ids"))
+
+    # --- _validate_write_payload ---
+
+    def test_unknown_tool_passes(self):
+        """Unknown tools pass validation (no rules to apply)."""
+        self.assertIsNone(_validate_write_payload("unknown_tool_xyz", {}))
+
+    def test_create_role_v1_valid(self):
+        """Valid create_role_v1 payload passes."""
+        args = {
+            "name": "Cost Reader",
+            "access": [{"permission": "cost-management:cost_model:read"}],
+        }
+        self.assertIsNone(_validate_write_payload("create_role_v1", args))
+
+    def test_create_role_v1_malformed_permission(self):
+        """create_role_v1 with malformed permission string is rejected."""
+        args = {
+            "name": "Bad Role",
+            "access": [{"permission": "cost-management:cost_model"}],
+        }
+        result = _validate_write_payload("create_role_v1", args)
+        self.assertIsNotNone(result)
+        self.assertIn("malformed", result)
+        self.assertIn("access[0]", result)
+
+    def test_create_role_v1_at_max_permissions(self):
+        """create_role_v1 with exactly the max number of permissions passes."""
+        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE)]
+        self.assertIsNone(_validate_write_payload("create_role_v1", {"name": "Big Role", "access": access}))
+
+    def test_create_role_v1_exceeds_max_permissions(self):
+        """create_role_v1 with too many permissions is rejected."""
+        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)]
+        args = {"name": "Huge Role", "access": access}
+        result = _validate_write_payload("create_role_v1", args)
+        self.assertIsNotNone(result)
+        self.assertIn("exceeds the maximum", result)
+        self.assertIn(str(_MAX_PERMISSIONS_PER_ROLE), result)
+
+    def test_update_role_v1_invalid_uuid(self):
+        """update_role_v1 with invalid role_uuid is rejected."""
+        args = {
+            "role_uuid": "not-a-uuid",
+            "name": "Updated",
+            "access": [{"permission": "app:res:read"}],
+        }
+        result = _validate_write_payload("update_role_v1", args)
+        self.assertIsNotNone(result)
+        self.assertIn("role_uuid", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_create_role_v2_valid(self):
+        """Valid create_role (V2) payload passes."""
+        args = {
+            "name": "Cost Reader",
+            "permissions": [{"application": "cost-management", "resource_type": "cost_model", "operation": "read"}],
+        }
+        self.assertIsNone(_validate_write_payload("create_role", args))
+
+    def test_create_role_v2_missing_operation(self):
+        """create_role (V2) with missing operation is rejected."""
+        args = {
+            "name": "Bad Role",
+            "permissions": [{"application": "app", "resource_type": "res"}],
+        }
+        result = _validate_write_payload("create_role", args)
+        self.assertIsNotNone(result)
+        self.assertIn("operation", result)
+
+    def test_add_roles_to_group_invalid_group_uuid(self):
+        """add_roles_to_group with invalid group_uuid is rejected."""
+        result = _validate_write_payload("add_roles_to_group", {"group_uuid": "bad-uuid", "roles": [self._VALID_UUID]})
+        self.assertIsNotNone(result)
+        self.assertIn("group_uuid", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_add_roles_to_group_invalid_role_uuid(self):
+        """add_roles_to_group with invalid role UUID in roles list is rejected."""
+        result = _validate_write_payload(
+            "add_roles_to_group", {"group_uuid": self._VALID_UUID, "roles": ["not-a-uuid"]}
+        )
+        self.assertIsNotNone(result)
+        self.assertIn("roles[0]", result)
+
+    def test_create_role_bindings_invalid_uuid(self):
+        """create_role_bindings with invalid role UUID is rejected."""
+        args = {
+            "bindings": [
+                {
+                    "role": "not-a-uuid",
+                    "resource": {"type": "workspace", "id": self._VALID_UUID},
+                    "subject": {"type": "principal", "id": self._VALID_UUID2},
+                }
+            ],
+        }
+        result = _validate_write_payload("create_role_bindings", args)
+        self.assertIsNotNone(result)
+        self.assertIn("bindings[0].role", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_create_role_bindings_invalid_subject_id(self):
+        """create_role_bindings with invalid subject.id is rejected."""
+        args = {
+            "bindings": [
+                {
+                    "role": self._VALID_UUID,
+                    "resource": {"type": "workspace", "id": self._VALID_UUID2},
+                    "subject": {"type": "principal", "id": "bad-subject-id"},
+                }
+            ],
+        }
+        result = _validate_write_payload("create_role_bindings", args)
+        self.assertIsNotNone(result)
+        self.assertIn("bindings[0].subject.id", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_create_role_bindings_valid(self):
+        """create_role_bindings with valid UUIDs passes."""
+        args = {
+            "bindings": [
+                {
+                    "role": self._VALID_UUID,
+                    "resource": {"type": "workspace", "id": self._VALID_UUID2},
+                    "subject": {"type": "principal", "id": self._VALID_UUID3},
+                }
+            ],
+        }
+        self.assertIsNone(_validate_write_payload("create_role_bindings", args))
+
+    def test_bulk_delete_roles_invalid_uuid(self):
+        """bulk_delete_roles with invalid UUID in ids is rejected."""
+        result = _validate_write_payload("bulk_delete_roles", {"ids": ["valid-looking", "not-uuid"]})
+        self.assertIsNotNone(result)
+        self.assertIn("ids[0]", result)
+        self.assertIn("not a valid UUID", result)
+
+    def test_delete_workspace_invalid_uuid(self):
+        """delete_workspace with invalid workspace_uuid is rejected."""
+        result = _validate_write_payload("delete_workspace", {"workspace_uuid": "bad"})
+        self.assertIsNotNone(result)
+        self.assertIn("workspace_uuid", result)
+
+    def test_update_role_binding_invalid_subject_id(self):
+        """update_role_binding with invalid subject_id is rejected."""
+        args = {
+            "resource_id": self._VALID_UUID,
+            "subject_id": "not-valid",
+            "subject_type": "principal",
+            "roles": [{"id": self._VALID_UUID2}],
+        }
+        result = _validate_write_payload("update_role_binding", args)
+        self.assertIsNotNone(result)
+        self.assertIn("subject_id", result)
+
+    def test_patch_cross_account_request_invalid_uuid(self):
+        """patch_cross_account_request with invalid request_id is rejected."""
+        result = _validate_write_payload("patch_cross_account_request", {"request_id": "xyz"})
+        self.assertIsNotNone(result)
+        self.assertIn("request_id", result)
+
+
+@override_settings(
+    MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False, V2_APIS_ENABLED=True, ATOMIC_RETRY_DISABLED=True
+)
+class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityRequest):
+    """Integration tests: write payload validation through the full MCP endpoint."""
+
+    def setUp(self):
+        """Set up write payload validation integration tests."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+
+    def tearDown(self):
+        """Tear down write payload validation integration tests."""
+        Principal.objects.all().delete()
+        super().tearDown()
+        reload(urls)
+        clear_url_caches()
+
+    def _call_tool_raw(self, tool_name: str, arguments: dict) -> dict:
+        """Call tool and return the parsed JSON response."""
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 300,
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.json()
+
+    def test_malformed_permission_rejected_via_endpoint(self):
+        """Malformed permission string rejected through the MCP endpoint."""
+        data = self._call_tool_raw(
+            "create_role_v1",
+            {"name": "Bad Role", "access": [{"permission": "only-two-parts:read"}]},
+        )
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("malformed", data["error"]["message"])
+        self.assertIn("application:resource_type:verb", data["error"]["message"])
+
+    def test_invalid_uuid_rejected_via_endpoint(self):
+        """Invalid UUID rejected through the MCP endpoint."""
+        data = self._call_tool_raw("delete_role_v1", {"role_uuid": "not-a-valid-uuid"})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("not a valid UUID", data["error"]["message"])
+
+    def test_max_permissions_rejected_via_endpoint(self):
+        """Too many permissions rejected through the MCP endpoint."""
+        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)]
+        data = self._call_tool_raw("create_role_v1", {"name": "Big Role", "access": access})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("exceeds the maximum", data["error"]["message"])
+
+    def test_valid_payload_passes_through(self):
+        """Valid write payload passes semantic validation and does not return a -32602 error."""
+        data = self._call_tool_raw(
+            "create_role_v1",
+            {"name": "Good Role", "access": [{"permission": "app:resource:read"}]},
+        )
+        # Validation passed — may succeed or fail downstream, but must not be a validation error.
+        if "error" in data:
+            self.assertNotEqual(data["error"]["code"], -32602, msg=f"Unexpected validation error: {data}")
+
+    def test_v2_valid_payload_passes_through(self):
+        """Valid create_role (V2) payload passes semantic validation."""
+        data = self._call_tool_raw(
+            "create_role",
+            {
+                "name": "Good V2 Role",
+                "permissions": [
+                    {"application": "cost-management", "resource_type": "cost_model", "operation": "read"}
+                ],
+            },
+        )
+        if "error" in data:
+            self.assertNotEqual(data["error"]["code"], -32602, msg=f"Unexpected validation error: {data}")
+
+    def test_v2_permission_missing_field_rejected(self):
+        """V2 permission with missing field rejected through endpoint."""
+        data = self._call_tool_raw(
+            "create_role",
+            {"name": "Bad V2 Role", "permissions": [{"application": "app"}]},
+        )
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("resource_type", data["error"]["message"])
+
+    def test_bulk_delete_invalid_uuids_rejected(self):
+        """bulk_delete_roles with invalid UUIDs rejected through endpoint."""
+        data = self._call_tool_raw("bulk_delete_roles", {"ids": ["abc", "def"]})
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("not a valid UUID", data["error"]["message"])
+
+    def test_create_role_bindings_invalid_resource_id(self):
+        """create_role_bindings with invalid resource UUID rejected."""
+        data = self._call_tool_raw(
+            "create_role_bindings",
+            {
+                "bindings": [
+                    {
+                        "role": "550e8400-e29b-41d4-a716-446655440000",
+                        "resource": {"type": "workspace", "id": "bad-uuid"},
+                        "subject": {"type": "principal", "id": "550e8400-e29b-41d4-a716-446655440001"},
+                    }
+                ]
+            },
+        )
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("bindings[0].resource.id", data["error"]["message"])
+
+
+class MCPHealthCheckTests(IdentityRequest):
+    """Test the MCP readiness probe endpoint at /_private/_a2s/mcp/health/."""
+
+    def setUp(self):
+        """Set up health check tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/health/"
+        self.client = APIClient()
+        _shutdown_in_progress.clear()
+
+    def tearDown(self):
+        """Ensure shutdown flag is cleared after each test."""
+        _shutdown_in_progress.clear()
+        super().tearDown()
+
+    def test_health_returns_ok(self):
+        """Positive: readiness endpoint returns 200 when not shutting down."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_health_returns_503_during_shutdown(self):
+        """Negative: readiness endpoint returns 503 when shutdown is in progress."""
+        _shutdown_in_progress.set()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "shutting_down"})
+
+    def test_health_no_auth_required(self):
+        """Positive: readiness endpoint does not require identity headers."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_health_post_allowed(self):
+        """Positive: readiness endpoint responds to POST as well (for flexible probes)."""
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_mcp_post_returns_error_during_shutdown(self):
+        """Negative: MCP endpoint returns JSON-RPC error when shutdown is in progress."""
+        _shutdown_in_progress.set()
+        mcp_url = "/_private/_a2s/mcp/"
+        payload = {"jsonrpc": "2.0", "method": "tools/list", "id": 1}
+        response = self.client.post(mcp_url, data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("error", body)
+        self.assertEqual(body["error"]["code"], -32000)
+        self.assertIn("shutting down", body["error"]["message"])
+
+
+class MCPShutdownTests(IdentityRequest):
+    """Test the mcp_shutdown() function."""
+
+    def setUp(self):
+        """Set up shutdown tests."""
+        super().setUp()
+        _shutdown_in_progress.clear()
+
+    def tearDown(self):
+        """Ensure shutdown flag is cleared after each test."""
+        _shutdown_in_progress.clear()
+        super().tearDown()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._get_connection_pool")
+    def test_shutdown_sets_flag_and_cleans_up(self, mock_get_pool, mock_executor):
+        """Positive: mcp_shutdown sets the event flag and calls shutdown/disconnect."""
+        mock_pool = mock_get_pool.return_value
+        mcp_shutdown()
+
+        self.assertTrue(_shutdown_in_progress.is_set())
+        mock_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
+        mock_pool.disconnect.assert_called_once()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._get_connection_pool")
+    def test_shutdown_is_idempotent(self, mock_get_pool, mock_executor):
+        """Edge case: calling mcp_shutdown twice only executes cleanup once."""
+        mock_pool = mock_get_pool.return_value
+        mcp_shutdown()
+        mcp_shutdown()
+
+        mock_executor.shutdown.assert_called_once()
+        mock_pool.disconnect.assert_called_once()
+
+    @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
+    @patch("management.mcp_views._get_connection_pool")
+    def test_shutdown_survives_redis_disconnect_error(self, mock_get_pool, mock_executor):
+        """Edge case: Redis disconnect failure does not prevent shutdown."""
+        mock_pool = mock_get_pool.return_value
+        mock_pool.disconnect.side_effect = ConnectionError("pool gone")
+
+        mcp_shutdown()
+
+        self.assertTrue(_shutdown_in_progress.is_set())
+        mock_executor.shutdown.assert_called_once()

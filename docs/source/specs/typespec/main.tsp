@@ -206,6 +206,12 @@ model OffsetPaginationLinks {
 namespace Problems {
     enum ProblemType {
         InsufficientPermission:"http://project-kessel.org/problems/insufficient-permission",
+        Unauthenticated:"http://project-kessel.org/problems/unauthenticated",
+        NotFound:"http://project-kessel.org/problems/not-found",
+        InternalError:"http://project-kessel.org/problems/internal-error",
+        InvalidRequest:"http://project-kessel.org/problems/invalid-request",
+        AlreadyExists:"http://project-kessel.org/problems/already-exists",
+        WorkspaceNotEmpty:"http://project-kessel.org/problems/workspace-not-empty",
     }
 
     @error
@@ -229,30 +235,45 @@ namespace Problems {
         title: "You do not have permission to perform this action.";
     }
 
-    alias Problem401 = ProblemDetails<Status = 401>;
+    @error
+    model Problem401 extends ProblemDetails<Status = 401>{
+        type: ProblemType.Unauthenticated,
+        title: "Authentication credentials were not provided or are invalid.";
+    }
 
     @error
     model Problem404 extends ProblemDetails<Status = 404>{
+        type: ProblemType.NotFound,
         title: "Resource was not found",
         @example("Not found")
         detail: string
     }
 
-    alias Problem500 = ProblemDetails<Status = 500>;
+    @error
+    model Problem500 extends ProblemDetails<Status = 500>{
+        type: ProblemType.InternalError,
+        title: "Unexpected error occurred.";
+    }
 
     @error
     model Problem400 extends ProblemDetails<Status = 400>{
+        type: ProblemType.InvalidRequest,
         title: "The request payload contains invalid syntax.",
         @example("JSON parse error - Expecting value: line 1 column 1 (char 0)")
         detail: string
     }
 
-    alias Problem400AlreadyExists = ProblemDetails<Status = 400>;
+    @error
+    model Problem400AlreadyExists extends ProblemDetails<Status = 400>{
+        type: ProblemType.AlreadyExists,
+        title: "The resource already exists.";
+    }
 
     alias CommonProblems = Problem400 | Problem401 | Problem403 | Problem500;
 
     namespace Workspace {
         model Problem400WorkspaceNotEmpty extends Problems.ProblemDetails<Status = 400>{
+            type: ProblemType.WorkspaceNotEmpty,
             title: "Unable to delete due to workspace dependencies",
         }
     }
@@ -529,6 +550,10 @@ namespace Workspaces {
         @doc("Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, created, modified, type.")
         @example("-created")
         @query order_by?: string = "name";
+
+        @doc("When true, list responses include ancestor workspaces for tree navigation and fallback workspaces (root, default, ungrouped) when the user has no explicit access. When false (default), only workspaces with explicit Inventory permission are returned.")
+        @example(false)
+        @query with_ancestry?: boolean = false;
     ): WorkspaceListResponse | Problems.CommonProblems;
 
     @doc("Create workspace in tenant")
@@ -552,7 +577,7 @@ namespace Workspaces {
             }
       }
     )
-    @post op create(@body body: CreateWorkspaceRequest): CreateWorkspaceResponse | Problems.CommonProblems;
+    @post op create(@body body: CreateWorkspaceRequest): CreateWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists;
 
     @doc("Get a workspace in tenant")
     @summary("Get a workspace in tenant")
@@ -1400,6 +1425,9 @@ namespace Roles {
         @doc("Control which fields are included in the response to optimize payload size.")
         @query fields?: FieldMask = "id,name,description,last_modified";
 
+        @doc("Filter by permission string(s). Comma-separated exact match (e.g. 'inventory:hosts:read' or 'inventory:hosts:read,rbac:workspace:write').")
+        @query permission?: string;
+
         @doc("Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, last_modified.")
         @query order_by?: OrderBy = "name";
     ): ListResponse<Role> | Problems.CommonProblems;
@@ -1552,4 +1580,117 @@ namespace Roles {
     @post op batchDelete(
         @body body: BatchDeleteRolesRequest
     ): BatchDeleteRolesResponse | Problems.CommonProblems | Problems.Problem404;
+}
+
+@doc("Principal type")
+enum PrincipalType {
+    user,
+    @doc("Service account principal")
+    `service-account`,
+}
+
+@example(#{
+    uuid: "550e8400-e29b-41d4-a716-446655440002",
+    username: "jdoe",
+    type: PrincipalType.user,
+    user_id: "12345",
+    service_account_id: null
+})
+model Principal {
+    @doc("UUID that uniquely identifies the principal")
+    uuid: UUID;
+    @doc("Username of the principal")
+    username: string;
+    @doc("Type of the principal: user or service-account")
+    type: PrincipalType;
+    @doc("External user ID. Null for service accounts.")
+    user_id: string | null;
+    @doc("Service account client ID. Null for users.")
+    service_account_id: string | null;
+}
+
+model PrincipalListResponse {
+    @statusCode _: 200;
+    meta: OffsetPaginationMeta;
+    links: OffsetPaginationLinks;
+    data: Principal[];
+}
+
+@route("/principals/")
+@tag("Principals")
+@doc("Operations about principals")
+namespace Principals {
+
+    @doc("List the principals for a tenant")
+    @summary("List the principals for a tenant")
+    @opExample(#{
+        parameters: #{
+            limit: 10
+        },
+        returnType: #{
+            _: 200,
+            meta: #{
+                count: 2,
+                limit: 10,
+                offset: 0
+            },
+            links: #{
+                first: "/api/rbac/v2/principals/?limit=10&offset=0",
+                next: null,
+                previous: null,
+                last: "/api/rbac/v2/principals/?limit=10&offset=0"
+            },
+            data: #[
+                #{
+                    uuid: "550e8400-e29b-41d4-a716-446655440002",
+                    username: "jdoe",
+                    type: PrincipalType.user,
+                    user_id: "12345",
+                    service_account_id: null
+                },
+                #{
+                    uuid: "660e8400-e29b-41d4-a716-446655440003",
+                    username: "service-account-abc123",
+                    type: PrincipalType.`service-account`,
+                    user_id: null,
+                    service_account_id: "abc123"
+                }
+            ]
+        }
+    })
+    @get op list(
+        @query limit?: Limit = DefaultLimit;
+
+        @query offset?: Offset = DefaultOffset;
+
+        @doc("Filter by username. Case-insensitive substring match by default; use * for glob patterns (e.g. jd*).")
+        @query username?: string;
+
+        @doc("Filter by principal type: user or service-account.")
+        @query type?: PrincipalType;
+
+        @doc("Sort by specified field, prefix with '-' for descending order. Allowed fields: username.")
+        @query order_by?: OrderBy;
+    ): PrincipalListResponse | Problems.CommonProblems;
+
+
+    @route("{uuid}/")
+    @doc("Retrieve a single principal by UUID")
+    @summary("Retrieve a single principal by UUID")
+    @opExample(#{
+        parameters: #{
+            uuid: "550e8400-e29b-41d4-a716-446655440002"
+        },
+        returnType: #{
+            _: 200,
+            uuid: "550e8400-e29b-41d4-a716-446655440002",
+            username: "jdoe",
+            type: PrincipalType.user,
+            user_id: "12345",
+            service_account_id: null
+        }
+    })
+    @get op read(
+        @path uuid: UUID;
+    ): ItemResponse<Principal, 200> | Problems.CommonProblems | Problems.Problem404;
 }

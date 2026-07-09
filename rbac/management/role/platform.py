@@ -16,7 +16,7 @@
 #
 """Contains utilities for handling platform roles."""
 
-from typing import Callable
+from typing import Callable, Iterable
 from uuid import UUID
 
 from django.conf import settings
@@ -34,18 +34,14 @@ ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE = frozenset(
 )
 
 
-def admin_platform_parent_scope_for_seeded_system_role(
-    role_name: str, permission_derived_scope: Scope, *, apply_override: bool
-) -> Scope:
-    """
-    Return the scope of the admin platform role that should be the parent of this admin_default seeded role.
+def admin_platform_parent_scopes_for_seeded_system_role(
+    role_name: str, permission_derived_scopes: Iterable[Scope]
+) -> set[Scope]:
+    """Return the scope of the admin platform role that should be the parent of the admin-default seeded role."""
+    if role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
+        return {Scope.ROOT}
 
-    Call only for roles with ``admin_default=True``. When apply_override is False (e.g. when generating
-    tuples to strip all historical variants), the caller's scope is used as-is.
-    """
-    if apply_override and role_name in ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE:
-        return Scope.ROOT
-    return permission_derived_scope
+    return set(permission_derived_scopes)
 
 
 _uuid_fns: dict[DefaultAccessType, dict[Scope, Callable[[GlobalPolicyIdService], UUID]]] = {

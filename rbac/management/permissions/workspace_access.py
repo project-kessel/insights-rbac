@@ -167,9 +167,9 @@ class WorkspaceAccessPermission(permissions.BasePermission):
 
         # For list/detail operations, allow request to proceed
         # FilterBackend handles access filtering via queryset
-        # For list: users with no real workspace access get fallback workspaces
-        # (root, default, ungrouped) via FilterBackend instead of 403
-        # This ensures 404 for both non-existing and inaccessible workspaces
+        # For list with with_ancestry=true: users get fallback workspaces (root, default, ungrouped)
+        # For list with with_ancestry=false: FilterBackend raises 403 if user has no access
+        # For detail: 404 for both non-existing and inaccessible workspaces
         return True
 
     def _has_permission_v1(self, request, view, ws_id) -> bool:

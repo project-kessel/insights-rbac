@@ -207,15 +207,15 @@ class V2CursorPagination(CursorPagination):
     }
 
     # For role binding list endpoint, the queryset is on RoleBinding model.
-    # Values map to annotations defined in RoleBindingQuerySet.for_tenant()
+    # Values map to annotations defined in RoleBindingQuerySet.with_expanded_platform_roles()
     # so that CursorPagination can extract cursor positions via getattr().
     ROLE_BINDING_FIELD_MAPPING = {
-        # Role fields (annotated in RoleBindingQuerySet.for_tenant)
-        "role.id": "role_uuid",
-        "role.name": "role_name",
-        "role.uuid": "role_uuid",
-        "role.modified": "role_modified",
-        "role.created": "role_created",
+        # Role fields (annotated in RoleBindingQuerySet.with_expanded_platform_roles)
+        "role.id": "effective_role_uuid",
+        "role.name": "effective_role_name",
+        "role.uuid": "effective_role_uuid",
+        "role.modified": "effective_role_modified",
+        "role.created": "effective_role_created",
         # Resource fields (direct model attributes)
         "resource.id": "resource_id",
         "resource.type": "resource_type",
@@ -224,7 +224,7 @@ class V2CursorPagination(CursorPagination):
     # Default ordering for each subject type
     GROUP_DEFAULT_ORDERING = "-modified"
     USER_DEFAULT_ORDERING = "username"
-    ROLE_BINDING_DEFAULT_ORDERING = "role_created"
+    ROLE_BINDING_DEFAULT_ORDERING = "effective_role_created"
 
     # Combined mapping for backward compatibility (defaults to group)
     FIELD_MAPPING = GROUP_FIELD_MAPPING

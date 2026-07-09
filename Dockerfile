@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1781496742 AS base
+FROM registry.access.redhat.com/hi/python:3.12-fips-builder AS base
 
 USER root
 
@@ -40,8 +40,8 @@ LABEL summary="$SUMMARY" \
 # Very minimal set of packages
 # glibc-langpack-en is needed to set locale to en_US and disable warning about it
 # gcc to compile some python packages (e.g. ciso8601)
-# shadow-utils to make useradd available
-RUN INSTALL_PKGS="python3.12 python3.12-devel glibc-langpack-en libpq-devel gcc shadow-utils libffi-devel" && \
+# postgresql-devel for psycopg2, libffi-devel for cffi
+RUN INSTALL_PKGS="glibc-langpack-en postgresql-server-devel postgresql gcc libffi-devel python3.12-devel curl" && \
     microdnf --nodocs -y upgrade && \
     microdnf -y --setopt=tsflags=nodocs --setopt=install_weak_deps=0 install $INSTALL_PKGS && \
     rpm -V $INSTALL_PKGS && \
@@ -60,7 +60,7 @@ RUN python3.12 -m venv /pipenv-venv
 ENV PATH="/pipenv-venv/bin:$PATH"
 # Install pipenv into the virtual env
 RUN \
-    pip install --upgrade "pip>=26.0" && \
+    pip install --upgrade "pip>=26.1.2" && \
     pip install pipenv
 
 WORKDIR ${APP_ROOT}
@@ -69,6 +69,7 @@ WORKDIR ${APP_ROOT}
 ENV PIP_DEFAULT_TIMEOUT=100
 COPY Pipfile .
 COPY Pipfile.lock .
+ENV PG_CONFIG=/usr/bin/pg_config
 RUN \
     # install the dependencies into the working dir (i.e. ${APP_ROOT}/.venv)
     pipenv install --deploy && \
@@ -116,5 +117,32 @@ EXPOSE 8080
 # Set this at the end to leverage build caching
 ARG GIT_COMMIT=undefined
 ENV GIT_COMMIT=${GIT_COMMIT}
+
+# Runtime stage
+FROM registry.access.redhat.com/hi/core-runtime:2.42-openssl-fips
+
+ENV APP_ROOT=/opt/rbac \
+    APP_HOME=/opt/rbac/rbac \
+    APP_CONFIG=/opt/rbac/rbac/gunicorn.py \
+    APP_MODULE=rbac.wsgi \
+    APP_NAMESPACE=rbac \
+    VIRTUAL_ENV=/opt/rbac/.venv \
+    PATH="/opt/rbac/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8 \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    PROMETHEUS_MULTIPROC_DIR=/tmp \
+    LOG_DIRECTORY=/tmp
+
+WORKDIR ${APP_ROOT}
+
+# Python binaries (not included in core-runtime)
+COPY --from=base /usr/bin/python3 /usr/bin/python3.12 /usr/bin/
+COPY --from=base /usr/lib64/ /usr/lib64/
+COPY --from=base /opt/rbac /opt/rbac
+COPY --from=base /licenses /licenses
+
+USER 1001
 
 ENTRYPOINT ["./scripts/entrypoint.sh"]

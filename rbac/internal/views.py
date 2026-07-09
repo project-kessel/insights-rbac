@@ -20,6 +20,7 @@
 import datetime
 import json
 import logging
+import uuid
 from typing import Optional
 
 import requests
@@ -55,9 +56,16 @@ from kessel.inventory.v1beta2 import (
     resource_reference_pb2,
     subject_reference_pb2,
 )
-from kessel.relations.v1beta1 import check_pb2, lookup_pb2, relation_tuples_pb2
-from kessel.relations.v1beta1 import check_pb2_grpc, lookup_pb2_grpc, relation_tuples_pb2_grpc
-from kessel.relations.v1beta1 import common_pb2
+from kessel.relations.v1beta1 import (
+    check_pb2,
+    check_pb2_grpc,
+    common_pb2,
+    lookup_pb2,
+    lookup_pb2_grpc,
+    relation_tuples_pb2,
+    relation_tuples_pb2_grpc,
+)
+from management.audit_log.model import AuditLog
 from management.cache import JWTCache, TenantCache
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.inventory_checker.inventory_api_check import (
@@ -71,10 +79,8 @@ from management.models import BindingMapping, Group, Permission, Principal, Reso
 from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
+    PrincipalProxy,
     USER_ENV_HEADER,
-)
-from management.principal.proxy import PrincipalProxy
-from management.principal.proxy import (
     bop_request_status_count,
     bop_request_time_tracking,
 )
@@ -94,11 +100,14 @@ from management.tasks import (
     fix_missing_binding_base_tuples_in_worker,
     migrate_binding_scope_in_worker,
     migrate_data_in_worker,
+    migrate_role_scope_if_changed_in_worker,
     recompute_tenant_role_bindings_in_worker,
     recover_workspace_events_in_worker,
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    replicate_updated_workspaces_in_worker,
+    run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
     run_ocm_performance_in_worker,
     run_seeds_in_worker,
@@ -420,6 +429,8 @@ def user_lookup(request):
 
     username = request.GET.get("username")
     email = request.GET.get("email")
+    search_param = f"username='{username}'" if username else f"email='{email}'"
+    caller = getattr(getattr(request, "user", None), "username", "internal-service")
 
     try:
         validate_user_lookup_input(username, email)
@@ -429,8 +440,10 @@ def user_lookup(request):
     try:
         user = get_user_from_bop(username, email)
     except UserNotFoundError as err:
+        _log_user_lookup(caller, f"User lookup: not found ({search_param})")
         return handle_error(f"Not found - {err}", 404)
     except Exception as err:
+        _log_user_lookup(caller, f"User lookup: error querying bop ({search_param})")
         return handle_error(f"Internal error - couldn't get user from bop: {err}", 500)
 
     username = user["username"]
@@ -446,12 +459,14 @@ def user_lookup(request):
         logger.debug("queried rbac db for tenant: '%s' based on org_id: '%s'", user_tenant, user_org_id)
     except Exception as err:
         logger.error(f"error querying for tenant with org_id: '{user_org_id}' in rbac, err: {err}")
+        _log_user_lookup(caller, f"User lookup: error resolving tenant ({search_param})")
         return handle_error(f"Internal error - failed to query rbac for tenant with org_id: '{user_org_id}'", 500)
 
     try:
         principal = get_principal(username, request, verify_principal=False, from_query=False, user_tenant=user_tenant)
     except Exception as err:
         logger.error(f"error querying for principal with username: '{username}' in rbac, err: {err}")
+        _log_user_lookup(caller, f"User lookup: error resolving principal ({search_param})")
         return handle_error(f"Internal error - failed to query rbac for user: '{username}'", 500)
 
     groups = groups_for_principal(principal, user_tenant, is_org_admin=user["is_org_admin"])
@@ -487,7 +502,23 @@ def user_lookup(request):
 
     result["groups"] = user_groups
 
+    _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", principal=principal)
+
     return HttpResponse(json.dumps(result, cls=DjangoJSONEncoder), content_type="application/json", status=200)
+
+
+def _log_user_lookup(caller, description, principal=None):
+    """Create an audit log entry for a user lookup request."""
+    try:
+        AuditLog.objects.create(
+            principal_username=caller,
+            description=description[:255],
+            resource_type=AuditLog.USER,
+            action=AuditLog.READ,
+            resource_uuid=getattr(principal, "uuid", None),
+        )
+    except Exception:
+        logger.exception("failed to create audit log for user lookup")
 
 
 def validate_user_lookup_input(username, email):
@@ -1986,7 +2017,9 @@ def check_workspace_relation(request, workspace_uuid):
         try:
             if workspace_pairs:
                 workspace_uuid = str(workspace_uuid)
-                workspace_descendants_correct = WorkspaceRelationChecker.check_workspace_descendants(workspace_pairs)
+                workspace_descendants_correct, _ = WorkspaceRelationChecker.check_workspace_descendants(
+                    workspace_pairs
+                )
                 response = {
                     "org_id": workspace.tenant.org_id,
                     "workspace_id": workspace_uuid,
@@ -2198,8 +2231,9 @@ def send_kafka_test_message(request):
         return HttpResponse("Kafka is not enabled", status=400)
 
     try:
-        from core.kafka import RBACProducer
         import uuid
+
+        from core.kafka import RBACProducer
 
         # Create sample test data
         relations_to_add = [
@@ -2690,6 +2724,44 @@ def replicate_default_workspaces(request):
 
 
 @require_http_methods(["POST"])
+def replicate_updated_workspaces(request):
+    """Replicate workspaces updated since the provided time.
+
+    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>&exclude_unchanged_default_workspaces=<bool>
+
+    since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    since = request.GET["since"]
+    exclude_unchanged_default_workspaces = (
+        request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
+    )
+
+    try:
+        datetime.datetime.fromisoformat(since)
+    except ValueError as e:
+        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
+
+    try:
+        replicate_updated_workspaces_in_worker.delay(
+            since=since, exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces
+        )
+        return JsonResponse(
+            {
+                "message": "Replication enqueued in background worker.",
+                "since": since,
+                "exclude_unchanged_default_workspaces": exclude_unchanged_default_workspaces,
+            },
+            status=202,
+        )
+    except Exception as e:
+        logger.exception("Error replicating updated workspaces", exc_info=True)
+        return JsonResponse({"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500)
+
+
+@require_http_methods(["POST"])
 def recompute_tenant_role_bindings(request, org_id):
     """
     Recompute all role bindings for a tenant.
@@ -2716,6 +2788,35 @@ def recompute_tenant_role_bindings(request, org_id):
 
 
 @require_http_methods(["POST"])
+def migrate_role_scope_if_changed(request, role_uuid):
+    """
+    Migrate existing role bindings for a role if its scope has changed.
+
+    POST /_private/api/utils/migrate_role_scope_if_changed/<role_uuid>/
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    try:
+        parsed_uuid = uuid.UUID(role_uuid)
+    except ValueError:
+        return JsonResponse({"message": f"invalid UUID: {role_uuid}"}, status=400)
+
+    if not Role.objects.public_tenant_only().filter(uuid=role_uuid, system=True).exists():
+        return JsonResponse({"message": f"role does not exist; UUID: {str(parsed_uuid)}"}, status=404)
+
+    try:
+        migrate_role_scope_if_changed_in_worker.delay(role_uuid=str(parsed_uuid))
+        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+    except Exception as e:
+        logger.exception(f"Error migrating scope for role {parsed_uuid}")
+        return JsonResponse(
+            {"detail": f"Error migrating scope for role: {str(e)}"},
+            status=500,
+        )
+
+
+@require_http_methods(["POST"])
 def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     """Trigger corrective workspace event generation after a DB restore.
 
@@ -2729,8 +2830,8 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     Returns 202 with task_id on success.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return JsonResponse({"detail": "DR recovery is disabled (DR_RECOVERY_ENABLED=False)"}, status=403)
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return JsonResponse({"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}, status=403)
 
     try:
         body = load_request_body(request)
@@ -2796,7 +2897,7 @@ def disaster_recovery_reconcile(request):
 
     Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
 
     from datetime import datetime
@@ -2836,6 +2937,56 @@ def disaster_recovery_reconcile(request):
             "restore_timestamp_ms": restore_timestamp_ms,
             "buffer_seconds": buffer_seconds,
             "dry_run": dry_run,
+        },
+        status=202,
+    )
+
+
+def kessel_parity_check(request):
+    """View method for triggering on-demand Kessel-RBAC parity checks.
+
+    POST /_private/api/utils/kessel_parity_check/
+
+    Body: {"org_ids": ["12345", "67890"]}
+
+    Triggers parity checks for the specified org(s) regardless of the
+    PARITY_CHECK_ENABLED setting. The scheduled Celery Beat cron job
+    behavior is unchanged.
+    """
+    if request.method != "POST":
+        return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
+
+    if not request.body:
+        return HttpResponse('Invalid request, must supply "org_ids" in body.', status=400)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponse("Invalid JSON in request body.", status=400)
+
+    org_ids = body.get("org_ids")
+    if not isinstance(org_ids, list) or len(org_ids) == 0:
+        return HttpResponse(
+            'Invalid request: the "org_ids" array in the body must contain at least one org_id.',
+            status=400,
+        )
+
+    # Validate all entries are non-empty strings
+    for entry in org_ids:
+        if not isinstance(entry, str) or not entry.strip():
+            return HttpResponse(
+                'Invalid request: all entries in "org_ids" must be non-empty strings.',
+                status=400,
+            )
+
+    logger.info("On-demand Kessel parity check requested for org_ids: %s", org_ids)
+    task = run_kessel_parity_checks_in_worker.delay(org_ids=org_ids)
+
+    return JsonResponse(
+        {
+            "message": "Kessel parity check enqueued.",
+            "task_id": str(task.id),
+            "org_ids": org_ids,
         },
         status=202,
     )

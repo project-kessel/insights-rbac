@@ -21,6 +21,7 @@ This module contains:
 - Output serializers: For serializing response data
 """
 
+import logging
 import uuid
 from typing import Optional
 
@@ -37,9 +38,63 @@ from rest_framework import serializers
 
 from api.models import Tenant
 
+logger = logging.getLogger(__name__)
+
 _SUBJECT_TYPE_GROUP = "group"
 _SUBJECT_TYPE_USER = "user"
-_GROUP_FIELD_PREFIX = "group."
+# ── Shared subject-building helper ──────────────────────────────────
+
+
+def _build_subject_response(
+    subject_obj,
+    subject_type: str,
+    field_selection: Optional[FieldSelection],
+    *,
+    default_extra: dict | None = None,
+) -> dict:
+    """Build a subject dict with ``id`` and ``type`` always included.
+
+    Centralises the subject-serialisation logic that was previously
+    duplicated across ``RoleBindingOutputSerializer``,
+    ``RoleBindingOutputSerializerMixin``, ``RoleBindingListOutputSerializer``
+    and ``RoleBindingFieldMaskingMixin``.
+
+    Args:
+        subject_obj: Group or Principal model instance (must have ``uuid``).
+        subject_type: ``"group"`` or ``"user"``.
+        field_selection: Optional :class:`FieldSelection` from query params.
+        default_extra: Extra fields to merge when *field_selection* is
+            ``None`` (e.g. ``{"user": {"username": …}}``).
+
+    Returns:
+        Subject dict — always contains ``id`` and ``type``.
+    """
+    subject: dict = {"id": subject_obj.uuid, "type": subject_type}
+
+    if field_selection is None:
+        if default_extra:
+            subject.update(default_extra)
+        return subject
+
+    # Extract nested fields for this subject type (e.g. "group.name" → "name")
+    subject_fields = field_selection.get_nested("subject")
+    prefix = f"{subject_type}."
+    prefix_len = len(prefix)
+    details: dict = {}
+    for field_path in subject_fields:
+        if field_path.startswith(prefix):
+            attr_name = field_path[prefix_len:]
+            if attr_name == "user_count":
+                details[attr_name] = getattr(subject_obj, "principalCount", 0)
+            else:
+                value = getattr(subject_obj, attr_name, None)
+                if value is not None:
+                    details[attr_name] = value
+
+    if details:
+        subject[subject_type] = details
+
+    return subject
 
 
 class RoleBindingFieldSelection(FieldSelection):
@@ -400,75 +455,19 @@ class RoleBindingOutputSerializer(serializers.Serializer):
             return obj.get("modified") or obj.get("latest_modified")
         return getattr(obj, "latest_modified", None)
 
-    # Field name mapping for special cases (e.g., API field name -> model attribute)
-    SUBJECT_FIELD_MAPPING = {
-        "group": {"user_count": "principalCount"},
-        "user": {},
-    }
-
     def get_subject(self, obj):
         """Extract subject information from the Group or Principal.
 
         Default (no fields param): Returns only id and type.
-        With fields param: Only type is always included. Other fields
-        (including id) are only included if explicitly requested.
-        """
-        if isinstance(obj, Principal):
-            return self._build_subject(obj, "user")
-        elif isinstance(obj, Group):
-            return self._build_subject(obj, "group")
-        return None
-
-    def _build_subject(self, obj, subject_type: str):
-        """Build subject dict for a Group or Principal.
-
-        Args:
-            obj: Group or Principal object
-            subject_type: The subject type string ("group" or "user")
-
-        Returns:
-            Subject dict with type and requested fields
+        With fields param: id and type are always included. Other fields
+        are only included if explicitly requested.
         """
         field_selection = self._get_field_selection()
-
-        # Default behavior: only basic fields
-        if field_selection is None:
-            return {
-                "id": obj.uuid,
-                "type": subject_type,
-            }
-
-        # With fields param: type is always included
-        subject: dict = {"type": subject_type}
-
-        # Check if id is explicitly requested
-        subject_fields = field_selection.get_nested("subject")
-        if "id" in subject_fields:
-            subject["id"] = obj.uuid
-
-        # Extract field names from "{subject_type}.X" paths
-        prefix = f"{subject_type}."
-        prefix_len = len(prefix)
-        fields_to_include = set()
-        for field_path in subject_fields:
-            if field_path.startswith(prefix):
-                fields_to_include.add(field_path[prefix_len:])
-
-        # Dynamically extract requested fields from the object
-        if fields_to_include:
-            field_mapping = self.SUBJECT_FIELD_MAPPING.get(subject_type, {})
-            details = {}
-            for field_name in fields_to_include:
-                # Map API field name to model attribute if needed
-                model_attr = field_mapping.get(field_name, field_name)
-                value = getattr(obj, model_attr, None)
-                if value is not None:
-                    details[field_name] = value
-
-            if details:
-                subject[subject_type] = details
-
-        return subject
+        if isinstance(obj, Principal):
+            return _build_subject_response(obj, "user", field_selection)
+        elif isinstance(obj, Group):
+            return _build_subject_response(obj, "group", field_selection)
+        return None
 
     def _build_role_data(self, role: RoleV2, field_selection: Optional[FieldSelection]) -> dict:
         """Build role data dictionary from a role object.
@@ -669,69 +668,13 @@ class RoleBindingOutputSerializerMixin:
         """Get field selection from context."""
         return self.context.get("field_selection")
 
-    def _extract_group_details(self, group: Group, field_selection: FieldSelection) -> dict:
-        """Extract group.* fields from a Group object based on field selection.
-
-        Args:
-            group: The Group object to extract fields from
-            field_selection: The field selection specifying which fields to include
-
-        Returns:
-            Dictionary with extracted group details, or empty dict if none requested
-        """
-        subject_fields = field_selection.get_nested("subject")
-        # Extract field names from "group.X" paths
-        fields_to_include = {
-            field_path.removeprefix(_GROUP_FIELD_PREFIX)
-            for field_path in subject_fields
-            if field_path.startswith(_GROUP_FIELD_PREFIX)
-        }
-
-        if not fields_to_include:
-            return {}
-
-        group_details = {}
-        for field_name in fields_to_include:
-            # Handle special case for user_count -> principalCount
-            if field_name == "user_count":
-                group_details[field_name] = getattr(group, "principalCount", 0)
-            else:
-                value = getattr(group, field_name, None)
-                if value is not None:
-                    group_details[field_name] = value
-
-        return group_details
-
     def _build_subject_data(self, group: Group, field_selection: Optional[FieldSelection]) -> dict:
         """Build subject data dictionary from a Group object.
 
-        Args:
-            group: The Group object to build subject data from
-            field_selection: Optional field selection to determine which fields to include
-
-        Returns:
-            Dictionary with subject data (always includes 'type')
+        Delegates to ``_build_subject_response`` for consistent subject
+        serialisation across all role binding endpoints.
         """
-        # Default behavior: only basic fields
-        if field_selection is None:
-            return {
-                "id": group.uuid,
-                "type": _SUBJECT_TYPE_GROUP,
-            }
-
-        # With fields param: type is always included
-        subject: dict = {"type": _SUBJECT_TYPE_GROUP}
-
-        # Check if id is explicitly requested
-        if "id" in field_selection.get_nested("subject"):
-            subject["id"] = group.uuid
-
-        # Extract group.* fields
-        group_details = self._extract_group_details(group, field_selection)
-        if group_details:
-            subject[_SUBJECT_TYPE_GROUP] = group_details
-
-        return subject
+        return _build_subject_response(group, _SUBJECT_TYPE_GROUP, field_selection)
 
     def _build_role_data(self, role: RoleV2, field_selection: Optional[FieldSelection]) -> dict:
         """Build role data dictionary from a role object.
@@ -783,8 +726,8 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
         Checks group_entries first, then principal_entries.
 
         Default (no fields param): Returns only id and type.
-        With fields param: Only type is always included. Other fields
-        (including id) are only included if explicitly requested.
+        With fields param: id and type are always included. Other fields
+        are only included if explicitly requested.
         """
         field_selection = self._get_field_selection()
 
@@ -801,15 +744,38 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
         if principal_entries is not None:
             first_entry = principal_entries.all()[:1]
             if first_entry:
-                principal = first_entry[0].principal
-                if field_selection is None:
-                    return {"id": principal.uuid, "type": _SUBJECT_TYPE_USER}
-                subject = {"type": _SUBJECT_TYPE_USER}
-                if "id" in field_selection.get_nested("subject"):
-                    subject["id"] = principal.uuid
-                return subject
+                return _build_subject_response(first_entry[0].principal, _SUBJECT_TYPE_USER, field_selection)
 
         return {"type": _SUBJECT_TYPE_GROUP}
+
+    def _get_effective_role(self, obj: RoleBinding):
+        """Return the effective role for this binding.
+
+        For expanded platform-role bindings (annotated by
+        ``with_expanded_platform_roles``), the effective role is one of
+        the platform role's children.  For regular bindings the effective
+        role is the binding's own role.
+        """
+        effective_uuid = getattr(obj, "effective_role_uuid", None)
+        if effective_uuid is not None and obj.role:
+            # Normalize to UUID for direct comparison (annotation may return str or UUID)
+            if not isinstance(effective_uuid, uuid.UUID):
+                effective_uuid = uuid.UUID(str(effective_uuid))
+            if obj.role.uuid != effective_uuid:
+                # Platform binding expanded to child — look up from prefetch cache.
+                for child in obj.role.children.all():
+                    if child.uuid == effective_uuid:
+                        return child
+                # effective_role_uuid doesn't match any child — data integrity issue.
+                logger.warning(
+                    "RoleBinding %s: effective_role_uuid %s not found among children of platform role %s (%s). "
+                    "Falling back to the platform role itself.",
+                    obj.uuid,
+                    effective_uuid,
+                    obj.role.uuid,
+                    obj.role.name,
+                )
+        return obj.role
 
     def get_role(self, obj: RoleBinding):
         """Extract role information from the RoleBinding.
@@ -817,11 +783,12 @@ class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializ
         Default (no fields param): Returns only role id.
         With fields param: id is always included, plus explicitly requested fields.
         """
-        if not obj.role:
+        role = self._get_effective_role(obj)
+        if not role:
             return None
 
         field_selection = self._get_field_selection()
-        return self._build_role_data(obj.role, field_selection)
+        return self._build_role_data(role, field_selection)
 
     def get_resource(self, obj: RoleBinding):
         """Extract resource information from the RoleBinding.
@@ -950,7 +917,7 @@ class RoleBindingFieldMaskingMixin:
     * With ``field_selection``: only explicitly requested fields appear
       and unrequested top-level sections are stripped entirely. Subject
       objects always include ``type`` (OpenAPI discriminator for
-      UserSubject | GroupSubject) even when not listed in ``fields``.
+      UserSubject | GroupSubject) and ``id`` even when not listed in ``fields``.
     """
 
     def __init__(self, *args, **kwargs):
@@ -972,36 +939,20 @@ class RoleBindingFieldMaskingMixin:
     def _build_subject_data(self, subject_type, subject_obj):
         """Build a subject dict with field masking applied.
 
+        Delegates to ``_build_subject_response`` for consistent subject
+        serialisation.  The ``default_extra`` provides user details in
+        the default (no field-selection) case.
+
         Args:
             subject_type: ``"group"`` or ``"user"`` (a SubjectType value).
             subject_obj: The underlying Group or Principal model instance.
         """
-        field_selection = self._get_field_selection()
-
-        if field_selection is None:
-            subject = {"id": subject_obj.uuid, "type": subject_type}
-            if subject_type == SubjectType.USER:
-                subject["user"] = {"username": subject_obj.username}
-            return subject
-
-        subject = {}
-        subject_fields = field_selection.get_nested("subject")
-
-        # UserSubject / GroupSubject require ``type`` for valid JSON and generated clients.
-        subject["type"] = subject_type
-        if "id" in subject_fields:
-            subject["id"] = subject_obj.uuid
-
-        if subject_type == SubjectType.GROUP:
-            group_details = self._extract_nested_fields("group.", subject_fields, subject_obj)
-            if group_details:
-                subject["group"] = group_details
-        elif subject_type == SubjectType.USER:
-            user_details = self._extract_nested_fields("user.", subject_fields, subject_obj)
-            if user_details:
-                subject["user"] = user_details
-
-        return subject
+        default_extra = None
+        if subject_type == SubjectType.USER:
+            default_extra = {"user": {"username": subject_obj.username}}
+        return _build_subject_response(
+            subject_obj, subject_type, self._get_field_selection(), default_extra=default_extra
+        )
 
     def _build_role_data(self, role):
         """Build a role dict with field masking applied."""
@@ -1037,25 +988,6 @@ class RoleBindingFieldMaskingMixin:
                 resource_data[field_name] = value
 
         return resource_data
-
-    @staticmethod
-    def _extract_nested_fields(prefix, field_paths, obj):
-        """Extract attribute values matching field paths with a given prefix.
-
-        Handles the ``user_count`` → ``principalCount`` special case for groups.
-        """
-        details = {}
-        prefix_len = len(prefix)
-        for field_path in field_paths:
-            if field_path.startswith(prefix):
-                attr_name = field_path[prefix_len:]
-                if attr_name == "user_count":
-                    details[attr_name] = getattr(obj, "principalCount", 0)
-                else:
-                    value = getattr(obj, attr_name, None)
-                    if value is not None:
-                        details[attr_name] = value
-        return details
 
 
 class BatchCreateRoleBindingResponseItemSerializer(RoleBindingFieldMaskingMixin, serializers.Serializer):

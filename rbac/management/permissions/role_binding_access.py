@@ -25,8 +25,9 @@ from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
 )
 from management.principal.proxy import get_kessel_principal_id
+from management.workspace.model import Workspace
 from rest_framework import permissions
-from rest_framework.exceptions import ParseError
+from rest_framework.exceptions import NotFound, ParseError
 
 from api.models import Tenant
 
@@ -157,13 +158,34 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
     def _check_read_permission(self, request):
         """Check read permission using resource info from query params.
 
-        Returns True if no resource params provided (pass-through for list endpoint).
+        When resource params are provided, checks access on that specific resource.
+        When no resource params are provided, falls back to a tenant-level check
+        which requires org admin access.
         """
         resource_type, resource_id = self._parse_query_resource(request)
         if not resource_type:
-            return True
+            return self._check_tenant_read_permission(request)
 
         return self._check_single_resource(request, resource_type, resource_id, self._get_read_relation())
+
+    def _check_tenant_read_permission(self, request):
+        """Check read permission at tenant level when no resource params provided.
+
+        When a read request (list, by_subject, etc.) omits resource_id/resource_type
+        query parameters, this method falls back to a tenant-level permission check.
+        Only users with org admin access on the tenant resource are allowed.
+        """
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            logger.debug("Denied unscoped role binding read: no tenant on request")
+            return False
+
+        tenant_resource_id = tenant.tenant_resource_id()
+        if not tenant_resource_id:
+            logger.debug("Denied unscoped role binding read: tenant has no resource ID")
+            return False
+
+        return self._check_single_resource(request, "tenant", tenant_resource_id, self._get_read_relation())
 
     def _check_batch_create_permission(self, request):
         """Check write permission for batch create.
@@ -229,6 +251,34 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             return get_kessel_principal_id(request)
         return None
 
+    def _validate_workspace_exists(self, request, resource_id):
+        """Validate that a workspace exists in the request's tenant.
+
+        Raises NotFound if the workspace does not exist for the tenant.
+        Silently returns if the resource_id is not a valid UUID (handled elsewhere).
+        """
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return
+
+        try:
+            validated_uuid = uuid.UUID(str(resource_id))
+        except (ValueError, AttributeError):
+            # Not a valid UUID — skip existence check; Kessel will handle the error
+            return
+
+        try:
+            exists = Workspace.objects.filter(id=validated_uuid, tenant=tenant).exists()
+        except TypeError:
+            logger.exception(
+                "Error checking workspace existence for resource_id %s",
+                resource_id,
+            )
+            return
+
+        if not exists:
+            raise NotFound(detail=f"Workspace with id '{resource_id}' not found.")
+
     def _check_single_resource(self, request, resource_type, resource_id, relation, principal_id=None) -> bool:
         """Check access on a single resource via Kessel or org-admin check.
 
@@ -246,6 +296,9 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
                 uuid.UUID(str(resource_id))
             except ValueError:
                 raise ParseError(detail=f"'{resource_id}' is not a valid UUID for resource_id.")
+
+        if resource_type == "workspace":
+            self._validate_workspace_exists(request, resource_id)
 
         if resource_type == "tenant":
             is_org_admin = getattr(request.user, "admin", False)

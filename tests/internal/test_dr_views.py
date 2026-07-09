@@ -26,7 +26,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         data = json.loads(response.content)
         self.assertIn("not enabled", data["error"])
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_valid_post_returns_202(self, mock_task):
         mock_result = MagicMock()
@@ -47,7 +47,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertIn("restore_timestamp_ms", data)
         mock_task.delay.assert_called_once()
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_missing_restore_timestamp(self, mock_task):
         response = self.client.post(
@@ -63,7 +63,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertIn("restore_timestamp", data["error"])
         mock_task.delay.assert_not_called()
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_invalid_timestamp_format(self, mock_task):
         response = self.client.post(
@@ -78,7 +78,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertIn("error", data)
         mock_task.delay.assert_not_called()
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_invalid_buffer_seconds(self, mock_task):
         response = self.client.post(
@@ -93,7 +93,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertIn("buffer_seconds", data["error"])
         mock_task.delay.assert_not_called()
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_boolean_buffer_seconds_rejected(self, mock_task):
         response = self.client.post(
@@ -108,7 +108,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
         self.assertIn("buffer_seconds", data["error"])
         mock_task.delay.assert_not_called()
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_dry_run_passes_flag(self, mock_task):
         mock_result = MagicMock()
@@ -131,7 +131,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
             dry_run=True,
         )
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     def test_get_method_not_allowed(self):
         response = self.client.get(
             "/_private/api/disaster_recovery/reconcile/",
@@ -140,7 +140,7 @@ class DisasterRecoveryViewTest(IdentityRequest):
 
         self.assertEqual(response.status_code, 405)
 
-    @override_settings(DR_RECONCILE_ENABLED=True)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True)
     @patch("management.tasks.run_disaster_recovery_reconcile")
     def test_default_buffer_seconds(self, mock_task):
         mock_result = MagicMock()
@@ -160,17 +160,23 @@ class DisasterRecoveryViewTest(IdentityRequest):
 
 
 class DisasterRecoveryTaskFeatureFlagTest(TestCase):
-    @override_settings(DR_RECONCILE_ENABLED=False)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=False)
     def test_task_disabled(self):
         from management.tasks import run_disaster_recovery_reconcile
 
         result = run_disaster_recovery_reconcile(restore_timestamp_ms=1000000, buffer_seconds=300)
         self.assertEqual(result["message"], "Disaster recovery reconciliation is disabled")
 
-    @override_settings(DR_RECONCILE_ENABLED=True, KAFKA_ENABLED=False)
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True, KAFKA_ENABLED=False)
     def test_task_enabled_but_kafka_disabled(self):
         from management.tasks import run_disaster_recovery_reconcile
 
         result = run_disaster_recovery_reconcile(restore_timestamp_ms=1000000, buffer_seconds=300)
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("error", result)
+        self.assertIn("KAFKA_ENABLED", result["message"])
+
+    @override_settings(DR_RELATIONS_RECONCILE_ENABLED=True, KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC=None)
+    def test_task_enabled_but_topic_not_configured(self):
+        from management.tasks import run_disaster_recovery_reconcile
+
+        result = run_disaster_recovery_reconcile(restore_timestamp_ms=1000000, buffer_seconds=300)
+        self.assertIn("RBAC_KAFKA_CONSUMER_TOPIC", result["message"])

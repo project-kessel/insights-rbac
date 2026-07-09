@@ -26,39 +26,6 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
-from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
-from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
-from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
-from internal.migrations.replicate_default_workspaces import replicate_default_workspaces
-from internal.utils import (
-    clean_invalid_workspace_resource_definitions,
-    expire_orphaned_cross_account_requests,
-    remove_unassigned_system_binding_mappings,
-    replicate_missing_binding_tuples,
-)
-from management.group.model import Group
-from management.health.healthcheck import redis_health
-from management.inventory_checker.inventory_api_check import (
-    BootstrappedTenantInventoryChecker,
-    CustomRolePermissionChecker,
-    GroupPrincipalInventoryChecker,
-    SeededRoleHierarchyChecker,
-    WorkspaceRelationInventoryChecker,
-    generate_seeded_role_hierarchy_tuples,
-)
-from management.parity_check import run_parity_checks
-from management.permission.scope_service import ImplicitResourceService
-from management.principal.cleaner import (
-    clean_tenants_principals,
-    process_principal_events_from_umb,
-)
-from management.role.v2_model import CustomRoleV2, SeededRoleV2
-from management.tenant_mapping.model import TenantMapping
-from management.workspace.model import Workspace
-from migration_tool.migrate import migrate_data
-from migration_tool.migrate_binding_scope import migrate_all_role_bindings
-
-from api.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +33,16 @@ logger = logging.getLogger(__name__)
 @shared_task
 def principal_cleanup():
     """Celery task to clean up principals no longer existing."""
+    from management.principal.cleaner import clean_tenants_principals
+
     clean_tenants_principals()
 
 
 @shared_task
 def principal_cleanup_via_umb():
     """Celery task to clean up principals no longer existing."""
+    from management.principal.cleaner import process_principal_events_from_umb
+
     process_principal_events_from_umb()
 
 
@@ -102,18 +73,24 @@ def run_ocm_performance_in_worker():
 @shared_task
 def run_redis_cache_health():
     """Celery task to check health of redis cache."""
+    from management.health.healthcheck import redis_health
+
     redis_health()
 
 
 @shared_task
 def migrate_data_in_worker(kwargs):
     """Celery task to migrate data from V1 to V2 spiceDB schema."""
+    from migration_tool.migrate import migrate_data
+
     migrate_data(**kwargs)
 
 
 @shared_task
 def migrate_binding_scope_in_worker(sources: Optional[list[str]] = None):
     """Celery task to migrate role binding scopes."""
+    from migration_tool.migrate_binding_scope import migrate_all_role_bindings
+
     return migrate_all_role_bindings(sources=set(sources) if sources is not None else None)
 
 
@@ -128,6 +105,8 @@ def fix_missing_binding_base_tuples_in_worker(binding_uuids=None):
     Returns:
         dict: Results with bindings_checked, bindings_fixed, and tuples_added count.
     """
+    from internal.utils import replicate_missing_binding_tuples
+
     return replicate_missing_binding_tuples(binding_uuids=binding_uuids)
 
 
@@ -142,6 +121,8 @@ def clean_invalid_workspace_resource_definitions_in_worker(dry_run=False):
     Returns:
         dict: Results with roles_checked, resource_definitions_fixed, bindings_deleted, and changes list.
     """
+    from internal.utils import clean_invalid_workspace_resource_definitions
+
     return clean_invalid_workspace_resource_definitions(dry_run=dry_run)
 
 
@@ -157,6 +138,8 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
     Returns:
         dict: Results with cleanup counts and migration results
     """
+    from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
+
     return cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
 
 
@@ -174,31 +157,62 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
 @shared_task
 def remove_unassigned_system_binding_mappings_in_worker():
     """Celery to remove unassigned system BindingMappings."""
+    from internal.utils import remove_unassigned_system_binding_mappings
+
     return remove_unassigned_system_binding_mappings()
 
 
 @shared_task
 def expire_orphaned_cross_account_requests_in_worker():
     """Celery task to expire orphaned cross-account requests."""
+    from internal.utils import expire_orphaned_cross_account_requests
+
     return expire_orphaned_cross_account_requests()
 
 
 @shared_task
 def remove_deleted_workspace_bindings_in_worker():
     """Celery task to remove role bindings that reference deleted workspaces."""
+    from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
+
     return remove_deleted_workspace_bindings()
 
 
 @shared_task
 def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
     """Celery task to replicate default workspaces."""
+    from internal.migrations.replicate_workspaces import replicate_default_workspaces
+
     return replicate_default_workspaces(limit=limit)
+
+
+@shared_task
+def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default_workspaces: bool):
+    """Celery task to replicate updated workspaces."""
+    from internal.migrations.replicate_workspaces import replicate_updated_workspaces
+
+    return replicate_updated_workspaces(
+        since=datetime.datetime.fromisoformat(since),
+        exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
+    )
 
 
 @shared_task
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
+    from api.models import Tenant
+    from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
+
     return recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+
+
+@shared_task
+def migrate_role_scope_if_changed_in_worker(role_uuid: str):
+    """Celery task to migrate existing role bindings for a role if its scope has changed."""
+    from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
+    from management.role.model import Role
+
+    return migrate_role_scope_if_changed(v1_role=Role.objects.filter(uuid=role_uuid).get())
 
 
 @shared_task
@@ -219,6 +233,8 @@ def run_parity_access_checks_in_worker(
     Returns:
         dict: Summary of check results including counts and any discrepancies found.
     """
+    from management.parity_check import run_parity_checks
+
     result = run_parity_checks(
         tenant_sample_size=tenant_sample_size,
         principal_sample_size=principal_sample_size,
@@ -236,26 +252,53 @@ def run_parity_access_checks_in_worker(
 
 
 @shared_task
-def run_kessel_parity_checks_in_worker():
+def run_kessel_parity_checks_in_worker(org_ids=None):
     """
     Celery task to run Kessel-RBAC parity checks for configured tenants.
+
+    Args:
+        org_ids: Optional list of org IDs to check. When provided, skips the
+            PARITY_CHECK_ENABLED gate and uses the given list directly. When None,
+            falls back to current behavior (reads from PARITY_CHECK_ORG_IDS env var
+            and checks PARITY_CHECK_ENABLED gate).
 
     Returns:
         dict: Summary statistics with checks performed, passed, and failed counts.
     """
-    if not getattr(settings, "PARITY_CHECK_ENABLED", False):
-        return {"message": "Parity checks disabled"}
+    if org_ids is None:
+        # Scheduled cron path: respect PARITY_CHECK_ENABLED gate
+        if not getattr(settings, "PARITY_CHECK_ENABLED", False):
+            return {"message": "Parity checks disabled"}
 
-    org_ids_str = settings.PARITY_CHECK_ORG_IDS
-    org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+        org_ids_str = settings.PARITY_CHECK_ORG_IDS
+        org_ids = [org_id.strip() for org_id in org_ids_str.split(",") if org_id.strip()]
+    else:
+        # On-demand path: validate and deduplicate provided org_ids
+        org_ids = [org_id.strip() for org_id in org_ids if org_id.strip()]
+
     # Deduplicate org_ids while preserving order to avoid redundant work and double-counting
     org_ids = list(dict.fromkeys(org_ids))
 
     if not org_ids:
-        logger.info("PARITY_CHECK_ORG_IDS not configured, skipping parity checks")
+        logger.info("[PCH] PARITY_CHECK_ORG_IDS not configured, skipping parity checks")
         return {"message": "No org_ids configured"}
 
-    logger.info(f"Starting Kessel parity checks for {len(org_ids)} org(s): {org_ids}")
+    logger.info(f"[PCH] Starting Kessel parity checks for {len(org_ids)} org(s): {org_ids}")
+
+    from api.models import Tenant
+    from management.group.model import Group
+    from management.inventory_checker.inventory_api_check import (
+        BootstrappedTenantInventoryChecker,
+        CustomRolePermissionChecker,
+        GroupPrincipalInventoryChecker,
+        SeededRoleHierarchyChecker,
+        WorkspaceRelationInventoryChecker,
+        generate_seeded_role_hierarchy_tuples,
+    )
+    from management.permission.scope_service import ImplicitResourceService
+    from management.role.v2_model import CustomRoleV2, SeededRoleV2
+    from management.tenant_mapping.model import TenantMapping
+    from management.workspace.model import Workspace
 
     stats = {
         "total_tenants": 0,
@@ -293,19 +336,19 @@ def run_kessel_parity_checks_in_worker():
             if not hierarchy_tuples:
                 continue
             role_passed = hierarchy_checker.check_seeded_role_hierarchy(hierarchy_tuples, str(seeded_role.uuid))
-            seeded_role_results.append(
-                {
-                    "role_uuid": str(seeded_role.uuid),
-                    "role_name": seeded_role.name,
-                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
-                    "tuple_count": len(hierarchy_tuples),
-                    "passed": role_passed,
-                }
-            )
+            seeded_result_entry = {
+                "role_uuid": str(seeded_role.uuid),
+                "role_name": seeded_role.name,
+                "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                "tuple_count": len(hierarchy_tuples),
+                "passed": role_passed,
+            }
             if not role_passed:
+                seeded_result_entry["expected_tuples"] = [t.stringify() for t in hierarchy_tuples[:5]]
                 seeded_hierarchy_passed = False
+            seeded_role_results.append(seeded_result_entry)
         except Exception as e:
-            logger.exception("Error checking seeded role hierarchy for role %s", seeded_role.name)
+            logger.exception("[PCH] Error checking seeded role hierarchy for role %s", seeded_role.name)
             seeded_hierarchy_passed = False
             seeded_role_results.append(
                 {
@@ -329,9 +372,27 @@ def run_kessel_parity_checks_in_worker():
 
     if seeded_role_results:
         logger.info(
-            f"Seeded role hierarchy check: {len(seeded_role_results)} role(s) with hierarchy checked, "
+            f"[PCH] Seeded role hierarchy check: {len(seeded_role_results)} role(s) with hierarchy checked, "
             f"passed={seeded_hierarchy_passed}, took {seeded_elapsed:.3f}s"
         )
+
+    if not seeded_hierarchy_passed:
+        failed_seeded = [r for r in seeded_role_results if not r["passed"]]
+        seeded_detail_lines = []
+        seeded_missing_shown = 0
+        for r in failed_seeded:
+            if seeded_missing_shown >= 20:
+                break
+            for t_str in r.get("expected_tuples", [])[:5]:
+                if seeded_missing_shown >= 20:
+                    break
+                seeded_detail_lines.append(f"[PCH]   - MISSING ({r['role_name']}): {t_str}")
+                seeded_missing_shown += 1
+        total_seeded_missing = sum(r.get("tuple_count", 0) for r in failed_seeded)
+        if total_seeded_missing > seeded_missing_shown:
+            seeded_detail_lines.append(f"[PCH]   ... and {total_seeded_missing - seeded_missing_shown} more")
+        if seeded_detail_lines:
+            logger.warning("\n".join(seeded_detail_lines))
 
     # Bulk fetch all tenants to avoid N+1 queries
     tenants = {t.org_id: t for t in Tenant.objects.filter(org_id__in=org_ids)}
@@ -347,7 +408,7 @@ def run_kessel_parity_checks_in_worker():
     for org_id in org_ids:
         tenant = tenants.get(org_id)
         if not tenant:
-            logger.warning(f"Tenant not found for org_id: {org_id}")
+            logger.warning(f"[PCH] Tenant not found for org_id: {org_id}")
             stats["tenants_not_found"] += 1
             continue
 
@@ -362,7 +423,7 @@ def run_kessel_parity_checks_in_worker():
 
         try:
             tenant_start = time.monotonic()
-            logger.info(f"Running parity check for tenant {org_id}")
+            logger.info(f"[PCH] Running parity check for tenant {org_id}")
             stats["total_tenants"] += 1
 
             workspaces = (
@@ -374,11 +435,14 @@ def run_kessel_parity_checks_in_worker():
             workspace_pairs = [(str(w_id), str(parent_id)) for (w_id, parent_id) in workspaces]
             pairs_count = len(workspace_pairs)
 
+            workspace_pair_results = []
             if workspace_pairs:
-                logger.info(f"Checking {pairs_count} workspace parent relations for tenant {org_id}")
-                workspace_check_passed = workspace_checker.check_workspace_descendants(workspace_pairs)
+                logger.info(f"[PCH] Checking {pairs_count} workspace parent relations for tenant {org_id}")
+                workspace_check_passed, workspace_pair_results = workspace_checker.check_workspace_descendants(
+                    workspace_pairs
+                )
             else:
-                logger.warning(f"No workspace pairs to check for tenant {org_id} — missing default workspace?")
+                logger.warning(f"[PCH] No workspace pairs to check for tenant {org_id} — missing default workspace?")
                 workspace_check_passed = False
 
             stats["total_workspace_pairs_checked"] += pairs_count
@@ -390,20 +454,20 @@ def run_kessel_parity_checks_in_worker():
             for role in custom_roles:
                 permission_tuples = [CustomRoleV2._permission_tuple(role, perm) for perm in role.permissions.all()]
                 role_passed = role_permission_checker.check_custom_role_permissions(permission_tuples, str(role.uuid))
-                role_results.append(
-                    {
-                        "role_uuid": str(role.uuid),
-                        "role_name": role.name,
-                        "permission_count": len(permission_tuples),
-                        "passed": role_passed,
-                    }
-                )
+                role_result_entry = {
+                    "role_uuid": str(role.uuid),
+                    "role_name": role.name,
+                    "permission_count": len(permission_tuples),
+                    "passed": role_passed,
+                }
                 if not role_passed:
+                    role_result_entry["expected_tuples"] = [t.stringify() for t in permission_tuples[:5]]
                     custom_role_check_passed = False
+                role_results.append(role_result_entry)
 
             stats["total_custom_roles_checked"] += len(role_results)
             if role_results:
-                logger.info(f"Checked {len(role_results)} custom role(s) for tenant {org_id}")
+                logger.info(f"[PCH] Checked {len(role_results)} custom role(s) for tenant {org_id}")
 
             # Bootstrap completeness check
             mapping = tenant_mappings.get(tenant.id)
@@ -422,10 +486,12 @@ def run_kessel_parity_checks_in_worker():
                     )
                     stats["total_bootstrap_checks"] += len(bootstrap_details)
                 else:
-                    logger.warning(f"Missing root/default workspace for tenant {org_id}, skipping bootstrap check")
+                    logger.warning(
+                        f"[PCH] Missing root/default workspace for tenant {org_id}, skipping bootstrap check"
+                    )
                     bootstrap_check_passed = False
             else:
-                logger.warning(f"No tenant mapping for org_id: {org_id}, skipping bootstrap check")
+                logger.warning(f"[PCH] No tenant mapping for org_id: {org_id}, skipping bootstrap check")
                 bootstrap_check_passed = False
 
             groups = Group.objects.filter(tenant=tenant).prefetch_related("principals")
@@ -443,22 +509,25 @@ def run_kessel_parity_checks_in_worker():
                 else:
                     all_exist = True
 
-                group_results.append(
-                    {
-                        "group_uuid": str(group.uuid),
-                        "group_name": group.name,
-                        "principal_count": principal_count,
-                        "passed": all_exist,
-                    }
-                )
+                group_result_entry = {
+                    "group_uuid": str(group.uuid),
+                    "group_name": group.name,
+                    "principal_count": principal_count,
+                    "passed": all_exist,
+                }
                 if not all_exist:
+                    missing_ids = {pr["id"] for pr in result["principal_relations"] if not pr["relation_exists"]}
+                    missing_rels = [r for r in relationships if r.subject.subject.id in missing_ids]
+                    group_result_entry["missing_tuples"] = [r.stringify() for r in missing_rels[:5]]
+                    group_result_entry["missing_count"] = len(missing_rels)
                     group_principal_check_passed = False
+                group_results.append(group_result_entry)
 
             stats["total_groups_checked"] += len(group_results)
             stats["total_group_principal_relations_checked"] += tenant_group_principal_relations
             if group_results:
                 logger.info(
-                    f"Checked {len(group_results)} group(s) with "
+                    f"[PCH] Checked {len(group_results)} group(s) with "
                     f"{tenant_group_principal_relations} principal relation(s) for tenant {org_id}"
                 )
 
@@ -471,14 +540,87 @@ def run_kessel_parity_checks_in_worker():
 
             if tenant_passed:
                 stats["passed_tenants"] += 1
-                logger.info(f"Parity check PASSED for tenant {org_id}")
+                logger.info(f"[PCH] Parity check PASSED for tenant {org_id}")
             else:
                 stats["failed_tenants"] += 1
-                logger.warning(f"Parity check FAILED for tenant {org_id}")
+                logger.warning(f"[PCH] Parity check FAILED for tenant {org_id}")
+
+            sub_check_log = logger.info if tenant_passed else logger.warning
+
+            detail_lines = []
+            detail_lines.append(f"[PCH]   Sub-check results for tenant {org_id}:")
+            detail_lines.append(
+                f"[PCH]     Workspace hierarchy: {'PASSED' if workspace_check_passed else 'FAILED'}"
+                f" ({pairs_count} pairs)"
+            )
+            if not workspace_check_passed and workspace_pair_results:
+                missing = [r for r in workspace_pair_results if not r["exists"]]
+                ws_missing_shown = 0
+                for r in missing:
+                    if ws_missing_shown >= 20:
+                        break
+                    detail_lines.append(
+                        f"[PCH]       - MISSING: rbac/workspace:{r['parent_id']}"
+                        f"#parent@rbac/workspace:{r['workspace_id']}"
+                    )
+                    ws_missing_shown += 1
+                if len(missing) > ws_missing_shown:
+                    detail_lines.append(f"[PCH]       ... and {len(missing) - ws_missing_shown} more")
+
+            detail_lines.append(
+                f"[PCH]     Custom roles:        {'PASSED' if custom_role_check_passed else 'FAILED'}"
+                f" ({len(role_results)} roles)"
+            )
+            if not custom_role_check_passed:
+                failed_roles = [r for r in role_results if not r["passed"]]
+                cr_missing_shown = 0
+                for r in failed_roles:
+                    if cr_missing_shown >= 20:
+                        break
+                    for t_str in r.get("expected_tuples", [])[:5]:
+                        if cr_missing_shown >= 20:
+                            break
+                        detail_lines.append(f"[PCH]       - MISSING ({r['role_name']}): {t_str}")
+                        cr_missing_shown += 1
+                total_cr_missing = sum(r.get("permission_count", 0) for r in failed_roles)
+                if total_cr_missing > cr_missing_shown:
+                    detail_lines.append(f"[PCH]       ... and {total_cr_missing - cr_missing_shown} more")
+
+            detail_lines.append(
+                f"[PCH]     Bootstrap:           {'PASSED' if bootstrap_check_passed else 'FAILED'}"
+                f" ({len(bootstrap_details)} checks)"
+            )
+            if not bootstrap_check_passed and bootstrap_details:
+                missing = [d for d in bootstrap_details if not d["exists"]]
+                for d in missing[:20]:
+                    detail_lines.append(f"[PCH]       - MISSING: {d['name']} ({d.get('check', '')})")
+                if len(missing) > 20:
+                    detail_lines.append(f"[PCH]       ... and {len(missing) - 20} more")
+
+            detail_lines.append(
+                f"[PCH]     Group-principal:     {'PASSED' if group_principal_check_passed else 'FAILED'}"
+                f" ({len(group_results)} groups, {tenant_group_principal_relations} relations)"
+            )
+            if not group_principal_check_passed:
+                failed_groups = [g for g in group_results if not g["passed"]]
+                gp_missing_shown = 0
+                for g in failed_groups:
+                    if gp_missing_shown >= 20:
+                        break
+                    for t_str in g.get("missing_tuples", [])[:5]:
+                        if gp_missing_shown >= 20:
+                            break
+                        detail_lines.append(f"[PCH]       - MISSING ({g['group_name']}): {t_str}")
+                        gp_missing_shown += 1
+                total_gp_missing = sum(g.get("missing_count", 0) for g in failed_groups)
+                if total_gp_missing > gp_missing_shown:
+                    detail_lines.append(f"[PCH]       ... and {total_gp_missing - gp_missing_shown} more")
+
+            sub_check_log("\n".join(detail_lines))
 
             tenant_elapsed = time.monotonic() - tenant_start
             tenant_durations.append(tenant_elapsed)
-            logger.info(f"Tenant {org_id} parity check took {tenant_elapsed:.3f}s")
+            logger.info(f"[PCH] Tenant {org_id} parity check took {tenant_elapsed:.3f}s")
 
             stats["tenants_checked"].append(
                 {
@@ -502,7 +644,7 @@ def run_kessel_parity_checks_in_worker():
         except Exception as e:
             tenant_elapsed = time.monotonic() - tenant_start
             tenant_durations.append(tenant_elapsed)
-            logger.exception(f"Error checking parity for tenant {org_id}: {e}")
+            logger.exception(f"[PCH] Error checking parity for tenant {org_id}: {e}")
             stats["failed_tenants"] += 1
             stats["tenants_checked"].append(
                 {
@@ -534,13 +676,13 @@ def run_kessel_parity_checks_in_worker():
             "p99_seconds": round(sorted_durations[min(int(n * 0.99), n - 1)], 3),
         }
         logger.info(
-            f"Timing: avg={timing_stats['avg_seconds']}s "
+            f"[PCH] Timing: avg={timing_stats['avg_seconds']}s "
             f"p95={timing_stats['p95_seconds']}s "
             f"p99={timing_stats['p99_seconds']}s"
         )
 
     logger.info(
-        f"Parity check complete. Checked: {stats['total_tenants']}, "
+        f"[PCH] Parity check complete. Checked: {stats['total_tenants']}, "
         f"Passed: {stats['passed_tenants']}, "
         f"Failed: {stats['failed_tenants']}, "
         f"Not Found: {stats['tenants_not_found']}, "
@@ -549,7 +691,9 @@ def run_kessel_parity_checks_in_worker():
         f"Total seeded roles: {stats['total_seeded_roles_checked']}, "
         f"Total bootstrap checks: {stats['total_bootstrap_checks']}, "
         f"Total groups: {stats['total_groups_checked']}, "
-        f"Total group-principal relations: {stats['total_group_principal_relations_checked']}"
+        f"Total group-principal relations: {stats['total_group_principal_relations_checked']}, "
+        f"Seeded role hierarchy: {'PASSED' if seeded_hierarchy_passed else 'FAILED'}"
+        f" ({stats['total_seeded_roles_checked']} roles)"
     )
 
     stats["timing"] = timing_stats
@@ -574,8 +718,8 @@ def recover_workspace_events_in_worker(
     Returns:
         dict: Summary statistics of corrective events generated.
     """
-    if not getattr(settings, "DR_RECOVERY_ENABLED", False):
-        return {"message": "DR recovery disabled (DR_RECOVERY_ENABLED=False)"}
+    if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
+        return {"message": "DR recovery disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}
 
     from django.core.cache import cache
 
@@ -651,8 +795,14 @@ def run_disaster_recovery_reconcile(
     Returns:
         dict: Summary with counts of corrective actions taken.
     """
-    if not getattr(settings, "DR_RECONCILE_ENABLED", False):
+    if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return {"message": "Disaster recovery reconciliation is disabled"}
+
+    if not getattr(settings, "KAFKA_ENABLED", False):
+        return {"message": "Disaster recovery reconciliation requires Kafka (KAFKA_ENABLED=False)"}
+
+    if not getattr(settings, "RBAC_KAFKA_CONSUMER_TOPIC", None):
+        return {"message": "Disaster recovery reconciliation requires RBAC_KAFKA_CONSUMER_TOPIC to be configured"}
 
     try:
         from management.disaster_recovery.service import reconcile

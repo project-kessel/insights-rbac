@@ -19,6 +19,7 @@ from management.relation_replicator.types import (
     SubjectReference,
 )
 from management.role.model import Role
+from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 
 
@@ -174,3 +175,121 @@ class ResourceCheckerTest(TestCase):
     def test_registry_covers_expected_types(self):
         expected = {"workspace", "role", "group", "principal", "role_binding", "tenant"}
         self.assertEqual(set(RESOURCE_TYPE_REGISTRY.keys()), expected)
+
+
+class TenantMappingFallbackTest(TestCase):
+    """Test that group/role_binding UUIDs from TenantMapping are found even without model instances."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.tenant = Tenant.objects.create(
+            tenant_name="test-mapping-tenant",
+            account_id="test-mapping-account",
+            org_id="test-mapping-org",
+            ready=True,
+        )
+        cls.root_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.ROOT,
+            type=Workspace.Types.ROOT,
+            tenant=cls.tenant,
+        )
+        cls.default_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.DEFAULT,
+            type=Workspace.Types.DEFAULT,
+            tenant=cls.tenant,
+            parent=cls.root_ws,
+        )
+        cls.mapping = TenantMapping.objects.create(tenant=cls.tenant)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mapping.delete()
+        cls.default_ws.delete()
+        cls.root_ws.delete()
+        cls.tenant.delete()
+        super().tearDownClass()
+
+    def test_group_found_via_tenant_mapping_default_group(self):
+        group_uuid = str(self.mapping.default_group_uuid)
+        t = _make_tuple("group", group_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("group", group_uuid)])
+
+    def test_group_found_via_tenant_mapping_admin_group(self):
+        group_uuid = str(self.mapping.default_admin_group_uuid)
+        t = _make_tuple("group", group_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("group", group_uuid)])
+
+    def test_role_binding_found_via_tenant_mapping(self):
+        rb_uuid = str(self.mapping.default_role_binding_uuid)
+        t = _make_tuple("role_binding", rb_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("role_binding", rb_uuid)])
+
+    def test_role_binding_root_scope_found_via_tenant_mapping(self):
+        rb_uuid = str(self.mapping.root_scope_default_role_binding_uuid)
+        t = _make_tuple("role_binding", rb_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("role_binding", rb_uuid)])
+
+    def test_role_binding_tenant_scope_found_via_tenant_mapping(self):
+        rb_uuid = str(self.mapping.tenant_scope_default_role_binding_uuid)
+        t = _make_tuple("role_binding", rb_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("role_binding", rb_uuid)])
+
+    def test_role_binding_admin_found_via_tenant_mapping(self):
+        rb_uuid = str(self.mapping.default_admin_role_binding_uuid)
+        t = _make_tuple("role_binding", rb_uuid)
+        result = check_resources_exist([t])
+        self.assertTrue(result[("role_binding", rb_uuid)])
+
+    def test_group_not_in_mapping_still_returns_false(self):
+        fake_uuid = str(uuid4())
+        t = _make_tuple("group", fake_uuid)
+        result = check_resources_exist([t])
+        self.assertFalse(result[("group", fake_uuid)])
+
+    def test_role_binding_not_in_mapping_still_returns_false(self):
+        fake_uuid = str(uuid4())
+        t = _make_tuple("role_binding", fake_uuid)
+        result = check_resources_exist([t])
+        self.assertFalse(result[("role_binding", fake_uuid)])
+
+    def test_mixed_real_and_virtual_resources(self):
+        """Groups that exist as model instances and groups from TenantMapping both return True."""
+        real_group = Group.objects.create(name="Real DR Group", tenant=self.tenant)
+        virtual_group_uuid = str(self.mapping.default_group_uuid)
+        fake_group_uuid = str(uuid4())
+
+        tuples = [
+            _make_tuple("group", str(real_group.uuid)),
+            _make_tuple("group", virtual_group_uuid),
+            _make_tuple("group", fake_group_uuid),
+        ]
+        result = check_resources_exist(tuples)
+
+        self.assertTrue(result[("group", str(real_group.uuid))])
+        self.assertTrue(result[("group", virtual_group_uuid)])
+        self.assertFalse(result[("group", fake_group_uuid)])
+        real_group.delete()
+
+    def test_bootstrap_scenario_all_virtual_resources(self):
+        """Simulate a full bootstrap event: group, role_binding, workspace all checked."""
+        tuples = [
+            _make_tuple("workspace", str(self.root_ws.id)),
+            _make_tuple("group", str(self.mapping.default_group_uuid)),
+            _make_tuple("group", str(self.mapping.default_admin_group_uuid)),
+            _make_tuple("role_binding", str(self.mapping.default_role_binding_uuid)),
+            _make_tuple("role_binding", str(self.mapping.default_admin_role_binding_uuid)),
+            _make_tuple("role_binding", str(self.mapping.root_scope_default_role_binding_uuid)),
+            _make_tuple("role_binding", str(self.mapping.root_scope_default_admin_role_binding_uuid)),
+            _make_tuple("role_binding", str(self.mapping.tenant_scope_default_role_binding_uuid)),
+            _make_tuple("role_binding", str(self.mapping.tenant_scope_default_admin_role_binding_uuid)),
+        ]
+        result = check_resources_exist(tuples)
+
+        for key, exists in result.items():
+            self.assertTrue(exists, f"Expected {key} to exist")

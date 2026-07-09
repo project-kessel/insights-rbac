@@ -16,6 +16,7 @@
 """Describes the urls and patterns for the management application."""
 
 from django.urls import include, path
+from management.principal.v2_view import PrincipalV2ViewSet
 from management.role.v2_view import RoleV2ViewSet
 from management.views import (
     RoleBindingViewSet,
@@ -49,6 +50,7 @@ ROUTER = V2Router()
 ROUTER.register(r"workspaces", WorkspaceViewSet, basename="workspace")
 ROUTER.register(r"role-bindings", RoleBindingViewSet, basename="role-bindings")
 ROUTER.register(r"roles", RoleV2ViewSet, basename="roles")
+ROUTER.register(r"principals", PrincipalV2ViewSet, basename="principals")
 
 # pylint: disable=invalid-name
 urlpatterns = [

@@ -416,6 +416,121 @@ class RoleBindingInvalidResourceTypeTests(RoleBindingAccessTestMixin, Transactio
 
 
 @override_settings(V2_APIS_ENABLED=True)
+class RoleBindingNonExistentWorkspaceTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
+    """Tests for non-existent workspace resource_id returning 404 instead of 403."""
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_nonexistent_workspace_returns_404_by_subject(self, mock_inventory_client):
+        """GET by-subject with non-existent workspace resource_id should return 404."""
+        self._setup_kessel_mock(mock_inventory_client)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mock_inventory_client.assert_not_called()
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_nonexistent_workspace_returns_404_list(self, mock_inventory_client):
+        """GET list with non-existent workspace resource_id should return 404."""
+        self._setup_kessel_mock(mock_inventory_client)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        url = self._get_list_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mock_inventory_client.assert_not_called()
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_existing_workspace_still_checks_kessel(self, mock_inventory_client):
+        """GET with existing workspace resource_id should proceed to Kessel check."""
+        self._setup_kessel_mock(mock_inventory_client, allowed_pb2.Allowed.ALLOWED_TRUE)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_inventory_client.assert_called()
+
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_nonexistent_workspace_unit_raises_not_found(self, mock_checker_class, mock_get_principal_id):
+        """Unit test: non-existent workspace should raise NotFound before Kessel call."""
+        from rest_framework.exceptions import NotFound
+
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+        mock_request = Mock()
+        mock_request.user.system = False
+        mock_request.user.admin = False
+        mock_request.tenant = self.tenant
+        mock_request.query_params = {
+            "resource_id": nonexistent_uuid,
+            "resource_type": "workspace",
+        }
+
+        mock_view = Mock()
+        mock_view.action = "by_subject"
+
+        with self.assertRaises(NotFound):
+            permission.has_permission(mock_request, mock_view)
+
+        mock_checker_class.return_value.check_resource_access.assert_not_called()
+
+    def test_nonexistent_workspace_returns_404_for_org_admin(self):
+        """Org admin with non-existent workspace should also get 404."""
+        nonexistent_uuid = "00000000-0000-0000-0000-000000000099"
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=True)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={nonexistent_uuid}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_tenant_resource_type_unaffected_by_workspace_check(self):
+        """resource_type=tenant should not trigger workspace existence check."""
+        tenant_resource_id = self.tenant.tenant_resource_id()
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=True)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={tenant_resource_id}&resource_type=tenant",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+@override_settings(V2_APIS_ENABLED=True)
 class RoleBindingSystemUserPermissionTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
     """Unit tests for RoleBindingSystemUserAccessPermission."""
 
@@ -826,112 +941,154 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
 
         self.assertFalse(result)
 
+    def _make_mock_request(self, admin=False, system=False, resource_id=None, resource_type=None):
+        """Create a mock request with common defaults for permission unit tests.
+
+        Args:
+            admin: Whether user is org admin (default: False).
+            system: Whether user is a system user (default: False).
+            resource_id: Optional resource_id query param.
+            resource_type: Optional resource_type query param.
+
+        Returns:
+            Mock request object. Set .tenant separately when needed.
+        """
+        mock_request = Mock()
+        mock_request.user.system = system
+        mock_request.user.admin = admin
+        query_params = {}
+        if resource_id is not None:
+            query_params["resource_id"] = str(resource_id)
+        if resource_type is not None:
+            query_params["resource_type"] = resource_type
+        mock_request.query_params = query_params
+        return mock_request
+
+    def _make_mock_view(self, action="by_subject"):
+        """Create a mock view with the specified action."""
+        mock_view = Mock()
+        mock_view.action = action
+        return mock_view
+
     def test_kessel_permission_rejects_invalid_uuid_resource_id(self):
         """Workspace resource_id must be a valid UUID; invalid values return 400."""
         from rest_framework.exceptions import ParseError
 
         permission = RoleBindingKesselAccessPermission()
-
-        mock_request = Mock()
-        mock_request.user.system = False
-        mock_request.user.admin = False
-        mock_request.query_params = {
-            "resource_id": "not-a-uuid",
-            "resource_type": "workspace",
-        }
-
-        mock_view = Mock()
-        mock_view.action = "by_subject"
+        mock_request = self._make_mock_request(resource_id="not-a-uuid", resource_type="workspace")
 
         with self.assertRaises(ParseError) as ctx:
-            permission.has_permission(mock_request, mock_view)
+            permission.has_permission(mock_request, self._make_mock_view())
 
         self.assertIn("not-a-uuid", str(ctx.exception.detail))
         self.assertIn("not a valid UUID", str(ctx.exception.detail))
 
     def test_kessel_permission_rejects_empty_string_resource_id(self):
-        """Empty string resource_id with workspace type is filtered out by _parse_query_resource."""
+        """Empty string resource_id is filtered out, falling back to tenant-level check."""
         permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(resource_id="", resource_type="workspace")
+        mock_request.tenant = self.tenant
 
-        mock_request = Mock()
-        mock_request.user.system = False
-        mock_request.user.admin = False
-        mock_request.query_params = {
-            "resource_id": "",
-            "resource_type": "workspace",
-        }
-
-        mock_view = Mock()
-        mock_view.action = "list"
-
-        # Empty resource_id is filtered by _parse_query_resource → pass-through
-        result = permission.has_permission(mock_request, mock_view)
-        self.assertTrue(result)
+        # Empty resource_id filtered by _parse_query_resource → tenant-level check → non-admin denied
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+        self.assertFalse(result)
 
     def test_kessel_permission_rejects_numeric_string_resource_id(self):
         """Numeric string is not a valid UUID for workspace resource_id."""
         from rest_framework.exceptions import ParseError
 
         permission = RoleBindingKesselAccessPermission()
-
-        mock_request = Mock()
-        mock_request.user.system = False
-        mock_request.user.admin = False
-        mock_request.query_params = {
-            "resource_id": "12345",
-            "resource_type": "workspace",
-        }
-
-        mock_view = Mock()
-        mock_view.action = "list"
+        mock_request = self._make_mock_request(resource_id="12345", resource_type="workspace")
 
         with self.assertRaises(ParseError):
-            permission.has_permission(mock_request, mock_view)
+            permission.has_permission(mock_request, self._make_mock_view(action="list"))
 
     def test_kessel_permission_accepts_valid_uuid_resource_id(self):
         """Valid UUID resource_id for workspace should not raise ParseError."""
         import uuid
 
         permission = RoleBindingKesselAccessPermission()
-
-        mock_request = Mock()
-        mock_request.user.system = False
-        mock_request.user.admin = False
-        mock_request.query_params = {
-            "resource_id": str(uuid.uuid4()),
-            "resource_type": "workspace",
-        }
-
-        mock_view = Mock()
-        mock_view.action = "by_subject"
+        mock_request = self._make_mock_request(resource_id=str(uuid.uuid4()), resource_type="workspace")
 
         # Should not raise ParseError; will proceed to Kessel check (which may deny)
         with patch("management.permissions.role_binding_access.get_kessel_principal_id") as mock_principal:
             mock_principal.return_value = None
-            result = permission.has_permission(mock_request, mock_view)
+            result = permission.has_permission(mock_request, self._make_mock_view())
             # Denied because principal_id is None, but no ParseError raised
             self.assertFalse(result)
 
     def test_kessel_permission_allows_non_uuid_for_tenant_resource_type(self):
         """Tenant resource_type does not require UUID format for resource_id."""
         permission = RoleBindingKesselAccessPermission()
-
         tenant_resource_id = self.tenant.tenant_resource_id()
-        mock_request = Mock()
-        mock_request.user.system = False
-        mock_request.user.admin = True
-        mock_request.query_params = {
-            "resource_id": tenant_resource_id,
-            "resource_type": "tenant",
-        }
+        mock_request = self._make_mock_request(admin=True, resource_id=tenant_resource_id, resource_type="tenant")
         mock_request.tenant = self.tenant
 
-        mock_view = Mock()
-        mock_view.action = "by_subject"
-
         # Should not raise ParseError — tenant resource_id is not a UUID
-        result = permission.has_permission(mock_request, mock_view)
+        result = permission.has_permission(mock_request, self._make_mock_view())
         self.assertTrue(result)
+
+    def test_list_without_resource_params_denied_for_non_admin(self):
+        """List endpoint without resource params should deny non-admin users."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request()
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+
+        self.assertFalse(result)
+
+    def test_list_without_resource_params_allowed_for_org_admin(self):
+        """List endpoint without resource params should allow org admin."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(admin=True)
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+
+        self.assertTrue(result)
+
+    def test_by_subject_without_resource_params_denied_for_non_admin(self):
+        """by_subject GET without resource params should deny non-admin users."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request()
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+
+    def test_by_subject_without_resource_params_allowed_for_org_admin(self):
+        """by_subject GET without resource params should allow org admin."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(admin=True)
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+
+    def test_list_without_resource_params_denied_when_no_tenant(self):
+        """List without resource params should deny when no tenant on request."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(admin=True)
+        mock_request.tenant = None
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+
+        self.assertFalse(result)
+
+    def test_list_without_resource_params_denied_when_tenant_has_no_resource_id(self):
+        """List without resource params should deny when tenant has no resource ID."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_tenant = Mock()
+        mock_tenant.tenant_resource_id.return_value = None
+        mock_request = self._make_mock_request(admin=True)
+        mock_request.tenant = mock_tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+
+        self.assertFalse(result)
 
 
 @override_settings(V2_APIS_ENABLED=True)
@@ -964,6 +1121,54 @@ class RoleBindingInvalidUuidIntegrationTests(RoleBindingAccessTestMixin, Transac
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("not a valid UUID", str(response.data))
+
+
+@override_settings(V2_APIS_ENABLED=True)
+class RoleBindingNoResourceParamsIntegrationTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
+    """Integration tests verifying non-admin users cannot list role bindings without resource params."""
+
+    def test_non_admin_list_without_resource_params_returns_403(self):
+        """Non-admin user calling GET /v2/role-bindings/ without resource params gets 403."""
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        url = self._get_list_url()
+        response = self.client.get(url, **headers)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_non_admin_by_subject_without_resource_params_returns_403(self):
+        """Non-admin user calling GET /v2/role-bindings/by-subject/ without resource params gets 403."""
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        url = self._get_by_subject_url()
+        response = self.client.get(url, **headers)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_list_without_resource_params_returns_200(self):
+        """Org admin calling GET /v2/role-bindings/ without resource params gets 200."""
+        url = self._get_list_url()
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @patch("management.permissions.workspace_inventory_access.inventory_client")
+    def test_non_admin_with_resource_params_and_kessel_allowed_returns_200(self, mock_inventory_client):
+        """Non-admin user with resource params and Kessel allowed still gets 200."""
+        self._setup_kessel_mock(mock_inventory_client, allowed_pb2.Allowed.ALLOWED_TRUE)
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        url = self._get_list_url()
+        response = self.client.get(
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace",
+            **headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
 @override_settings(V2_APIS_ENABLED=True)

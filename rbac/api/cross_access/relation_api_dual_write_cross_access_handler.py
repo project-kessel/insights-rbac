@@ -168,18 +168,19 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
         source_key = self._source_key()
 
         for role in roles:
-            self._update_mapping_for_system_role(
-                role,
-                scope=(self._resource_service.scope_for_role(role)),
-                update_mapping=add_principal_to_binding,
-                create_default_mapping_for_system_role=(
-                    lambda resource: self._create_default_mapping_for_system_role(
-                        system_role=role,
-                        resource=resource,
-                        users={str(source_key): user_id},
-                    )
-                ),
-            )
+            for scope in self._resource_service.binding_scopes_for_role(role):
+                self._update_mapping_for_system_role(
+                    role,
+                    scope=scope,
+                    update_mapping=add_principal_to_binding,
+                    create_default_mapping_for_system_role=(
+                        lambda resource: self._create_default_mapping_for_system_role(
+                            system_role=role,
+                            resource=resource,
+                            users={str(source_key): user_id},
+                        )
+                    ),
+                )
 
     @atomic
     def _add_car_roles_v2(self, roles: set[Role]):
@@ -191,7 +192,8 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
         principal = Principal.objects.get(user_id=self._user_id())
 
         for role in roles:
-            v1_roles_by_scope.setdefault(self._resource_service.scope_for_role(role), set()).add(role)
+            for scope in self._resource_service.binding_scopes_for_role(role):
+                v1_roles_by_scope.setdefault(scope, set()).add(role)
 
         for scope, v1_roles in v1_roles_by_scope.items():
             resource = scope_resources.resource_for(scope)

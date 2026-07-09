@@ -18,10 +18,17 @@
 
 import uuid as uuid_mod
 
-from django.db.models import Case, Count, F, OuterRef, Q, QuerySet, Subquery, Value, When
+from django.db.models import Case, Count, DateTimeField, F, OuterRef, Q, QuerySet, Subquery, Value, When
 from django.db.models.fields import CharField, UUIDField
 from django.db.models.functions import Cast
 from management.subject import SubjectType
+
+
+def _get_platform_type() -> str:
+    """Lazily resolve the canonical platform role type to avoid a circular import."""
+    from management.role.v2_model import RoleV2
+
+    return RoleV2.Types.PLATFORM
 
 
 class RoleBindingQuerySet(QuerySet):
@@ -35,11 +42,16 @@ class RoleBindingQuerySet(QuerySet):
     def for_tenant(self, tenant):
         """Return role bindings for a tenant with related data eagerly loaded.
 
-        Annotates cross-relation fields so they are available as attributes
-        on each RoleBinding instance.  This is required by DRF's
-        CursorPagination which uses ``getattr(instance, field)`` to build
-        cursor positions — plain ORM lookups (``role__name``) only work in
-        ``.order_by()`` but not in ``getattr``.
+        Eagerly loads related role, group/principal entries, and role children
+        via ``select_related`` / ``prefetch_related``.
+
+        Note: The ``role_created``, ``role_name``, ``role_uuid``, and
+        ``role_modified`` annotations below are **not** consumed by the list
+        endpoint's pagination (which uses the ``effective_role_*`` annotations
+        from ``with_expanded_platform_roles()`` instead).  They are retained
+        for the by-subject service path and any callers that access role
+        attributes via ``getattr(instance, field)`` without going through
+        the platform-role expansion layer.
         """
         qs = (
             self.filter(tenant=tenant)
@@ -135,6 +147,60 @@ class RoleBindingQuerySet(QuerySet):
                 Q(principal_entries__principal__uuid=principal.uuid) | Q(group_entries__group__uuid__in=group_uuids)
             ).distinct()
         return self.none()
+
+    def with_expanded_platform_roles(self):
+        """Expand platform-role bindings into per-child-role rows at the DB level.
+
+        For non-platform bindings: one row per binding, effective_role_* = binding's own role.
+        For platform bindings: one row per child role, effective_role_* = child role's fields.
+        Platform bindings with no children are excluded (zero rows).
+
+        This must be called BEFORE pagination so that limit/offset operate on the
+        expanded row count rather than the raw binding count.
+
+        The ``F("role__children__*")`` references cause an implicit LEFT JOIN on
+        the children M2M table.  Non-platform roles are short-circuited by an
+        explicit ``When(~Q(...))`` clause evaluated first, so the JOIN result is
+        unused for those rows.  However, if a non-platform role ever acquires
+        M2M children entries (the DB schema does not prevent this), the JOIN
+        could still produce duplicate rows.  ``.distinct()`` is applied as a
+        safety net against that edge case.
+        """
+        platform_type = _get_platform_type()
+        qs = (
+            self.annotate(
+                effective_role_uuid=Case(
+                    When(~Q(role__type=platform_type), then=F("role__uuid")),
+                    When(role__type=platform_type, then=F("role__children__uuid")),
+                    default=F("role__uuid"),
+                ),
+                effective_role_name=Case(
+                    When(~Q(role__type=platform_type), then=F("role__name")),
+                    When(role__type=platform_type, then=F("role__children__name")),
+                    default=F("role__name"),
+                    output_field=CharField(),
+                ),
+                effective_role_created=Case(
+                    When(~Q(role__type=platform_type), then=F("role__created")),
+                    When(role__type=platform_type, then=F("role__children__created")),
+                    default=F("role__created"),
+                    output_field=DateTimeField(),
+                ),
+                effective_role_modified=Case(
+                    When(~Q(role__type=platform_type), then=F("role__modified")),
+                    When(role__type=platform_type, then=F("role__children__modified")),
+                    default=F("role__modified"),
+                    output_field=DateTimeField(),
+                ),
+            )
+            .exclude(
+                # Platform bindings with no children expand to a single NULL row — remove it.
+                Q(role__type=platform_type)
+                & Q(effective_role_uuid__isnull=True)
+            )
+            .distinct()
+        )
+        return qs
 
     def with_resource_names(self):
         """Annotate each binding with its resource's display name.

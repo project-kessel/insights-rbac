@@ -736,7 +736,7 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
 
             url = reverse("v2_management:workspace-list")
             client = APIClient()
-            response = client.get(url, format="json", **headers)
+            response = client.get(f"{url}?with_ancestry=true", format="json", **headers)
 
             # Should return 200 with fallback workspaces (root, default, ungrouped)
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1211,7 +1211,7 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
 
             url = reverse("v2_management:workspace-list")
             client = APIClient()
-            response = client.get(url, format="json", **headers)
+            response = client.get(f"{url}?with_ancestry=true", format="json", **headers)
 
             # Should return 200 with fallback workspaces (root, default, ungrouped)
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1321,7 +1321,7 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
 
             url = reverse("v2_management:workspace-list")
             client = APIClient()
-            response = client.get(url, format="json", **headers)
+            response = client.get(f"{url}?with_ancestry=true", format="json", **headers)
 
             # Should have access to the workspace and all its ancestors
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1334,6 +1334,38 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             self.assertIn(str(self.standard_workspace.id), returned_ids)
             self.assertIn(str(self.default_workspace.id), returned_ids)
             self.assertIn(str(self.root_workspace.id), returned_ids)
+
+    @patch("management.inventory_client.create_client_channel_inventory")
+    @patch(
+        "feature_flags.FEATURE_FLAGS.is_workspace_access_check_v2_enabled",
+        return_value=True,
+    )
+    def test_workspace_list_excludes_ancestors_when_with_ancestry_false(self, mock_flag, mock_channel):
+        """with_ancestry=false returns only the accessible workspace, not its ancestors."""
+        mock_stub = MagicMock()
+        mock_channel.return_value.__enter__.return_value = MagicMock()
+        mock_responses = self._create_mock_workspace_responses([self.standard_sub_workspace.id])
+        mock_stub.StreamedListObjects.side_effect = lambda *args, **kwargs: iter(mock_responses)
+
+        with patch(
+            "kessel.inventory.v1beta2.inventory_service_pb2_grpc.KesselInventoryServiceStub",
+            return_value=mock_stub,
+        ):
+            request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+            headers = request_context["request"].META
+            self._setup_access_for_principal(
+                self.user_data["username"],
+                "inventory:groups:read",
+                workspace_id=str(self.standard_sub_workspace.id),
+                platform_default=False,
+            )
+
+            url = reverse("v2_management:workspace-list")
+            response = APIClient().get(f"{url}?with_ancestry=false", format="json", **headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {str(ws["id"]) for ws in response.data["data"]}
+        self.assertEqual(returned_ids, {str(self.standard_sub_workspace.id)})
 
     @patch("management.inventory_client.create_client_channel_inventory")
     @patch(
@@ -1367,7 +1399,7 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
 
             url = reverse("v2_management:workspace-list")
             client = APIClient()
-            response = client.get(url, format="json", **headers)
+            response = client.get(f"{url}?with_ancestry=true", format="json", **headers)
 
             # Should return 200 with fallback workspaces (root, default, ungrouped)
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1706,104 +1738,70 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
 
     @patch("management.permissions.workspace_inventory_access.logger")
     @patch("management.inventory_client.create_client_channel_inventory")
-    def test_lookup_accessible_workspaces_duplicate_continuation_token_guard(self, mock_channel, mock_logger):
-        """Guard rail: stop when the server returns the same continuation token that was sent."""
+    def test_lookup_accessible_workspaces_max_items_guard(self, mock_channel, mock_logger):
+        """Guard rail: stop iteration when max items (PAGE_SIZE * MAX_PAGES) is reached.
 
+        The SDK handles pagination internally, so RBAC applies an item-count
+        safety guard to prevent infinite iteration from buggy server responses.
+
+        This test also verifies that the underlying SDK iterator is *not* fully
+        consumed once the max-items limit is reached.
+        """
         mock_stub = MagicMock()
         mock_channel.return_value.__enter__.return_value = MagicMock()
 
-        # First page: returns workspace and continuation token "dup-token"
-        first_response = MagicMock()
-        first_response.object.resource_id = "ws-101"
-        first_response.pagination.continuation_token = "dup-token"
+        # Use small limits for testing
+        test_page_size = 2
+        test_max_pages = 3
+        test_max_items = test_page_size * test_max_pages  # 6 items max
 
-        # Second page: server echoes back the same continuation token ("dup-token")
-        second_response = MagicMock()
-        second_response.object.resource_id = "ws-202"
-        second_response.pagination.continuation_token = "dup-token"
-
-        mock_stub.StreamedListObjects.side_effect = [
-            iter([first_response]),
-            iter([second_response]),
-            # If the guard fails, we'd keep going; the test asserts we stop at 2 calls
-        ]
-
-        with patch(
-            "kessel.inventory.v1beta2.inventory_service_pb2_grpc.KesselInventoryServiceStub",
-            return_value=mock_stub,
-        ):
-            checker = WorkspaceInventoryAccessChecker()
-            workspaces = checker.lookup_accessible_workspaces("user-1", "view")
-
-            # Assert: we got workspace IDs from both pages
-            self.assertEqual(workspaces, {"ws-101", "ws-202"})
-
-            # StreamedListObjects should only be called twice (guard stops at duplicate token)
-            self.assertEqual(mock_stub.StreamedListObjects.call_count, 2)
-
-            # Verify a warning was logged about the duplicate token
-            warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
-            duplicate_token_warnings = [c for c in warning_calls if "duplicate continuation token" in c.lower()]
-            self.assertTrue(
-                duplicate_token_warnings,
-                f"Expected a warning about duplicate continuation token. Got warnings: {warning_calls}",
-            )
-
-    @patch("management.permissions.workspace_inventory_access.logger")
-    @patch("management.inventory_client.create_client_channel_inventory")
-    def test_lookup_accessible_workspaces_max_pages_guard(self, mock_channel, mock_logger):
-        """Guard rail: stop pagination when MAX_PAGES is reached even if server keeps returning tokens."""
-
-        mock_stub = MagicMock()
-        mock_channel.return_value.__enter__.return_value = MagicMock()
-
-        # Use a small MAX_PAGES for testing to avoid creating thousands of mock pages
-        test_max_pages = 5
-
-        def make_page_response(page_index):
-            """Create a mock response for a single page."""
+        def make_response(index):
+            """Create a mock response for a single item."""
             response = MagicMock()
-            response.object.resource_id = f"ws-{page_index}"
-            response.pagination.continuation_token = f"token-{page_index}"
+            response.object.resource_id = f"ws-{index}"
             return response
 
-        # Create more pages than MAX_PAGES to ensure we'd loop forever without the guard
-        mock_stub.StreamedListObjects.side_effect = [iter([make_page_response(i)]) for i in range(test_max_pages + 5)]
+        # Build a guarded iterator that raises if consumed past max_items.
+        # This ensures the loop exits as soon as the limit is hit.
+        def guarded_iterator():
+            for i in range(test_max_items):
+                yield make_response(i)
+            raise AssertionError(
+                "lookup_accessible_workspaces over-consumed the SDK iterator past the max-items guard"
+            )
 
         with patch(
-            "kessel.inventory.v1beta2.inventory_service_pb2_grpc.KesselInventoryServiceStub",
-            return_value=mock_stub,
+            "management.permissions.workspace_inventory_access.sdk_list_workspaces",
+            return_value=guarded_iterator(),
         ):
-            checker = WorkspaceInventoryAccessChecker()
-            # Temporarily override MAX_PAGES for this test
-            original_max_pages = checker.MAX_PAGES
-            checker.MAX_PAGES = test_max_pages
+            with patch(
+                "kessel.inventory.v1beta2.inventory_service_pb2_grpc.KesselInventoryServiceStub",
+                return_value=mock_stub,
+            ):
+                checker = WorkspaceInventoryAccessChecker()
+                original_page_size = checker.PAGE_SIZE
+                original_max_pages = checker.MAX_PAGES
+                checker.PAGE_SIZE = test_page_size
+                checker.MAX_PAGES = test_max_pages
 
-            try:
-                workspaces = checker.lookup_accessible_workspaces("user-2", "view")
+                try:
+                    workspaces = checker.lookup_accessible_workspaces("user-guard", "view")
 
-                # Assert: StreamedListObjects is not called more than MAX_PAGES times
-                self.assertEqual(
-                    mock_stub.StreamedListObjects.call_count,
-                    test_max_pages,
-                    "Pagination loop should stop at MAX_PAGES",
-                )
+                    # Should get exactly max_items workspaces (guard stops iteration)
+                    self.assertEqual(len(workspaces), test_max_items)
+                    expected_workspaces = {f"ws-{i}" for i in range(test_max_items)}
+                    self.assertEqual(workspaces, expected_workspaces)
 
-                # We should get exactly MAX_PAGES workspaces
-                self.assertEqual(len(workspaces), test_max_pages)
-                expected_workspaces = {f"ws-{i}" for i in range(test_max_pages)}
-                self.assertEqual(workspaces, expected_workspaces)
-
-                # Verify a warning was logged about hitting MAX_PAGES limit
-                warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
-                max_pages_warnings = [c for c in warning_calls if "maximum page limit" in c.lower()]
-                self.assertTrue(
-                    max_pages_warnings,
-                    f"Expected a warning about hitting MAX_PAGES limit. Got warnings: {warning_calls}",
-                )
-            finally:
-                # Restore original MAX_PAGES
-                checker.MAX_PAGES = original_max_pages
+                    # Verify a warning was logged about hitting the item limit
+                    warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+                    max_item_warnings = [c for c in warning_calls if "maximum item limit" in c.lower()]
+                    self.assertTrue(
+                        max_item_warnings,
+                        f"Expected a warning about hitting maximum item limit. Got warnings: {warning_calls}",
+                    )
+                finally:
+                    checker.PAGE_SIZE = original_page_size
+                    checker.MAX_PAGES = original_max_pages
 
     @patch("core.kafka.RBACProducer.send_kafka_message")
     @patch("management.inventory_client.create_client_channel_inventory")
@@ -2457,8 +2455,8 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
         "feature_flags.FEATURE_FLAGS.is_workspace_access_check_v2_enabled",
         return_value=True,
     )
-    def test_workspace_list_type_standard_returns_empty_without_real_access(self, mock_flag, mock_channel):
-        """Test that type=standard returns 200 with empty list when user has no real workspace access in V2 mode."""
+    def test_workspace_list_type_standard_returns_403_without_real_access(self, mock_flag, mock_channel):
+        """Test that type=standard returns 403 when user has no real workspace access and with_ancestry is false."""
         # Mock Inventory API to return empty list (no accessible workspaces)
         mock_stub = MagicMock()
         mock_channel.return_value.__enter__.return_value = MagicMock()
@@ -2477,13 +2475,10 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             url = reverse("v2_management:workspace-list")
             client = APIClient()
 
-            # Query with type=standard - should return 200 with empty data
-            # (fallback workspaces are root/default/ungrouped, none are type=standard)
+            # Without with_ancestry, fallback workspaces are not applied
             response = client.get(f"{url}?type=standard", format="json", **headers)
 
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertIn("data", response.data)
-            self.assertEqual(len(response.data["data"]), 0)
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     @patch("management.inventory_client.create_client_channel_inventory")
     @patch(
@@ -2510,8 +2505,8 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             url = reverse("v2_management:workspace-list")
             client = APIClient()
 
-            # Query with type=all - should return 200 with fallback workspaces
-            response = client.get(f"{url}?type=all", format="json", **headers)
+            # Query with type=all and with_ancestry - should return 200 with fallback workspaces
+            response = client.get(f"{url}?type=all&with_ancestry=true", format="json", **headers)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertIn("data", response.data)
@@ -2621,8 +2616,8 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
         "feature_flags.FEATURE_FLAGS.is_workspace_access_check_v2_enabled",
         return_value=True,
     )
-    def test_workspace_list_no_type_returns_fallback_without_real_access(self, mock_flag, mock_channel):
-        """Test that default list (no type filter) returns fallback workspaces when user has no real workspace access."""
+    def test_workspace_list_no_type_returns_403_without_real_access(self, mock_flag, mock_channel):
+        """Test that default list (no type filter) returns 403 when user has no real workspace access."""
         # Mock Inventory API to return empty list (no accessible workspaces)
         mock_stub = MagicMock()
         mock_channel.return_value.__enter__.return_value = MagicMock()
@@ -2641,13 +2636,10 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             url = reverse("v2_management:workspace-list")
             client = APIClient()
 
-            # Query without type filter - should return 200 with fallback workspaces
+            # Omitting with_ancestry defaults to false; no Inventory access returns 403
             response = client.get(url, format="json", **headers)
 
-            # Default type filter is 'standard', so fallback workspaces (root, default, ungrouped)
-            # are filtered out, resulting in empty data
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertIn("data", response.data)
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     @patch("management.inventory_client.create_client_channel_inventory")
     @patch(
@@ -2674,8 +2666,8 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             url = reverse("v2_management:workspace-list")
             client = APIClient()
 
-            # Query with type=root - should return root workspace from fallback
-            response = client.get(f"{url}?type=root", format="json", **headers)
+            # Query with type=root and with_ancestry - should return root workspace from fallback
+            response = client.get(f"{url}?type=root&with_ancestry=true", format="json", **headers)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertIn("data", response.data)
@@ -2708,8 +2700,8 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             url = reverse("v2_management:workspace-list")
             client = APIClient()
 
-            # Query with type=default - should return default workspace from fallback
-            response = client.get(f"{url}?type=default", format="json", **headers)
+            # Query with type=default and with_ancestry - should return default workspace from fallback
+            response = client.get(f"{url}?type=default&with_ancestry=true", format="json", **headers)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertIn("data", response.data)
@@ -2717,40 +2709,9 @@ class WorkspaceInventoryAccessV2Tests(TransactionIdentityRequest):
             returned_ids = {str(ws["id"]) for ws in response.data["data"]}
             self.assertIn(str(self.default_workspace.id), returned_ids)
 
-    def test_build_streamed_request_with_consistency_token(self):
-        """Test that _build_streamed_request sets consistency when a token is provided."""
-
-        checker = WorkspaceInventoryAccessChecker()
-        token_value = "test-consistency-token-abc123"
-        request = checker._build_streamed_request(
-            principal_id="localhost/testuser",
-            relation="view",
-            continuation_token=None,
-            consistency_token=token_value,
-        )
-
-        self.assertTrue(request.HasField("consistency"))
-        self.assertEqual(
-            request.consistency.at_least_as_fresh.token,
-            token_value,
-        )
-
-    def test_build_streamed_request_without_consistency_token(self):
-        """Test that _build_streamed_request does not set consistency when no token is provided."""
-
-        checker = WorkspaceInventoryAccessChecker()
-        request = checker._build_streamed_request(
-            principal_id="localhost/testuser",
-            relation="view",
-            continuation_token=None,
-            consistency_token=None,
-        )
-
-        self.assertFalse(request.HasField("consistency"))
-
     @patch("management.inventory_client.create_client_channel_inventory")
     def test_lookup_accessible_workspaces_passes_consistency_token_to_request(self, mock_channel):
-        """Test that consistency_token parameter is used in the actual StreamedListObjects gRPC call."""
+        """Test that consistency_token parameter is passed through sdk_list_workspaces to the gRPC call."""
 
         mock_stub = MagicMock()
         mock_channel.return_value.__enter__.return_value = MagicMock()

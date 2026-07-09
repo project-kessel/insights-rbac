@@ -2749,6 +2749,194 @@ class InternalViewsetUserLookupTests(BaseInternalViewsetTests):
         self.assertEqual(len(resp_groups), 1)
         self.assertEqual(resp_groups[0]["name"], "test_group_platform_default")
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "test_user",
+                    "email": "test_user@redhat.com",
+                    "is_org_admin": "false",
+                    "org_id": "12345",
+                }
+            ],
+        },
+    )
+    def test_user_lookup_creates_audit_log_on_success(self, _):
+        username = "test_user"
+        tenant = Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
+        principal = Principal.objects.create(username=username, tenant=tenant)
+
+        self.client.get(f"{self.API_PATH}?username={username}", **self.request.META)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertTrue(log.principal_username)
+        self.assertIn("found 'test_user'", log.description)
+        self.assertIn("username='test_user'", log.description)
+        self.assertIsNone(log.tenant)
+        self.assertEqual(log.resource_uuid, principal.uuid)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [],
+        },
+    )
+    def test_user_lookup_creates_audit_log_on_not_found(self, _):
+        username = "nonexistent_user"
+
+        response = self.client.get(f"{self.API_PATH}?username={username}", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertTrue(log.principal_username)
+        self.assertIn("not found", log.description)
+        self.assertIn("username='nonexistent_user'", log.description)
+        self.assertIsNone(log.tenant)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "test_user",
+                    "email": "test_user@redhat.com",
+                    "is_org_admin": "false",
+                    "org_id": "12345",
+                }
+            ],
+        },
+    )
+    def test_user_lookup_creates_audit_log_on_email_search(self, _):
+        email = "test_user@redhat.com"
+        tenant = Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
+        Principal.objects.create(username="test_user", tenant=tenant)
+
+        self.client.get(f"{self.API_PATH}?email={email}", **self.request.META)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertIn("email='test_user@redhat.com'", log.description)
+        self.assertIsNone(log.tenant)
+
+    def test_user_lookup_no_audit_log_on_bad_input(self):
+        response = self.client.get(f"{self.API_PATH}", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 0)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "test_user",
+                    "email": "test_user@redhat.com",
+                    "is_org_admin": "false",
+                    "org_id": "12345",
+                }
+            ],
+        },
+    )
+    @patch("internal.views.AuditLog.objects.create", side_effect=Exception("db error"))
+    def test_user_lookup_succeeds_when_audit_log_fails(self, mock_create, _):
+        username = "test_user"
+        tenant = Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
+        Principal.objects.create(username=username, tenant=tenant)
+
+        response = self.client.get(f"{self.API_PATH}?username={username}", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_create.assert_called()
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [],
+        },
+    )
+    def test_user_lookup_creates_audit_log_on_bop_error(self, mock_proxy):
+        mock_proxy.side_effect = Exception("BOP connection failed")
+        username = "test_user"
+
+        response = self.client.get(f"{self.API_PATH}?username={username}", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertIn("error querying bop", log.description)
+        self.assertIn("username='test_user'", log.description)
+        self.assertIsNone(log.tenant)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "test_user",
+                    "email": "test_user@redhat.com",
+                    "is_org_admin": "false",
+                    "org_id": "12345",
+                }
+            ],
+        },
+    )
+    def test_user_lookup_creates_audit_log_on_tenant_error(self, _):
+        response = self.client.get(f"{self.API_PATH}?username=test_user", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertIn("error resolving tenant", log.description)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "test_user",
+                    "email": "test_user@redhat.com",
+                    "is_org_admin": "false",
+                    "org_id": "12345",
+                }
+            ],
+        },
+    )
+    @patch(
+        "internal.views.get_principal",
+        side_effect=Exception("something went wrong"),
+    )
+    def test_user_lookup_creates_audit_log_on_principal_error(self, __, _):
+        Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
+
+        response = self.client.get(f"{self.API_PATH}?username=test_user", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        audit_logs = AuditLog.objects.filter(resource_type=AuditLog.USER, action=AuditLog.READ)
+        self.assertEqual(audit_logs.count(), 1)
+        log = audit_logs.first()
+        self.assertIn("error resolving principal", log.description)
+
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
@@ -4821,7 +5009,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         mock_stub = MagicMock()
         mock_stub.Check.return_value = "true"
 
-        mock_check_workspace_relation.return_value = mock_stub.Check.return_value
+        mock_check_workspace_relation.return_value = (True, [])
         mock_workspace_view.return_value = (
             {
                 "org_id": self.root_workspace.tenant.org_id,
@@ -4848,7 +5036,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         # Check response
         self.assertEqual(response_body["org_id"], self.root_workspace.tenant.org_id)
         self.assertEqual(response_body["workspace_id"], str(self.root_workspace.id))
-        self.assertEqual(response_body["workspace_descendants_correct"], "true")
+        self.assertTrue(response_body["workspace_descendants_correct"])
 
     @patch(
         "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace",
@@ -5323,3 +5511,141 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, 500)
         response_body = response.json()
         self.assertIn("Unexpected error", response_body["detail"])
+
+
+class KesselParityCheckEndpointTests(BaseInternalViewsetTests):
+    """Tests for the on-demand Kessel parity check endpoint."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        super().setUp()
+
+    def tearDown(self):
+        """Tear down test fixtures."""
+        super().tearDown()
+
+    @patch("internal.views.run_kessel_parity_checks_in_worker")
+    def test_kessel_parity_check_valid_request(self, mock_task):
+        """Test POST with valid org_ids returns 202 and enqueues task."""
+        mock_task.delay.return_value.id = "fake-task-id"
+
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", "67890"]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertEqual(body["message"], "Kessel parity check enqueued.")
+        self.assertEqual(body["task_id"], "fake-task-id")
+        self.assertEqual(body["org_ids"], ["12345", "67890"])
+        mock_task.delay.assert_called_once_with(org_ids=["12345", "67890"])
+
+    @patch("internal.views.run_kessel_parity_checks_in_worker")
+    def test_kessel_parity_check_single_org_id(self, mock_task):
+        """Test POST with a single org_id returns 202."""
+        mock_task.delay.return_value.id = "fake-task-id"
+
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345"]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        mock_task.delay.assert_called_once_with(org_ids=["12345"])
+
+    def test_kessel_parity_check_missing_org_ids(self):
+        """Test POST without org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"something_else": "value"},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_empty_org_ids(self):
+        """Test POST with empty org_ids list returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": []},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_org_ids_not_list(self):
+        """Test POST with org_ids as string returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": "12345"},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("org_ids", response.content.decode())
+
+    def test_kessel_parity_check_empty_body(self):
+        """Test POST with empty body returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data="",
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_kessel_parity_check_invalid_json(self):
+        """Test POST with invalid JSON returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data="not-json",
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid JSON", response.content.decode())
+
+    def test_kessel_parity_check_get_not_allowed(self):
+        """Test GET method is not allowed."""
+        response = self.client.get(
+            "/_private/api/utils/kessel_parity_check/",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_kessel_parity_check_org_ids_with_empty_strings(self):
+        """Test POST with empty strings in org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", ""]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("non-empty strings", response.content.decode())
+
+    def test_kessel_parity_check_org_ids_with_non_string(self):
+        """Test POST with non-string entries in org_ids returns 400."""
+        response = self.client.post(
+            "/_private/api/utils/kessel_parity_check/",
+            data={"org_ids": ["12345", 67890]},
+            content_type="application/json",
+            **self.request.META,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("non-empty strings", response.content.decode())

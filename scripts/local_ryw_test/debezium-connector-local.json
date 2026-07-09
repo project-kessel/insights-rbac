@@ -1,0 +1,22 @@
+{
+  "name": "rbac-debezium",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.server.name": "rbac",
+    "database.dbname": "postgres",
+    "database.hostname": "rbac_db",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "topic.prefix": "rbac",
+    "table.include.list": "public.management_outbox",
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.payload": "payload",
+    "plugin.name": "pgoutput",
+    "heartbeat.interval.ms": "30000",
+    "heartbeat.action.query": "INSERT INTO heartbeat (status) VALUES (1)",
+    "topic.heartbeat.prefix": "__debezium-heartbeat",
+    "transforms.outbox.table.field.event.type": "type"
+  }
+}

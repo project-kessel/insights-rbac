@@ -225,7 +225,7 @@ def is_user_allowed_v1(request, required_operation, target_workspace):
     return any(valid_perm_tuple in tuple_set for valid_perm_tuple in valid_perm_tuples)
 
 
-def is_user_allowed_v2(request, required_operation, target_workspace):
+def is_user_allowed_v2(request, required_operation, target_workspace, with_ancestry=False):
     """
     Check if the user is allowed to perform the required permission on the target workspace using Inventory API.
 
@@ -235,6 +235,10 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
         request: The HTTP request object
         required_operation: The operation/relation to check (view, create, edit, move, delete)
         target_workspace: The workspace ID to check, or None for list operations
+        with_ancestry: For list operations only. When True, include ancestor workspaces for
+            tree navigation and fallback workspaces (root, default, ungrouped) when the user
+            has no explicit access. When False, return only workspaces with explicit Inventory
+            permission.
 
     Returns:
         bool: True if the user has permission, False otherwise
@@ -358,11 +362,6 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
             accessible_workspace_ids = set(accessible_workspace_ids)
 
             if accessible_workspace_ids:
-                # User has actual workspace permissions (not just fallbacks)
-                request.has_real_workspace_access = True
-
-                # Add ancestors only from the top-level workspace(s) in accessible workspaces (for ancestry needs)
-                # Get workspace objects for accessible IDs
                 with record_timing(timings, "db_filter_accessible_workspaces"):
                     accessible_workspaces = Workspace.objects.filter(
                         id__in=accessible_workspace_ids, tenant=request.tenant
@@ -370,38 +369,36 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
 
                 if not accessible_workspaces.exists():
                     # Inventory can return workspace ids that are not present in RBAC for this tenant
-                    # (replication lag, stale tuples, cross-env mismatch). Treat like no workspace access
-                    # so the list API still returns root/default/ungrouped like users with no permissions.
+                    # (replication lag, stale tuples, cross-env mismatch). Treat like no workspace access.
                     logger.info(
                         "StreamedListObjects returned %s workspace id(s) but none exist for this tenant; "
                         "using fallback workspaces",
                         len(accessible_workspace_ids),
                     )
-                    request.has_real_workspace_access = False
-                    with record_timing(timings, "get_fallback_workspace_ids"):
-                        accessible_workspace_ids = get_fallback_workspace_ids(request.tenant)
+                    if with_ancestry:
+                        with record_timing(timings, "get_fallback_workspace_ids"):
+                            accessible_workspace_ids = get_fallback_workspace_ids(request.tenant)
+                    else:
+                        accessible_workspace_ids = set()
                 else:
-                    # Keep only ids that exist for this tenant; drop stale Inventory-only ids
                     accessible_workspace_ids = {str(wid) for wid in accessible_workspaces.values_list("id", flat=True)}
 
-                    # Find the top-level workspace(s) - those that are not children of any other accessible workspace
-                    with record_timing(timings, "filter_top_level_workspaces"):
-                        top_level_workspaces = filter_top_level_workspaces(accessible_workspaces)
+                    if with_ancestry:
+                        with record_timing(timings, "filter_top_level_workspaces"):
+                            top_level_workspaces = filter_top_level_workspaces(accessible_workspaces)
 
-                    with record_timing(timings, "add_ancestor_ids"):
-                        for workspace in top_level_workspaces:
-                            # Add ancestors directly for this top-level workspace
-                            ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
-                            accessible_workspace_ids.update(ancestor_ids)
-            else:
-                # User has no actual workspace permissions, only fallback access
-                request.has_real_workspace_access = False
-
-                # If no accessible workspaces, attach at least root, default, and ungrouped workspaces
+                        with record_timing(timings, "add_ancestor_ids"):
+                            for workspace in top_level_workspaces:
+                                ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
+                                accessible_workspace_ids.update(ancestor_ids)
+            elif with_ancestry:
                 with record_timing(timings, "get_fallback_workspace_ids"):
                     accessible_workspace_ids = get_fallback_workspace_ids(request.tenant)
 
-            # Store permission tuples for later filtering
+            # Store permission tuples for later filtering.
+            # Note: the contents depend on with_ancestry — with_ancestry=true includes
+            # ancestor and fallback IDs, while false includes only explicitly granted IDs.
+            # Do not cache or reuse these tuples across requests with different with_ancestry values.
             request.permission_tuples = [(None, ws_id) for ws_id in accessible_workspace_ids]
 
             result = bool(accessible_workspace_ids)

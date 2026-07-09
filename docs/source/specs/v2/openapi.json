@@ -13,9 +13,252 @@
     },
     {
       "name": "Roles"
+    },
+    {
+      "name": "Principals"
     }
   ],
   "paths": {
+    "/principals/": {
+      "get": {
+        "operationId": "Principals_list",
+        "summary": "List the principals for a tenant",
+        "description": "List the principals for a tenant",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Limit"
+                }
+              ],
+              "default": 10
+            },
+            "explode": false
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Offset"
+                }
+              ],
+              "default": 0
+            },
+            "explode": false
+          },
+          {
+            "name": "username",
+            "in": "query",
+            "required": false,
+            "description": "Filter by username. Case-insensitive substring match by default; use * for glob patterns (e.g. jd*).",
+            "schema": {
+              "type": "string"
+            },
+            "explode": false
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Filter by principal type: user or service-account.",
+            "schema": {
+              "$ref": "#/components/schemas/PrincipalType"
+            },
+            "explode": false
+          },
+          {
+            "name": "order_by",
+            "in": "query",
+            "required": false,
+            "description": "Sort by specified field, prefix with '-' for descending order. Allowed fields: username.",
+            "schema": {
+              "$ref": "#/components/schemas/OrderBy"
+            },
+            "explode": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalListResponse"
+                },
+                "example": {
+                  "meta": {
+                    "count": 2,
+                    "limit": 10,
+                    "offset": 0
+                  },
+                  "links": {
+                    "first": "/api/rbac/v2/principals/?limit=10&offset=0",
+                    "next": null,
+                    "previous": null,
+                    "last": "/api/rbac/v2/principals/?limit=10&offset=0"
+                  },
+                  "data": [
+                    {
+                      "uuid": "550e8400-e29b-41d4-a716-446655440002",
+                      "username": "jdoe",
+                      "type": "user",
+                      "user_id": "12345",
+                      "service_account_id": null
+                    },
+                    {
+                      "uuid": "660e8400-e29b-41d4-a716-446655440003",
+                      "username": "service-account-abc123",
+                      "type": "service-account",
+                      "user_id": null,
+                      "service_account_id": "abc123"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access is unauthorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem401"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access is forbidden.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem403"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem500"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Principals"
+        ]
+      }
+    },
+    "/principals/{uuid}/": {
+      "get": {
+        "operationId": "Principals_read",
+        "summary": "Retrieve a single principal by UUID",
+        "description": "Retrieve a single principal by UUID",
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Principal"
+                },
+                "example": {
+                  "uuid": "550e8400-e29b-41d4-a716-446655440002",
+                  "username": "jdoe",
+                  "type": "user",
+                  "user_id": "12345",
+                  "service_account_id": null
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access is unauthorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem401"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access is forbidden.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem403"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The server cannot find the requested resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem404"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem500"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Principals"
+        ]
+      }
+    },
     "/role-bindings/": {
       "get": {
         "operationId": "RoleBindings_list",
@@ -254,28 +497,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -295,28 +517,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -578,28 +779,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -619,28 +799,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -771,28 +930,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -822,28 +960,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -951,28 +1068,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -992,28 +1088,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -1150,6 +1225,16 @@
             "explode": false
           },
           {
+            "name": "permission",
+            "in": "query",
+            "required": false,
+            "description": "Filter by permission string(s). Comma-separated exact match (e.g. 'inventory:hosts:read' or 'inventory:hosts:read,rbac:workspace:write').",
+            "schema": {
+              "type": "string"
+            },
+            "explode": false
+          },
+          {
             "name": "order_by",
             "in": "query",
             "required": false,
@@ -1249,28 +1334,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -1290,28 +1354,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -1382,28 +1425,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -1423,28 +1445,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -1562,28 +1563,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -1613,28 +1593,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -1723,28 +1682,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -1774,28 +1712,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -1861,28 +1778,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -1912,28 +1808,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2049,6 +1924,17 @@
               "default": "name"
             },
             "explode": false
+          },
+          {
+            "name": "with_ancestry",
+            "in": "query",
+            "required": false,
+            "description": "When true, list responses include ancestor workspaces for tree navigation and fallback workspaces (root, default, ungrouped) when the user has no explicit access. When false (default), only workspaces with explicit Inventory permission are returned.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "explode": false
           }
         ],
         "responses": {
@@ -2101,28 +1987,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2142,28 +2007,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2204,7 +2048,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    }
+                  ]
                 }
               }
             }
@@ -2214,28 +2065,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2255,28 +2085,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2386,28 +2195,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2437,28 +2225,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2514,28 +2281,7 @@
                       "$ref": "#/components/schemas/Problems.Problem400"
                     },
                     {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "$ref": "#/components/schemas/Problems.ProblemType"
-                        },
-                        "status": {
-                          "type": "number",
-                          "enum": [
-                            400
-                          ]
-                        },
-                        "title": {
-                          "type": "string"
-                        },
-                        "detail": {
-                          "type": "string"
-                        },
-                        "instance": {
-                          "type": "string",
-                          "format": "uri"
-                        }
-                      }
+                      "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
                     }
                   ]
                 }
@@ -2547,28 +2293,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2588,28 +2313,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2678,28 +2382,7 @@
                       "$ref": "#/components/schemas/Problems.Problem400"
                     },
                     {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "$ref": "#/components/schemas/Problems.ProblemType"
-                        },
-                        "status": {
-                          "type": "number",
-                          "enum": [
-                            400
-                          ]
-                        },
-                        "title": {
-                          "type": "string"
-                        },
-                        "detail": {
-                          "type": "string"
-                        },
-                        "instance": {
-                          "type": "string",
-                          "format": "uri"
-                        }
-                      }
+                      "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
                     }
                   ]
                 }
@@ -2711,28 +2394,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2752,28 +2414,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2838,28 +2479,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -2879,28 +2499,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -2957,28 +2556,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        401
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem401"
                 }
               }
             }
@@ -3008,28 +2586,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "$ref": "#/components/schemas/Problems.ProblemType"
-                    },
-                    "status": {
-                      "type": "number",
-                      "enum": [
-                        500
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "instance": {
-                      "type": "string",
-                      "format": "uri"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problems.Problem500"
                 }
               }
             }
@@ -3227,13 +2784,99 @@
           "operation": "read"
         }
       },
+      "Principal": {
+        "type": "object",
+        "required": [
+          "uuid",
+          "username",
+          "type",
+          "user_id",
+          "service_account_id"
+        ],
+        "properties": {
+          "uuid": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              }
+            ],
+            "description": "UUID that uniquely identifies the principal"
+          },
+          "username": {
+            "type": "string",
+            "description": "Username of the principal"
+          },
+          "type": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PrincipalType"
+              }
+            ],
+            "description": "Type of the principal: user or service-account"
+          },
+          "user_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "External user ID. Null for service accounts."
+          },
+          "service_account_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Service account client ID. Null for users."
+          }
+        },
+        "example": {
+          "uuid": "550e8400-e29b-41d4-a716-446655440002",
+          "username": "jdoe",
+          "type": "user",
+          "user_id": "12345",
+          "service_account_id": null
+        }
+      },
+      "PrincipalListResponse": {
+        "type": "object",
+        "required": [
+          "meta",
+          "links",
+          "data"
+        ],
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/OffsetPaginationMeta"
+          },
+          "links": {
+            "$ref": "#/components/schemas/OffsetPaginationLinks"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Principal"
+            }
+          }
+        }
+      },
+      "PrincipalType": {
+        "type": "string",
+        "enum": [
+          "user",
+          "service-account"
+        ],
+        "description": "Principal type"
+      },
       "Problems.Problem400": {
         "type": "object",
         "required": [
+          "type",
           "title",
           "detail"
         ],
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/invalid-request"
+            ]
+          },
           "title": {
             "type": "string",
             "enum": [
@@ -3256,6 +2899,100 @@
                 "type": "number",
                 "enum": [
                   400
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "instance": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        ]
+      },
+      "Problems.Problem400AlreadyExists": {
+        "type": "object",
+        "required": [
+          "type",
+          "title"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/already-exists"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "enum": [
+              "The resource already exists."
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/Problems.ProblemType"
+              },
+              "status": {
+                "type": "number",
+                "enum": [
+                  400
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "instance": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        ]
+      },
+      "Problems.Problem401": {
+        "type": "object",
+        "required": [
+          "type",
+          "title"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/unauthenticated"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "enum": [
+              "Authentication credentials were not provided or are invalid."
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/Problems.ProblemType"
+              },
+              "status": {
+                "type": "number",
+                "enum": [
+                  401
                 ]
               },
               "title": {
@@ -3322,10 +3059,17 @@
       "Problems.Problem404": {
         "type": "object",
         "required": [
+          "type",
           "title",
           "detail"
         ],
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/not-found"
+            ]
+          },
           "title": {
             "type": "string",
             "enum": [
@@ -3364,18 +3108,78 @@
           }
         ]
       },
+      "Problems.Problem500": {
+        "type": "object",
+        "required": [
+          "type",
+          "title"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/internal-error"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "enum": [
+              "Unexpected error occurred."
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/Problems.ProblemType"
+              },
+              "status": {
+                "type": "number",
+                "enum": [
+                  500
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "instance": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        ]
+      },
       "Problems.ProblemType": {
         "type": "string",
         "enum": [
-          "http://project-kessel.org/problems/insufficient-permission"
+          "http://project-kessel.org/problems/insufficient-permission",
+          "http://project-kessel.org/problems/unauthenticated",
+          "http://project-kessel.org/problems/not-found",
+          "http://project-kessel.org/problems/internal-error",
+          "http://project-kessel.org/problems/invalid-request",
+          "http://project-kessel.org/problems/already-exists",
+          "http://project-kessel.org/problems/workspace-not-empty"
         ]
       },
       "Problems.Workspace.Problem400WorkspaceNotEmpty": {
         "type": "object",
         "required": [
+          "type",
           "title"
         ],
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/workspace-not-empty"
+            ]
+          },
           "title": {
             "type": "string",
             "enum": [

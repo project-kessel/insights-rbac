@@ -5436,6 +5436,88 @@
           }
         }
       }
+    },
+    "/api/utils/kessel_parity_check/": {
+      "post": {
+        "tags": [
+          "Utils",
+          "Kessel"
+        ],
+        "summary": "Trigger on-demand Kessel parity check",
+        "description": "Triggers Kessel-RBAC parity checks for the specified org(s) regardless of the PARITY_CHECK_ENABLED setting. The checks run asynchronously in a Celery worker. The scheduled Celery Beat cron job behavior is unchanged.",
+        "operationId": "triggerKesselParityCheck",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "org_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "A list of organization IDs to run parity checks for.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "org_ids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Parity check task enqueued successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Kessel parity check enqueued."
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "description": "Celery task ID for tracking the async operation"
+                    },
+                    "org_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (missing or invalid org_ids)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed (only POST is accepted)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [

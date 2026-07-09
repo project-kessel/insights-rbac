@@ -28,7 +28,7 @@ from management.audit_log.model import AuditLog
 from management.base_viewsets import BaseV2ViewSet
 from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
-from management.utils import validate_and_get_key
+from management.utils import v2response_error_from_errors, validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
 from management.workspace.service import WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
@@ -159,16 +159,23 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 return response
             raise
         except ValidationError as e:
-            message = ""
             for field, error_message in flatten_validation_error(e):
                 if "unique_workspace_name_per_parent" in error_message:
-                    message = "A workspace with the same name already exists under the parent."
-                    break
+                    return Response(
+                        v2response_error_from_errors(
+                            errors=[
+                                {
+                                    "detail": "A workspace with the same name already exists under the parent.",
+                                    "status": status.HTTP_400_BAD_REQUEST,
+                                }
+                            ],
+                            exc=e,
+                            problem_type="http://project-kessel.org/problems/already-exists",
+                        ),
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 if "__all__" in field:
-                    message = error_message
-                    break
-            if message:
-                raise serializers.ValidationError(message)
+                    raise serializers.ValidationError(error_message)
             raise
 
     def retrieve(self, request, *args, **kwargs):
@@ -186,6 +193,10 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         input_serializer = WorkspaceListInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
         validated_params = input_serializer.validated_data
+
+        # Bridge query param to access layer; read by WorkspaceAccessFilterBackend and
+        # passed explicitly to is_user_allowed_v2(with_ancestry=...).
+        request.with_ancestry = validated_params.get("with_ancestry", False)
 
         queryset = self.filter_queryset(self.get_queryset())
         queryset = self._service.list(queryset, validated_params)

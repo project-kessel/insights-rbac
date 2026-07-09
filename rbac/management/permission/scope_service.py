@@ -326,11 +326,6 @@ class ImplicitResourceService:
             default=Scope.DEFAULT,
         )
 
-    def scope_for_role(self, role: Role) -> Scope:
-        """Return the implicit scope for a role based on its permissions."""
-        # TODO: this may need to eventually take into account resource definitions for custom roles.
-        return self.highest_scope_for_permissions(a.permission.permission for a in role.access.all())
-
     def binding_scopes_for_role(self, role: Role) -> list["Scope"]:
         """Return the scopes at which bindings should be created for this role.
 
@@ -338,6 +333,7 @@ class ImplicitResourceService:
         remaining workspace scopes are merged to the highest among them.
         ROOT+DEFAULT without TENANT collapses to ROOT (workspace parent inheritance).
         """
+        # TODO: this may need to eventually take into account resource definitions for custom roles.
         return binding_scopes_for_permissions((a.permission.permission for a in role.access.all()), self)
 
     def v2_bound_resource_for_permission(
