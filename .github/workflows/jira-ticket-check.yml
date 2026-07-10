@@ -1,0 +1,35 @@
+name: "JIRA ticket check"
+
+permissions: {}
+
+on:
+  pull_request_target:
+    types: [opened, edited]
+
+# Only the latest title matters — cancel in-progress runs for the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  jira-ticket-check:
+    runs-on: ubuntu-latest
+    # For 'edited' events, only run when the title actually changed.
+    if: >-
+      github.event.action == 'opened' ||
+      github.event.changes.title.from != ''
+    steps:
+      - name: Check PR title for JIRA ticket
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if printf '%s\n' "$PR_TITLE" | grep -qE '\[RHCLOUD-[0-9]+\]'; then
+            echo "✅ JIRA ticket found in PR title"
+          else
+            echo "❌ PR title must contain a JIRA ticket reference in the format [RHCLOUD-XXXXX]"
+            echo ""
+            echo "Current title: $PR_TITLE"
+            echo ""
+            echo "Example: feat: add new feature [RHCLOUD-12345]"
+            exit 1
+          fi

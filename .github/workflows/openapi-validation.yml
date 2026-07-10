@@ -14,6 +14,7 @@ on:
       - 'docs/source/specs/v2/openapi.yaml'
       - 'docs/source/specs/v2/openapi.json'
       - '.redocly.yaml'
+  merge_group:
   workflow_dispatch:
 
 permissions:

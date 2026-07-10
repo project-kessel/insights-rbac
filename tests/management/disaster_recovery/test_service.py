@@ -3,7 +3,7 @@
 from unittest.mock import patch
 from uuid import uuid4
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from api.models import Tenant
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
@@ -175,6 +175,7 @@ class ReconcileServiceTest(TestCase):
         self.assertEqual(result["time_window"]["start_ms"], 2000000 - 60000)
         self.assertEqual(result["time_window"]["end_ms"], 2000000)
         self.assertIn("events_read", result)
+        self.assertIn("events_skipped_by_type", result)
         self.assertIn("tuples_processed", result)
         self.assertIn("duration_seconds", result)
 
@@ -457,7 +458,7 @@ class ReconcileAllResourceTypesTest(TestCase):
                 offset=0,
                 partition=0,
                 timestamp_ms=1000,
-                event_type="bootstrap_tenant",
+                event_type="update_root_workspace_tenants",
                 relations_to_add=[t],
                 relations_to_remove=[],
             )
@@ -494,13 +495,12 @@ class ReconcileAllResourceTypesTest(TestCase):
         self.assertEqual(len(log), 0)
 
 
-class ReconcileBootstrapTenantTest(TestCase):
-    """Verify reconciliation correctly handles bootstrap_tenant events.
+class ReconcileSkippedEventTypesTest(TestCase):
+    """Verify that bootstrap and external user (UMB) events are skipped during DR.
 
-    Bootstrap events are structurally different: they create many tuples at once
-    across multiple resource types (workspace, group, role_binding, tenant).
-    Groups and role_bindings from bootstrap are "virtual" -- they exist as UUIDs
-    in TenantMapping but not as actual model instances.
+    These event types should not be processed through the corrective truth table:
+    - bootstrap_tenant / bulk_bootstrap_tenant: bulk initialization events
+    - external_user_update / external_user_disable / bulk_external_user_update: UMB-sourced user sync
     """
 
     @classmethod
@@ -534,16 +534,11 @@ class ReconcileBootstrapTenantTest(TestCase):
         super().tearDownClass()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
-    def test_bootstrap_event_with_existing_tenant(self, mock_read):
-        """Bootstrap event where tenant, workspace, and virtual resources all exist -> all SKIP."""
+    def test_bootstrap_event_is_skipped(self, mock_read):
+        """bootstrap_tenant events are filtered out before processing."""
         tuples = [
             _make_tuple(resource_type="workspace", resource_id=str(self.root_ws.id)),
             _make_tuple(resource_type="group", resource_id=str(self.mapping.default_group_uuid)),
-            _make_tuple(resource_type="group", resource_id=str(self.mapping.default_admin_group_uuid)),
-            _make_tuple(resource_type="role_binding", resource_id=str(self.mapping.default_role_binding_uuid)),
-            _make_tuple(
-                resource_type="role_binding", resource_id=str(self.mapping.root_scope_default_role_binding_uuid)
-            ),
             _make_tuple(resource_type="tenant", resource_id=f"localhost/{self.tenant.org_id}"),
         ]
 
@@ -562,23 +557,16 @@ class ReconcileBootstrapTenantTest(TestCase):
         log = InMemoryLog()
         result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
 
-        self.assertEqual(result["skipped"], len(tuples))
-        self.assertEqual(result["corrective_adds"], 0)
-        self.assertEqual(result["corrective_removes"], 0)
+        self.assertEqual(result["events_read"], 0)
+        self.assertEqual(result["events_skipped_by_type"], 1)
+        self.assertEqual(result["tuples_processed"], 0)
         self.assertEqual(len(log), 0)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
-    def test_bootstrap_event_with_deleted_tenant(self, mock_read):
-        """Bootstrap event where all resources were deleted -> all REMOVE."""
-        fake_ws = str(uuid4())
-        fake_group = str(uuid4())
-        fake_rb = str(uuid4())
-
+    def test_bulk_bootstrap_event_is_skipped(self, mock_read):
+        """bulk_bootstrap_tenant events are filtered out before processing."""
         tuples = [
-            _make_tuple(resource_type="workspace", resource_id=fake_ws),
-            _make_tuple(resource_type="group", resource_id=fake_group),
-            _make_tuple(resource_type="role_binding", resource_id=fake_rb),
-            _make_tuple(resource_type="tenant", resource_id="localhost/deleted-org"),
+            _make_tuple(resource_type="workspace", resource_id=str(self.root_ws.id)),
         ]
 
         mock_read.return_value = [
@@ -586,8 +574,8 @@ class ReconcileBootstrapTenantTest(TestCase):
                 offset=0,
                 partition=0,
                 timestamp_ms=1000,
-                event_type="bootstrap_tenant",
-                org_id="deleted-org",
+                event_type="bulk_bootstrap_tenant",
+                org_id=self.tenant.org_id,
                 relations_to_add=tuples,
                 relations_to_remove=[],
             )
@@ -596,21 +584,15 @@ class ReconcileBootstrapTenantTest(TestCase):
         log = InMemoryLog()
         result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
 
-        self.assertEqual(result["corrective_removes"], len(tuples))
-        self.assertEqual(result["skipped"], 0)
-        self.assertEqual(len(log), len(tuples))
-        for entry in log:
-            self.assertEqual(entry.event_type, ReplicationEventType.DR_CORRECTIVE_REMOVE)
+        self.assertEqual(result["events_read"], 0)
+        self.assertEqual(result["events_skipped_by_type"], 1)
+        self.assertEqual(result["tuples_processed"], 0)
+        self.assertEqual(len(log), 0)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
-    def test_bootstrap_event_partial_state(self, mock_read):
-        """Bootstrap event: workspace exists, but group was deleted -> mixed SKIP + REMOVE."""
-        fake_group = str(uuid4())
-
-        tuples_add = [
-            _make_tuple(resource_type="workspace", resource_id=str(self.root_ws.id)),
-            _make_tuple(resource_type="group", resource_id=fake_group),
-        ]
+    def test_bootstrap_events_skipped_alongside_regular_events(self, mock_read):
+        """Bootstrap events are skipped but regular events in the same window are processed."""
+        fake_ws = str(uuid4())
 
         mock_read.return_value = [
             ParsedReplicationEvent(
@@ -619,41 +601,112 @@ class ReconcileBootstrapTenantTest(TestCase):
                 timestamp_ms=1000,
                 event_type="bootstrap_tenant",
                 org_id=self.tenant.org_id,
-                relations_to_add=tuples_add,
+                relations_to_add=[_make_tuple(resource_type="workspace", resource_id=str(self.root_ws.id))],
                 relations_to_remove=[],
-            )
+            ),
+            ParsedReplicationEvent(
+                offset=1,
+                partition=0,
+                timestamp_ms=1100,
+                event_type="create_workspace",
+                relations_to_add=[_make_tuple(resource_type="workspace", resource_id=fake_ws)],
+                relations_to_remove=[],
+            ),
         ]
 
         log = InMemoryLog()
         result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
 
-        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["events_read"], 1)
+        self.assertEqual(result["events_skipped_by_type"], 1)
         self.assertEqual(result["corrective_removes"], 1)
         self.assertEqual(len(log), 1)
-        self.assertEqual(log.first().event_type, ReplicationEventType.DR_CORRECTIVE_REMOVE)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
-    def test_bootstrap_event_virtual_role_bindings_via_tenant_mapping(self, mock_read):
-        """All 6 TenantMapping role binding UUIDs are recognized as existing."""
-        tuples = [
-            _make_tuple(resource_type="role_binding", resource_id=str(self.mapping.default_role_binding_uuid)),
-            _make_tuple(resource_type="role_binding", resource_id=str(self.mapping.default_admin_role_binding_uuid)),
-            _make_tuple(
-                resource_type="role_binding", resource_id=str(self.mapping.root_scope_default_role_binding_uuid)
+    def test_multiple_bootstrap_events_all_skipped(self, mock_read):
+        """Multiple bootstrap events of different types are all skipped."""
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=0,
+                partition=0,
+                timestamp_ms=1000,
+                event_type="bootstrap_tenant",
+                org_id="org-1",
+                relations_to_add=[_make_tuple()],
+                relations_to_remove=[],
             ),
-            _make_tuple(
-                resource_type="role_binding",
-                resource_id=str(self.mapping.root_scope_default_admin_role_binding_uuid),
+            ParsedReplicationEvent(
+                offset=1,
+                partition=0,
+                timestamp_ms=1100,
+                event_type="bulk_bootstrap_tenant",
+                org_id="org-2",
+                relations_to_add=[_make_tuple()],
+                relations_to_remove=[],
             ),
-            _make_tuple(
-                resource_type="role_binding",
-                resource_id=str(self.mapping.tenant_scope_default_role_binding_uuid),
-            ),
-            _make_tuple(
-                resource_type="role_binding",
-                resource_id=str(self.mapping.tenant_scope_default_admin_role_binding_uuid),
+            ParsedReplicationEvent(
+                offset=2,
+                partition=0,
+                timestamp_ms=1200,
+                event_type="bootstrap_tenant",
+                org_id="org-3",
+                relations_to_add=[_make_tuple()],
+                relations_to_remove=[],
             ),
         ]
+
+        log = InMemoryLog()
+        result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
+
+        self.assertEqual(result["events_read"], 0)
+        self.assertEqual(result["events_skipped_by_type"], 3)
+        self.assertEqual(len(log), 0)
+
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_external_user_events_are_skipped(self, mock_read):
+        """UMB-sourced external_user_update/disable/bulk events are filtered out."""
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=0,
+                partition=0,
+                timestamp_ms=1000,
+                event_type="external_user_update",
+                org_id="org-1",
+                relations_to_add=[_make_tuple(resource_type="principal", resource_id="localhost/user-1")],
+                relations_to_remove=[],
+            ),
+            ParsedReplicationEvent(
+                offset=1,
+                partition=0,
+                timestamp_ms=1100,
+                event_type="external_user_disable",
+                org_id="org-1",
+                relations_to_add=[],
+                relations_to_remove=[_make_tuple(resource_type="principal", resource_id="localhost/user-2")],
+            ),
+            ParsedReplicationEvent(
+                offset=2,
+                partition=0,
+                timestamp_ms=1200,
+                event_type="bulk_external_user_update",
+                org_id="org-1",
+                relations_to_add=[_make_tuple(resource_type="principal", resource_id="localhost/user-3")],
+                relations_to_remove=[],
+            ),
+        ]
+
+        log = InMemoryLog()
+        result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
+
+        self.assertEqual(result["events_read"], 0)
+        self.assertEqual(result["events_skipped_by_type"], 3)
+        self.assertEqual(len(log), 0)
+
+    @override_settings(DR_SKIP_EVENT_TYPES=[])
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_empty_skip_list_processes_all_events(self, mock_read):
+        """When DR_SKIP_EVENT_TYPES is empty, bootstrap events are processed normally."""
+        fake_ws = str(uuid4())
 
         mock_read.return_value = [
             ParsedReplicationEvent(
@@ -662,7 +715,7 @@ class ReconcileBootstrapTenantTest(TestCase):
                 timestamp_ms=1000,
                 event_type="bootstrap_tenant",
                 org_id=self.tenant.org_id,
-                relations_to_add=tuples,
+                relations_to_add=[_make_tuple(resource_type="workspace", resource_id=fake_ws)],
                 relations_to_remove=[],
             )
         ]
@@ -670,9 +723,10 @@ class ReconcileBootstrapTenantTest(TestCase):
         log = InMemoryLog()
         result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
 
-        self.assertEqual(result["skipped"], 6)
-        self.assertEqual(result["corrective_removes"], 0)
-        self.assertEqual(len(log), 0)
+        self.assertEqual(result["events_read"], 1)
+        self.assertEqual(result["events_skipped_by_type"], 0)
+        self.assertEqual(result["corrective_removes"], 1)
+        self.assertEqual(len(log), 1)
 
 
 class ReconcileMultiEventTest(TestCase):

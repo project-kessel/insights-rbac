@@ -96,3 +96,8 @@ class MigrateRoleScopeTest(DualWriteTestCase):
             self._do_migrate()
 
         self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=False)
+    def test_no_migrate_without_replication(self):
+        self._do_migrate()
+        self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())

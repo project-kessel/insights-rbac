@@ -8,6 +8,7 @@ on:
       - 'docs/source/specs/typespec/package.json'
       - 'docs/source/specs/v2/openapi.json'
       - 'docs/source/specs/v2/openapi.yaml'
+  merge_group:
   push:
     branches: [master]
     paths:

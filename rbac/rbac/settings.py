@@ -707,6 +707,14 @@ PARITY_CHECK_SCHEDULE = ENVIRONMENT.str("PARITY_CHECK_SCHEDULE", default="0 0 * 
 DR_RELATIONS_RECONCILE_ENABLED = ENVIRONMENT.bool("DR_RELATIONS_RECONCILE_ENABLED", default=False)
 DR_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("DR_KAFKA_CONSUMER_GROUP_ID", default="rbac-dr-consumer-group")
 DR_MAX_EVENTS_PER_RECONCILE = ENVIRONMENT.int("DR_MAX_EVENTS_PER_RECONCILE", default=10000)
+DR_SKIP_EVENT_TYPES = [
+    t.strip()
+    for t in ENVIRONMENT.get_value(
+        "DR_SKIP_EVENT_TYPES",
+        default="bootstrap_tenant,bulk_bootstrap_tenant,external_user_update,external_user_disable,bulk_external_user_update",
+    ).split(",")
+    if t.strip()
+]
 
 # Org level permissons parent role uuids
 SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID", default="")
