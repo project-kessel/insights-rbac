@@ -15,7 +15,7 @@ generation → outbox writing → parity verification.
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from api.models import Tenant
@@ -331,6 +331,7 @@ class DRParityHappyPathTest(TestCase):
         principal.delete()
         ws.delete()
 
+    @override_settings(DR_SKIP_EVENT_TYPES=[])
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
     def test_tenant_corrective_remove_cleans_orphaned_tenant(self, mock_pdp_cls, mock_read):
