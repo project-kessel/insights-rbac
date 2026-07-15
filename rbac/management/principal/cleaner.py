@@ -219,13 +219,14 @@ def retrieve_user_info_umb(message) -> User:
         # identifiers["Reference"] might be a dict
         if not isinstance((refs := identifiers["Reference"]), list):
             refs = [identifiers["Reference"]]
+        # BUG FIX: Original UMB code had break statements that would only extract org_id OR account,
+        # not both. Removing breaks to extract both values when present in the message.
+        # Users typically have both org_id and account, and messages often contain both references.
         for ref in refs:
             if ref["@system"] == "WEB" and ref["@entity-name"] == "Customer" and ref["@qualifier"] == "id":
                 user.org_id = ref["#text"]
-                break
             if ref["@system"] == "EBS" and ref["@entity-name"] == "Account" and ref["@qualifier"] == "number":
                 user.account = ref["#text"]
-                break
 
         return user
 
@@ -291,6 +292,9 @@ def retrieve_user_info_kafka(message) -> User:
         if not isinstance(references, list):
             references = [references]
 
+        # BUG FIX: Original UMB code had break statements that would only extract org_id OR account,
+        # not both. Removing breaks to extract both values when present in the message.
+        # Users typically have both org_id and account, and messages often contain both references.
         for ref in references:
             is_web_customer = (
                 ref.get("system") == "WEB" and ref.get("entity-name") == "Customer" and ref.get("qualifier") == "id"
@@ -300,10 +304,8 @@ def retrieve_user_info_kafka(message) -> User:
             )
             if is_web_customer:
                 user.org_id = ref.get("text") or ref.get("value")
-                break
             if is_ebs_account:
                 user.account = ref.get("text") or ref.get("value")
-                break
 
         return user
 
