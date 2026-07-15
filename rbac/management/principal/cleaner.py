@@ -22,6 +22,7 @@ import logging
 import os
 import ssl
 from typing import NamedTuple, Optional
+from xml.parsers.expat import ExpatError
 
 import xmltodict
 from core.kafka import RBACProducer
@@ -449,15 +450,18 @@ def process_kafka_message(
             kafka_messages_failure_total.inc()
 
             # Determine if this is a permanent error (unprocessable message) or transient error (retry later)
-            # Permanent errors: JSON parsing, missing fields, schema violations
+            # Permanent errors: Parsing failures, missing fields, schema violations, wrong types/structure
             # Transient errors: Network issues, DB connection problems, temporary service unavailability
             is_permanent_error = isinstance(
                 e,
                 (
                     json.JSONDecodeError,  # Malformed JSON
+                    ExpatError,  # Malformed XML (from xmltodict.parse)
                     KeyError,  # Missing required field in message
                     ValueError,  # Invalid data format
                     UnicodeDecodeError,  # Invalid message encoding
+                    AttributeError,  # Wrong message structure (e.g., accessing nonexistent attributes)
+                    TypeError,  # Wrong type in message (e.g., iterating over non-iterable)
                 ),
             )
 
