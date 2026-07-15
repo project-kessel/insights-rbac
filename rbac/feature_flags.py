@@ -231,21 +231,24 @@ class FeatureFlags:
         try:
             variant = self.client.get_variant(
                 self.TOGGLE_USE_KAFKA_CLEANUP,
-                fallback_variant={"name": "kafka_active", "enabled": True},
+                fallback_variant={"name": "umb_only", "enabled": False},
             )
 
-            mode = variant.get("name", "kafka_active")
+            mode = variant.get("name", "umb_only")
 
             # Validate mode - only kafka_shadow and kafka_active are valid when flag is enabled
             if mode == "kafka_shadow":
                 return "kafka_shadow"
-            else:
-                # Default to kafka_active for any other variant
+            elif mode == "kafka_active":
                 return "kafka_active"
+            else:
+                # Reject unknown variants and fall back to safe default (UMB only)
+                logger.warning(f"Unknown principal cleanup mode variant '{mode}', falling back to umb_only")
+                return "umb_only"
 
         except Exception as e:
-            logger.warning(f"Error getting variant for principal cleanup mode: {e}, defaulting to kafka_active")
-            return "kafka_active"
+            logger.warning(f"Error getting variant for principal cleanup mode: {e}, falling back to umb_only")
+            return "umb_only"
 
     def is_kafka_shadow_mode_enabled(self) -> bool:
         """Check if Kafka is in shadow/dry-run mode."""
