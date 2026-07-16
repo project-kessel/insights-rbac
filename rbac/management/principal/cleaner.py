@@ -551,8 +551,7 @@ def process_kafka_message(
             return MessageProcessingResult(should_continue=True, success=True)
         except Exception as dlq_error:
             logger.error(
-                "process_kafka_message: Failed to send message to DLQ: %s. "
-                "Message will be retried on restart.",
+                "process_kafka_message: Failed to send message to DLQ: %s. " "Message will be retried on restart.",
                 str(dlq_error),
             )
             capture_exception(dlq_error)

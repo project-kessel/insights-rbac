@@ -138,7 +138,18 @@ def principal_cleanup_via_message_bus():
             logger.info("Kafka-active mode: processing via Kafka")
             process_principal_events_from_kafka(dry_run=False)
         else:
-            logger.warning("Kafka mode selected but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
+            # Fall back to UMB when Kafka is disabled
+            logger.warning(
+                "Kafka-active mode selected but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False. "
+                "Falling back to UMB for principal cleanup."
+            )
+            if settings.UMB_JOB_ENABLED:
+                process_principal_events_from_umb()
+            else:
+                logger.error(
+                    "Kafka-active mode fallback failed: UMB_JOB_ENABLED is also False. "
+                    "Principal cleanup will not run."
+                )
 
     else:
         logger.error(f"Unknown principal cleanup mode: {mode}, defaulting to UMB")
