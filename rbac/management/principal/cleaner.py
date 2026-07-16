@@ -525,56 +525,61 @@ def process_kafka_message(
                 return MessageProcessingResult(should_continue=True, success=False if not dry_run else True)
 
     # Transaction and advisory lock are now released - safe to do network I/O
-    if send_to_dlq and error_for_dlq:
-        dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
-        try:
-            # Build DLQ message with error context
-            # NOTE: original_message may contain PII (usernames, org/account IDs)
-            # Ensure DLQ topic has appropriate access controls and retention policy
+    # At this point, send_to_dlq must be True (only code path that doesn't return in except block above)
+    if not (send_to_dlq and error_for_dlq):
+        # This should never happen - all code paths should have returned or set send_to_dlq=True
+        logger.error("process_kafka_message: Unexpected state - send_to_dlq or error_for_dlq not set")
+        return MessageProcessingResult(should_continue=True, success=False)
 
-            # Preserve invalid UTF-8 payloads by base64-encoding them
-            # This allows poison messages (e.g., UnicodeDecodeError) to be delivered to DLQ
-            if isinstance(message.value, bytes):
-                try:
-                    # Try to decode as UTF-8 first
-                    original_message = message.value.decode("utf-8")
-                    message_encoding = "utf-8"
-                except UnicodeDecodeError:
-                    # If UTF-8 decode fails, base64-encode the raw bytes to preserve them
-                    original_message = base64.b64encode(message.value).decode("ascii")
-                    message_encoding = "base64"
-            else:
-                # Already a string (shouldn't happen with raw consumer, but handle it)
-                original_message = message.value
-                message_encoding = "string"
+    dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+    try:
+        # Build DLQ message with error context
+        # NOTE: original_message may contain PII (usernames, org/account IDs)
+        # Ensure DLQ topic has appropriate access controls and retention policy
 
-            dlq_message = {
-                "original_message": original_message,
-                "message_encoding": message_encoding,
-                "error": str(error_for_dlq),
-                "error_type": type(error_for_dlq).__name__,
-                "partition": message.partition,
-                "offset": message.offset,
-                "timestamp": message.timestamp,
-                "dry_run": dry_run,
-            }
-            dlq_producer.send_kafka_message(dlq_topic, dlq_message)
-            logger.info(
-                "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
-                dlq_topic,
-                message.partition,
-                message.offset,
-            )
-            # Return success=True so offset gets committed (message moved to DLQ)
-            return MessageProcessingResult(should_continue=True, success=True)
-        except Exception as dlq_error:
-            logger.error(
-                "process_kafka_message: Failed to send message to DLQ: %s. " "Message will be retried on restart.",
-                str(dlq_error),
-            )
-            capture_exception(dlq_error)
-            # DLQ send failed, so don't commit offset (will retry message)
-            return MessageProcessingResult(should_continue=True, success=False)
+        # Preserve invalid UTF-8 payloads by base64-encoding them
+        # This allows poison messages (e.g., UnicodeDecodeError) to be delivered to DLQ
+        if isinstance(message.value, bytes):
+            try:
+                # Try to decode as UTF-8 first
+                original_message = message.value.decode("utf-8")
+                message_encoding = "utf-8"
+            except UnicodeDecodeError:
+                # If UTF-8 decode fails, base64-encode the raw bytes to preserve them
+                original_message = base64.b64encode(message.value).decode("ascii")
+                message_encoding = "base64"
+        else:
+            # Already a string (shouldn't happen with raw consumer, but handle it)
+            original_message = message.value
+            message_encoding = "string"
+
+        dlq_message = {
+            "original_message": original_message,
+            "message_encoding": message_encoding,
+            "error": str(error_for_dlq),
+            "error_type": type(error_for_dlq).__name__,
+            "partition": message.partition,
+            "offset": message.offset,
+            "timestamp": message.timestamp,
+            "dry_run": dry_run,
+        }
+        dlq_producer.send_kafka_message(dlq_topic, dlq_message)
+        logger.info(
+            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+            dlq_topic,
+            message.partition,
+            message.offset,
+        )
+        # Return success=True so offset gets committed (message moved to DLQ)
+        return MessageProcessingResult(should_continue=True, success=True)
+    except Exception as dlq_error:
+        logger.error(
+            "process_kafka_message: Failed to send message to DLQ: %s. " "Message will be retried on restart.",
+            str(dlq_error),
+        )
+        capture_exception(dlq_error)
+        # DLQ send failed, so don't commit offset (will retry message)
+        return MessageProcessingResult(should_continue=True, success=False)
 
 
 def process_principal_events_from_umb(bootstrap_service: Optional[TenantBootstrapService] = None):
