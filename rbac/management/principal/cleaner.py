@@ -466,15 +466,14 @@ def process_kafka_message(
             )
 
             if dry_run:
-                # In dry-run, track errors and send permanent errors to DLQ for inspection
+                # In dry-run, track errors but ALWAYS continue processing (never block)
                 kafka_dry_run_errors_total.inc()
                 if is_permanent_error:
                     logger.warning("DRY RUN: Permanent error detected - message would be sent to DLQ in production.")
-                    # Fall through to DLQ logic below
                 else:
                     logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
-                    # In dry-run, still commit offset to continue validation (not blocking on retries)
-                    return MessageProcessingResult(should_continue=True, success=True)
+                # In dry-run mode, always commit offset to continue validation (never block on any errors)
+                return MessageProcessingResult(should_continue=True, success=True)
 
             # For production mode, only send permanent errors to DLQ
             # Transient errors will not commit offset and will retry
