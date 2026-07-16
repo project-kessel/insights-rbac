@@ -118,17 +118,26 @@ def principal_cleanup_via_message_bus():
 
     elif mode == "kafka_shadow":
         # Shadow mode: Both run, Kafka in dry-run (no DB writes)
+        # Isolate UMB and Kafka so one backend failure doesn't prevent the other from running
         logger.info("Shadow mode: processing via UMB (active) and Kafka (dry-run)")
 
         if settings.UMB_JOB_ENABLED:
-            logger.info("Shadow mode: Running UMB consumer (active - writes to DB)")
-            process_principal_events_from_umb()
+            try:
+                logger.info("Shadow mode: Running UMB consumer (active - writes to DB)")
+                process_principal_events_from_umb()
+            except Exception as umb_error:
+                logger.error("Shadow mode: UMB consumer failed: %s", str(umb_error))
+                capture_exception(umb_error)
         else:
             logger.warning("Shadow mode requires UMB but UMB_JOB_ENABLED is False")
 
         if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-            logger.info("Shadow mode: Running Kafka consumer (dry-run - no DB writes)")
-            process_principal_events_from_kafka(dry_run=True)
+            try:
+                logger.info("Shadow mode: Running Kafka consumer (dry-run - no DB writes)")
+                process_principal_events_from_kafka(dry_run=True)
+            except Exception as kafka_error:
+                logger.error("Shadow mode: Kafka consumer (dry-run) failed: %s", str(kafka_error))
+                capture_exception(kafka_error)
         else:
             logger.warning("Shadow mode requires Kafka but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
 
