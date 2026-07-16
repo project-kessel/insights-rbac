@@ -386,6 +386,10 @@ def process_kafka_message(
         - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
+    # Track error for DLQ send outside transaction (to avoid holding DB lock during network I/O)
+    send_to_dlq = False
+    error_for_dlq = None
+
     with transaction.atomic():
         # This is locked per transaction to ensure another listener process does not run concurrently.
         if not _lock_listener():
@@ -485,49 +489,63 @@ def process_kafka_message(
                 )
                 return MessageProcessingResult(should_continue=True, success=False)
 
-            # Send permanent errors to DLQ if configured
+            # Permanent error - mark for DLQ send outside transaction (to avoid holding DB lock)
             if dlq_producer and hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
                 dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
                 if dlq_topic:
-                    try:
-                        # Build DLQ message with error context
-                        dlq_message = {
-                            "original_message": (
-                                message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
-                            ),
-                            "error": str(e),
-                            "error_type": type(e).__name__,
-                            "partition": message.partition,
-                            "offset": message.offset,
-                            "timestamp": message.timestamp,
-                            "dry_run": dry_run,  # Mark if this is from shadow mode validation
-                        }
-                        dlq_mode = " (DRY RUN)" if dry_run else ""
-                        dlq_producer.send_kafka_message(dlq_topic, dlq_message)
-                        logger.info(
-                            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)%s",
-                            dlq_topic,
-                            message.partition,
-                            message.offset,
-                            dlq_mode,
-                        )
-                        # Return success=True so offset gets committed (message moved to DLQ)
-                        return MessageProcessingResult(should_continue=True, success=True)
-                    except Exception as dlq_error:
-                        logger.error(
-                            "process_kafka_message: Failed to send message to DLQ: %s. "
-                            "Message will be retried on restart.",
-                            str(dlq_error),
-                        )
-                        capture_exception(dlq_error)
-                        # DLQ send failed, so don't commit offset (will retry message)
-                        return MessageProcessingResult(should_continue=True, success=False)
+                    send_to_dlq = True
+                    error_for_dlq = e
+                    # Transaction will commit, then DLQ send happens outside
+                else:
+                    logger.warning(
+                        "process_kafka_message: No DLQ topic configured. "
+                        "Failed message at offset %d will be retried on restart.",
+                        message.offset,
+                    )
+                    return MessageProcessingResult(should_continue=True, success=False)
+            else:
+                logger.warning(
+                    "process_kafka_message: No DLQ producer configured. "
+                    "Failed message at offset %d will be retried on restart.",
+                    message.offset,
+                )
+                return MessageProcessingResult(should_continue=True, success=False)
 
-            # No DLQ configured - don't commit offset, will retry on restart
-            logger.warning(
-                "process_kafka_message: No DLQ configured. Failed message at offset %d will be retried on restart.",
+    # Transaction and advisory lock are now released - safe to do network I/O
+    if send_to_dlq and error_for_dlq:
+        dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+        try:
+            # Build DLQ message with error context
+            # NOTE: original_message may contain PII (usernames, org/account IDs)
+            # Ensure DLQ topic has appropriate access controls and retention policy
+            dlq_message = {
+                "original_message": (
+                    message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
+                ),
+                "error": str(error_for_dlq),
+                "error_type": type(error_for_dlq).__name__,
+                "partition": message.partition,
+                "offset": message.offset,
+                "timestamp": message.timestamp,
+                "dry_run": dry_run,
+            }
+            dlq_producer.send_kafka_message(dlq_topic, dlq_message)
+            logger.info(
+                "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+                dlq_topic,
+                message.partition,
                 message.offset,
             )
+            # Return success=True so offset gets committed (message moved to DLQ)
+            return MessageProcessingResult(should_continue=True, success=True)
+        except Exception as dlq_error:
+            logger.error(
+                "process_kafka_message: Failed to send message to DLQ: %s. "
+                "Message will be retried on restart.",
+                str(dlq_error),
+            )
+            capture_exception(dlq_error)
+            # DLQ send failed, so don't commit offset (will retry message)
             return MessageProcessingResult(should_continue=True, success=False)
 
 
