@@ -409,6 +409,8 @@ class PrincipalKafkaTests(IdentityRequest):
 
         consumer_instance.__iter__.return_value = iter([create_mock_kafka_message(KAFKA_MESSAGE_SPECIAL)])
         process_principal_events_from_kafka()
+        # Verify second message processing also doesn't delete the existing principal
+        self.assertTrue(Principal.objects.filter(username=principal_name).exists())
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
