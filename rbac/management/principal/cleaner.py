@@ -17,6 +17,7 @@
 
 """Handler for principal clean up."""
 
+import base64
 import json
 import logging
 import os
@@ -484,15 +485,16 @@ def process_kafka_message(
                 # In dry-run, track errors but ALWAYS continue processing (never block)
                 kafka_dry_run_errors_total.inc()
                 if is_permanent_error:
-                    logger.warning("DRY RUN: Permanent error detected - message would be sent to DLQ in production.")
+                    logger.warning("DRY RUN: Permanent error detected - testing DLQ path.")
+                    # In dry-run, test DLQ functionality by sending to DLQ (fall through to DLQ logic)
                 else:
                     logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
-                # In dry-run mode, always commit offset to continue validation (never block on any errors)
-                return MessageProcessingResult(should_continue=True, success=True)
+                    # In dry-run mode, always commit offset to continue validation (never block on any errors)
+                    return MessageProcessingResult(should_continue=True, success=True)
 
-            # For production mode, only send permanent errors to DLQ
-            # Transient errors will not commit offset and will retry
-            if not is_permanent_error:
+            # For permanent errors, send to DLQ. For transient errors (production only), retry.
+            if not dry_run and not is_permanent_error:
+                # Production mode: transient errors don't commit offset and will retry
                 logger.warning(
                     "process_kafka_message: Transient error at offset %d. "
                     "Will not commit offset - message will be retried on next consumer run.",
@@ -500,7 +502,7 @@ def process_kafka_message(
                 )
                 return MessageProcessingResult(should_continue=True, success=False)
 
-            # Permanent error - mark for DLQ send outside transaction (to avoid holding DB lock)
+            # Permanent error (or dry-run permanent error) - mark for DLQ send outside transaction
             if dlq_producer and hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
                 dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
                 if dlq_topic:
@@ -513,14 +515,14 @@ def process_kafka_message(
                         "Failed message at offset %d will be retried on restart.",
                         message.offset,
                     )
-                    return MessageProcessingResult(should_continue=True, success=False)
+                    return MessageProcessingResult(should_continue=True, success=False if not dry_run else True)
             else:
                 logger.warning(
                     "process_kafka_message: No DLQ producer configured. "
                     "Failed message at offset %d will be retried on restart.",
                     message.offset,
                 )
-                return MessageProcessingResult(should_continue=True, success=False)
+                return MessageProcessingResult(should_continue=True, success=False if not dry_run else True)
 
     # Transaction and advisory lock are now released - safe to do network I/O
     if send_to_dlq and error_for_dlq:
@@ -529,10 +531,26 @@ def process_kafka_message(
             # Build DLQ message with error context
             # NOTE: original_message may contain PII (usernames, org/account IDs)
             # Ensure DLQ topic has appropriate access controls and retention policy
+
+            # Preserve invalid UTF-8 payloads by base64-encoding them
+            # This allows poison messages (e.g., UnicodeDecodeError) to be delivered to DLQ
+            if isinstance(message.value, bytes):
+                try:
+                    # Try to decode as UTF-8 first
+                    original_message = message.value.decode("utf-8")
+                    message_encoding = "utf-8"
+                except UnicodeDecodeError:
+                    # If UTF-8 decode fails, base64-encode the raw bytes to preserve them
+                    original_message = base64.b64encode(message.value).decode("ascii")
+                    message_encoding = "base64"
+            else:
+                # Already a string (shouldn't happen with raw consumer, but handle it)
+                original_message = message.value
+                message_encoding = "string"
+
             dlq_message = {
-                "original_message": (
-                    message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
-                ),
+                "original_message": original_message,
+                "message_encoding": message_encoding,
                 "error": str(error_for_dlq),
                 "error_type": type(error_for_dlq).__name__,
                 "partition": message.partition,
