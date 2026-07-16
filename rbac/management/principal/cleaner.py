@@ -398,8 +398,19 @@ def process_kafka_message(
             return MessageProcessingResult(should_continue=False, success=False)
 
         try:
+            # Handle tombstone messages (Kafka deletes with null value)
+            if message.value is None:
+                logger.warning(
+                    "process_kafka_message: Received tombstone message (null value) at offset %d. "
+                    "Tombstones are not expected in principal cleanup topic. Skipping.",
+                    message.offset,
+                )
+                kafka_messages_success_total.inc()
+                return MessageProcessingResult(should_continue=True, success=True)
+
             # Parse message - handle both XML (from UMB bridge) and JSON (from native Kafka producer)
             # The messaging bridge copies raw UMB message bodies (XML) to Kafka during migration
+            # Decode here (not in consumer config) so UTF-8 errors reach our error handling/DLQ logic
             message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
 
             # Detect format: XML starts with '<' or '<?xml', JSON starts with '{' or '['
@@ -614,7 +625,7 @@ def process_principal_events_from_kafka(
         "group_id": f"{settings.SA_NAME}-principal-cleanup",
         "auto_offset_reset": "earliest",
         "enable_auto_commit": False,  # Manual commit for at-least-once semantics
-        "value_deserializer": lambda m: m.decode("utf-8"),
+        # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
         "consumer_timeout_ms": 15000,  # 15 second timeout per run, matches UMB behavior
     }
 
