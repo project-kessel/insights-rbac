@@ -31,6 +31,7 @@ from management.principal.cleaner import (
     process_principal_events_from_kafka,
     process_principal_events_from_umb,
 )
+from sentry_sdk import capture_exception
 
 logger = logging.getLogger(__name__)
 

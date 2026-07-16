@@ -1083,6 +1083,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         tenant.refresh_from_db()
         self.assertFalse(tenant.ready)
 
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
@@ -1091,7 +1092,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(V2_BOOTSTRAP_TENANT=False)
     def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
-        self, consumer_mock, proxy_mock
+        self, consumer_mock, proxy_mock, replicate_mock
     ):
         """Test that non-V2 tenant with disabled user doesn't produce replication events."""
         principal_name = "principal-test"
@@ -1108,6 +1109,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         # Principal should be deleted when inactive and not found in proxy
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         # No replication events should be produced for non-V2 tenants
+        replicate_mock.assert_not_called()
         consumer_instance.close.assert_called_once()
 
     def assertTenantBootstrappedByOrgId(self, org_id: str):
