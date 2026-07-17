@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="auditlog",
             name="principal_username",
-            field=models.CharField(max_length=255),
+            field=models.CharField(db_index=True, max_length=255),
         ),
         migrations.AlterField(
             model_name="permission",
