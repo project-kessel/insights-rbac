@@ -168,10 +168,10 @@ class PermissionValue:
 class Permission(TenantAwareModel):
     """A Permission."""
 
-    application = models.TextField(null=False)
-    resource_type = models.TextField(null=False)
-    verb = models.TextField(null=False)
-    permission = models.TextField(null=False, unique=True)
+    application = models.CharField(max_length=255, null=False, db_index=True)
+    resource_type = models.CharField(max_length=255, null=False)
+    verb = models.CharField(max_length=255, null=False)
+    permission = models.CharField(max_length=512, null=False, unique=True)
     description = models.TextField(default="")
     permissions = models.ManyToManyField("self", symmetrical=False, related_name="requiring_permissions")
 

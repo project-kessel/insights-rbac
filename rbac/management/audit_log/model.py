@@ -75,8 +75,8 @@ class AuditLog(TenantAwareModel):
     }
 
     created = models.DateTimeField(default=timezone.now)
-    principal_username = models.TextField(max_length=255, null=False)
-    description = models.TextField(max_length=255, null=False)
+    principal_username = models.CharField(max_length=255, null=False)
+    description = models.CharField(max_length=255, null=False)
     resource_type = models.CharField(max_length=32, choices=RESOURCE_CHOICES)
     resource_id = models.IntegerField(null=True)
     action = models.CharField(max_length=32, choices=ACTION_CHOICES)
