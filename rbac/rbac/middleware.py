@@ -20,6 +20,8 @@
 import binascii
 import json
 import logging
+import time
+import uuid
 from json.decoder import JSONDecodeError
 
 from django.conf import settings
@@ -43,6 +45,7 @@ from api.common import RH_IDENTITY_HEADER, RH_INSIGHTS_REQUEST_ID
 from api.models import Tenant, User
 from api.serializers import extract_header
 from rbac.a2s import is_a2s_path as _is_a2s_path
+from rbac.request_context import org_id_var, request_id_var, username_var
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 req_sys_counter = Counter(
@@ -225,8 +228,14 @@ class IdentityHeaderMiddleware:
     @catch_integrity_error
     def __call__(self, request):
         """Code to be executed for each request before or after the view is called."""
-        # Get request ID
-        request.req_id = request.META.get(RH_INSIGHTS_REQUEST_ID)
+        # Start timing
+        request._request_start = time.monotonic()
+
+        # Get request ID — generate a fallback UUID when the header is absent
+        request.req_id = request.META.get(RH_INSIGHTS_REQUEST_ID) or str(uuid.uuid4())
+
+        # Set request_id context var early so all log lines include it
+        request_id_var.set(request.req_id)
 
         if any(
             [request.path.startswith(prefix) for prefix in settings.INTERNAL_API_PATH_PREFIXES]
@@ -329,6 +338,12 @@ class IdentityHeaderMiddleware:
             request.user = user
             request.tenant = self.get_tenant(model=None, hostname=None, request=request)
 
+            # Enrich context vars with identity information for log correlation
+            if user.org_id:
+                org_id_var.set(str(user.org_id))
+            if user.username:
+                username_var.set(str(user.username))
+
         response = self.get_response(request)
 
         # Code to be executed for each request/response after
@@ -414,6 +429,12 @@ class IdentityHeaderMiddleware:
             }
         """
 
+        # Compute request duration if timing was captured
+        duration_ms = None
+        request_start = getattr(request, "_request_start", None)
+        if request_start is not None:
+            duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+
         log_object = {
             "method": request.method,
             "path": request.path + query_string,
@@ -426,6 +447,7 @@ class IdentityHeaderMiddleware:
             "is_system": is_system,
             "is_internal": is_internal,
             "is_internal_request": is_internal_request,
+            "duration_ms": duration_ms,
         }
         logger.info(log_object)
 
