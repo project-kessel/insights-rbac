@@ -12,11 +12,6 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AlterField(
             model_name="auditlog",
-            name="description",
-            field=models.CharField(max_length=255),
-        ),
-        migrations.AlterField(
-            model_name="auditlog",
             name="principal_username",
             field=models.CharField(max_length=255),
         ),
