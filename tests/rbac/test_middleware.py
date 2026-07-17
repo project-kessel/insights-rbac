@@ -55,7 +55,14 @@ from migration_tool.in_memory_tuples import (
 )
 from tests.identity_request import IdentityRequest
 from rbac import urls
-from rbac.middleware import HttpResponseUnauthorizedRequest, IdentityHeaderMiddleware, ReadOnlyApiMiddleware
+from rbac.middleware import (
+    HttpResponseUnauthorizedRequest,
+    IdentityHeaderMiddleware,
+    ReadOnlyApiMiddleware,
+    _get_api_version,
+    _normalize_user_agent,
+    api_migration_counter,
+)
 from rbac.request_context import org_id_var, request_id_var, user_id_var
 from management.models import Access, Group, Permission, Principal, Policy, ResourceDefinition, Role
 
@@ -1368,6 +1375,167 @@ class RBACReadOnlyApiMiddlewareV2(RBACReadOnlyApiMiddleware):
             middleware = ReadOnlyApiMiddleware(get_response=Mock(return_value="OK"))
             resp = middleware(self.request)
             self.assertEqual(resp, "OK")
+
+
+class NormalizeUserAgentTest(TestCase):
+    """Tests for _normalize_user_agent helper."""
+
+    def test_none_returns_empty(self):
+        self.assertEqual(_normalize_user_agent(None), "")
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(_normalize_user_agent(""), "")
+
+    def test_simple_product_version(self):
+        self.assertEqual(_normalize_user_agent("python-requests/2.28.0"), "python-requests")
+
+    def test_product_with_comment(self):
+        self.assertEqual(_normalize_user_agent("insights-chrome/1.0.0 (Linux; x86_64)"), "insights-chrome")
+
+    def test_mozilla_browser(self):
+        self.assertEqual(
+            _normalize_user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"),
+            "mozilla",
+        )
+
+    def test_single_word(self):
+        self.assertEqual(_normalize_user_agent("curl"), "curl")
+
+    def test_long_agent_truncated(self):
+        long_name = "a" * 200
+        result = _normalize_user_agent(long_name)
+        self.assertEqual(len(result), 64)
+
+    def test_case_normalized(self):
+        self.assertEqual(_normalize_user_agent("MyCustomClient/3.0"), "mycustomclient")
+
+
+class GetApiVersionTest(TestCase):
+    """Tests for _get_api_version helper."""
+
+    def test_v1_management(self):
+        self.assertEqual(_get_api_version("v1_management"), "v1")
+
+    def test_v1_api(self):
+        self.assertEqual(_get_api_version("v1_api"), "v1")
+
+    def test_v2_management(self):
+        self.assertEqual(_get_api_version("v2_management"), "v2")
+
+    def test_v2_api(self):
+        self.assertEqual(_get_api_version("v2_api"), "v2")
+
+    def test_internal_returns_none(self):
+        self.assertIsNone(_get_api_version("internal"))
+
+    def test_mcp_returns_none(self):
+        self.assertIsNone(_get_api_version("mcp"))
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(_get_api_version(""))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(_get_api_version(None))
+
+
+class ApiMigrationCounterTest(IdentityRequest):
+    """Tests for the api_migration_counter Prometheus metric in IdentityHeaderMiddleware."""
+
+    def setUp(self):
+        """Set up migration counter tests."""
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.META["QUERY_STRING"] = ""
+
+    @patch("rbac.middleware.resolve")
+    def test_v1_request_increments_counter(self, mock_resolve):
+        """Test that a v1 API request increments the migration counter with api_version=v1."""
+        mock_resolve.return_value = Mock(url_name="role-list", app_name="v1_management")
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "python-requests/2.28.0"
+
+        before = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="python-requests", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        middleware(self.request)
+
+        after = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="python-requests", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    @patch("rbac.middleware.resolve")
+    def test_v2_request_increments_counter(self, mock_resolve):
+        """Test that a v2 API request increments the migration counter with api_version=v2."""
+        mock_resolve.return_value = Mock(url_name="role-list", app_name="v2_management")
+        self.request.path = "/api/rbac/v2/roles/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "insights-chrome/1.0"
+
+        before = api_migration_counter.labels(
+            api_version="v2", client_id="", user_agent="insights-chrome", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        middleware(self.request)
+
+        after = api_migration_counter.labels(
+            api_version="v2", client_id="", user_agent="insights-chrome", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    @patch("rbac.middleware.resolve")
+    def test_service_account_includes_client_id(self, mock_resolve):
+        """Test that service account requests record client_id in the counter."""
+        mock_resolve.return_value = Mock(url_name="role-list", app_name="v1_management")
+        sa_data = self._create_service_account_data()
+        customer = self._create_customer_data()
+        request_context = self._create_request_context(customer, None, service_account_data=sa_data)
+        request = request_context["request"]
+        request.path = "/api/rbac/v1/roles/"
+        request.method = "GET"
+        request.META["QUERY_STRING"] = ""
+        request.META["HTTP_USER_AGENT"] = "my-service/1.0"
+
+        expected_client_id = sa_data.get("client_id", "")
+        before = api_migration_counter.labels(
+            api_version="v1", client_id=expected_client_id, user_agent="my-service", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        middleware(request)
+
+        after = api_migration_counter.labels(
+            api_version="v1", client_id=expected_client_id, user_agent="my-service", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    @patch("rbac.middleware.resolve")
+    def test_internal_request_does_not_increment(self, mock_resolve):
+        """Test that internal endpoint requests do not increment the migration counter."""
+        mock_resolve.return_value = Mock(url_name="status", app_name="internal")
+        self.request.path = "/_private/api/status/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "curl/7.80"
+
+        # Internal endpoints should not increment; _get_api_version returns None.
+        before = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="curl", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        middleware(self.request)
+
+        after = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="curl", method="GET"
+        )._value.get()
+        self.assertEqual(after, before)
 
 
 class RequestContextMiddlewareTest(IdentityRequest):
