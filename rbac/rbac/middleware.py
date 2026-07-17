@@ -460,21 +460,23 @@ class IdentityHeaderMiddleware:
 
         behalf = "system" if is_system else "principal"
 
-        resolved = resolve(request.path)
+        resolver_match = getattr(request, "resolver_match", None)
+        view_name = resolver_match.url_name if resolver_match else ""
+        app_name = resolver_match.app_name if resolver_match else ""
         req_sys_counter.labels(
             behalf=behalf,
             method=request.method,
-            view=resolved.url_name,
-            status=response.get("status_code"),
+            view=view_name,
+            status=response.status_code,
         ).inc()
 
         # Track v1/v2 migration metrics per client_id and user_agent.
-        api_version = _get_api_version(resolved.app_name)
+        api_version = _get_api_version(app_name)
         if api_version:
             client_id = ""
-            if hasattr(request, "user") and request.user and request.user.is_service_account:
-                client_id = request.user.client_id or ""
-            user_agent = _normalize_user_agent(request.META.get("HTTP_USER_AGENT"))
+            if hasattr(request, "user") and request.user and getattr(request.user, "is_service_account", False):
+                client_id = getattr(request.user, "client_id", "") or ""
+            user_agent = _normalize_user_agent(request.headers.get("user-agent"))
             api_migration_counter.labels(
                 api_version=api_version,
                 client_id=client_id,
@@ -513,8 +515,8 @@ class IdentityHeaderMiddleware:
                 is_admin = request.user.admin
                 is_system = request.user.system
                 is_internal = getattr(request.user, "internal", False)
-                if request.user.is_service_account:
-                    client_id = request.user.client_id
+                if getattr(request.user, "is_service_account", False):
+                    client_id = getattr(request.user, "client_id", "")
             else:
                 # django.contrib.auth.models.AnonymousUser does not
                 is_admin = is_system = False
@@ -567,7 +569,7 @@ class IdentityHeaderMiddleware:
             "duration_ms": duration_ms,
             "api_version": api_version,
             "client_id": client_id,
-            "user_agent": _normalize_user_agent(request.META.get("HTTP_USER_AGENT")),
+            "user_agent": _normalize_user_agent(request.headers.get("user-agent")),
         }
         logger.info("log_request", extra=log_object)
 
