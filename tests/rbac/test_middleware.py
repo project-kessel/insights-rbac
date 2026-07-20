@@ -1775,31 +1775,27 @@ class RequestContextMiddlewareTest(IdentityRequest):
             self.assertNotIn("user_id", log_object)
 
 
+@override_settings(V2_APIS_ENABLED=True)
 class V2MetricsTest(IdentityRequest):
     """Tests for V2-specific Prometheus metrics (Counter and Histogram)."""
 
     def setUp(self):
         """Set up V2 metrics tests."""
+        reload(urls)
+        clear_url_caches()
         super().setUp()
         self.user_data = self._create_user_data()
         self.customer = self._create_customer_data()
         self.request_context = self._create_request_context(self.customer, self.user_data)
         self.request = self.request_context["request"]
         self.request.META["QUERY_STRING"] = ""
+        # Ensure resolver_match is None so middleware falls through to resolve().
+        self.request.resolver_match = None
 
-    def _make_resolve_result(self, app_name="v2_api", url_name="workspace-list"):
-        """Create a mock resolve result with the given app_name."""
-        mock_match = Mock()
-        mock_match.app_name = app_name
-        mock_match.url_name = url_name
-        return mock_match
-
-    @patch("rbac.middleware.resolve")
-    def test_v2_request_increments_counter(self, mock_resolve):
+    def test_v2_request_increments_counter(self):
         """Test that V2 requests increment rbac_v2_api_requests_total."""
         from rbac.middleware import rbac_v2_requests_total
 
-        mock_resolve.return_value = self._make_resolve_result(app_name="v2_api")
         self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "GET"
 
@@ -1807,35 +1803,33 @@ class V2MetricsTest(IdentityRequest):
 
         get_response = Mock(return_value=HttpResponse(status=200))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
-        middleware(self.request)
+        response = middleware(self.request)
 
         after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
         self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 200)
 
-    @patch("rbac.middleware.resolve")
-    def test_v2_request_records_duration(self, mock_resolve):
+    def test_v2_request_records_duration(self):
         """Test that V2 requests observe rbac_v2_api_request_duration_seconds."""
         from rbac.middleware import rbac_v2_request_duration
 
-        mock_resolve.return_value = self._make_resolve_result(app_name="v2_management")
-        self.request.path = "/api/rbac/v2/roles/"
+        self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "POST"
 
         before = rbac_v2_request_duration.labels(method="POST")._sum.get()
 
         get_response = Mock(return_value=HttpResponse(status=201))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
-        middleware(self.request)
+        response = middleware(self.request)
 
         after = rbac_v2_request_duration.labels(method="POST")._sum.get()
         self.assertGreater(after, before)
+        self.assertEqual(response.status_code, 201)
 
-    @patch("rbac.middleware.resolve")
-    def test_v2_error_increments_5xx_counter(self, mock_resolve):
+    def test_v2_error_increments_5xx_counter(self):
         """Test that V2 5xx responses are recorded with status='5xx'."""
         from rbac.middleware import rbac_v2_requests_total
 
-        mock_resolve.return_value = self._make_resolve_result(app_name="v2_api")
         self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "GET"
 
@@ -1843,17 +1837,16 @@ class V2MetricsTest(IdentityRequest):
 
         get_response = Mock(return_value=HttpResponse(status=500))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
-        middleware(self.request)
+        response = middleware(self.request)
 
         after = rbac_v2_requests_total.labels(method="GET", status="5xx")._value.get()
         self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 500)
 
-    @patch("rbac.middleware.resolve")
-    def test_v1_request_does_not_increment_v2_counter(self, mock_resolve):
+    def test_v1_request_does_not_increment_v2_counter(self):
         """Test that V1 requests do not increment V2 metrics."""
         from rbac.middleware import rbac_v2_requests_total
 
-        mock_resolve.return_value = self._make_resolve_result(app_name="v1_api", url_name="role-list")
         self.request.path = "/api/rbac/v1/roles/"
         self.request.method = "GET"
 
@@ -1861,7 +1854,8 @@ class V2MetricsTest(IdentityRequest):
 
         get_response = Mock(return_value=HttpResponse(status=200))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
-        middleware(self.request)
+        response = middleware(self.request)
 
         after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
         self.assertEqual(after - before, 0)
+        self.assertEqual(response.status_code, 200)

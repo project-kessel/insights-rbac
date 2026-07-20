@@ -29,7 +29,7 @@ from django.conf import settings
 from django.core.handlers.wsgi import WSGIRequest
 from django.db import IntegrityError, transaction
 from django.http import Http404, HttpResponse, QueryDict
-from django.urls import resolve, reverse
+from django.urls import Resolver404, resolve, reverse
 from feature_flags import FEATURE_FLAGS
 from management.authorization.token_validator import ITSSOTokenValidator, TokenValidator
 from management.cache import TenantCache
@@ -478,9 +478,16 @@ class IdentityHeaderMiddleware:
 
         behalf = "system" if is_system else "principal"
 
-        resolver_match = getattr(request, "resolver_match", None)
-        view_name = resolver_match.url_name if resolver_match else ""
-        app_name = resolver_match.app_name if resolver_match else ""
+        resolved = getattr(request, "resolver_match", None)
+        if resolved is None:
+            try:
+                resolved = resolve(request.path)
+            except Resolver404:
+                resolved = None
+
+        view_name = resolved.url_name if resolved else "unresolved"
+        app_name = resolved.app_name if resolved else None
+
         req_sys_counter.labels(
             behalf=behalf,
             method=request.method,
