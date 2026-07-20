@@ -9,28 +9,7 @@ from management.disaster_recovery.corrective_writer import (
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
 from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
-from management.relation_replicator.types import (
-    ObjectReference,
-    ObjectType,
-    RelationTuple,
-    SubjectReference,
-)
-
-
-def _make_tuple(resource_type="workspace", resource_id="ws-123"):
-    return RelationTuple(
-        resource=ObjectReference(
-            type=ObjectType(namespace="rbac", name=resource_type),
-            id=resource_id,
-        ),
-        relation="parent",
-        subject=SubjectReference(
-            subject=ObjectReference(
-                type=ObjectType(namespace="rbac", name="workspace"),
-                id="ws-parent",
-            ),
-        ),
-    )
+from tests.management.disaster_recovery.helpers import _make_tuple
 
 
 def _make_event(relations_to_add=None, relations_to_remove=None, offset=0):

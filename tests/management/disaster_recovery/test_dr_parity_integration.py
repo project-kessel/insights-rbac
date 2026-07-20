@@ -18,6 +18,9 @@ from uuid import uuid4
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from tests.identity_request import IdentityRequest
+from tests.management.disaster_recovery.helpers import _make_tuple
+
 from api.models import Tenant
 from management.disaster_recovery.corrective_writer import (
     generate_corrective_actions,
@@ -30,12 +33,6 @@ from management.parity_check.checker import ParityAccessChecker, ParityCheckResu
 from management.principal.model import Principal
 from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
-from management.relation_replicator.types import (
-    ObjectReference,
-    ObjectType,
-    RelationTuple,
-    SubjectReference,
-)
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
@@ -43,28 +40,13 @@ from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 
 
-def _make_tuple(resource_type="workspace", resource_id="ws-123", relation="parent"):
-    return RelationTuple(
-        resource=ObjectReference(
-            type=ObjectType(namespace="rbac", name=resource_type),
-            id=resource_id,
-        ),
-        relation=relation,
-        subject=SubjectReference(
-            subject=ObjectReference(
-                type=ObjectType(namespace="rbac", name="workspace"),
-                id="ws-parent",
-            ),
-        ),
-    )
-
-
-class DRParityHappyPathTest(TestCase):
+class DRParityHappyPathTest(IdentityRequest):
     """After successful DR reconciliation, parity checks should confirm consistency."""
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        # Skip IdentityRequest's tenant creation — we manage our own DR fixtures
+        super(IdentityRequest, cls).setUpClass()
         cls.tenant = Tenant.objects.create(
             tenant_name="dr-parity-happy",
             account_id="parity-account",
@@ -89,15 +71,11 @@ class DRParityHappyPathTest(TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        RoleBindingPrincipal.objects.filter(binding__tenant=cls.tenant).delete()
-        RoleBindingGroup.objects.filter(binding__tenant=cls.tenant).delete()
-        RoleBinding.objects.filter(tenant=cls.tenant).delete()
-        CustomRoleV2.objects.filter(tenant=cls.tenant).delete()
         cls.mapping.delete()
         cls.default_ws.delete()
         cls.root_ws.delete()
         cls.tenant.delete()
-        super().tearDownClass()
+        super(IdentityRequest, cls).tearDownClass()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -150,15 +128,9 @@ class DRParityHappyPathTest(TestCase):
         checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
+        self.assertEqual(parity_result.only_in_rbac, set(), "Unexpected workspaces only in RBAC")
+        self.assertEqual(parity_result.only_in_pdp, set(), "Unexpected workspaces only in PDP")
         self.assertTrue(parity_result.match, f"Parity should match after corrective ADD, got: {parity_result}")
-        self.assertEqual(parity_result.only_in_rbac, set())
-        self.assertEqual(parity_result.only_in_pdp, set())
-
-        RoleBindingPrincipal.objects.filter(binding=binding).delete()
-        binding.delete()
-        role.delete()
-        principal.delete()
-        ws.delete()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -201,8 +173,6 @@ class DRParityHappyPathTest(TestCase):
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertTrue(parity_result.match, "Parity should match after corrective REMOVE")
-
-        principal.delete()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -270,13 +240,6 @@ class DRParityHappyPathTest(TestCase):
 
         self.assertTrue(parity_result.match, "Full multi-resource DR should restore parity")
 
-        RoleBindingPrincipal.objects.filter(binding=binding).delete()
-        binding.delete()
-        v2_role.delete()
-        role.delete()
-        principal.delete()
-        ws.delete()
-
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
     def test_role_binding_corrective_add_restores_access_parity(self, mock_pdp_cls, mock_read):
@@ -325,12 +288,6 @@ class DRParityHappyPathTest(TestCase):
 
         self.assertTrue(parity_result.match, "role_binding corrective ADD should restore access parity")
 
-        RoleBindingPrincipal.objects.filter(binding=binding).delete()
-        binding.delete()
-        v2_role.delete()
-        principal.delete()
-        ws.delete()
-
     @override_settings(DR_SKIP_EVENT_TYPES=[])
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -360,7 +317,7 @@ class DRParityHappyPathTest(TestCase):
 
         self.assertEqual(result["corrective_removes"], 1)
         self.assertEqual(log.first().event_type, ReplicationEventType.DR_CORRECTIVE_REMOVE)
-        self.assertIn(orphaned_org_id, log.first().payload["resource_context"]["org_id"])
+        self.assertEqual(orphaned_org_id, log.first().payload["resource_context"]["org_id"])
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -412,21 +369,13 @@ class DRParityHappyPathTest(TestCase):
 
         self.assertTrue(parity_result.match, "Group membership corrective ADD should restore access parity")
 
-        RoleBindingGroup.objects.filter(binding=binding).delete()
-        binding.delete()
-        v2_role.delete()
-        group.principals.remove(principal)
-        group.delete()
-        principal.delete()
-        ws.delete()
 
-
-class DRParityUnhappyPathTest(TestCase):
+class DRParityUnhappyPathTest(IdentityRequest):
     """When DR corrective events fail, parity checks should detect the remaining divergence."""
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        super(IdentityRequest, cls).setUpClass()
         cls.tenant = Tenant.objects.create(
             tenant_name="dr-parity-unhappy",
             account_id="unhappy-account",
@@ -446,15 +395,11 @@ class DRParityUnhappyPathTest(TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        RoleBindingPrincipal.objects.filter(binding__tenant=cls.tenant).delete()
-        RoleBindingGroup.objects.filter(binding__tenant=cls.tenant).delete()
-        RoleBinding.objects.filter(tenant=cls.tenant).delete()
-        CustomRoleV2.objects.filter(tenant=cls.tenant).delete()
         cls.mapping.delete()
         cls.default_ws.delete()
         cls.root_ws.delete()
         cls.tenant.delete()
-        super().tearDownClass()
+        super(IdentityRequest, cls).tearDownClass()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -510,12 +455,6 @@ class DRParityUnhappyPathTest(TestCase):
         self.assertIn(str(ws.id), parity_result.only_in_rbac)
         self.assertEqual(parity_result.only_in_pdp, set())
 
-        RoleBindingPrincipal.objects.filter(binding=binding).delete()
-        binding.delete()
-        v2_role.delete()
-        principal.delete()
-        ws.delete()
-
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
     def test_failed_corrective_remove_leaves_orphaned_access_detected_by_parity(self, mock_pdp_cls, mock_read):
@@ -562,8 +501,6 @@ class DRParityUnhappyPathTest(TestCase):
         self.assertFalse(parity_result.match, "Parity should detect orphaned workspace when corrective REMOVE failed")
         self.assertIn(orphaned_ws_id, parity_result.only_in_pdp)
         self.assertEqual(parity_result.only_in_rbac, set())
-
-        principal.delete()
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
@@ -639,14 +576,6 @@ class DRParityUnhappyPathTest(TestCase):
         self.assertIn(str(ws_fail.id), parity_result.only_in_rbac)
         self.assertNotIn(str(ws_success.id), parity_result.only_in_rbac)
 
-        RoleBindingPrincipal.objects.filter(binding__in=[binding_success, binding_fail]).delete()
-        binding_success.delete()
-        binding_fail.delete()
-        v2_role.delete()
-        principal.delete()
-        ws_success.delete()
-        ws_fail.delete()
-
     @patch("management.disaster_recovery.service.read_events_in_window")
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
     def test_corrective_add_written_but_pdp_not_yet_converged_detected_by_parity(self, mock_pdp_cls, mock_read):
@@ -698,12 +627,6 @@ class DRParityUnhappyPathTest(TestCase):
         self.assertFalse(parity_result.match, "Parity detects eventual consistency lag")
         self.assertIn(str(ws.id), parity_result.only_in_rbac)
 
-        RoleBindingPrincipal.objects.filter(binding=binding).delete()
-        binding.delete()
-        v2_role.delete()
-        principal.delete()
-        ws.delete()
-
     @patch("management.disaster_recovery.service.read_events_in_window")
     def test_outbox_write_error_is_recorded_in_dr_result(self, mock_read):
         """DR result should accurately report the number of failed writes."""
@@ -738,8 +661,6 @@ class DRParityUnhappyPathTest(TestCase):
         self.assertEqual(result["corrective_adds"], 2)
         self.assertEqual(result["errors"], 2)
 
-        ws.delete()
-
     @patch("management.disaster_recovery.service.read_events_in_window")
     def test_negative_buffer_seconds_raises(self, mock_read):
         """reconcile() should reject invalid buffer_seconds."""
@@ -749,12 +670,13 @@ class DRParityUnhappyPathTest(TestCase):
         mock_read.assert_not_called()
 
 
-class DRWorkspaceParityIntegrationTest(TestCase):
+class DRWorkspaceParityIntegrationTest(IdentityRequest):
     """Integration tests for workspace DR (HBI channel) with corrective event verification."""
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        # Skip IdentityRequest's tenant creation — we manage our own DR fixtures
+        super(IdentityRequest, cls).setUpClass()
         cls.tenant = Tenant.objects.create(
             tenant_name="dr-ws-parity",
             account_id="ws-account",
@@ -777,7 +699,7 @@ class DRWorkspaceParityIntegrationTest(TestCase):
         cls.default_ws.delete()
         cls.root_ws.delete()
         cls.tenant.delete()
-        super().tearDownClass()
+        super(IdentityRequest, cls).tearDownClass()
 
     def test_all_six_truth_table_cases_produce_correct_outbox_events(self):
         """Run all 6 workspace DR truth table cases and verify each outbox event.
@@ -852,15 +774,27 @@ class DRWorkspaceParityIntegrationTest(TestCase):
         self.assertEqual(operations.count("create"), 1)
         self.assertEqual(operations.count("update"), 1)
 
+        delete_ids = {entry.payload["workspace"]["id"] for entry in log if entry.payload["operation"] == "delete"}
+        create_ids = {entry.payload["workspace"]["id"] for entry in log if entry.payload["operation"] == "create"}
+        update_ids = {entry.payload["workspace"]["id"] for entry in log if entry.payload["operation"] == "update"}
+
+        self.assertEqual(
+            delete_ids,
+            {gone_id_1, gone_id_3},
+            "Corrective deletes: create+gone and update+gone both get deleted; delete+gone is skipped",
+        )
+        self.assertEqual(
+            create_ids, {str(ws_exists_2.id)}, "Corrective create should target the deleted-but-existing ws"
+        )
+        self.assertEqual(
+            update_ids, {str(ws_exists_3.id)}, "Corrective update should target the updated-but-existing ws"
+        )
+
         for entry in log:
             self.assertEqual(entry.aggregatetype, "workspace")
             self.assertIn("org_id", entry.payload)
             self.assertIn("workspace", entry.payload)
             self.assertIn("id", entry.payload["workspace"])
-
-        ws_exists_1.delete()
-        ws_exists_2.delete()
-        ws_exists_3.delete()
 
     def test_workspace_corrective_create_uses_db_state_not_kafka_event(self):
         """After DR, corrective CREATE events should reflect current RBAC DB workspace name.
@@ -950,16 +884,14 @@ class DRWorkspaceParityIntegrationTest(TestCase):
             _ws_kafka_event(gone_id_2, "create", ts=2000),
         ]
 
-        call_count = 0
-
         class FailFirstLog:
             def __init__(self):
                 self.entries = []
+                self.call_count = 0
 
             def log(self, outbox):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
+                self.call_count += 1
+                if self.call_count == 1:
                     raise RuntimeError("First write fails")
                 self.entries.append(outbox)
 

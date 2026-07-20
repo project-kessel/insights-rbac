@@ -156,6 +156,11 @@ class WorkspaceCheckerCheckRequestTest(TestCase):
     So CheckRequest must have:
         object.resource_id = child workspace UUID
         subject.resource.resource_id = parent workspace UUID
+
+    Previously the checker had resource/subject swapped (child was set as subject, parent as object).
+    These tests were marked @unittest.expectedFailure while the bug existed; the fix in
+    WorkspaceRelationInventoryChecker.check_workspace_descendants and check_workspace
+    corrects the mapping so these tests now pass.
     """
 
     def setUp(self):
@@ -163,7 +168,6 @@ class WorkspaceCheckerCheckRequestTest(TestCase):
         self.child_id = str(uuid.uuid4())
         self.parent_id = str(uuid.uuid4())
 
-    @unittest.expectedFailure
     @patch(MESSAGE_TO_DICT_PATH, return_value=_allowed_response())
     @patch(CREATE_CHANNEL_PATH)
     def test_check_workspace_descendants_object_is_child_subject_is_parent(
@@ -193,7 +197,6 @@ class WorkspaceCheckerCheckRequestTest(TestCase):
         )
         self.assertEqual(check_request.subject.resource.resource_type, "workspace")
 
-    @unittest.expectedFailure
     @patch(MESSAGE_TO_DICT_PATH, return_value=_allowed_response())
     @patch(CREATE_CHANNEL_PATH)
     def test_check_workspace_single_object_is_child_subject_is_parent(self, mock_create_channel, mock_message_to_dict):
@@ -218,7 +221,6 @@ class WorkspaceCheckerCheckRequestTest(TestCase):
             f"but got {check_request.subject.resource.resource_id}. Resource and subject are swapped.",
         )
 
-    @unittest.expectedFailure
     @patch(MESSAGE_TO_DICT_PATH, return_value=_allowed_response())
     @patch(CREATE_CHANNEL_PATH)
     def test_check_workspace_descendants_multiple_pairs(self, mock_create_channel, mock_message_to_dict):
@@ -651,34 +653,31 @@ class RoleRelationCheckerCheckRequestTest(TestCase):
 
 
 class ParityLogFormatTest(TestCase):
-    """Verify the parity check log output matches the actual CheckRequest direction.
+    """Verify the parity check log output matches the SpiceDB tuple direction.
 
-    The log format uses: rbac/workspace:{parent_id}#parent@rbac/workspace:{workspace_id}
-    This must match the SpiceDB tuple direction: resource#relation@subject.
+    The SpiceDB tuple direction is: resource#relation@subject
+    For workspace parent relations: workspace:<child>#parent@workspace:<parent>
 
-    If the CheckRequest has object=child and subject=parent (correct),
-    then the log should show: rbac/workspace:{child}#parent@rbac/workspace:{parent}
+    The log format in tasks.py must match this direction:
+        rbac/workspace:{workspace_id}#parent@rbac/workspace:{parent_id}
+    where workspace_id is the child and parent_id is the parent.
     """
 
-    def test_log_format_matches_tuple_direction(self):
-        """Log line for a MISSING workspace pair should read child#parent@parent."""
+    def test_log_format_child_as_resource_parent_as_subject(self):
+        """Log line for a MISSING workspace pair must read child#parent@parent."""
         child_id = str(uuid.uuid4())
         parent_id = str(uuid.uuid4())
 
         pair_result = {"workspace_id": child_id, "parent_id": parent_id, "exists": False}
 
         expected_log = f"rbac/workspace:{child_id}#parent@rbac/workspace:{parent_id}"
-        actual_log = f"rbac/workspace:{pair_result['parent_id']}#parent@rbac/workspace:{pair_result['workspace_id']}"
-
-        self.assertEqual(
-            expected_log,
-            f"rbac/workspace:{child_id}#parent@rbac/workspace:{parent_id}",
+        actual_log = (
+            f"rbac/workspace:{pair_result['workspace_id']}" f"#parent@rbac/workspace:{pair_result['parent_id']}"
         )
 
-        self.assertNotEqual(
+        self.assertEqual(
             actual_log,
             expected_log,
-            "Current log format swaps child/parent — the log line puts parent_id as the resource "
-            "and workspace_id as the subject, but the tuple direction is child#parent@parent. "
-            "This means the log output is also inverted relative to the actual SpiceDB tuple.",
+            "Log format should show child workspace as resource and parent workspace as subject, "
+            "matching the SpiceDB tuple direction: workspace:<child>#parent@workspace:<parent>.",
         )
