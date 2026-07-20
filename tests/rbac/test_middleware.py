@@ -1389,16 +1389,25 @@ class RequestContextMiddlewareTest(IdentityRequest):
         import contextvars
         import uuid
 
+        from rbac.request_context import request_id_var
+
         # Ensure the header is not set
         self.request.META.pop("HTTP_X_RH_INSIGHTS_REQUEST_ID", None)
 
         response = Mock(status_code=200)
         response.get = Mock(return_value=None)
 
+        # Capture context var inside middleware's isolated context
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
         ctx = contextvars.copy_context()
 
         def _run():
-            middleware = IdentityHeaderMiddleware(get_response=lambda r: response)
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
             middleware(self.request)
             # req_id should be a valid UUID
             req_id = self.request.req_id
@@ -1406,6 +1415,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
             self.assertNotEqual(req_id, "-")
             # Should be a valid UUID string
             uuid.UUID(req_id)  # raises ValueError if invalid
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], req_id)
 
         ctx.run(_run)
 
@@ -1413,17 +1424,54 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """When X-RH-INSIGHTS-REQUEST-ID header is present, it is used as-is."""
         import contextvars
 
+        from rbac.request_context import request_id_var
+
         self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "my-custom-id-123"
 
         response = Mock(status_code=200)
         response.get = Mock(return_value=None)
 
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
         ctx = contextvars.copy_context()
 
         def _run():
-            middleware = IdentityHeaderMiddleware(get_response=lambda r: response)
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
             middleware(self.request)
             self.assertEqual(self.request.req_id, "my-custom-id-123")
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], "my-custom-id-123")
+
+        ctx.run(_run)
+
+    def test_request_id_crlf_sanitized(self):
+        """CRLF characters in X-RH-INSIGHTS-REQUEST-ID header are stripped to prevent log injection."""
+        import contextvars
+
+        from rbac.request_context import request_id_var
+
+        self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "legit-id\r\nINFO Injected log line"
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            self.assertEqual(self.request.req_id, "legit-idINFO Injected log line")
+            self.assertEqual(captured["request_id"], "legit-idINFO Injected log line")
 
         ctx.run(_run)
 

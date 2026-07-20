@@ -56,14 +56,13 @@ class TestRequestContextFilter(SimpleTestCase):
         # Reset context vars to defaults so copy_context() captures clean
         # state.  Without this, middleware from earlier tests can leak a
         # UUID into request_id_var and cause false failures.
-        self._req_token = request_id_var.set("-")
-        self._org_token = org_id_var.set("-")
-        self._user_token = username_var.set("-")
-
-    def tearDown(self):
-        request_id_var.reset(self._req_token)
-        org_id_var.reset(self._org_token)
-        username_var.reset(self._user_token)
+        # Using addCleanup guarantees reset even if setUp raises midway.
+        req_token = request_id_var.set("-")
+        org_token = org_id_var.set("-")
+        user_token = username_var.set("-")
+        self.addCleanup(request_id_var.reset, req_token)
+        self.addCleanup(org_id_var.reset, org_token)
+        self.addCleanup(username_var.reset, user_token)
 
     def test_defaults_when_no_context_set(self):
         """Filter injects safe defaults when no context vars are set."""

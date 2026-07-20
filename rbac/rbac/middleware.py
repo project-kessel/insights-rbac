@@ -18,6 +18,7 @@
 """Custom RBAC Middleware."""
 
 import binascii
+import contextvars
 import json
 import logging
 import time
@@ -227,12 +228,26 @@ class IdentityHeaderMiddleware:
 
     @catch_integrity_error
     def __call__(self, request):
+        """Dispatch each request in an isolated contextvars context.
+
+        Running _process_request inside a copied context prevents
+        request_id_var, org_id_var and username_var from leaking across
+        requests on the same thread (gunicorn gthread workers).
+        """
+        ctx = contextvars.copy_context()
+        return ctx.run(self._process_request, request)
+
+    def _process_request(self, request):
         """Code to be executed for each request before or after the view is called."""
         # Start timing
         request._request_start = time.monotonic()
 
-        # Get request ID — generate a fallback UUID when the header is absent
-        request.req_id = request.META.get(RH_INSIGHTS_REQUEST_ID) or str(uuid.uuid4())
+        # Get request ID — sanitize to prevent CRLF log injection,
+        # generate a fallback UUID when the header is absent
+        raw_req_id = request.META.get(RH_INSIGHTS_REQUEST_ID)
+        if raw_req_id:
+            raw_req_id = raw_req_id.replace("\r", "").replace("\n", "")
+        request.req_id = raw_req_id or str(uuid.uuid4())
 
         # Set request_id context var early so all log lines include it
         request_id_var.set(request.req_id)
@@ -338,11 +353,13 @@ class IdentityHeaderMiddleware:
             request.user = user
             request.tenant = self.get_tenant(model=None, hostname=None, request=request)
 
-            # Enrich context vars with identity information for log correlation
-            if user.org_id:
-                org_id_var.set(str(user.org_id))
-            if user.username:
-                username_var.set(str(user.username))
+        # Enrich context vars with identity information for log correlation.
+        # Placed after the try/except so all authentication paths (identity
+        # header, PSK, system token) get context var enrichment.
+        if getattr(user, "org_id", None):
+            org_id_var.set(str(user.org_id))
+        if getattr(user, "username", None):
+            username_var.set(str(user.username))
 
         response = self.get_response(request)
 

@@ -352,7 +352,7 @@ if CW_AWS_ACCESS_KEY_ID:
         "formatter": LOGGING_FORMATTER,
         "use_queues": True,
         "create_log_group": CW_CREATE_LOG_GROUP,
-        "filters": ["env_name"],
+        "filters": ["env_name", "request_context"],
     }
     LOGGING["handlers"]["watchtower"] = WATCHTOWER_HANDLER
 

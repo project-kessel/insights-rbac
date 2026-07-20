@@ -50,6 +50,18 @@ class ECSCustomFormatter(StdlibFormatter):
             result["labels"] = result.get("labels", {})
             result["labels"]["env"] = record.env_name
 
+        # Inject request context fields as structured ECS labels so that
+        # downstream log aggregation can query them directly.
+        if hasattr(record, "request_id"):
+            result["labels"] = result.get("labels", {})
+            result["labels"]["request_id"] = record.request_id
+        if hasattr(record, "org_id"):
+            result["labels"] = result.get("labels", {})
+            result["labels"]["org_id"] = record.org_id
+        if hasattr(record, "username"):
+            result.setdefault("user", {})
+            result["user"]["name"] = record.username
+
         # Remove some field not following standard:
         # https://www.elastic.co/guide/en/ecs/1.6/ecs-field-reference.html
         result.pop("message", None)
