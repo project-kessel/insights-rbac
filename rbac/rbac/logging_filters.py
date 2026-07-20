@@ -2,7 +2,7 @@
 
 import logging
 
-from rbac.request_context import org_id_var, request_id_var, user_id_var
+from rbac.request_context import org_id_var, request_id_var, user_id_var, user_type_var
 
 
 class EnvironmentFilter(logging.Filter):
@@ -26,7 +26,9 @@ class RequestContextFilter(logging.Filter):
     * ``request_id`` -- from ``X-RH-INSIGHTS-REQUEST-ID`` header or a
       generated fallback UUID.  Defaults to ``"-"`` outside a request.
     * ``org_id`` -- organisation identifier from the identity header.
-    * ``user_id`` -- user ID from the identity header.
+    * ``user_id`` -- user ID from the identity header (or ``client_id``
+      for service accounts).
+    * ``user_type`` -- ``"user"``, ``"service_account"``, or ``"-"``.
 
     Safe defaults (``"-"``) ensure that log lines emitted outside a request
     context (Celery tasks, management commands, startup) never crash.
@@ -37,4 +39,5 @@ class RequestContextFilter(logging.Filter):
         record.request_id = request_id_var.get()
         record.org_id = org_id_var.get()
         record.user_id = user_id_var.get()
+        record.user_type = user_type_var.get()
         return True

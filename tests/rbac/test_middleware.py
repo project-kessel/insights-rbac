@@ -1479,7 +1479,7 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """org_id_var and user_id_var are populated from the identity header."""
         import contextvars
 
-        from rbac.request_context import org_id_var, user_id_var
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
 
         response = Mock(status_code=200)
         response.get = Mock(return_value=None)
@@ -1489,6 +1489,7 @@ class RequestContextMiddlewareTest(IdentityRequest):
         def get_response(r):
             captured["org_id"] = org_id_var.get()
             captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
             return response
 
         ctx = contextvars.copy_context()
@@ -1499,6 +1500,43 @@ class RequestContextMiddlewareTest(IdentityRequest):
             self.assertEqual(captured["org_id"], self.customer["org_id"])
             # user_id is hardcoded as "1111111" in _build_identity
             self.assertEqual(captured["user_id"], "1111111")
+            self.assertEqual(captured["user_type"], "user")
+
+        ctx.run(_run)
+
+    def test_service_account_context_vars_use_client_id(self):
+        """Service accounts populate user_id_var with client_id and user_type_var with 'service_account'."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
+
+        sa_data = self._create_service_account_data()
+        request_context = self._create_request_context(self.customer, None, service_account_data=sa_data)
+        sa_request = request_context["request"]
+        sa_request.path = "/api/rbac/v1/roles/"
+        sa_request.method = "GET"
+        sa_request.META["QUERY_STRING"] = ""
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(sa_request)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # Service accounts have user_id=None; client_id is used instead
+            self.assertEqual(captured["user_id"], sa_data["client_id"])
+            self.assertEqual(captured["user_type"], "service_account")
 
         ctx.run(_run)
 

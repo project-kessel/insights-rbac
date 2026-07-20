@@ -46,7 +46,7 @@ from api.common import RH_IDENTITY_HEADER, RH_INSIGHTS_REQUEST_ID
 from api.models import Tenant, User
 from api.serializers import extract_header
 from rbac.a2s import is_a2s_path as _is_a2s_path
-from rbac.request_context import org_id_var, request_id_var, user_id_var
+from rbac.request_context import org_id_var, request_id_var, user_id_var, user_type_var
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 req_sys_counter = Counter(
@@ -358,8 +358,17 @@ class IdentityHeaderMiddleware:
         # header, PSK, system token) get context var enrichment.
         if getattr(user, "org_id", None):
             org_id_var.set(str(user.org_id))
-        if getattr(user, "user_id", None):
-            user_id_var.set(str(user.user_id))
+        if getattr(user, "is_service_account", False):
+            user_type_var.set("service_account")
+            # Service accounts have user_id=None; log client_id instead
+            # so every authenticated request has a meaningful identifier.
+            client_id = getattr(user, "client_id", None)
+            if client_id:
+                user_id_var.set(str(client_id))
+        else:
+            if getattr(user, "user_id", None):
+                user_id_var.set(str(user.user_id))
+                user_type_var.set("user")
 
         response = self.get_response(request)
 

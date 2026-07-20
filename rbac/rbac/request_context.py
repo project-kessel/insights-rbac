@@ -18,5 +18,11 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id
 #: Organization identifier extracted from the identity header.
 org_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("org_id", default="-")
 
-#: User ID extracted from the identity header.
+#: User ID extracted from the identity header.  For service accounts
+#: (where ``user_id`` is ``None``) this is set to the ``client_id`` instead,
+#: so that every authenticated request has a meaningful identifier.
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id", default="-")
+
+#: Type of the authenticated caller: ``"user"``, ``"service_account"``,
+#: or the default ``"-"`` outside a request context.
+user_type_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_type", default="-")
