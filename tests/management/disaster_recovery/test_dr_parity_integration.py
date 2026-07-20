@@ -119,13 +119,20 @@ class DRParityHappyPathTest(IdentityRequest):
 
         self.assertEqual(result["corrective_adds"], 1)
         self.assertEqual(log.first().event_type, ReplicationEventType.DR_CORRECTIVE_ADD)
+        corrective_relations = log.first().payload["relations_to_add"]
+        self.assertEqual(len(corrective_relations), 1, "Corrective ADD should contain exactly one relation")
+        self.assertEqual(
+            corrective_relations[0]["resource"]["id"],
+            str(ws.id),
+            f"Corrective ADD relation must target workspace {ws.id}",
+        )
+        self.assertEqual(corrective_relations[0]["resource"]["type"]["name"], "workspace")
 
         mock_pdp = MagicMock()
         mock_pdp.lookup_accessible_workspaces.return_value = {str(ws.id)}
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertEqual(parity_result.only_in_rbac, set(), "Unexpected workspaces only in RBAC")
@@ -169,7 +176,6 @@ class DRParityHappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertTrue(parity_result.match, "Parity should match after corrective REMOVE")
@@ -235,7 +241,6 @@ class DRParityHappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertTrue(parity_result.match, "Full multi-resource DR should restore parity")
@@ -283,7 +288,6 @@ class DRParityHappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertTrue(parity_result.match, "role_binding corrective ADD should restore access parity")
@@ -364,7 +368,6 @@ class DRParityHappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertTrue(parity_result.match, "Group membership corrective ADD should restore access parity")
@@ -448,7 +451,6 @@ class DRParityUnhappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertFalse(parity_result.match, "Parity should detect discrepancy when corrective ADD failed")
@@ -495,7 +497,6 @@ class DRParityUnhappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertFalse(parity_result.match, "Parity should detect orphaned workspace when corrective REMOVE failed")
@@ -569,7 +570,6 @@ class DRParityUnhappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertFalse(parity_result.match, "Parity should fail when one corrective event failed")
@@ -621,7 +621,6 @@ class DRParityUnhappyPathTest(IdentityRequest):
         mock_pdp_cls.return_value = mock_pdp
 
         checker = ParityAccessChecker(tenant_sample_size=1, principal_sample_size=1)
-        checker.inventory_checker = mock_pdp
         parity_result = checker.check_principal_parity(principal, self.tenant)
 
         self.assertFalse(parity_result.match, "Parity detects eventual consistency lag")
