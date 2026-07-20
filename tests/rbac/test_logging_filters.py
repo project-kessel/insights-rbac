@@ -6,7 +6,7 @@ import logging
 from django.test import SimpleTestCase
 
 from rbac.logging_filters import EnvironmentFilter, RequestContextFilter
-from rbac.request_context import org_id_var, request_id_var, username_var
+from rbac.request_context import org_id_var, request_id_var, user_id_var
 
 
 class TestEnvironmentFilter(SimpleTestCase):
@@ -59,10 +59,10 @@ class TestRequestContextFilter(SimpleTestCase):
         # Using addCleanup guarantees reset even if setUp raises midway.
         req_token = request_id_var.set("-")
         org_token = org_id_var.set("-")
-        user_token = username_var.set("-")
+        user_token = user_id_var.set("-")
         self.addCleanup(request_id_var.reset, req_token)
         self.addCleanup(org_id_var.reset, org_token)
-        self.addCleanup(username_var.reset, user_token)
+        self.addCleanup(user_id_var.reset, user_token)
 
     def test_defaults_when_no_context_set(self):
         """Filter injects safe defaults when no context vars are set."""
@@ -73,7 +73,7 @@ class TestRequestContextFilter(SimpleTestCase):
             self.assertTrue(result)
             self.assertEqual(self.record.request_id, "-")
             self.assertEqual(self.record.org_id, "-")
-            self.assertEqual(self.record.username, "-")
+            self.assertEqual(self.record.user_id, "-")
 
         ctx.run(_run)
 
@@ -84,13 +84,13 @@ class TestRequestContextFilter(SimpleTestCase):
         def _run():
             request_id_var.set("abc-123")
             org_id_var.set("org-456")
-            username_var.set("testuser")
+            user_id_var.set("12345")
 
             result = self.filter.filter(self.record)
             self.assertTrue(result)
             self.assertEqual(self.record.request_id, "abc-123")
             self.assertEqual(self.record.org_id, "org-456")
-            self.assertEqual(self.record.username, "testuser")
+            self.assertEqual(self.record.user_id, "12345")
 
         ctx.run(_run)
 
@@ -100,12 +100,12 @@ class TestRequestContextFilter(SimpleTestCase):
 
         def _run():
             request_id_var.set("req-789")
-            # org_id and username left unset
+            # org_id and user_id left unset
 
             self.filter.filter(self.record)
             self.assertEqual(self.record.request_id, "req-789")
             self.assertEqual(self.record.org_id, "-")
-            self.assertEqual(self.record.username, "-")
+            self.assertEqual(self.record.user_id, "-")
 
         ctx.run(_run)
 

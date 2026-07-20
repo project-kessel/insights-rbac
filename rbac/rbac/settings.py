@@ -260,7 +260,7 @@ LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "con
 
 ENV_NAME = os.getenv("ENV_NAME", "stage")
 VERBOSE_FORMATTING = (
-    "%(levelname)s %(asctime)s [%(env_name)s] [req=%(request_id)s org=%(org_id)s user=%(username)s]"
+    "%(levelname)s %(asctime)s [%(env_name)s] [req=%(request_id)s org=%(org_id)s user=%(user_id)s]"
     " %(module)s %(process)d %(thread)d %(message)s"
 )
 
@@ -289,7 +289,7 @@ LOGGING = {
         "verbose": {"format": VERBOSE_FORMATTING},
         "simple": {
             "format": "[%(asctime)s] %(levelname)s [%(env_name)s] [req=%(request_id)s org=%(org_id)s"
-            " user=%(username)s]: %(message)s"
+            " user=%(user_id)s]: %(message)s"
         },
         "ecs_formatter": {"()": "rbac.ECSCustom.ECSCustomFormatter"},
     },

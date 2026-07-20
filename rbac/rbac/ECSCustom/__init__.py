@@ -58,9 +58,9 @@ class ECSCustomFormatter(StdlibFormatter):
         if hasattr(record, "org_id"):
             result["labels"] = result.get("labels", {})
             result["labels"]["org_id"] = record.org_id
-        if hasattr(record, "username"):
+        if hasattr(record, "user_id"):
             result.setdefault("user", {})
-            result["user"]["name"] = record.username
+            result["user"]["id"] = record.user_id
 
         # Remove some field not following standard:
         # https://www.elastic.co/guide/en/ecs/1.6/ecs-field-reference.html

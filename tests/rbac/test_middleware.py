@@ -56,7 +56,7 @@ from migration_tool.in_memory_tuples import (
 from tests.identity_request import IdentityRequest
 from rbac import urls
 from rbac.middleware import HttpResponseUnauthorizedRequest, IdentityHeaderMiddleware, ReadOnlyApiMiddleware
-from rbac.request_context import org_id_var, request_id_var, username_var
+from rbac.request_context import org_id_var, request_id_var, user_id_var
 from management.models import Access, Group, Permission, Principal, Policy, ResourceDefinition, Role
 
 
@@ -1472,6 +1472,33 @@ class RequestContextMiddlewareTest(IdentityRequest):
             middleware(self.request)
             self.assertEqual(self.request.req_id, "legit-idINFO Injected log line")
             self.assertEqual(captured["request_id"], "legit-idINFO Injected log line")
+
+        ctx.run(_run)
+
+    def test_org_id_and_user_id_context_vars_enriched(self):
+        """org_id_var and user_id_var are populated from the identity header."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # user_id is hardcoded as "1111111" in _build_identity
+            self.assertEqual(captured["user_id"], "1111111")
 
         ctx.run(_run)
 

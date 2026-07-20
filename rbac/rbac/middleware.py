@@ -46,7 +46,7 @@ from api.common import RH_IDENTITY_HEADER, RH_INSIGHTS_REQUEST_ID
 from api.models import Tenant, User
 from api.serializers import extract_header
 from rbac.a2s import is_a2s_path as _is_a2s_path
-from rbac.request_context import org_id_var, request_id_var, username_var
+from rbac.request_context import org_id_var, request_id_var, user_id_var
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 req_sys_counter = Counter(
@@ -231,7 +231,7 @@ class IdentityHeaderMiddleware:
         """Dispatch each request in an isolated contextvars context.
 
         Running _process_request inside a copied context prevents
-        request_id_var, org_id_var and username_var from leaking across
+        request_id_var, org_id_var and user_id_var from leaking across
         requests on the same thread (gunicorn gthread workers).
         """
         ctx = contextvars.copy_context()
@@ -358,8 +358,8 @@ class IdentityHeaderMiddleware:
         # header, PSK, system token) get context var enrichment.
         if getattr(user, "org_id", None):
             org_id_var.set(str(user.org_id))
-        if getattr(user, "username", None):
-            username_var.set(str(user.username))
+        if getattr(user, "user_id", None):
+            user_id_var.set(str(user.user_id))
 
         response = self.get_response(request)
 

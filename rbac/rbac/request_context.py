@@ -1,7 +1,7 @@
 """Request context variables for automatic log enrichment.
 
 Uses Python's ``contextvars`` module so that request metadata (request_id,
-org_id, username) is available to every log line within the same request
+org_id, user_id) is available to every log line within the same request
 without requiring explicit parameter passing.
 
 Context variables are thread-safe and async-safe.  Outside a request context
@@ -18,5 +18,5 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id
 #: Organization identifier extracted from the identity header.
 org_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("org_id", default="-")
 
-#: Username extracted from the identity header.
-username_var: contextvars.ContextVar[str] = contextvars.ContextVar("username", default="-")
+#: User ID extracted from the identity header.
+user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id", default="-")
