@@ -502,7 +502,7 @@ class IdentityHeaderMiddleware:
         is_system = False
         username = None
         user_id = None
-        client_id = None
+        client_id = ""
         req_id = getattr(request, "req_id", None)
         if request.META.get("QUERY_STRING"):
             query_string = "?{}".format(request.META.get("QUERY_STRING"))
