@@ -39,7 +39,7 @@ from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import get_tenant_bootstrap_service
 from management.tenant_service.tenant_service import TenantBootstrapService
 from management.utils import APPLICATION_KEY, access_for_principal, build_system_user_from_token, build_user_from_psk
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 from rest_framework import status
 
 from api.common import RH_IDENTITY_HEADER, RH_INSIGHTS_REQUEST_ID
@@ -59,6 +59,22 @@ api_migration_counter = Counter(
     "Tracks v1 vs v2 API requests per client_id and user_agent for migration monitoring.",
     ["api_version", "client_id", "user_agent", "method"],
 )
+
+# V2-specific metrics for alerting on error rate and latency.
+rbac_v2_requests_total = Counter(
+    "rbac_v2_api_requests_total",
+    "Total V2 API requests by HTTP method and status class",
+    ["method", "status"],
+)
+
+rbac_v2_request_duration = Histogram(
+    "rbac_v2_api_request_duration_seconds",
+    "V2 API request duration in seconds",
+    ["method"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+
+_V2_APP_NAMES = frozenset(("v2_api", "v2_management"))
 TENANTS = TenantCache()
 
 # Namespace prefix → API version mapping for migration tracking.
@@ -446,7 +462,9 @@ class IdentityHeaderMiddleware:
                 user_id_var.set(str(user.user_id))
                 user_type_var.set("user")
 
+        request_start = time.monotonic()
         response = self.get_response(request)
+        request_duration = time.monotonic() - request_start
 
         # Code to be executed for each request/response after
         # the view is called.
@@ -483,6 +501,12 @@ class IdentityHeaderMiddleware:
                 user_agent=user_agent,
                 method=request.method,
             ).inc()
+
+        # Record V2-specific metrics for error rate and latency alerting.
+        if app_name in _V2_APP_NAMES:
+            status_class = f"{response.status_code // 100}xx"
+            rbac_v2_requests_total.labels(method=request.method, status=status_class).inc()
+            rbac_v2_request_duration.labels(method=request.method).observe(request_duration)
 
         IdentityHeaderMiddleware.log_request(request, response, is_internal_request, api_version)
         return response
