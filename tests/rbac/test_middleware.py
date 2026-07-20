@@ -54,6 +54,7 @@ from migration_tool.in_memory_tuples import (
     subject,
 )
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 from rbac import urls
 from rbac.middleware import (
     HttpResponseUnauthorizedRequest,
@@ -1791,6 +1792,13 @@ class V2MetricsTest(IdentityRequest):
         self.request.META["QUERY_STRING"] = ""
         # Ensure resolver_match is None so middleware falls through to resolve().
         self.request.resolver_match = None
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+    def tearDown(self):
+        """Clean up V2 configuration and URL caches to prevent test pollution."""
+        super().tearDown()
+        clear_url_caches()
+        reload(urls)
 
     def test_v2_request_increments_counter(self):
         """Test that V2 requests increment rbac_v2_api_requests_total."""
