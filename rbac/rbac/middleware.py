@@ -318,6 +318,11 @@ class IdentityHeaderMiddleware:
 
         if is_no_auth(request):
             return self.get_response(request)
+
+        # Start timing after early returns — captures auth, tenant bootstrap,
+        # permission loading, and view processing for accurate latency alerting.
+        request_start = time.monotonic()
+
         user = User()
         try:
             _, json_rh_auth = extract_header(request, self.header)
@@ -462,7 +467,6 @@ class IdentityHeaderMiddleware:
                 user_id_var.set(str(user.user_id))
                 user_type_var.set("user")
 
-        request_start = time.monotonic()
         response = self.get_response(request)
         request_duration = time.monotonic() - request_start
 

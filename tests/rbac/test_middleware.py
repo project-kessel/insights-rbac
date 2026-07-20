@@ -1859,3 +1859,20 @@ class V2MetricsTest(IdentityRequest):
         after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
         self.assertEqual(after - before, 0)
         self.assertEqual(response.status_code, 200)
+
+    def test_unresolved_path_does_not_increment_v2_counter_or_500(self):
+        """Test that an unresolvable path does not increment V2 metrics and does not crash."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/nonexistent-endpoint/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=404))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
+        self.assertEqual(after - before, 0)
+        self.assertNotEqual(response.status_code, 500)
