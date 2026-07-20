@@ -18,22 +18,22 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="permission",
             name="application",
-            field=models.CharField(db_index=True, max_length=255),
+            field=models.CharField(db_index=True, max_length=64),
         ),
         migrations.AlterField(
             model_name="permission",
             name="permission",
-            field=models.CharField(max_length=512, unique=True),
+            field=models.CharField(max_length=200, unique=True),
         ),
         migrations.AlterField(
             model_name="permission",
             name="resource_type",
-            field=models.CharField(max_length=255),
+            field=models.CharField(max_length=64),
         ),
         migrations.AlterField(
             model_name="permission",
             name="verb",
-            field=models.CharField(max_length=255),
+            field=models.CharField(max_length=64),
         ),
         migrations.AlterField(
             model_name="principal",
