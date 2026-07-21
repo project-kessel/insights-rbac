@@ -19,6 +19,7 @@
 import collections
 from functools import partial
 import json
+import logging
 import os
 from typing import Tuple
 from unittest.mock import Mock, patch
@@ -55,6 +56,7 @@ from migration_tool.in_memory_tuples import (
 from tests.identity_request import IdentityRequest
 from rbac import urls
 from rbac.middleware import HttpResponseUnauthorizedRequest, IdentityHeaderMiddleware, ReadOnlyApiMiddleware
+from rbac.request_context import org_id_var, request_id_var, user_id_var
 from management.models import Access, Group, Permission, Principal, Policy, ResourceDefinition, Role
 
 
@@ -1366,3 +1368,208 @@ class RBACReadOnlyApiMiddlewareV2(RBACReadOnlyApiMiddleware):
             middleware = ReadOnlyApiMiddleware(get_response=Mock(return_value="OK"))
             resp = middleware(self.request)
             self.assertEqual(resp, "OK")
+
+
+class RequestContextMiddlewareTest(IdentityRequest):
+    """Tests for context variable integration in IdentityHeaderMiddleware."""
+
+    def setUp(self):
+        """Set up middleware tests."""
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+        self.request.META["QUERY_STRING"] = ""
+
+    def test_fallback_uuid_generated_when_header_missing(self):
+        """When X-RH-INSIGHTS-REQUEST-ID header is absent, a UUID is generated."""
+        import contextvars
+        import uuid
+
+        from rbac.request_context import request_id_var
+
+        # Ensure the header is not set
+        self.request.META.pop("HTTP_X_RH_INSIGHTS_REQUEST_ID", None)
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        # Capture context var inside middleware's isolated context
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            # req_id should be a valid UUID
+            req_id = self.request.req_id
+            self.assertIsNotNone(req_id)
+            self.assertNotEqual(req_id, "-")
+            # Should be a valid UUID string
+            uuid.UUID(req_id)  # raises ValueError if invalid
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], req_id)
+
+        ctx.run(_run)
+
+    def test_request_id_from_header(self):
+        """When X-RH-INSIGHTS-REQUEST-ID header is present, it is used as-is."""
+        import contextvars
+
+        from rbac.request_context import request_id_var
+
+        self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "my-custom-id-123"
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            self.assertEqual(self.request.req_id, "my-custom-id-123")
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], "my-custom-id-123")
+
+        ctx.run(_run)
+
+    def test_request_id_crlf_sanitized(self):
+        """CRLF characters in X-RH-INSIGHTS-REQUEST-ID header are stripped to prevent log injection."""
+        import contextvars
+
+        from rbac.request_context import request_id_var
+
+        self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "legit-id\r\nINFO Injected log line"
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            self.assertEqual(self.request.req_id, "legit-idINFO Injected log line")
+            self.assertEqual(captured["request_id"], "legit-idINFO Injected log line")
+
+        ctx.run(_run)
+
+    def test_org_id_and_user_id_context_vars_enriched(self):
+        """org_id_var and user_id_var are populated from the identity header."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(self.request)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # user_id is hardcoded as "1111111" in _build_identity
+            self.assertEqual(captured["user_id"], "1111111")
+            self.assertEqual(captured["user_type"], "user")
+
+        ctx.run(_run)
+
+    def test_service_account_context_vars_use_client_id(self):
+        """Service accounts populate user_id_var with client_id and user_type_var with 'service_account'."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
+
+        sa_data = self._create_service_account_data()
+        request_context = self._create_request_context(self.customer, None, service_account_data=sa_data)
+        sa_request = request_context["request"]
+        sa_request.path = "/api/rbac/v1/roles/"
+        sa_request.method = "GET"
+        sa_request.META["QUERY_STRING"] = ""
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            middleware(sa_request)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # Service accounts have user_id=None; client_id is used instead
+            self.assertEqual(captured["user_id"], sa_data["client_id"])
+            self.assertEqual(captured["user_type"], "service_account")
+
+        ctx.run(_run)
+
+    def test_duration_ms_in_log_request(self):
+        """log_request includes duration_ms when _request_start is set."""
+        import time
+
+        response = Mock(status_code=200)
+        self.request._request_start = time.monotonic() - 0.05  # 50ms ago
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+
+        with patch.object(logger := logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            self.assertEqual(mock_info.call_count, 1)
+            log_object = mock_info.call_args[0][0]
+            self.assertIn("duration_ms", log_object)
+            self.assertIsNotNone(log_object["duration_ms"])
+            self.assertGreater(log_object["duration_ms"], 0)
+
+    def test_duration_ms_none_without_request_start(self):
+        """log_request sets duration_ms to None when _request_start is absent."""
+        response = Mock(status_code=200)
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+        # Ensure _request_start is not set
+        if hasattr(self.request, "_request_start"):
+            delattr(self.request, "_request_start")
+
+        with patch.object(logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            log_object = mock_info.call_args[0][0]
+            self.assertIn("duration_ms", log_object)
+            self.assertIsNone(log_object["duration_ms"])

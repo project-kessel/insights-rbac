@@ -260,7 +260,11 @@ def _parse_logging_handlers(raw_value):
 LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "console"))
 
 ENV_NAME = os.getenv("ENV_NAME", "stage")
-VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
+VERBOSE_FORMATTING = (
+    "%(levelname)s %(asctime)s [%(env_name)s]"
+    " [req=%(request_id)s org=%(org_id)s user=%(user_id)s type=%(user_type)s]"
+    " %(module)s %(process)d %(thread)d %(message)s"
+)
 
 if DEBUG and "ecs" in LOGGING_HANDLERS:
     DEBUG_LOG_HANDLERS = [v for v in LOGGING_HANDLERS if v != "ecs"]
@@ -281,22 +285,34 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "env_name": {"()": "rbac.logging_filters.EnvironmentFilter", "env_name": ENV_NAME},
+        "request_context": {"()": "rbac.logging_filters.RequestContextFilter"},
     },
     "formatters": {
         "verbose": {"format": VERBOSE_FORMATTING},
-        "simple": {"format": "[%(asctime)s] %(levelname)s [%(env_name)s]: %(message)s"},
+        "simple": {
+            "format": "[%(asctime)s] %(levelname)s [%(env_name)s]"
+            " [req=%(request_id)s org=%(org_id)s user=%(user_id)s type=%(user_type)s]: %(message)s"
+        },
         "ecs_formatter": {"()": "rbac.ECSCustom.ECSCustomFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER, "filters": ["env_name"]},
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": LOGGING_FORMATTER,
+            "filters": ["env_name", "request_context"],
+        },
         "file": {
             "level": RBAC_LOGGING_LEVEL,
             "class": "logging.FileHandler",
             "filename": LOGGING_FILE,
             "formatter": LOGGING_FORMATTER,
-            "filters": ["env_name"],
+            "filters": ["env_name", "request_context"],
         },
-        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter", "filters": ["env_name"]},
+        "ecs": {
+            "class": "logging.StreamHandler",
+            "formatter": "ecs_formatter",
+            "filters": ["env_name", "request_context"],
+        },
     },
     "loggers": {
         "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
@@ -341,7 +357,7 @@ if CW_AWS_ACCESS_KEY_ID:
         "formatter": "ecs_formatter",
         "use_queues": True,
         "create_log_group": CW_CREATE_LOG_GROUP,
-        "filters": ["env_name"],
+        "filters": ["env_name", "request_context"],
     }
     LOGGING["handlers"]["watchtower"] = WATCHTOWER_HANDLER
 
