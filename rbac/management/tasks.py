@@ -50,7 +50,6 @@ def principal_cleanup():
         },
     )
     try:
-        from management.principal.cleaner import clean_tenants_principals
 
         clean_tenants_principals()
         # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
