@@ -1553,7 +1553,9 @@ class RequestContextMiddlewareTest(IdentityRequest):
             IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
 
             self.assertEqual(mock_info.call_count, 1)
-            log_object = mock_info.call_args[0][0]
+            # First positional arg is the message string
+            self.assertEqual(mock_info.call_args[0][0], "log_request")
+            log_object = mock_info.call_args.kwargs["extra"]
             self.assertIn("duration_ms", log_object)
             self.assertIsNotNone(log_object["duration_ms"])
             self.assertGreater(log_object["duration_ms"], 0)
@@ -1570,6 +1572,32 @@ class RequestContextMiddlewareTest(IdentityRequest):
         with patch.object(logging.getLogger("rbac.middleware"), "info") as mock_info:
             IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
 
-            log_object = mock_info.call_args[0][0]
+            log_object = mock_info.call_args.kwargs["extra"]
             self.assertIn("duration_ms", log_object)
             self.assertIsNone(log_object["duration_ms"])
+
+    def test_log_request_uses_extra_fields(self):
+        """log_request passes fields via extra kwarg for structured logging."""
+        response = Mock(status_code=200)
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+        self.request.method = "GET"
+        self.request.path = "/api/rbac/v1/access/"
+        # Ensure _request_start is not set so duration_ms is None
+        if hasattr(self.request, "_request_start"):
+            delattr(self.request, "_request_start")
+
+        with patch.object(logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            self.assertEqual(mock_info.call_count, 1)
+            self.assertEqual(mock_info.call_args[0][0], "log_request")
+            log_object = mock_info.call_args.kwargs["extra"]
+            # Fields that should be present as individual keys
+            self.assertEqual(log_object["method"], "GET")
+            self.assertEqual(log_object["path"], "/api/rbac/v1/access/")
+            self.assertEqual(log_object["status"], 200)
+            # Fields handled by RequestContextFilter must NOT be in extra
+            self.assertNotIn("request_id", log_object)
+            self.assertNotIn("org_id", log_object)
+            self.assertNotIn("user_id", log_object)
