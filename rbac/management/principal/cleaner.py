@@ -575,6 +575,10 @@ def process_kafka_message(
         )
         capture_exception(dlq_error)
         # DLQ send failed, so don't commit offset (will retry message)
+        # Exception: in dry-run mode, commit the offset to allow processing to continue
+        if dry_run:
+            logger.warning("process_kafka_message: DLQ failure in dry-run mode, committing offset anyway")
+            return MessageProcessingResult(should_continue=True, success=True)
         return MessageProcessingResult(should_continue=True, success=False)
 
 
