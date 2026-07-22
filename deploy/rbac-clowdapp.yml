@@ -691,6 +691,8 @@ objects:
             value: ${IT_SERVICE_PORT}
           - name: IT_SERVICE_PROTOCOL_SCHEME
             value: ${IT_SERVICE_PROTOCOL_SCHEME}
+          - name: IT_SERVICE_REALM
+            value: ${IT_SERVICE_REALM}
           - name: IT_SERVICE_TIMEOUT_SECONDS
             value: ${IT_SERVICE_TIMEOUT_SECONDS}
           - name: IT_TOKEN_JKWS_CACHE_LIFETIME
@@ -1792,6 +1794,9 @@ parameters:
 - name: IT_SERVICE_PROTOCOL_SCHEME
   description: Protocol scheme of the IT service
   value: 'https'
+- name: IT_SERVICE_REALM
+  description: Realm path of the IT service (used to build the OIDC discovery URL and token issuer)
+  value: '/auth/realms/redhat-external'
 - name: IT_SERVICE_TIMEOUT_SECONDS
   description: Number of seconds to wait for a response from IT before timing out and failing the request
   value: '10'
