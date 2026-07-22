@@ -405,6 +405,21 @@ class RelationApiDualWriteSubjectHandler:
                 role.uuid,
                 role.name,
             )
+            # If the role has access permissions but no binding mappings, trigger migration
+            # to create them. This handles roles created before the dual-write migration ran.
+            if not migrated and not bindings_by_id and role.access.exists():
+                logger.info(
+                    "[Dual Write] Migrating unmapped role(%s): '%s' to create binding mappings.",
+                    role.uuid,
+                    role.name,
+                )
+                self._migrate_custom_role(role)
+                return self._update_mappings_for_custom_role(
+                    role=role,
+                    update_mapping=update_mapping,
+                    migrated=True,
+                )
+            return
 
         # Check for the case where a custom role exists, has BindingMappings, but does not yet have RoleBindings
         # (because it has not been re-migrated since the dual-write code started creating RoleBindings).

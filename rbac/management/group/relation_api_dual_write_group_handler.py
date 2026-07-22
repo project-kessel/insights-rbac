@@ -142,11 +142,24 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
         if self._expected_empty_relation_reason:
             logger.info(f"[Dual Write] Skipping empty replication event. {self._expected_empty_relation_reason}")
             return
-        try:
-            # Deduplicate relations_to_add to avoid duplicates when generate_relations
-            # is called multiple times with the same data
-            deduplicated_add = self._deduplicate_subject_relations(self.relations_to_add, handler_name="Group")
 
+        # Deduplicate relations_to_add to avoid duplicates when generate_relations
+        # is called multiple times with the same data
+        deduplicated_add = self._deduplicate_subject_relations(self.relations_to_add, handler_name="Group")
+
+        # Guard: skip empty events so they don't reach the outbox as spurious warnings.
+        # This can happen when all roles in a group operation have no binding mappings.
+        if not deduplicated_add and not self.relations_to_remove:
+            logger.info(
+                "[Dual Write] Skipping empty replication event for group(%s): '%s'. "
+                "Both add and remove relations are empty. event_type='%s'",
+                self.group.uuid,
+                self.group.name,
+                self.event_type,
+            )
+            return
+
+        try:
             self._replicator.replicate(
                 ReplicationEvent(
                     event_type=self.event_type,

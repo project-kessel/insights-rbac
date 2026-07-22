@@ -1235,6 +1235,33 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         with self.assertRaises(RuntimeError):
             self.given_roles_unassigned_from_group(group, [role])
 
+    def test_empty_group_replicate_skipped(self):
+        """Group replication with no relations to add or remove is skipped at handler level."""
+        import logging
+
+        group, _ = self.given_group("empty group", [])
+
+        replicator = InMemoryRelationReplicator(self.tuples)
+        handler = RelationApiDualWriteGroupHandler(
+            group,
+            ReplicationEventType.ASSIGN_ROLE,
+            replicator=replicator,
+        )
+
+        # Don't generate any relations — simulate a no-op role assignment
+        prior_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs("management.group.relation_api_dual_write_group_handler", level="INFO") as logs:
+                handler.replicate()
+
+            self.assertTrue(
+                any("Skipping empty replication event for group" in log for log in logs.output),
+                f"Expected handler-level skip log, got: {logs.output}",
+            )
+        finally:
+            logging.disable(prior_disable)
+
 
 class DualWriteSystemRolesTestCase(DualWriteTestCase):
     """Test dual write logic for system roles."""
@@ -2153,6 +2180,28 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
             )
             self.assertEqual(len(deleted_tuple), 0)
 
+    def test_empty_system_role_replication_skipped(self):
+        """System role with no permissions skips replication at handler level."""
+        import logging
+
+        role = self.fixture.new_system_role(name="empty system role", permissions=[])
+
+        replicator = InMemoryRelationReplicator(self.tuples)
+        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=replicator)
+
+        prior_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs("management.role.relation_api_dual_write_handler", level="WARNING") as logs:
+                handler.replicate_new_system_role()
+
+            self.assertTrue(
+                any("Skipping empty replication event for system role" in log for log in logs.output),
+                f"Expected handler-level skip log, got: {logs.output}",
+            )
+        finally:
+            logging.disable(prior_disable)
+
 
 class DualWriteCustomRolesTestCase(DualWriteTestCase):
     """Test dual write logic when we are working with custom roles."""
@@ -2666,6 +2715,84 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         # There should be no binding in the other tenant's workspace because it should be ignored.
         self.assertFalse(BindingMapping.objects.filter(role=role).exists())
         self.assertFalse(RoleBinding.objects.filter(role__v1_source=role).exists())
+
+    def test_empty_replication_event_skipped_for_custom_role(self):
+        """Empty replication events are caught at handler level, not at outbox."""
+        import logging
+
+        replicator = InMemoryRelationReplicator(self.tuples)
+
+        # Create a custom role with no access permissions — results in empty relations
+        role = Role.objects.create(name="empty role", system=False, tenant=self.tenant)
+
+        dual_write = self.dual_write_handler(role, ReplicationEventType.CREATE_CUSTOM_ROLE, replicator=replicator)
+
+        prior_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs:
+                dual_write.replicate_new_or_updated_role(role)
+
+            # Should log info about skipping, not reach the outbox with a warning
+            self.assertTrue(
+                any("Skipping empty replication event for role" in log for log in logs.output),
+                f"Expected handler-level skip log, got: {logs.output}",
+            )
+        finally:
+            logging.disable(prior_disable)
+
+    def test_empty_delete_replication_event_skipped_for_custom_role(self):
+        """Delete of role with no bindings produces no empty event."""
+        import logging
+
+        replicator = InMemoryRelationReplicator(self.tuples)
+
+        # Create role with no access — no binding mappings will exist
+        role = Role.objects.create(name="empty role for delete", system=False, tenant=self.tenant)
+
+        dual_write = self.dual_write_handler(role, ReplicationEventType.DELETE_CUSTOM_ROLE, replicator=replicator)
+        dual_write.prepare_for_update()
+        role.delete()
+
+        prior_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs:
+                dual_write.replicate_deleted_role()
+
+            self.assertTrue(
+                any("Skipping empty replication event for role" in log for log in logs.output),
+                f"Expected handler-level skip log, got: {logs.output}",
+            )
+        finally:
+            logging.disable(prior_disable)
+
+    def test_group_assign_role_with_no_binding_mappings_triggers_migration(self):
+        """Assigning a group to a custom role with no binding mappings triggers migration."""
+        # Create a custom role with permissions but WITHOUT running dual-write migration
+        # to simulate a role created before the dual-write system existed.
+        # Using fixture.new_custom_role directly (not given_v1_role) avoids creating
+        # V2 roles/binding mappings/tuples that would need to be cleaned up.
+        role = self.fixture.new_custom_role(
+            name="unmigrated role",
+            tenant=self.tenant,
+            resource_access=self.fixture.workspace_access(["inventory:hosts:read"]),
+        )
+
+        # Verify no binding mappings exist (role was never migrated)
+        self.assertFalse(BindingMapping.objects.filter(role=role).exists())
+        self.assertTrue(role.access.exists(), "Role should have access permissions")
+
+        group, _ = self.given_group("test group", ["u1"])
+
+        # Assign role to group — should trigger auto-migration
+        self.given_roles_assigned_to_group(group, roles=[role])
+
+        # After assignment, binding mappings should exist (created by migration)
+        self.assertTrue(
+            BindingMapping.objects.filter(role=role).exists(),
+            "Binding mappings should be created by auto-migration during group assignment",
+        )
 
 
 @override_settings(ROOT_SCOPE_PERMISSIONS="advisor:*:*", TENANT_SCOPE_PERMISSIONS="subscriptions:*:*")
