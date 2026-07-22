@@ -1252,13 +1252,17 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         prior_disable = logging.root.manager.disable
         logging.disable(logging.NOTSET)
         try:
-            with self.assertLogs("management.group.relation_api_dual_write_group_handler", level="INFO") as logs:
+            with (
+                self.assertLogs("management.group.relation_api_dual_write_group_handler", level="INFO") as logs,
+                patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
+            ):
                 handler.replicate()
 
             self.assertTrue(
                 any("Skipping empty replication event for group" in log for log in logs.output),
                 f"Expected handler-level skip log, got: {logs.output}",
             )
+            spy.assert_not_called()
         finally:
             logging.disable(prior_disable)
 
@@ -2192,13 +2196,17 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         prior_disable = logging.root.manager.disable
         logging.disable(logging.NOTSET)
         try:
-            with self.assertLogs("management.role.relation_api_dual_write_handler", level="WARNING") as logs:
+            with (
+                self.assertLogs("management.role.relation_api_dual_write_handler", level="WARNING") as logs,
+                patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
+            ):
                 handler.replicate_new_system_role()
 
             self.assertTrue(
                 any("Skipping empty replication event for system role" in log for log in logs.output),
                 f"Expected handler-level skip log, got: {logs.output}",
             )
+            spy.assert_not_called()
         finally:
             logging.disable(prior_disable)
 
@@ -2730,7 +2738,10 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         prior_disable = logging.root.manager.disable
         logging.disable(logging.NOTSET)
         try:
-            with self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs:
+            with (
+                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
+            ):
                 dual_write.replicate_new_or_updated_role(role)
 
             # Should log info about skipping, not reach the outbox with a warning
@@ -2738,6 +2749,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
                 any("Skipping empty replication event for role" in log for log in logs.output),
                 f"Expected handler-level skip log, got: {logs.output}",
             )
+            spy.assert_not_called()
         finally:
             logging.disable(prior_disable)
 
@@ -2757,13 +2769,17 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         prior_disable = logging.root.manager.disable
         logging.disable(logging.NOTSET)
         try:
-            with self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs:
+            with (
+                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
+            ):
                 dual_write.replicate_deleted_role()
 
             self.assertTrue(
                 any("Skipping empty replication event for role" in log for log in logs.output),
                 f"Expected handler-level skip log, got: {logs.output}",
             )
+            spy.assert_not_called()
         finally:
             logging.disable(prior_disable)
 
