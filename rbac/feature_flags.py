@@ -204,7 +204,8 @@ class FeatureFlags:
 
         This method supports 3 modes controlled by the Unleash flag value:
         - 'umb_only' (flag disabled or unknown variant): Only UMB consumer runs and writes to DB
-        - 'kafka_shadow' (flag enabled with kafka_shadow variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
+        - 'kafka_shadow' (flag enabled with kafka_shadow variant): Both UMB and Kafka run, only UMB writes
+          (Kafka dry-run)
         - 'kafka_active' (flag enabled with kafka_active variant): Only Kafka consumer runs and writes to DB
 
         Returns:

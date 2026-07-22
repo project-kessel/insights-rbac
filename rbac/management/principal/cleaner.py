@@ -431,15 +431,11 @@ def process_kafka_message(
 
             if dry_run:
                 # DRY RUN MODE: Validate message structure and log what would happen
-                logger.debug(
-                    "DRY RUN: Would process user"
-                )
+                logger.debug("DRY RUN: Would process user")
 
                 # Validate message structure is correct but DON'T call update_user (no DB writes)
                 if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
-                    logger.debug(
-                        "DRY RUN: Would call bootstrap_service.update_user()"
-                    )
+                    logger.debug("DRY RUN: Would call bootstrap_service.update_user()")
 
                 kafka_messages_success_total.inc()
                 kafka_dry_run_messages_total.inc()
