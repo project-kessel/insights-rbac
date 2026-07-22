@@ -440,10 +440,7 @@ class IdentityHeaderMiddleware:
         query_string = ""
         is_admin = False
         is_system = False
-        org_id = None
         username = None
-        user_id = None
-        req_id = getattr(request, "req_id", None)
         if request.META.get("QUERY_STRING"):
             query_string = "?{}".format(request.META.get("QUERY_STRING"))
 
@@ -453,14 +450,11 @@ class IdentityHeaderMiddleware:
             if username:
                 # rbac.api.models.User has these fields
                 is_admin = request.user.admin
-                org_id = request.user.org_id
                 is_system = request.user.system
-                user_id = request.user.user_id
                 is_internal = getattr(request.user, "internal", False)
             else:
                 # django.contrib.auth.models.AnonymousUser does not
                 is_admin = is_system = False
-                org_id = None
 
         # Todo: add some info back to logs
         """
@@ -495,21 +489,21 @@ class IdentityHeaderMiddleware:
         if request_start is not None:
             duration_ms = round((time.monotonic() - request_start) * 1000, 2)
 
+        # Fields already emitted by RequestContextFilter → ECS labels
+        # (request_id, org_id, user_id) are intentionally excluded to
+        # avoid duplicate values across different JSON paths.
         log_object = {
             "method": request.method,
             "path": request.path + query_string,
             "status": response.status_code,
-            "request_id": req_id,
-            "org_id": org_id,
             "username": username,
-            "user_id": user_id,
             "is_admin": is_admin,
             "is_system": is_system,
             "is_internal": is_internal,
             "is_internal_request": is_internal_request,
             "duration_ms": duration_ms,
         }
-        logger.info(log_object)
+        logger.info("log_request", extra=log_object)
 
     def should_load_user_permissions(self, request: WSGIRequest, user: User) -> bool:
         """Decide whether RBAC should load the access permissions for the user based on the given request."""
