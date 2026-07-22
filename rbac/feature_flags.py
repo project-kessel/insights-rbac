@@ -203,9 +203,9 @@ class FeatureFlags:
         Get the principal cleanup mode using the feature flag.
 
         This method supports 3 modes controlled by the Unleash flag value:
-        - 'umb_only' (flag disabled): Only UMB consumer runs and writes to DB
-        - 'kafka_shadow' (flag enabled with variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
-        - 'kafka_active' (flag enabled, default): Only Kafka consumer runs and writes to DB
+        - 'umb_only' (flag disabled or unknown variant): Only UMB consumer runs and writes to DB
+        - 'kafka_shadow' (flag enabled with kafka_shadow variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
+        - 'kafka_active' (flag enabled with kafka_active variant): Only Kafka consumer runs and writes to DB
 
         Returns:
             str: One of 'umb_only', 'kafka_shadow', or 'kafka_active'

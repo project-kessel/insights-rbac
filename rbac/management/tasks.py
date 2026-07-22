@@ -99,9 +99,9 @@ def principal_cleanup_via_message_bus():
     between message bus implementations via Unleash flag without requiring worker restart.
 
     Supported modes (controlled by rbac.principal-cleanup.use-kafka.enabled flag):
-    - 'umb_only' (flag disabled): Only UMB consumer runs and writes to DB
-    - 'kafka_shadow' (flag enabled with variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
-    - 'kafka_active' (flag enabled, default): Only Kafka consumer runs and writes to DB
+    - 'umb_only' (flag disabled or unknown variant): Only UMB consumer runs and writes to DB
+    - 'kafka_shadow' (flag enabled with kafka_shadow variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
+    - 'kafka_active' (flag enabled with kafka_active variant): Only Kafka consumer runs and writes to DB
     """
     from feature_flags import FEATURE_FLAGS
 
