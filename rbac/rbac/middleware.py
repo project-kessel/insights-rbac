@@ -54,7 +54,49 @@ req_sys_counter = Counter(
     "Tracks a count of requests to RBAC tracking those made on behalf of the system or a principal.",
     ["behalf", "method", "view", "status"],
 )
+api_migration_counter = Counter(
+    "rbac_api_migration_requests_total",
+    "Tracks v1 vs v2 API requests per client_id and user_agent for migration monitoring.",
+    ["api_version", "client_id", "user_agent", "method"],
+)
 TENANTS = TenantCache()
+
+# Namespace prefix → API version mapping for migration tracking.
+_NAMESPACE_TO_VERSION = {
+    "v1_": "v1",
+    "v2_": "v2",
+}
+
+
+def _get_api_version(app_name):
+    """Map a Django URL resolver app_name to an API version string.
+
+    Returns "v1", "v2", or None for non-versioned endpoints (internal, mcp, metrics).
+    """
+    if not app_name:
+        return None
+    for prefix, version in _NAMESPACE_TO_VERSION.items():
+        if app_name.startswith(prefix):
+            return version
+    return None
+
+
+def _normalize_user_agent(raw):
+    """Extract a short product token from a raw User-Agent string.
+
+    Examples:
+        "python-requests/2.28.0" → "python-requests"
+        "insights-chrome/1.0.0 (Linux; x86_64)" → "insights-chrome"
+        "Mozilla/5.0 (X11; Linux...)" → "mozilla"
+        None / "" → ""
+
+    Keeps cardinality manageable for Prometheus labels.
+    """
+    if not raw:
+        return ""
+    # Take the first token (before '/' or ' '), lowercase, max 64 chars.
+    token = raw.split("/", 1)[0].split(" ", 1)[0].strip().lower()
+    return token[:64]
 
 
 def catch_integrity_error(func):
@@ -418,32 +460,48 @@ class IdentityHeaderMiddleware:
 
         behalf = "system" if is_system else "principal"
 
+        resolver_match = getattr(request, "resolver_match", None)
+        view_name = resolver_match.url_name if resolver_match else ""
+        app_name = resolver_match.app_name if resolver_match else ""
         req_sys_counter.labels(
             behalf=behalf,
             method=request.method,
-            view=resolve(request.path).url_name,
-            status=response.get("status_code"),
+            view=view_name,
+            status=response.status_code,
         ).inc()
 
-        IdentityHeaderMiddleware.log_request(request, response, is_internal_request)
+        # Track v1/v2 migration metrics per client_id and user_agent.
+        api_version = _get_api_version(app_name)
+        if api_version:
+            client_id = ""
+            if hasattr(request, "user") and request.user and getattr(request.user, "is_service_account", False):
+                client_id = getattr(request.user, "client_id", "") or ""
+            user_agent = _normalize_user_agent(request.headers.get("user-agent"))
+            api_migration_counter.labels(
+                api_version=api_version,
+                client_id=client_id,
+                user_agent=user_agent,
+                method=request.method,
+            ).inc()
+
+        IdentityHeaderMiddleware.log_request(request, response, is_internal_request, api_version)
         return response
 
     @staticmethod
-    def log_request(request, response, is_internal_request=False):
+    def log_request(request, response, is_internal_request=False, api_version=None):
         """Log requests for identity middleware.
 
         Args:
             request (object): The request object
             response (object): The response object
             is_internal_request (bool): Boolean for if request is internal
+            api_version (str|None): "v1", "v2", or None for non-versioned endpoints
         """
         query_string = ""
         is_admin = False
         is_system = False
-        org_id = None
         username = None
-        user_id = None
-        req_id = getattr(request, "req_id", None)
+        client_id = ""
         if request.META.get("QUERY_STRING"):
             query_string = "?{}".format(request.META.get("QUERY_STRING"))
 
@@ -453,14 +511,13 @@ class IdentityHeaderMiddleware:
             if username:
                 # rbac.api.models.User has these fields
                 is_admin = request.user.admin
-                org_id = request.user.org_id
                 is_system = request.user.system
-                user_id = request.user.user_id
                 is_internal = getattr(request.user, "internal", False)
+                if getattr(request.user, "is_service_account", False):
+                    client_id = getattr(request.user, "client_id", "")
             else:
                 # django.contrib.auth.models.AnonymousUser does not
                 is_admin = is_system = False
-                org_id = None
 
         # Todo: add some info back to logs
         """
@@ -495,21 +552,24 @@ class IdentityHeaderMiddleware:
         if request_start is not None:
             duration_ms = round((time.monotonic() - request_start) * 1000, 2)
 
+        # Fields already emitted by RequestContextFilter → ECS labels
+        # (request_id, org_id, user_id) are intentionally excluded to
+        # avoid duplicate values across different JSON paths.
         log_object = {
             "method": request.method,
             "path": request.path + query_string,
             "status": response.status_code,
-            "request_id": req_id,
-            "org_id": org_id,
             "username": username,
-            "user_id": user_id,
             "is_admin": is_admin,
             "is_system": is_system,
             "is_internal": is_internal,
             "is_internal_request": is_internal_request,
             "duration_ms": duration_ms,
+            "api_version": api_version,
+            "client_id": client_id,
+            "user_agent": _normalize_user_agent(request.headers.get("user-agent")),
         }
-        logger.info(log_object)
+        logger.info("log_request", extra=log_object)
 
     def should_load_user_permissions(self, request: WSGIRequest, user: User) -> bool:
         """Decide whether RBAC should load the access permissions for the user based on the given request."""
