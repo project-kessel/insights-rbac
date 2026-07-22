@@ -377,7 +377,7 @@ objects:
               - /opt/rbac/deploy/init-container-setup.sh
         livenessProbe:
           httpGet:
-            path: /api/rbac/v1/status/
+            path: /
             port: 8000
             scheme: HTTP
           initialDelaySeconds: 60
