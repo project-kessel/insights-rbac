@@ -398,6 +398,25 @@ class RelationApiDualWriteSubjectHandler:
         }
 
         if not mappings:
+            # Check if the role's permissions are entirely in migration-excluded apps
+            # (e.g. cost-management). These roles were intentionally skipped during bulk
+            # migration, so missing binding mappings is expected — not a bug.
+            if role.access.exists():
+                from management.role.v2_role_scope import v2_role_excluded_applications
+
+                excluded_apps = v2_role_excluded_applications()
+                if excluded_apps:
+                    role_apps = set(role.access.values_list("permission__application", flat=True).distinct())
+                    if role_apps and role_apps <= excluded_apps:
+                        logger.info(
+                            "[Dual Write] Skipping unmigrated role(%s): '%s' — all permissions "
+                            "are in migration-excluded apps (%s). No binding mappings expected.",
+                            role.uuid,
+                            role.name,
+                            ", ".join(sorted(role_apps)),
+                        )
+                        return
+
             logger.warning(
                 "[Dual Write] Binding mappings not found for role(%s): '%s'. "
                 "Assuming no current relations exist. "
@@ -405,20 +424,6 @@ class RelationApiDualWriteSubjectHandler:
                 role.uuid,
                 role.name,
             )
-            # If the role has access permissions but no binding mappings, trigger migration
-            # to create them. This handles roles created before the dual-write migration ran.
-            if not migrated and not bindings_by_id and role.access.exists():
-                logger.info(
-                    "[Dual Write] Migrating unmapped role(%s): '%s' to create binding mappings.",
-                    role.uuid,
-                    role.name,
-                )
-                self._migrate_custom_role(role)
-                return self._update_mappings_for_custom_role(
-                    role=role,
-                    update_mapping=update_mapping,
-                    migrated=True,
-                )
             return
 
         # Check for the case where a custom role exists, has BindingMappings, but does not yet have RoleBindings

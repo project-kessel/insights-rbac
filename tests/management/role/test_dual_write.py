@@ -2767,31 +2767,47 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         finally:
             logging.disable(prior_disable)
 
-    def test_group_assign_role_with_no_binding_mappings_triggers_migration(self):
-        """Assigning a group to a custom role with no binding mappings triggers migration."""
-        # Create a custom role with permissions but WITHOUT running dual-write migration
-        # to simulate a role created before the dual-write system existed.
-        # Using fixture.new_custom_role directly (not given_v1_role) avoids creating
-        # V2 roles/binding mappings/tuples that would need to be cleaned up.
+    @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["cost-management"])
+    def test_excluded_app_role_skipped_without_warning(self):
+        """Roles with only excluded-app permissions are skipped gracefully, not warned about."""
+        import logging
+
+        # Create a custom role with only cost-management permissions (no dual-write migration).
+        # cost-management:reports:read is seeded by default, so we can reference it directly.
         role = self.fixture.new_custom_role(
-            name="unmigrated role",
+            name="cost mgmt test role",
             tenant=self.tenant,
-            resource_access=self.fixture.workspace_access(["inventory:hosts:read"]),
+            resource_access=self.fixture.workspace_access(["cost-management:reports:read"]),
         )
 
-        # Verify no binding mappings exist (role was never migrated)
+        # Verify no binding mappings exist (role was never migrated — excluded app)
         self.assertFalse(BindingMapping.objects.filter(role=role).exists())
         self.assertTrue(role.access.exists(), "Role should have access permissions")
 
         group, _ = self.given_group("test group", ["u1"])
 
-        # Assign role to group — should trigger auto-migration
-        self.given_roles_assigned_to_group(group, roles=[role])
+        prior_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs("management.group.relation_api_dual_write_subject_handler", level="INFO") as logs:
+                self.given_roles_assigned_to_group(group, roles=[role])
 
-        # After assignment, binding mappings should exist (created by migration)
-        self.assertTrue(
+            # Should log info-level skip, NOT the warning about inconsistent relations
+            self.assertTrue(
+                any("migration-excluded apps" in log for log in logs.output),
+                f"Expected excluded-app skip log, got: {logs.output}",
+            )
+            self.assertFalse(
+                any("relations are inconsistent" in log for log in logs.output),
+                "Should NOT warn about inconsistency for excluded-app roles",
+            )
+        finally:
+            logging.disable(prior_disable)
+
+        # Binding mappings should still NOT exist (role was not migrated)
+        self.assertFalse(
             BindingMapping.objects.filter(role=role).exists(),
-            "Binding mappings should be created by auto-migration during group assignment",
+            "Excluded-app roles should not be auto-migrated",
         )
 
 
