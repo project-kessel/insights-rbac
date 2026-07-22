@@ -4,13 +4,14 @@ on:
   check_suite:
     types:
       - completed
-    branches:
-      - master
 
 jobs:
   check-image:
     runs-on: ubuntu-latest
-    if: github.event.check_suite.conclusion == 'success' && github.event.check_suite.app.slug == 'red-hat-konflux'
+    if: >-
+      github.event.check_suite.head_branch == 'master' &&
+      github.event.check_suite.conclusion == 'success' &&
+      github.event.check_suite.app.slug == 'red-hat-konflux'
     steps:
       - name: Wait for Quay image
         uses: petracihalova/check-quay-image@v1
