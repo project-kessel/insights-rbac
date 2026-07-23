@@ -56,11 +56,28 @@ app.conf.beat_schedule = {
     },
 }
 
-if settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB:
+# Determine which principal cleanup method to use
+# If both UMB and Kafka are enabled, schedule a dispatcher task that checks Unleash flag at runtime
+# Otherwise, schedule the appropriate cleanup method directly
+if settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB and settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA:
+    # Both are enabled - schedule dispatcher task that will check Unleash flag at runtime
+    app.conf.beat_schedule["principal-cleanup-every-minute"] = {
+        "task": "management.tasks.principal_cleanup_via_message_bus",
+        "schedule": 60,  # Every 60 seconds
+        "args": [],
+    }
+elif settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB:
     if settings.UMB_JOB_ENABLED:  # TODO: This is temp flag, remove it after populating user_id
         app.conf.beat_schedule["principal-cleanup-every-minute"] = {
             "task": "management.tasks.principal_cleanup_via_umb",
             "schedule": 60,  # Every 60 second
+            "args": [],
+        }
+elif settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA:
+    if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
+        app.conf.beat_schedule["principal-cleanup-every-minute"] = {
+            "task": "management.tasks.principal_cleanup_via_kafka",
+            "schedule": 60,  # Every 60 seconds
             "args": [],
         }
 else:

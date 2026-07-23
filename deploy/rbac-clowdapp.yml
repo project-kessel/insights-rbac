@@ -257,6 +257,12 @@ objects:
             value: ${EPH_ENV}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
+          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
+            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
+          - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_TOPIC}
+          - name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
           - name: V2_BOOTSTRAP_TENANT
@@ -304,6 +310,10 @@ objects:
             value: ${PARITY_CHECK_ORG_IDS}
           - name: PARITY_CHECK_SCHEDULE
             value: ${PARITY_CHECK_SCHEDULE}
+          - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
+            value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA}
+          - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
+            value: ${KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED}
           - name: READ_ONLY_API_MODE
             value: ${READ_ONLY_API_MODE}
           - name: PARITY_CHECK_ENABLED
@@ -573,6 +583,8 @@ objects:
             value: ${EPH_ENV}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
+          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
+            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
           - name: V2_BOOTSTRAP_TENANT
@@ -795,6 +807,10 @@ objects:
             value: ${RBAC_KAFKA_CONSUMER_GROUP_ID}
           - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
             value: ${RBAC_KAFKA_CUSTOM_CONSUMER_BROKER}
+          - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_TOPIC}
+          - name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
           - name: EPH_ENV
@@ -1039,6 +1055,8 @@ objects:
               value: ${SA_NAME}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
+            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
+              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
             - name: V2_BOOTSTRAP_TENANT
@@ -1260,6 +1278,8 @@ objects:
               value: ${SA_NAME}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
+            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
+              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
             - name: V2_BOOTSTRAP_TENANT
@@ -1812,12 +1832,18 @@ parameters:
   value: 'redhat'
 - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
   description: Allow cleanup job to delete principals via messages from UMB
+- name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
+  description: Allow cleanup job to delete principals via messages from Kafka
   value: 'False'
 - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
   description: Allow cleanup job to update principals via messages from UMB
+- name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
+  description: Allow cleanup job to update principals via messages from Kafka
   value: 'False'
 - name: UMB_JOB_ENABLED
   description: Temp env to enable the UMB job
+- name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
+  description: Enable the Kafka-based principal cleanup job
   value: 'True'
 - name: UMB_HOST
   description: Host of the UMB service
@@ -1968,6 +1994,12 @@ parameters:
   value: '1'
 - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
   description: Custom Kafka broker URL for the RBAC Kafka consumer (if empty, uses default Clowder/localhost configuration)
+  value: ''
+- name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
+  description: Kafka topic name for principal cleanup events (required when PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is true)
+  value: ''
+- name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+  description: Kafka Dead Letter Queue topic for failed principal cleanup messages (optional, prevents infinite retry loops)
   value: ''
 - name: ROOT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to root workspace scope (supports wildcards like rbac:*:read)
