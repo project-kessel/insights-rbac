@@ -40,7 +40,10 @@ from management.models import (
     Workspace,
     BindingMapping,
 )
-from management.role.v2_model import CustomRoleV2, RoleBinding
+from management.relation_replicator.noop_replicator import NoopReplicator
+from management.role.v2_model import CustomRoleV2
+from management.role_binding.model import RoleBinding
+from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     all_of,
     InMemoryRelationReplicator,
@@ -53,7 +56,8 @@ from migration_tool.in_memory_tuples import (
 
 from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
-from tests.v2_util import assert_v2_custom_roles_consistent
+from tests.util import assert_v1_v2_tuples_fully_consistent, assert_v1_v2_locally_consistent
+from tests.v2_util import bootstrap_tenant_for_v2_test
 from unittest.mock import ANY, patch, call, Mock
 
 URL = reverse("v1_management:role-list")
@@ -87,9 +91,10 @@ def replication_event_for_v1_role(v1_role_uuid, bound_workspace_id, org_id=None,
 
 def relation_api_tuples_for_v1_role(v1_role_uuid, bound_workspace_id):
     """Create a relation API tuple for a v1 role."""
-    role_id = Role.objects.get(uuid=v1_role_uuid).id
-    mappings = BindingMapping.objects.filter(role=role_id).all()
+    v1_role = Role.objects.get(uuid=v1_role_uuid)
+    mappings = BindingMapping.objects.filter(role=v1_role.id).all()
     relations = []
+    seen_v2_role_ids = set()
     for role_binding in [m.get_role_binding() for m in mappings]:
         relation_tuple = relation_api_tuple("role_binding", role_binding.id, "role", "role", role_binding.role.id)
         relations.append(relation_tuple)
@@ -109,6 +114,14 @@ def relation_api_tuples_for_v1_role(v1_role_uuid, bound_workspace_id):
         else:
             relation_tuple = relation_api_tuple("keya/id", "valueA", "binding", "role_binding", role_binding.id)
             relations.append(relation_tuple)
+
+        if role_binding.role.id not in seen_v2_role_ids:
+            seen_v2_role_ids.add(role_binding.role.id)
+            tenant_resource_id = v1_role.tenant.tenant_resource_id()
+            if tenant_resource_id:
+                relations.append(
+                    relation_api_tuple("role", role_binding.role.id, "owner", "tenant", tenant_resource_id)
+                )
     return relations
 
 
@@ -154,6 +167,7 @@ class RoleViewsetTests(IdentityRequest):
     def setUp(self):
         """Set up the role viewset tests."""
         super().setUp()
+        bootstrap_tenant_for_v2_test(self.tenant)
         sys_role_config = {
             "name": "system_role",
             "display_name": "system_display",
@@ -260,18 +274,15 @@ class RoleViewsetTests(IdentityRequest):
 
         self.access3 = Access.objects.create(permission=self.permission2, role=self.sysRole, tenant=self.tenant)
         Permission.objects.create(permission="cost-management:*:*", tenant=self.tenant)
-        self.root_workspace = Workspace.objects.create(
-            name="root",
-            description="Root workspace",
+        self.root_workspace, _ = Workspace.objects.get_or_create(
             tenant=self.tenant,
-            type="root",
+            type=Workspace.Types.ROOT,
+            defaults={"name": "root", "description": "Root workspace"},
         )
-        self.default_workspace = Workspace.objects.create(
-            name="default",
-            description="Default workspace",
+        self.default_workspace, _ = Workspace.objects.get_or_create(
             tenant=self.tenant,
-            parent=self.root_workspace,
-            type="default",
+            type=Workspace.Types.DEFAULT,
+            defaults={"name": "default", "description": "Default workspace", "parent": self.root_workspace},
         )
         self.child_workspace = Workspace.objects.create(
             name="child",
@@ -284,7 +295,7 @@ class RoleViewsetTests(IdentityRequest):
     def tearDown(self):
         """Tear down role viewset tests."""
         with self.subTest(msg="V2 consistency"):
-            self._assert_v2_consistent()
+            assert_v1_v2_locally_consistent(test=self)
 
         Group.objects.all().delete()
         Principal.objects.all().delete()
@@ -307,9 +318,6 @@ class RoleViewsetTests(IdentityRequest):
 
         PRINCIPAL_CACHE.delete_all_principals_for_tenant("100001")
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
-
-    def _assert_v2_consistent(self, tuples: Optional[InMemoryTuples] = None):
-        assert_v2_custom_roles_consistent(test=self, tuples=tuples)
 
     def create_role(self, role_name, role_display="", in_access_data=None):
         """Create a role."""
@@ -365,6 +373,16 @@ class RoleViewsetTests(IdentityRequest):
         test_data = {"principals": [{"username": username}]}
         response = client.post(url, test_data, format="json", **self.headers)
         return response
+
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_edit_api_enabled", return_value=True)
+    def test_create_role_blocked_when_workspaces_enabled(self, mock_is_v2_edit_enabled):
+        """Test that V1 role create returns 403 when workspaces feature flag is enabled for the org."""
+        role_name = "BlockedV1Role"
+        access_data = [{"permission": "app:*:read", "resourceDefinitions": []}]
+        response = self.create_role(role_name, in_access_data=access_data)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("workspaces", str(response.data).lower())
+        mock_is_v2_edit_enabled.assert_called_once_with(self.customer_data["org_id"])
 
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_create_role_success(self, send_kafka_message):
@@ -747,6 +765,30 @@ class RoleViewsetTests(IdentityRequest):
         client = APIClient()
         response = client.get(url, **self.headers)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(V1_ROLE_PERMISSION_BLOCK_LIST=["test_app:resource:blocked_action"])
+    def test_read_role_access_filters_blocked_permissions(self):
+        """Test that blocked permissions are filtered from role access endpoint."""
+        blocked_permission = Permission.objects.create(
+            permission="test_app:resource:blocked_action", tenant=self.tenant
+        )
+        allowed_permission = Permission.objects.create(
+            permission="test_app:resource:allowed_action", tenant=self.tenant
+        )
+
+        role = Role.objects.create(name="test_role_block_list", tenant=self.tenant)
+        Access.objects.create(role=role, permission=blocked_permission, tenant=self.tenant)
+        Access.objects.create(role=role, permission=allowed_permission, tenant=self.tenant)
+
+        url = reverse("v1_management:role-access", kwargs={"uuid": role.uuid})
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permissions = [item["permission"] for item in response.data.get("data", [])]
+
+        self.assertNotIn("test_app:resource:blocked_action", permissions)
+        self.assertIn("test_app:resource:allowed_action", permissions)
 
     def test_read_role_list_success(self):
         """Test that we can read a list of roles."""
@@ -1417,7 +1459,8 @@ class RoleViewsetTests(IdentityRequest):
         al_response = al_client.get(al_url, **self.headers)
         retrieve_data = al_response.data.get("data")
         al_list = retrieve_data
-        al_dict = al_list[1]
+        # Audit logs are now ordered by -created (newest first), so edit action is at index 0
+        al_dict = al_list[0]
 
         al_dict_principal_username = al_dict["principal_username"]
         al_dict_description = al_dict["description"]
@@ -1498,7 +1541,8 @@ class RoleViewsetTests(IdentityRequest):
             al_response = al_client.get(al_url, **self.headers)
             retrieve_data = al_response.data.get("data")
             al_list = retrieve_data
-            al_dict = al_list[1]
+            # Audit logs are now ordered by -created (newest first), so edit action is at index 0
+            al_dict = al_list[0]
 
             al_dict_principal_username = al_dict["principal_username"]
             al_dict_description = al_dict["description"]
@@ -1723,52 +1767,6 @@ class RoleViewsetTests(IdentityRequest):
                 )
             ),
         )
-
-    @override_settings(
-        REPLICATION_TO_RELATION_ENABLED=True,
-        ROLE_CREATE_ALLOW_LIST="compliance,inventory",
-        ROOT_SCOPE_PERMISSIONS="inventory:*:*",
-        TENANT_SCOPE_PERMISSIONS="",
-    )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
-    def test_update_role_unmigrated(self, replicate):
-        """Test that updating a role created without any V2 models creates the appropriate V2 models."""
-        tuples = InMemoryTuples()
-        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
-
-        # Set up
-        Permission.objects.create(permission="compliance:policy:read", tenant=self.public_tenant)
-        Permission.objects.create(permission="inventory:groups:read", tenant=self.public_tenant)
-
-        role_name = "test_update_role"
-        access_data = [{"permission": "compliance:policy:read", "resourceDefinitions": []}]
-        new_access_data = [{"permission": "inventory:groups:read", "resourceDefinitions": []}]
-
-        response = self.create_role(role_name, in_access_data=access_data)
-
-        v1_uuid = response.data["uuid"]
-        v1_role = Role.objects.get(uuid=v1_uuid)
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-
-        # Emulate the role having been created before the V2 models were added.
-        deleted_count, _ = CustomRoleV2.objects.filter(v1_source=v1_role).delete()
-        self.assertGreater(deleted_count, 0)
-
-        # Update the role with new access data.
-        test_data = dict(response.data)
-        test_data["access"] = new_access_data
-        url = reverse("v1_management:role-detail", kwargs={"uuid": v1_uuid})
-        client = APIClient()
-
-        response = client.put(url, test_data, format="json", **self.headers)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-        # The role should now have been migrated.
-        v2_role = CustomRoleV2.objects.get(v1_source=v1_role)
-        self.assertEqual("inventory:groups:read", v2_role.permissions.get().permission)
-        self._assert_v2_consistent(tuples)
 
     @override_settings(
         ROLE_CREATE_ALLOW_LIST="inventory", REPLICATION_TO_RELATION_ENABLED=True, REMOVE_NULL_VALUE=True
@@ -2287,6 +2285,90 @@ class RoleViewsetTests(IdentityRequest):
             f"Role '{name}' already exists for a tenant.",
         )
 
+    def test_create_role_with_system_role_name_fail(self):
+        """Test that creating a custom role with the same name as a system role is rejected."""
+        client = APIClient()
+        # Use the system role name from setUp (case-insensitive match)
+        test_data = {"name": "SYSTEM_ROLE", "access": []}
+
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
+    def test_create_role_with_system_role_display_name_fail(self):
+        """Test that creating a custom role with the same display_name as a system role is rejected."""
+        client = APIClient()
+        # Use the system role display_name from setUp (case-insensitive match)
+        test_data = {"name": "unique_custom_name", "display_name": "System_Display", "access": []}
+
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
+    def test_update_role_to_system_role_name_fail(self):
+        """Test that updating a custom role to have the same name as a system role is rejected."""
+        client = APIClient()
+        # Create a custom role first
+        test_data = {"name": "my_custom_role", "access": []}
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        role_uuid = response.data.get("uuid")
+
+        # Try to update name to match system role (case-insensitive)
+        url = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
+        update_data = {"name": "System_Role", "display_name": "my_custom_role", "access": []}
+        response = client.put(url, update_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
+    def test_patch_role_to_system_role_name_fail(self):
+        """Test that patching a custom role to have the same name as a system role is rejected."""
+        client = APIClient()
+        # Create a custom role first
+        test_data = {"name": "my_patchable_role", "access": []}
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        role_uuid = response.data.get("uuid")
+
+        # Try to patch name to match system role (case-insensitive)
+        url = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
+        patch_data = {"name": "SYSTEM_ROLE"}
+        response = client.patch(url, patch_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
+    def test_update_role_to_system_role_display_name_fail(self):
+        """Test that updating a custom role to have the same display_name as a system role is rejected."""
+        client = APIClient()
+        # Create a custom role first
+        test_data = {"name": "my_updatable_dn_role", "access": []}
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        role_uuid = response.data.get("uuid")
+
+        # Try to update display_name to match system role (case-insensitive)
+        url = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
+        update_data = {"name": "my_updatable_dn_role", "display_name": "SYSTEM_DISPLAY", "access": []}
+        response = client.put(url, update_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
+    def test_patch_role_to_system_role_display_name_fail(self):
+        """Test that patching a custom role to have the same display_name as a system role is rejected."""
+        client = APIClient()
+        # Create a custom role first
+        test_data = {"name": "my_patchable_dn_role", "access": []}
+        response = client.post(URL, test_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        role_uuid = response.data.get("uuid")
+
+        # Try to patch display_name to match system role (case-insensitive)
+        url = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
+        patch_data = {"display_name": "System_Display"}
+        response = client.patch(url, patch_data, format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("conflicts with an existing system role", str(response.data))
+
     @override_settings(ROLE_CREATE_ALLOW_LIST="someApp")
     def test_create_role_with_invalid_equals_operation(self):
         """Test that we cannot create a role when a List value is paired with the 'equal' operation."""
@@ -2541,6 +2623,7 @@ class RoleViewNonAdminTests(IdentityRequest):
     def setUp(self):
         """Set up the role viewset nonadmin tests."""
         super().setUp()
+        bootstrap_tenant_for_v2_test(self.tenant)
 
         platform_default_role_config = {
             "name": "platform_default_role",
@@ -2662,7 +2745,7 @@ class RoleViewNonAdminTests(IdentityRequest):
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
 
     def _assert_v2_consistent(self):
-        assert_v2_custom_roles_consistent(test=self, tuples=None)
+        assert_v1_v2_locally_consistent(test=self)
 
     @staticmethod
     def _create_group_with_user_access_admin_role(tenant):
@@ -3171,7 +3254,7 @@ class RoleWorkspaceValidationTests(IdentityRequest):
         except Exception as e:
             self.fail(f"validate_role raised an unexpected exception: {e}")
 
-    def test_workspace_validation_non_inventory_app_skipped(self):
+    def test_workspace_validation_non_inventory_app_fails(self):
         """Test that non-inventory applications skip workspace validation."""
         # Create permission for different app
         Permission.objects.create(
@@ -3198,15 +3281,22 @@ class RoleWorkspaceValidationTests(IdentityRequest):
 
         self.request_mock.data = request_data
 
+        from rest_framework import serializers
         from management.role.view import RoleViewSet
 
         viewset = RoleViewSet()
 
-        # Should not raise exception since app is not inventory
-        try:
+        with self.assertRaises(serializers.ValidationError) as context:
             viewset.validate_role(self.request_mock)
-        except Exception as e:
-            self.fail(f"validate_role raised an unexpected exception: {e}")
+
+        error_dict = context.exception.detail
+        self.assertIn("role", error_dict)
+        error_msg = str(error_dict["role"][0])
+        self.assertIn(
+            "user from org 'tenant1_org_id' cannot add permission 'app:groups:read' to workspace outside their org",
+            error_msg,
+        )
+        self.assertIn(f"Invalid workspace IDs: {self.tenant2_workspace.id}", error_msg)
 
     def test_workspace_validation_multiple_resource_definitions(self):
         """Test validation with multiple resourceDefinitions, some valid, some invalid."""
@@ -3300,43 +3390,6 @@ class RoleWorkspaceValidationTests(IdentityRequest):
         self.assertIn("resourceDefinitions", error_dict)
         self.assertIn("attributeFilter", error_dict["resourceDefinitions"][0])
         self.assertIn("This field is required.", error_dict["resourceDefinitions"][0]["attributeFilter"][0])
-
-    @patch("management.role.view.is_resource_a_workspace")
-    def test_workspace_validation_is_resource_workspace_called(self, mock_is_resource_workspace):
-        """Test that is_resource_a_workspace is called with correct parameters."""
-        mock_is_resource_workspace.return_value = False  # Make it return False to skip validation
-
-        request_data = {
-            "name": "test_role",
-            "access": [
-                {
-                    "permission": "inventory:groups:read",
-                    "resourceDefinitions": [
-                        {
-                            "attributeFilter": {
-                                "key": "group.id",
-                                "operation": "equal",
-                                "value": str(self.tenant1_workspace.id),
-                            }
-                        }
-                    ],
-                }
-            ],
-        }
-
-        self.request_mock.data = request_data
-
-        from management.role.view import RoleViewSet
-
-        viewset = RoleViewSet()
-        viewset.validate_role(self.request_mock)
-
-        # Verify is_resource_a_workspace was called with correct parameters
-        mock_is_resource_workspace.assert_called_once_with(
-            "inventory",
-            "groups",
-            {"key": "group.id", "operation": "equal", "value": str(self.tenant1_workspace.id)},
-        )
 
     @patch("management.role.view.get_workspace_ids_from_resource_definition")
     def test_workspace_validation_get_workspace_id_called(self, mock_get_workspace_ids):

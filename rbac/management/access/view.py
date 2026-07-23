@@ -16,27 +16,93 @@
 #
 
 """View for principal access."""
+
+import logging
+
 from django.db.models import Prefetch
 from management.cache import AccessCache
 from management.models import Access, ResourceDefinition
+from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
 from management.querysets import get_access_queryset
 from management.role.serializer import AccessSerializer
+from management.role.v2_role_scope import v2_role_excluded_applications
 from management.utils import (
     APPLICATION_KEY,
     get_principal_from_request,
     validate_and_get_key,
     validate_key,
 )
+from prometheus_client import Counter
 from rest_framework import status
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.views import APIView
+
+logger = logging.getLogger(__name__)
+
+v1_access_by_v2_org_total = Counter(
+    "rbac_v1_access_v2_org_total",
+    "Tracks v1 /access calls made by orgs that have been v2-enabled.",
+    ["org_id", "application", "caller_type"],
+)
 
 ORDER_FIELD = "order_by"
 VALID_ORDER_VALUES = ["application", "resource_type", "verb", "-application", "-resource_type", "-verb"]
 STATUS_KEY = "status"
 VALID_STATUS_VALUE = ["enabled", "disabled", "all"]
+
+
+def _record_v2_org_v1_access_rejected(request):
+    """Increment Prometheus counter and log context when a v2-enabled org's v1 /access call is rejected."""
+    app_param = request.query_params.get(APPLICATION_KEY, "")
+    caller_type = "service_account" if request.user.is_service_account else "user"
+    v1_access_by_v2_org_total.labels(
+        org_id=request.user.org_id,
+        application=app_param,
+        caller_type=caller_type,
+    ).inc()
+    logger.info(
+        "V2 org called v1 /access/ endpoint: org_id=%s application=%s caller_type=%s "
+        "user_id=%s client_id=%s is_org_admin=%s request_id=%s user_agent=%s result=rejected",
+        request.user.org_id,
+        app_param,
+        caller_type,
+        request.user.user_id,
+        request.user.client_id if request.user.is_service_account else None,
+        request.user.admin,
+        getattr(request, "req_id", None),
+        request.headers.get("user-agent"),
+    )
+
+
+def validate_v2_application_param(request):
+    """For v2-enabled orgs, ensure all requested applications are in the migration exclude list.
+
+    Returns None when the request is allowed, or a 400 Response when it must be rejected.
+    """
+    if not is_v2_edit_enabled_for_request(request):
+        return None
+
+    app_param = request.query_params.get(APPLICATION_KEY, "")
+    if not app_param:
+        return Response(
+            status=status.HTTP_400_BAD_REQUEST,
+            data={"detail": "V2 orgs must specify an application from the allowed list."},
+        )
+
+    allowed_apps = v2_role_excluded_applications()
+    requested_apps = {a.strip() for a in app_param.split(",") if a.strip()}
+    disallowed = requested_apps - allowed_apps
+    if disallowed:
+        return Response(
+            status=status.HTTP_400_BAD_REQUEST,
+            data={
+                "detail": f"V2 orgs may only query applications in the allowed list. "
+                f"Disallowed: {', '.join(sorted(disallowed))}"
+            },
+        )
+
+    return None
 
 
 class AccessView(APIView):
@@ -89,7 +155,8 @@ class AccessView(APIView):
 
     serializer_class = AccessSerializer
     pagination_class = api_settings.DEFAULT_PAGINATION_CLASS
-    permission_classes = (AllowAny,)
+    # Read-only endpoint: no DRF permission gate (auth/enforcement via middleware & query logic).
+    permission_classes = ()
 
     def get_access_queryset_unique_by_column(self, *columns):
         """Define the access query set with DISTINCT ON clause to get unique records."""
@@ -124,10 +191,15 @@ class AccessView(APIView):
         """Provide access data for principal."""
         # Parameter extraction and validation
         try:
-            sub_key, ordering = self.validate_and_get_param(request.query_params)
+            sub_key, ordering = self.validate_and_get_param(request)
             validate_key(request.query_params, STATUS_KEY, VALID_STATUS_VALUE, "enabled")
         except ValueError as e:
             return Response(status=status.HTTP_400_BAD_REQUEST, data=e)
+
+        v2_error = validate_v2_application_param(request)
+        if v2_error is not None:
+            _record_v2_org_v1_access_rejected(request)
+            return v2_error
 
         principal = get_principal_from_request(request)
         cache = AccessCache(request.tenant.org_id)
@@ -167,11 +239,16 @@ class AccessView(APIView):
         assert self.paginator is not None
         return self.paginator.get_paginated_response(data)
 
-    def validate_and_get_param(self, params):
+    def validate_and_get_param(self, request):
         """Validate input parameters and get ordering and sub_key."""
+        params = request.query_params
         app = params.get(APPLICATION_KEY)
         sub_key = app
         ordering = validate_and_get_key(params, ORDER_FIELD, VALID_ORDER_VALUES, required=False)
         if ordering:
             sub_key = f"{app}&order:{ordering}"
+        # Include is_org_admin in the cache sub_key so that a flag change
+        # triggers a cache miss and returns up-to-date permissions.
+        is_org_admin = bool(request.user.admin)
+        sub_key = f"{sub_key}&is_org_admin:{is_org_admin}"
         return sub_key, ordering

@@ -91,3 +91,22 @@ class TenantMappingTests(TestCase):
             self.tenant_mapping.tenant_scope_default_admin_role_binding_uuid,
             self.tenant_mapping.default_role_binding_uuid_for(DefaultAccessType.ADMIN, Scope.TENANT),
         )
+
+    def test_source_for_role_binding_id(self):
+        for default_access_type in DefaultAccessType:
+            for scope in Scope:
+                self.assertEqual(
+                    (default_access_type, scope),
+                    self.tenant_mapping.source_for_role_binding_id(
+                        self.tenant_mapping.default_role_binding_uuid_for(default_access_type, scope)
+                    ),
+                )
+
+                self.assertEqual(
+                    (default_access_type, scope),
+                    self.tenant_mapping.source_for_role_binding_id(
+                        str(self.tenant_mapping.default_role_binding_uuid_for(default_access_type, scope))
+                    ),
+                )
+
+        self.assertIsNone(self.tenant_mapping.source_for_role_binding_id(uuid.uuid4()))

@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# See https://docs.coderabbit.ai/reference/configuration for all fields and default values
+language: en
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - "docs/*-guidelines.md"
+reviews:
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "rbac/management/**"
+      instructions: |
+        This is the core business logic layer. Review for:
+        - Business logic must live in service.py files, not views or serializers
+        - All models must inherit TenantAwareModel for multi-tenancy
+        - V2 views must extend BaseV2ViewSet
+        - V2 errors must use RFC 7807 Problem JSON format
+    - path: "rbac/management/v2_urls.py"
+      instructions: |
+        V2 routes are feature-flagged by V2_APIS_ENABLED. Ensure new routes follow this pattern.
+    - path: "tests/**"
+      instructions: |
+        Tests should use IdentityRequest or TransactionalIdentityRequest base classes.
+        Verify tests assert both return values and side effects.
+    - path: "rbac/migration*/**"
+      instructions: |
+        Database migrations. Verify they can apply cleanly and include reverse migrations where possible.
+chat:
+  auto_reply: true

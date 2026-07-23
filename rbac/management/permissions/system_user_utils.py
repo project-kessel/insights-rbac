@@ -25,6 +25,7 @@ The main entry point is `check_system_user_access()` which encapsulates the
 complete decision tree for system user access, preventing behavior drift
 between different call sites.
 """
+
 from enum import Enum
 from typing import NamedTuple
 

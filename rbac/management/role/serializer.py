@@ -16,6 +16,7 @@
 #
 
 """Serializer for role management."""
+
 from django.conf import settings
 from django.utils.translation import gettext as _
 from feature_flags import FEATURE_FLAGS
@@ -137,6 +138,18 @@ class ResourceDefinitionSerializer(SerializerCreateOverrideMixin, serializers.Mo
         return is_resource_a_workspace(instance.application, instance.resource_type, instance.attributeFilter)
 
 
+class AccessListSerializer(serializers.ListSerializer):
+    """List serializer that filters out blocked permissions for v1 API."""
+
+    def to_representation(self, data):
+        """Filter blocked permissions before serializing the list."""
+        request = self.context.get("request")
+        if request:
+            iterable = data.all() if hasattr(data, "all") else data
+            data = [item for item in iterable if not is_permission_blocked_for_v1(item.permission.permission, request)]
+        return super().to_representation(data)
+
+
 class AccessSerializer(SerializerCreateOverrideMixin, serializers.ModelSerializer):
     """Serializer for the Access model."""
 
@@ -154,24 +167,12 @@ class AccessSerializer(SerializerCreateOverrideMixin, serializers.ModelSerialize
             raise serializers.ValidationError(error)
         return value
 
-    def to_representation(self, instance):
-        """Filter blocked permissions from access list for v1 API."""
-        request = self.context.get("request")
-
-        # Check if permission is blocked for v1 API (hide from v1, show in v2)
-        # This enables gradual migration of permissions from v1 to v2 UI
-        if request and is_permission_blocked_for_v1(instance.permission.permission, request):
-            # Return None to indicate this item should be skipped
-            # RoleSerializer.to_representation() will filter out these None values
-            return None
-
-        return super().to_representation(instance)
-
     class Meta:
         """Metadata for the serializer."""
 
         model = Access
         fields = ("resourceDefinitions", "permission")
+        list_serializer_class = AccessListSerializer
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -192,16 +193,6 @@ class RoleSerializer(serializers.ModelSerializer):
     modified = serializers.DateTimeField(read_only=True)
     external_role_id = serializers.SerializerMethodField()
     external_tenant = serializers.SerializerMethodField()
-
-    def to_representation(self, instance):
-        """Filter out None access items (blocked permissions) from the response."""
-        data = super().to_representation(instance)
-
-        # Filter out None values from access list (blocked permissions)
-        if "access" in data and data["access"]:
-            data["access"] = [item for item in data["access"] if item is not None]
-
-        return data
 
     class Meta:
         """Metadata for the serializer."""
@@ -268,6 +259,7 @@ class RoleSerializer(serializers.ModelSerializer):
             message = "System roles may not be updated."
             error = {key: [_(message)]}
             raise serializers.ValidationError(error)
+        _validate_name_not_system_role(data.get("name"), data.get("display_name"), self.instance)
         return super().validate(data)
 
 
@@ -362,16 +354,6 @@ class RoleDynamicSerializer(DynamicFieldsModelSerializer):
     external_role_id = serializers.SerializerMethodField()
     external_tenant = serializers.SerializerMethodField()
 
-    def to_representation(self, instance):
-        """Filter out None access items (blocked permissions) from the response."""
-        data = super().to_representation(instance)
-
-        # Filter out None values from access list (blocked permissions)
-        if "access" in data and data["access"]:
-            data["access"] = [item for item in data["access"] if item is not None]
-
-        return data
-
     class Meta:
         """Metadata for the serializer."""
 
@@ -430,15 +412,6 @@ class RolePatchSerializer(RoleSerializer):
         instance = update_role(instance, validated_data, clear_access=False)
         return instance
 
-    def validate(self, data):
-        """Validate the input data of patching role."""
-        if self.instance.system:
-            key = "role.update"
-            message = "System roles may not be updated."
-            error = {key: [_(message)]}
-            raise serializers.ValidationError(error)
-        return super().validate(data)
-
 
 class BindingMappingSerializer(serializers.ModelSerializer):
     """Serializer for the binding mapping."""
@@ -448,6 +421,27 @@ class BindingMappingSerializer(serializers.ModelSerializer):
 
         model = BindingMapping
         fields = "__all__"
+
+
+def _validate_name_not_system_role(name, display_name, instance=None):
+    """Validate that name/display_name do not conflict with system role names (case-insensitive)."""
+    public_tenant = Tenant.objects.get(tenant_name="public")
+
+    if name and (not instance or instance.name != name):
+        if Role.objects.filter(system=True, tenant=public_tenant, name__iexact=name).exists():
+            raise serializers.ValidationError(
+                {"name": [_("Role name '%(name)s' conflicts with an existing system role.") % {"name": name}]}
+            )
+
+    if display_name and (not instance or instance.display_name != display_name):
+        if Role.objects.filter(system=True, tenant=public_tenant, display_name__iexact=display_name).exists():
+            raise serializers.ValidationError(
+                {
+                    "display_name": [
+                        _("Display name '%(name)s' conflicts with an existing system role.") % {"name": display_name}
+                    ]
+                }
+            )
 
 
 def obtain_applications(obj):

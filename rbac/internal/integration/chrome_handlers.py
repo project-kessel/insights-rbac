@@ -16,6 +16,7 @@
 #
 
 """Notification handlers of object change."""
+
 import json
 import logging
 import os

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Workspace lookup utilities."""
+
 import logging
 from typing import Optional
 

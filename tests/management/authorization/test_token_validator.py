@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the token validator class."""
+
 import requests
 
 from django.conf import settings
@@ -29,7 +30,6 @@ from tests.identity_request import IdentityRequest
 from unittest import mock
 
 from tests.management.authorization.token_fixtures import InMemoryIssuer
-
 
 # IT path to fetch the service accounts.
 IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
@@ -47,6 +47,7 @@ class TokenValidatorTests(IdentityRequest):
         settings.IT_SERVICE_BASE_PATH = "/"
         settings.IT_SERVICE_PORT = "999"
         settings.IT_SERVICE_PROTOCOL_SCHEME = "http"
+        settings.IT_SERVICE_REALM = "/auth/realms/redhat-external"
         settings.IT_SERVICE_TIMEOUT_SECONDS = 10
 
         self.token_validator = ITSSOTokenValidator()
@@ -131,6 +132,58 @@ class TokenValidatorTests(IdentityRequest):
                 instance,
                 "no new instances of the token validator class should have been created since it is supposed to be a singleton",
             )
+
+    def test_default_realm_builds_expected_urls(self):
+        """Test that the default realm produces the same URLs and issuer as before it was configurable."""
+        validator = ITSSOTokenValidator()
+
+        self.assertEqual(
+            "http://localhost:999/auth/realms/redhat-external",
+            validator.host,
+            "the host should be built from the default realm",
+        )
+        self.assertEqual(
+            "http://localhost:999/auth/realms/redhat-external/.well-known/openid-configuration",
+            validator.oidc_configuration_url,
+            "the OIDC configuration URL should be built from the default realm",
+        )
+
+        validator.reset_jwks_source()
+        self.assertEqual(
+            "http://localhost/auth/realms/redhat-external",
+            validator.issuer,
+            "the issuer (which excludes the port) should be built from the default realm",
+        )
+
+    def test_configurable_realm_builds_expected_urls(self):
+        """Test that a custom IT_SERVICE_REALM flows into the host, OIDC configuration URL, and issuer."""
+        settings.IT_SERVICE_REALM = "/auth/realms/some-other-realm"
+
+        try:
+            validator = ITSSOTokenValidator()
+
+            self.assertEqual(
+                "http://localhost:999/auth/realms/some-other-realm",
+                validator.host,
+                "the host should reflect the configured realm",
+            )
+            self.assertEqual(
+                "http://localhost:999/auth/realms/some-other-realm/.well-known/openid-configuration",
+                validator.oidc_configuration_url,
+                "the OIDC configuration URL should reflect the configured realm",
+            )
+
+            validator.reset_jwks_source()
+            self.assertEqual(
+                "http://localhost/auth/realms/some-other-realm",
+                validator.issuer,
+                "the issuer (which excludes the port) should reflect the configured realm",
+            )
+        finally:
+            # The validator is a singleton shared across tests, so restore the default realm and rebuild its
+            # derived URLs to avoid leaking the custom realm into subsequent tests.
+            settings.IT_SERVICE_REALM = "/auth/realms/redhat-external"
+            ITSSOTokenValidator().reset_jwks_source()
 
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")

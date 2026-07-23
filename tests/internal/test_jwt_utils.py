@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test JWT utilities."""
+
 import base64
 import json
 import time
@@ -128,6 +129,7 @@ class JWTManagerTest(TestCase):
 
         self.assertTrue(result, "Token with invalid JSON payload should be considered expired")
 
+    @patch("internal.jwt_utils.settings.REDHAT_SSO", "sso.example.com")
     def test_get_jwt_from_redis_with_cached_valid_token(self):
         """Test retrieving a valid token from cache."""
         cached_token = self._create_test_token(exp_offset=3600)
@@ -139,6 +141,7 @@ class JWTManagerTest(TestCase):
         self.jwt_cache.get_jwt_response.assert_called_once()
         self.jwt_provider.get_jwt_token.assert_not_called()
 
+    @patch("internal.jwt_utils.settings.REDHAT_SSO", "sso.example.com")
     def test_get_jwt_from_redis_with_cached_expired_token(self):
         """Test that expired cached token triggers new token fetch."""
         expired_token = self._create_test_token(exp_offset=-3600)
@@ -154,6 +157,7 @@ class JWTManagerTest(TestCase):
         self.jwt_provider.get_jwt_token.assert_called_once()
         self.jwt_cache.set_jwt_response.assert_called_once_with(new_token)
 
+    @patch("internal.jwt_utils.settings.REDHAT_SSO", "sso.example.com")
     def test_get_jwt_from_redis_with_no_cached_token(self):
         """Test fetching new token when cache is empty."""
         new_token = self._create_test_token(exp_offset=3600)
@@ -168,6 +172,7 @@ class JWTManagerTest(TestCase):
         self.jwt_provider.get_jwt_token.assert_called_once()
         self.jwt_cache.set_jwt_response.assert_called_once_with(new_token)
 
+    @patch("internal.jwt_utils.settings.REDHAT_SSO", "sso.example.com")
     def test_get_jwt_from_redis_handles_provider_failure(self):
         """Test that None is returned when token provider fails."""
         self.jwt_cache.get_jwt_response.return_value = None
@@ -178,6 +183,7 @@ class JWTManagerTest(TestCase):
         self.assertIsNone(result)
         self.jwt_cache.set_jwt_response.assert_not_called()
 
+    @patch("internal.jwt_utils.settings.REDHAT_SSO", "sso.example.com")
     def test_get_jwt_from_redis_handles_exception(self):
         """Test that exceptions are caught and None is returned."""
         self.jwt_cache.get_jwt_response.side_effect = Exception("Redis connection error")
@@ -260,3 +266,29 @@ class JWTProviderTest(TestCase):
             provider.get_jwt_token("test-client-id", None)
 
         self.assertIn("Missing client_id or client_secret", str(context.exception))
+
+    @patch("internal.jwt_utils.http.client.HTTPSConnection")
+    @patch("internal.jwt_utils.settings")
+    def test_get_jwt_token_raises_on_missing_access_token(self, mock_settings, mock_https):
+        """Test that exception is raised on missing access token."""
+        # Configure mock settings
+        mock_settings.REDHAT_SSO = "sso.example.com"
+        mock_settings.TOKEN_GRANT_TYPE = "client_credentials"
+        mock_settings.RELATIONS_API_CLIENT_ID = "test-client-id"
+        mock_settings.RELATIONS_API_CLIENT_SECRET = "test-secret"
+        mock_settings.SCOPE = "test-scope"
+        mock_settings.OPENID_URL = "/auth/token"
+
+        # Configure mock HTTPS connection
+        mock_conn = MagicMock()
+        mock_https.return_value = mock_conn
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"error": "an unexpected error"}).encode()
+        mock_conn.getresponse.return_value = mock_response
+
+        provider = JWTProvider()
+
+        with self.assertRaises(Exception) as context:
+            provider.get_jwt_token("test-client-id", "test-secret")
+
+        self.assertIn("an unexpected error", str(context.exception))

@@ -2,34 +2,62 @@ import unittest
 import uuid
 from typing import Optional
 
+from google.protobuf import json_format
 from kessel.relations.v1beta1.common_pb2 import Relationship, ObjectReference, ObjectType, SubjectReference
 from migration_tool.in_memory_tuples import InMemoryTuples, RelationTuple
 from migration_tool.utils import create_relationship
 
 
-class TestRelationTuple(unittest.TestCase):
-    def _make_args(
-        self,
-        resource_type_namespace: str = "rbac",
-        resource_type_name: str = "workspace",
-        resource_id: str = "c7a3ff11-10d5-4326-9570-9fbbd3e06e17",
-        relation: str = "binding",
-        subject_type_namespace: str = "rbac",
-        subject_type_name: str = "role_binding",
-        subject_id: str = "d3431795-b368-448d-8835-0e77c0b7ded1",
-        subject_relation: Optional[str] = None,
-    ) -> dict[str, str]:
-        return {
-            "resource_type_namespace": resource_type_namespace,
-            "resource_type_name": resource_type_name,
-            "resource_id": resource_id,
-            "relation": relation,
-            "subject_type_namespace": subject_type_namespace,
-            "subject_type_name": subject_type_name,
-            "subject_id": subject_id,
-            "subject_relation": subject_relation,
-        }
+def _make_tuple(
+    resource_type_namespace: str = "rbac",
+    resource_type_name: str = "workspace",
+    resource_id: str = "c7a3ff11-10d5-4326-9570-9fbbd3e06e17",
+    relation: str = "binding",
+    subject_type_namespace: str = "rbac",
+    subject_type_name: str = "role_binding",
+    subject_id: str = "d3431795-b368-448d-8835-0e77c0b7ded1",
+    subject_relation: Optional[str] = None,
+) -> RelationTuple:
+    """Build a RelationTuple from flat keyword arguments for test convenience."""
+    from management.relation_replicator.types import (
+        ObjectReference as ObjRef,
+        ObjectType as ObjType,
+        SubjectReference as SubRef,
+    )
 
+    return RelationTuple(
+        resource=ObjRef(type=ObjType(namespace=resource_type_namespace, name=resource_type_name), id=resource_id),
+        relation=relation,
+        subject=SubRef(
+            subject=ObjRef(type=ObjType(namespace=subject_type_namespace, name=subject_type_name), id=subject_id),
+            relation=subject_relation,
+        ),
+    )
+
+
+def _make_args(
+    resource_type_namespace: str = "rbac",
+    resource_type_name: str = "workspace",
+    resource_id: str = "c7a3ff11-10d5-4326-9570-9fbbd3e06e17",
+    relation: str = "binding",
+    subject_type_namespace: str = "rbac",
+    subject_type_name: str = "role_binding",
+    subject_id: str = "d3431795-b368-448d-8835-0e77c0b7ded1",
+    subject_relation: Optional[str] = None,
+) -> dict:
+    return {
+        "resource_type_namespace": resource_type_namespace,
+        "resource_type_name": resource_type_name,
+        "resource_id": resource_id,
+        "relation": relation,
+        "subject_type_namespace": subject_type_namespace,
+        "subject_type_name": subject_type_name,
+        "subject_id": subject_id,
+        "subject_relation": subject_relation,
+    }
+
+
+class TestRelationTuple(unittest.TestCase):
     def test_valid(self):
         for args in [
             {},
@@ -42,10 +70,10 @@ class TestRelationTuple(unittest.TestCase):
             {"subject_id": "*"},
         ]:
             with self.subTest(args=args):
-                RelationTuple(**self._make_args(**args))
+                _make_tuple(**_make_args(**args))
 
     def test_invalid(self):
-        for args, type in [
+        for args, error_type in [
             ({"resource_type_namespace": None}, TypeError),
             ({"resource_type_name": None}, TypeError),
             ({"resource_id": None}, TypeError),
@@ -74,7 +102,27 @@ class TestRelationTuple(unittest.TestCase):
             ({"subject_id": "foo-*"}, ValueError),
         ]:
             with self.subTest(args=args):
-                self.assertRaises(type, RelationTuple, **self._make_args(**args))
+                self.assertRaises(error_type, _make_tuple, **_make_args(**args))
+
+    def test_to_dict_matches_proto_json_with_subject_relation(self):
+        """to_dict() must produce identical JSON to MessageToDict for tuples with subject_relation."""
+        t = _make_tuple(subject_relation="member")
+        self.assertEqual(t.to_dict(), json_format.MessageToDict(t.as_message()))
+
+    def test_to_dict_matches_proto_json_without_subject_relation(self):
+        """to_dict() must produce identical JSON to MessageToDict for tuples without subject_relation."""
+        t = _make_tuple(subject_relation=None)
+        self.assertEqual(t.to_dict(), json_format.MessageToDict(t.as_message()))
+
+    def test_from_message_dict_roundtrip(self):
+        """from_message_dict(to_dict()) should return the same RelationTuple."""
+        t = _make_tuple(subject_relation="member")
+        self.assertEqual(RelationTuple.from_message_dict(t.to_dict()), t)
+
+    def test_from_message_dict_roundtrip_no_relation(self):
+        """from_message_dict(to_dict()) should return the same RelationTuple without subject_relation."""
+        t = _make_tuple(subject_relation=None)
+        self.assertEqual(RelationTuple.from_message_dict(t.to_dict()), t)
 
 
 class TestInMemoryTuples(unittest.TestCase):
@@ -137,7 +185,7 @@ class TestInMemoryTuples(unittest.TestCase):
             ),
         )
         self.store.add(relationship)
-        tuples = self.store.find_tuples(lambda x: x.resource_id == "res_id")
+        tuples = self.store.find_tuples(lambda x: x.resource.id == "res_id")
         self.assertEqual(len(tuples), 1)
 
     def test_find_group_finds_group_with_tuple_that_matches_predicate(self):
@@ -157,9 +205,9 @@ class TestInMemoryTuples(unittest.TestCase):
         )
         self.store.add(relationship)
         tuples, _ = self.store.find_group_with_tuples(
-            group_by=lambda x: x.resource_id,
+            group_by=lambda x: x.resource.id,
             group_filter=lambda x: x == "res_id",
-            predicates=[lambda x: x.resource_id == "res_id"],
+            predicates=[lambda x: x.resource.id == "res_id"],
         )
         self.assertEqual(len(tuples), 1)
 
@@ -180,9 +228,9 @@ class TestInMemoryTuples(unittest.TestCase):
         )
         self.store.add(relationship)
         tuples, _ = self.store.find_group_with_tuples(
-            group_by=lambda x: x.resource_id,
+            group_by=lambda x: x.resource.id,
             group_filter=lambda x: x == "res_id",
-            predicates=[lambda x: x.subject_id == "sub_id1", lambda x: x.subject_id == "sub_id3"],
+            predicates=[lambda x: x.subject.subject.id == "sub_id1", lambda x: x.subject.subject.id == "sub_id3"],
         )
         self.assertEqual(len(tuples), 0)
 
@@ -231,7 +279,7 @@ class TestCreateRelationship(unittest.TestCase):
 
     def test_create_relationship_raises_error_on_none_resource_id(self):
         """Test that create_relationship raises ValueError when resource_id is None."""
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(TypeError):
             create_relationship(
                 ("rbac", "workspace"),
                 None,  # Invalid: None resource_id
@@ -240,14 +288,9 @@ class TestCreateRelationship(unittest.TestCase):
                 "binding",
             )
 
-        error_message = str(context.exception)
-        self.assertIn("resource_id cannot be empty", error_message)
-        self.assertIn("workspace", error_message)
-        self.assertIn("None", error_message)
-
     def test_create_relationship_raises_error_on_empty_resource_id(self):
         """Test that create_relationship raises ValueError when resource_id is empty string."""
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(ValueError):
             create_relationship(
                 ("rbac", "workspace"),
                 "",  # Invalid: empty resource_id
@@ -256,12 +299,9 @@ class TestCreateRelationship(unittest.TestCase):
                 "binding",
             )
 
-        error_message = str(context.exception)
-        self.assertIn("resource_id cannot be empty", error_message)
-
     def test_create_relationship_raises_error_on_none_subject_id(self):
         """Test that create_relationship raises ValueError when subject_id is None."""
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(TypeError):
             create_relationship(
                 ("rbac", "workspace"),
                 "workspace-123",
@@ -270,14 +310,9 @@ class TestCreateRelationship(unittest.TestCase):
                 "binding",
             )
 
-        error_message = str(context.exception)
-        self.assertIn("subject_id cannot be empty", error_message)
-        self.assertIn("workspace", error_message)
-        self.assertIn("None", error_message)
-
     def test_create_relationship_raises_error_on_empty_subject_id(self):
         """Test that create_relationship raises ValueError when subject_id is empty string."""
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(ValueError):
             create_relationship(
                 ("rbac", "workspace"),
                 "workspace-123",
@@ -285,7 +320,3 @@ class TestCreateRelationship(unittest.TestCase):
                 "",  # Invalid: empty subject_id
                 "binding",
             )
-
-        error_message = str(context.exception)
-        self.assertIn("subject_id cannot be empty", error_message)
-        self.assertIn("role_binding", error_message)

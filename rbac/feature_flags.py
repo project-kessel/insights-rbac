@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Feature flag module module."""
+
 import logging
 import threading
 from typing import Callable, Optional
@@ -38,6 +39,10 @@ class FeatureFlags:
     TOGGLE_READ_YOUR_WRITES_WORKSPACE = "rbac.read-your-writes.workspace.enabled"
     # Enables Inventory API access check v2 for workspace permissions.
     TOGGLE_WORKSPACE_ACCESS_CHECK_V2 = "rbac.workspace-access-check-v2.enabled"
+    # When enabled, use 'role_binding_view' permission; when disabled, use 'view' permission for role binding access.
+    TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
+    # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
+    TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
 
     def __init__(self):
         """Add attributes."""
@@ -149,6 +154,32 @@ class FeatureFlags:
         return self.is_enabled(
             feature_name=self.TOGGLE_WORKSPACE_ACCESS_CHECK_V2,
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.WORKSPACE_ACCESS_CHECK_V2_ENABLED,
+        )
+
+    def is_use_role_binding_view_permission_enabled(self):
+        """Check whether to use 'role_binding_view' permission for role binding access.
+
+        When enabled (True), use 'role_binding_view' permission.
+        When disabled (False), use 'view' permission.
+        Falls back to reading the environment variable if any error occurs.
+        """
+        return self.is_enabled(
+            feature_name=self.TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION,
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.USE_ROLE_BINDING_VIEW_PERMISSION,
+        )
+
+    def is_v2_edit_api_enabled(self, org_id: str) -> bool:
+        """Check whether v2 write APIs are enabled for the given org.
+
+        When enabled, the org should use v2 APIs and v1 write operations are blocked.
+        When disabled, the org should use v1 APIs and v2 write operations are blocked.
+
+        Uses orgId in context to match Unleash strategy constraints (contextName: orgId).
+        """
+        return self.is_enabled(
+            feature_name=self.TOGGLE_V2_EDIT_API_ENABLED,
+            context={"orgId": str(org_id)},
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
         )
 
 

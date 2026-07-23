@@ -16,8 +16,9 @@
 #
 
 """API views for import organization"""
+
 # flake8: noqa
 # pylint: disable=unused-import
-from api.status.view import status
+from api.status.view import ready, status
 from api.openapi.view import openapi
 from api.cross_access.view import CrossAccountRequestViewSet

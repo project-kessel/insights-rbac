@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Defines the Group Access Permissions class."""
+
 from management.permissions.utils import is_scope_principal
 from rest_framework import permissions
 from rest_framework.request import Request

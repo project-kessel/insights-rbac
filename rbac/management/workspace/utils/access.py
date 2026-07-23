@@ -15,11 +15,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Workspace access checking utilities."""
+
 import logging
 import time
 from contextlib import contextmanager
 from uuid import UUID
 
+from django.db.models.expressions import RawSQL
 from feature_flags import FEATURE_FLAGS
 from management.models import Access, Workspace
 from management.permissions.system_user_utils import SystemUserAccessResult, check_system_user_access
@@ -28,7 +30,7 @@ from management.permissions.workspace_inventory_access import (
 )
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy
-from management.utils import get_principal_from_request, roles_for_principal
+from management.utils import get_principal_for_auth, get_principal_from_request, roles_for_principal
 from rest_framework.serializers import ValidationError
 
 from rbac import settings
@@ -114,13 +116,11 @@ def get_fallback_workspace_ids(tenant):
 
 def filter_top_level_workspaces(queryset):
     """
-    Filter workspaces to return only top-level ones.
+    Filter workspaces to return only top-level ones using a single CTE query.
 
     A workspace is top-level if none of its ancestors are in the queryset.
-    Algorithm:
-    - Let S be the set of workspaces in queryset
-    - For each workspace w in S, check its ancestors
-    - If none of w's ancestors are in S, then w is top-level
+    Uses RawSQL with a recursive CTE (similar to Workspace.ancestors() in model.py)
+    to compute top-level workspaces in a single database round-trip.
 
     Args:
         queryset: QuerySet of workspaces to filter
@@ -128,20 +128,40 @@ def filter_top_level_workspaces(queryset):
     Returns:
         QuerySet: Filtered queryset containing only top-level workspaces
     """
-    accessible_workspaces = list(queryset)
-    accessible_ids_set = {str(ws.id) for ws in accessible_workspaces}
-    top_level_workspaces = []
+    accessible_ids_list = list(queryset.values_list("id", flat=True))
+    if not accessible_ids_list:
+        return queryset.none()
 
-    for workspace in accessible_workspaces:
-        # Check if any of this workspace's ancestors are in the accessible set
-        ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
-        # If none of the ancestors are in accessible set, this is a top-level workspace
-        if not (ancestor_ids & accessible_ids_set):
-            top_level_workspaces.append(workspace)
+    # Single CTE query to find top-level workspaces:
+    # A workspace is top-level if none of its ancestors are in the accessible set
+    sql = """
+        WITH RECURSIVE workspace_ancestors AS (
+            -- Base case: start with all specified workspaces and their direct parents
+            SELECT id AS workspace_id, parent_id AS ancestor_id
+            FROM management_workspace
+            WHERE id = ANY(%s) AND parent_id IS NOT NULL
 
-    # Return a filtered queryset containing only top-level workspaces
-    top_level_ids = [ws.id for ws in top_level_workspaces]
-    return queryset.filter(id__in=top_level_ids)
+            UNION
+
+            -- Recursive case: get ancestors of ancestors
+            SELECT wa.workspace_id, w.parent_id AS ancestor_id
+            FROM workspace_ancestors wa
+            JOIN management_workspace w ON w.id = wa.ancestor_id
+            WHERE w.parent_id IS NOT NULL
+        ),
+        -- Find workspaces that have an ancestor in the accessible set (not top-level)
+        has_ancestor_in_set AS (
+            SELECT DISTINCT workspace_id
+            FROM workspace_ancestors
+            WHERE ancestor_id = ANY(%s)
+        )
+        -- Return workspaces that don't have any ancestor in the accessible set
+        SELECT unnest(%s::uuid[])
+        EXCEPT
+        SELECT workspace_id FROM has_ancestor_in_set
+    """
+
+    return queryset.filter(id__in=RawSQL(sql, [accessible_ids_list, accessible_ids_list, accessible_ids_list]))
 
 
 def is_user_allowed(request, required_operation, target_workspace):
@@ -251,7 +271,7 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
 
         # Try to get user_id from principal, request.user, or IT service API
         with record_timing(timings, "get_principal_id"):
-            principal = get_principal_from_request(request)
+            principal = get_principal_for_auth(request)
             if principal is not None and principal.user_id is not None:
                 user_id = principal.user_id
             elif (user_id := getattr(request.user, "user_id", None)) is not None:
@@ -316,16 +336,31 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
         if target_workspace is None:
             # Lookup accessible workspaces using StreamedListObjects
             with record_timing(timings, "inventory_api_lookup"):
+                org_id = getattr(request.tenant, "org_id", None)
+                # Reload tenant from DB to get the latest consistency token,
+                # since the cached tenant (from Redis TenantCache) may have a stale value.
+                # The Kafka consumer updates this field in the DB when relations change.
+                request.tenant.refresh_from_db(fields=["relations_consistency_token"])
+                consistency_token = request.tenant.relations_consistency_token
+                logger.info(
+                    "lookup_accessible_workspaces: org_id=%s, consistency_token=%s",
+                    org_id,
+                    consistency_token,
+                )
                 accessible_workspace_ids = checker.lookup_accessible_workspaces(
                     principal_id=principal_id,
                     relation=relation,
                     request_id=getattr(request, "req_id", None),
+                    consistency_token=consistency_token,
                 )
 
             # Convert to set of UUIDs for proper filtering
             accessible_workspace_ids = set(accessible_workspace_ids)
 
             if accessible_workspace_ids:
+                # User has actual workspace permissions (not just fallbacks)
+                request.has_real_workspace_access = True
+
                 # Add ancestors only from the top-level workspace(s) in accessible workspaces (for ancestry needs)
                 # Get workspace objects for accessible IDs
                 with record_timing(timings, "db_filter_accessible_workspaces"):
@@ -333,16 +368,35 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
                         id__in=accessible_workspace_ids, tenant=request.tenant
                     )
 
-                # Find the top-level workspace(s) - those that are not children of any other accessible workspace
-                with record_timing(timings, "filter_top_level_workspaces"):
-                    top_level_workspaces = filter_top_level_workspaces(accessible_workspaces)
+                if not accessible_workspaces.exists():
+                    # Inventory can return workspace ids that are not present in RBAC for this tenant
+                    # (replication lag, stale tuples, cross-env mismatch). Treat like no workspace access
+                    # so the list API still returns root/default/ungrouped like users with no permissions.
+                    logger.info(
+                        "StreamedListObjects returned %s workspace id(s) but none exist for this tenant; "
+                        "using fallback workspaces",
+                        len(accessible_workspace_ids),
+                    )
+                    request.has_real_workspace_access = False
+                    with record_timing(timings, "get_fallback_workspace_ids"):
+                        accessible_workspace_ids = get_fallback_workspace_ids(request.tenant)
+                else:
+                    # Keep only ids that exist for this tenant; drop stale Inventory-only ids
+                    accessible_workspace_ids = {str(wid) for wid in accessible_workspaces.values_list("id", flat=True)}
 
-                with record_timing(timings, "add_ancestor_ids"):
-                    for workspace in top_level_workspaces:
-                        # Add ancestors directly for this top-level workspace
-                        ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
-                        accessible_workspace_ids.update(ancestor_ids)
+                    # Find the top-level workspace(s) - those that are not children of any other accessible workspace
+                    with record_timing(timings, "filter_top_level_workspaces"):
+                        top_level_workspaces = filter_top_level_workspaces(accessible_workspaces)
+
+                    with record_timing(timings, "add_ancestor_ids"):
+                        for workspace in top_level_workspaces:
+                            # Add ancestors directly for this top-level workspace
+                            ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
+                            accessible_workspace_ids.update(ancestor_ids)
             else:
+                # User has no actual workspace permissions, only fallback access
+                request.has_real_workspace_access = False
+
                 # If no accessible workspaces, attach at least root, default, and ungrouped workspaces
                 with record_timing(timings, "get_fallback_workspace_ids"):
                     accessible_workspace_ids = get_fallback_workspace_ids(request.tenant)
@@ -358,6 +412,16 @@ def is_user_allowed_v2(request, required_operation, target_workspace):
             result = checker.check_workspace_access(
                 workspace_id=target_workspace, principal_id=principal_id, relation=relation
             )
+
+        # If Kessel denied access for a 'view' operation, check if it's a fallback workspace
+        # (root, default, ungrouped). These workspaces should be accessible to all users for
+        # basic workspace structure visibility, but only for read operations.
+        # Write operations (create, edit, move, delete) still require explicit permissions.
+        if not result and required_operation == "view":
+            with record_timing(timings, "check_fallback_workspace"):
+                fallback_workspace_ids = get_fallback_workspace_ids(request.tenant)
+                if target_workspace in fallback_workspace_ids:
+                    result = True
 
         return result
 

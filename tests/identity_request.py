@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test Case extension to collect common test data."""
+
 import uuid
 import os
 
@@ -169,4 +170,7 @@ class IdentityRequest(BaseIdentityRequest, TestCase):
 
 @override_settings(REPLICATION_TO_RELATION_ENABLED=True, PRINCIPAL_USER_DOMAIN="redhat")
 class TransactionalIdentityRequest(BaseIdentityRequest, TransactionTestCase):
-    pass
+    def setUp(self):
+        super().setUp()
+
+        Tenant.objects.get_or_create(tenant_name="public")

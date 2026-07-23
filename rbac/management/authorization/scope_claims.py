@@ -16,6 +16,7 @@
 #
 
 """An enumeration of the additional scopes the token validator needs to validate for a token."""
+
 from enum import Enum
 
 

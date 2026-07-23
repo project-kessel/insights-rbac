@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Classes to handle JWT token generation and management."""
+
 import base64
 import http.client
 import json
@@ -45,7 +46,7 @@ class JWTProvider:
 
     def get_conn(self):
         """Get connection to sso stage."""
-        if settings.REDHAT_SSO is not None:
+        if settings.REDHAT_SSO:
             self.connection = http.client.HTTPSConnection(settings.REDHAT_SSO)
         return self.connection
 
@@ -74,6 +75,9 @@ class JWTProvider:
         res = connection.getresponse()
         data = res.read()
         json_data = json.loads(data)
+
+        if "access_token" not in json_data:
+            raise Exception(f"Unexpected response when retrieving JWT (status={res.status}): {json_data}")
 
         token = json_data["access_token"]
         return token
@@ -119,6 +123,13 @@ class JWTManager:
 
     def get_jwt_from_redis(self):
         """Retrieve jwt token from redis or generate from Redhat SSO if not exists in redis."""
+        if not settings.REDHAT_SSO:
+            logger.debug(
+                "REDHAT_SSO not configured; "
+                "skipping JWT token retrieval (expected in ephemeral/local environments)."
+            )
+            return None
+
         try:
             # Try retrieve token from redis
             token = self.jwt_cache.get_jwt_response()
@@ -147,5 +158,5 @@ class JWTManager:
             return token
 
         except Exception as e:
-            logger.error(f"error occurred when trying to retrieve JWT token. {e}")
+            logger.error(f"Error occurred when trying to retrieve JWT token: {e}", exc_info=True)
             return None

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the principal viewset."""
+
 from datetime import datetime
 from unittest.mock import patch, ANY
 from uuid import uuid4

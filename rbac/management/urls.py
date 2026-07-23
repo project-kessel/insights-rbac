@@ -14,6 +14,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Describes the urls and patterns for the management application."""
+
 from django.urls import include, path
 from management.views import (
     AccessView,
@@ -24,7 +25,6 @@ from management.views import (
     RoleViewSet,
 )
 from rest_framework.routers import DefaultRouter
-
 
 ROUTER = DefaultRouter()
 ROUTER.register(r"groups", GroupViewSet)

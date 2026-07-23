@@ -16,6 +16,7 @@
 #
 
 """Serializer for principal management."""
+
 from collections import OrderedDict
 
 from django.core.exceptions import ValidationError

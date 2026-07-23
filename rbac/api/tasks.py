@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Celery tasks."""
+
 from __future__ import absolute_import, unicode_literals
 
 from celery import shared_task

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the group model."""
+
 from management.models import Group, Role, Policy
 from tests.identity_request import IdentityRequest
 

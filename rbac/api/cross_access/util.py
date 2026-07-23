@@ -16,11 +16,12 @@
 #
 
 """Handler for cross-account request clean up."""
+
 import logging
 
-from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from management.atomic_transactions import atomic_block
 from management.models import Principal
 from management.relation_replicator.relation_replicator import ReplicationEventType
 
@@ -36,7 +37,8 @@ def check_cross_request_expiry():
     cars = CrossAccountRequest.objects.filter(Q(status="pending") | Q(status="approved"))
     logger.info("Running expiry check on %d cross-account requests.", len(cars))
     for car in cars:
-        with transaction.atomic():
+        # This can operate on V2 tenants, so we must use a SERIALIZABLE transaction here.
+        with atomic_block():
             logger.debug("Checking for expiration of cross-account request %s.", car.pk)
             # Lock CAR so that the status and roles do not concurrently change
             car = CrossAccountRequest.objects.select_for_update().get(pk=car.pk)

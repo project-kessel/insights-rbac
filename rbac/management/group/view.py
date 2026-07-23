@@ -16,6 +16,7 @@
 #
 
 """View for group management."""
+
 import logging
 from typing import Iterable, List, Optional, Tuple
 from uuid import UUID
@@ -54,6 +55,7 @@ from management.notifications.notification_handlers import (
     group_principal_change_notification_handler,
 )
 from management.permissions import GroupAccessPermission
+from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
 from management.principal.it_service import ITService
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy
@@ -65,6 +67,8 @@ from management.querysets import (
 )
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.view import RoleViewSet
+from management.role_binding.service import RoleBindingService
+from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
 from management.utils import validate_and_get_key, validate_group_name, validate_uuid
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -440,6 +444,10 @@ class GroupViewSet(
             if not request.user.admin:
                 self.protect_group_with_user_access_admin_role(group.roles_with_access(), "remove_group")
 
+            # Capture these before deletion
+            is_custom_default_group = group.platform_default
+            group_tenant = group.tenant
+
             dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.DELETE_GROUP)
             roles = Role.objects.filter(policies__group=group)
             if not group.platform_default and not group.principals.exists() and not roles.exists():
@@ -455,6 +463,11 @@ class GroupViewSet(
             response = super().destroy(request=request, args=args, kwargs=kwargs)
 
             dual_write_handler.replicate()
+
+            # Restore USER default role bindings if custom default group was deleted
+            if is_custom_default_group:
+                role_binding_service = RoleBindingService(tenant=group_tenant)
+                role_binding_service.restore_user_default_bindings()
 
         if response.status_code == status.HTTP_204_NO_CONTENT:
             group_obj_change_notification_handler(request.user, group, "deleted")
@@ -1282,6 +1295,15 @@ class GroupViewSet(
         roles = []
         validate_uuid(uuid, "group uuid validation")
         group = self.get_object()
+        v2_write_msg = (
+            "V1 role-to-group assignment operations are not allowed "
+            "for orgs using workspaces. Use v2 role bindings instead."
+        )
+        if request.method in ("POST", "DELETE") and is_v2_edit_enabled_for_request(request):
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": v2_write_msg}]},
+            )
         if request.method == "POST":
             self.protect_default_admin_group_roles(group)
 
@@ -1292,14 +1314,25 @@ class GroupViewSet(
             if serializer.is_valid(raise_exception=True):
                 roles = request.data.pop(ROLES_KEY, [])
 
-            with transaction.atomic():
-                group = set_system_flag_before_update(group, request.tenant, request.user)
-
-                add_roles(group, roles, request.tenant, user=request.user)
+            try:
+                original_group_pk = group.pk
+                with transaction.atomic():
+                    assert_v1_write_allowed(request.tenant)
+                    group = set_system_flag_before_update(group, request.tenant, request.user)
+                    add_roles(group, roles, request.tenant, user=request.user)
+            except V1WriteBlockedError:
+                return Response(
+                    status=status.HTTP_403_FORBIDDEN,
+                    data={"errors": [{"detail": v2_write_msg}]},
+                )
 
             response_data = GroupRoleSerializerIn(group)
             response = Response(status=status.HTTP_200_OK, data=response_data.data)
             if status.is_success(response.status_code):
+                if group is not None and group.pk != original_group_pk:
+                    auditlog = AuditLog()
+                    auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+
                 for role in response_data.data["data"]:
                     auditlog = AuditLog()
                     auditlog.log_group_assignment(
@@ -1329,9 +1362,22 @@ class GroupViewSet(
             role_ids = request.query_params.get(ROLES_KEY, "").split(",")
             serializer = GroupRoleSerializerIn(data={"roles": role_ids})
             if serializer.is_valid(raise_exception=True):
-                with transaction.atomic():
-                    group = set_system_flag_before_update(group, request.tenant, request.user)
-                    remove_roles(group, role_ids, request.tenant, request.user)
+                original_group_pk = group.pk
+                try:
+                    with transaction.atomic():
+                        assert_v1_write_allowed(request.tenant)
+                        group = set_system_flag_before_update(group, request.tenant, request.user)
+                        remove_roles(group, role_ids, request.tenant, request.user)
+                except V1WriteBlockedError:
+                    return Response(
+                        status=status.HTTP_403_FORBIDDEN,
+                        data={"errors": [{"detail": v2_write_msg}]},
+                    )
+
+                # Log custom default group creation if a new group was actually cloned
+                if group is not None and group.pk != original_group_pk:
+                    auditlog = AuditLog()
+                    auditlog.log_create_from_object(request, AuditLog.GROUP, group)
 
                 # Save the information to audit logs
                 roles = _roles_by_query_or_ids(role_ids, request.tenant)

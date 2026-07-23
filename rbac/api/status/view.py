@@ -17,12 +17,62 @@
 
 """View for server status."""
 
+import logging
+
+from management.group.model import Group
 from rest_framework import permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from api.status.model import Status
 from api.status.serializer import StatusSerializer
+from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
+
+# Cache for _is_seeding_complete. Only cache True (seeding does not get undone).
+# Avoids DB hit on every readiness probe once ready.
+_SEEDING_COMPLETE_CACHE = None
+
+
+def _is_seeding_complete():
+    """Check if seeding has been completed (by worker or init container).
+
+    We verify seeding by checking for the platform default group (last step in seeding).
+    Caches True to avoid DB hit on every readiness probe (every 10s) once ready.
+    """
+    global _SEEDING_COMPLETE_CACHE
+
+    if _SEEDING_COMPLETE_CACHE is True:
+        return True
+
+    try:
+        result = Group.objects.public_tenant_only().filter(platform_default=True).exists()
+        if result:
+            _SEEDING_COMPLETE_CACHE = True
+        return result
+    except Exception as exc:
+        logger.exception("Error checking if seeding is complete: %s", exc)
+        return False
+
+
+@api_view(["GET", "HEAD"])
+@permission_classes((permissions.AllowAny,))
+def ready(request):
+    """Readiness probe: returns 200 when service can accept traffic.
+
+    When MIGRATE_AND_SEED_ON_INIT is True, the service runs its own seeding in the init
+    container, so we return 200 immediately without a DB check. When False, the worker
+    runs seeding and we check for the platform default group before returning 200.
+
+    Note: This endpoint is intentionally not added to the OpenAPI spec to avoid
+    impacting client generation (e.g., generated clients should not include
+    infrastructure endpoints like readiness probes).
+    """
+    migrate_and_seed = ENVIRONMENT.bool("MIGRATE_AND_SEED_ON_INIT", default=True)
+    if migrate_and_seed or _is_seeding_complete():
+        return Response({"status": "ready"}, status=200)
+    return Response({"status": "waiting for seeding"}, status=503)
 
 
 @api_view(["GET", "HEAD"])

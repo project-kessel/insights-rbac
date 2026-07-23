@@ -15,6 +15,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """API models for import organization."""
+
 # flake8: noqa
 # pylint: disable=unused-import
 from management.principal.serializer import PrincipalSerializer

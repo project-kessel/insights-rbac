@@ -15,11 +15,14 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Helper utilities for management module."""
+
 import logging
 import os
+import re
 import uuid
 from contextlib import contextmanager
-from typing import Optional, TypedDict
+from dataclasses import dataclass, field
+from typing import ClassVar, Optional, TypedDict
 from uuid import UUID
 
 import grpc
@@ -37,6 +40,7 @@ from management.permissions.principal_access import PrincipalAccessPermission
 from management.principal.it_service import ITService
 from management.principal.proxy import PrincipalProxy
 from rest_framework import serializers
+from rest_framework.fields import UUIDField
 from rest_framework.request import Request
 from rest_framework.serializers import ValidationError
 
@@ -262,20 +266,47 @@ def build_system_user_from_token(request, token_validator: TokenValidator) -> Op
         return None
 
 
-def get_principal_from_request(request):
-    """Obtain principal from the request object."""
+def get_principal_from_request(request, *, ignore_username_query_param=False):
+    """Obtain principal from the request object.
+
+    Args:
+        request: The HTTP request object
+        ignore_username_query_param: If True, ignore the username query parameter and always
+                                     use request.user.username. This should be True for
+                                     authorization checks to prevent privilege confusion.
+
+    Returns:
+        Principal object for the resolved username
+    """
     current_user = request.user.username
-    qs_user = request.query_params.get(USERNAME_KEY)
     username = current_user
     from_query = False
-    if qs_user and not PRINCIPAL_PERMISSION_INSTANCE.has_permission(request=request, view=None):
-        raise PermissionDenied()
 
-    if qs_user:
-        username = qs_user
-        from_query = True
+    if not ignore_username_query_param:
+        qs_user = request.query_params.get(USERNAME_KEY)
+        if qs_user and not PRINCIPAL_PERMISSION_INSTANCE.has_permission(request=request, view=None):
+            raise PermissionDenied()
+        if qs_user:
+            username = qs_user
+            from_query = True
 
-    return get_principal(username, request, verify_principal=bool(qs_user), from_query=from_query)
+    return get_principal(username, request, verify_principal=from_query, from_query=from_query)
+
+
+def get_principal_for_auth(request):
+    """Get principal from request for authorization purposes.
+
+    This helper ensures the principal is resolved from the authenticated user
+    (request.user.username) and never from a query parameter, preventing
+    privilege confusion in authorization checks.
+
+    Args:
+        request: The HTTP request object
+
+    Returns:
+        Principal object for the authenticated user
+    """
+    return get_principal_from_request(request, ignore_username_query_param=True)
 
 
 def get_principal(
@@ -475,6 +506,31 @@ def validate_and_get_key(params, query_key, valid_values, default_value=None, re
     return value.lower()
 
 
+def validate_and_get_key_multi(params, query_key, valid_values, default_value=None):
+    """Validate and return multiple comma-separated values for a query key.
+
+    Splits the query parameter on commas, strips whitespace and lowercases
+    each value, then validates every value against *valid_values*.
+
+    Returns a **list** of validated (lowercased) strings.
+    """
+    value = params.get(query_key, default_value)
+    if not value:
+        if default_value:
+            return [default_value.lower()]
+        return []
+
+    fields = [v.strip().lower() for v in value.split(",") if v.strip()]
+    for val in fields:
+        if val not in valid_values:
+            key = "detail"
+            message = "{} query parameter value '{}' is invalid. Allowed values are {}.".format(
+                query_key, val, [str(v) for v in valid_values]
+            )
+            raise serializers.ValidationError({key: _(message)})
+    return fields
+
+
 def validate_key(params, query_key, valid_values, default_value=None, required=True):
     """Validate a key and do not return the value."""
     value = params.get(query_key, default_value)
@@ -501,6 +557,23 @@ def is_valid_uuid(value):
         return False
 
 
+def clean_query_param(value, param_name):
+    """Clean a query parameter: return None if empty/whitespace, raise 400 if NUL character present."""
+    if value is None:
+        return None
+    if not value.strip():
+        return None
+    if "\x00" in value:
+        message = f"The '{param_name}' query parameter contains invalid characters."
+        raise serializers.ValidationError({param_name: message})
+    return value
+
+
+def normalize_blank_or_none(value: str | None) -> str | None:
+    """Return None for empty/blank strings, pass through otherwise."""
+    return (value and value.strip()) or None
+
+
 def validate_uuid(uuid, key="UUID Validation"):
     """Verify UUID provided is valid."""
     try:
@@ -509,6 +582,18 @@ def validate_uuid(uuid, key="UUID Validation"):
         key = key
         message = f"{uuid} is not a valid UUID."
         raise serializers.ValidationError({key: _(message)})
+
+
+def as_uuid(value: str | UUID) -> UUID:
+    """
+    Convert a string (or UUID) to a UUID.
+
+    A provided UUID is returned unchanged.
+    """
+    if isinstance(value, UUID):
+        return value
+
+    return UUID(value)
 
 
 def validate_group_name(name):
@@ -576,20 +661,43 @@ def api_path_prefix():
     return path_prefix
 
 
+PROBLEM_TITLES = {
+    400: "The request payload contains invalid syntax.",
+    401: "Authentication credentials were not provided or are invalid.",
+    403: "You do not have permission to perform this action.",
+    404: "Not found.",
+    409: "Conflict.",
+    500: "Unexpected error occurred.",
+}
+
+
 def v2response_error_from_errors(errors, exc=None, context=None):
-    """Convert v1 error format to v2."""
+    """Build a ProblemDetails-formatted error response from errors."""
     detail = ""
     status_code = 0
+    field_errors = []
+
     if errors and any(isinstance(error, dict) and "detail" in error for error in errors):
         detail = str(errors[0]["detail"])
         status_code = int(errors[0]["status"])
 
+        for error in errors:
+            if isinstance(error, dict) and "detail" in error:
+                field_error = {"message": str(error["detail"])}
+                if error.get("source"):
+                    field_error["field"] = error["source"]
+                field_errors.append(field_error)
+
     response = {
         "status": status_code,
+        "title": PROBLEM_TITLES.get(status_code, "An error occurred."),
         "detail": detail,
     }
 
-    if context.get("request").method in ["PUT", "PATCH", "DELETE"]:
+    if field_errors:
+        response["errors"] = field_errors
+
+    if context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"]:
         response["instance"] = context.get("request").path
 
     return response
@@ -638,3 +746,136 @@ def is_permission_blocked_for_v1(permission_str, request=None):
     # Check against block list using exact string matching
     block_list = getattr(settings, "V1_ROLE_PERMISSION_BLOCK_LIST", [])
     return permission_str in block_list
+
+
+class FieldSelectionValidationError(Exception):
+    """Exception raised when field selection validation fails."""
+
+    def __init__(self, message: str):
+        """Initialize with error message."""
+        self.message = message
+        super().__init__(self.message)
+
+
+@dataclass
+class FieldSelection:
+    """Generic, config-driven field selection parser.
+
+    Parses a fields query parameter that supports both root-level fields
+    and nested object fields using the syntax: object(field1,field2) or field1,field2.
+
+    Examples:
+        - "last_modified"
+        - "subject(group.name,group.user_count)"
+        - "subject(id),role(name),last_modified"
+    """
+
+    VALID_ROOT_FIELDS: ClassVar[set] = set()
+    VALID_NESTED_FIELDS: ClassVar[dict[str, set]] = {}
+
+    root_fields: set = field(default_factory=set)
+    nested_fields: dict[str, set] = field(default_factory=dict)
+
+    def get_nested(self, name: str) -> set:
+        """Return the parsed nested fields for name."""
+        return self.nested_fields.get(name, set())
+
+    def get_sub_object_fields(self, nested_name: str, sub_object: str) -> set:
+        """Return sub-fields for a dotted sub-object within a nested field."""
+        prefix = f"{sub_object}."
+        return {f.removeprefix(prefix) for f in self.get_nested(nested_name) if f.startswith(prefix)}
+
+    @classmethod
+    def parse(cls, fields_param: Optional[str]) -> Optional["FieldSelection"]:
+        """Parse a fields parameter string into a FieldSelection instance."""
+        if not fields_param:
+            return None
+
+        selection = cls()
+        invalid_fields: list[str] = []
+
+        parts = cls._split_fields(fields_param)
+
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # Nested: object(field1,field2)
+            match = re.match(r"(\w+)\(([^)]+)\)", part)
+            if match:
+                obj_name = match.group(1)
+                obj_fields = {f.strip() for f in match.group(2).split(",")}
+
+                valid_set = cls.VALID_NESTED_FIELDS.get(obj_name)
+                if valid_set is None:
+                    invalid_fields.append(f"Unknown object type: '{obj_name}'")
+                else:
+                    invalid = obj_fields - valid_set
+                    if invalid:
+                        invalid_fields.extend([f"{obj_name}({f})" for f in invalid])
+                    selection.nested_fields.setdefault(obj_name, set()).update(obj_fields)
+            else:
+                if part not in cls.VALID_ROOT_FIELDS:
+                    invalid_fields.append(f"Unknown field: '{part}'")
+                selection.root_fields.add(part)
+
+        if invalid_fields:
+            error_parts = [f"Invalid field(s): {', '.join(invalid_fields)}."]
+            for obj_name, valid_set in sorted(cls.VALID_NESTED_FIELDS.items()):
+                error_parts.append(f"Valid {obj_name} fields: {sorted(valid_set)}.")
+            error_parts.append(f"Valid root fields: {sorted(cls.VALID_ROOT_FIELDS)}.")
+            raise FieldSelectionValidationError(" ".join(error_parts))
+
+        return selection
+
+    @staticmethod
+    def _split_fields(fields_str: str) -> list[str]:
+        """Split a fields string by comma, respecting parentheses."""
+        if not fields_str:
+            return []
+
+        parts: list[str] = []
+        start = 0
+        depth = 0
+
+        for i, char in enumerate(fields_str):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(fields_str[start:i].strip())
+                start = i + 1
+
+        parts.append(fields_str[start:].strip())
+        return parts
+
+
+class UUIDStringField(UUIDField):
+    """A UUID field that is always represented as a hex string with hyphens (the hex_verbose) format."""
+
+    _pattern = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+    def __init__(self, **kwargs):
+        """Create a new UUIDStringField."""
+        format = kwargs.get("format")
+
+        if format not in (None, "hex_verbose"):
+            raise ValueError("Format, if provided, must be hex_verbose")
+
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        """Convert data to a UUID; it must either already be a UUID or be a hex string with hyphens."""
+        if isinstance(data, UUID):
+            return super().to_internal_value(data)
+
+        if isinstance(data, str):
+            if not re.fullmatch(self._pattern, data):
+                self.fail("invalid", value=data)
+
+            return super().to_internal_value(data)
+
+        self.fail("invalid", value=data)
+        raise AssertionError("unreachable")

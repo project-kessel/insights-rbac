@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the Management queryset helpers."""
+
 import uuid
 from unittest.mock import Mock, patch
 

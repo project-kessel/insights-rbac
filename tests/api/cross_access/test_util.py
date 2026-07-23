@@ -46,7 +46,7 @@ from functools import partial
 URL_LIST = reverse("v1_api:cross-list")
 
 
-@override_settings(PRINCIPAL_USER_DOMAIN="localhost")
+@override_settings(PRINCIPAL_USER_DOMAIN="localhost", ATOMIC_RETRY_DISABLED=True)
 class CrossAccountRequestUtilTests(CrossAccountRequestTest):
     """Test the cross access util module."""
 
@@ -55,7 +55,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         super().setUp()
 
         self.another_tenant_data = {
-            "target_account": self.another_account,
             "target_org": self.another_org_id,
             "start_date": self.format_date(self.ref_time),
             "end_date": self.format_date(self.ref_time + timedelta(90)),
@@ -63,8 +62,8 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         }
 
         self.another_tenant = Tenant.objects.create(
-            tenant_name=f"acct{self.another_tenant_data['target_account']}",
-            account_id=self.another_tenant_data["target_account"],
+            tenant_name=f"acct{self.another_account}",
+            account_id=self.another_account,
             org_id=self.another_tenant_data["target_org"],
         )
         self.another_tenant.ready = True
@@ -101,11 +100,11 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         cross_account_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 all_of(
@@ -139,7 +138,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         # Add one of the same roles to another request for the same user and target org and approve
         # but this one expires later
         additional_request = CrossAccountRequest.objects.create(
-            target_account=self.request_4.target_account,
             target_org=self.request_4.target_org,
             user_id="2222222",
             end_date=self.request_4.end_date + timedelta(days=10),
@@ -164,11 +162,11 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         cross_account_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 all_of(
@@ -204,7 +202,6 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         # Add one of the same roles to another request for the same user and target org and approve
         # but this one expires later
         additional_request = CrossAccountRequest.objects.create(
-            target_account=self.request_4.target_account,
             target_org=self.request_4.target_org,
             user_id="2222222",
             end_date=self.request_4.end_date + timedelta(days=10),
@@ -229,11 +226,11 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         cross_account_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 all_of(

@@ -209,6 +209,16 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RELATIONS_RECONCILE_ENABLED
+            value: ${DR_RELATIONS_RECONCILE_ENABLED}
+          - name: DR_WORKSPACE_RECONCILE_ENABLED
+            value: ${DR_WORKSPACE_RECONCILE_ENABLED}
+          - name: RBAC_KAFKA_CONSUMER_TOPIC
+            value: ${RBAC_KAFKA_CONSUMER_TOPIC}
+          - name: DR_KAFKA_CONSUMER_GROUP_ID
+            value: ${DR_KAFKA_CONSUMER_GROUP_ID}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -239,8 +249,12 @@ objects:
                 optional: true
           - name: INVENTORY_API_SERVER
             value: ${INVENTORY_API_SERVER}
+          - name: REDHAT_SSO
+            value: ${REDHAT_SSO}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: EPH_ENV
+            value: ${EPH_ENV}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -275,14 +289,29 @@ objects:
             value: ${ROOT_SCOPE_PERMISSIONS}
           - name: TENANT_SCOPE_PERMISSIONS
             value: ${TENANT_SCOPE_PERMISSIONS}
+          - name: DEFAULT_SCOPE_PERMISSIONS
+            value: ${DEFAULT_SCOPE_PERMISSIONS}
           ####### Following envs are for scheduler, doesn't hurt to put in worker
           - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB}
           - name: UMB_JOB_ENABLED
             value: ${UMB_JOB_ENABLED}
+          - name: PARITY_CHECK_ENABLED
+            value: ${PARITY_CHECK_ENABLED}
+          - name: PARITY_CHECK_ORG_IDS
+            value: ${PARITY_CHECK_ORG_IDS}
+          - name: PARITY_CHECK_SCHEDULE
+            value: ${PARITY_CHECK_SCHEDULE}
           - name: READ_ONLY_API_MODE
             value: ${READ_ONLY_API_MODE}
-
+          - name: PARITY_CHECK_ENABLED
+            value: ${PARITY_CHECK_ENABLED}
+          - name: PARITY_CHECK_INTERVAL_SECONDS
+            value: ${PARITY_CHECK_INTERVAL_SECONDS}
+          - name: PARITY_CHECK_TENANT_SAMPLE_SIZE
+            value: ${PARITY_CHECK_TENANT_SAMPLE_SIZE}
+          - name: PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE
+            value: ${PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE}
     - name: scheduler-service
       minReplicas: ${{MIN_SCHEDULER_REPLICAS}}
       metadata:
@@ -356,7 +385,7 @@ objects:
           timeoutSeconds: 3
         readinessProbe:
           httpGet:
-            path: /api/rbac/v1/status/
+            path: /api/rbac/v1/ready/
             port: 8000
             scheme: HTTP
           initialDelaySeconds: 60
@@ -516,6 +545,12 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: DR_RELATIONS_RECONCILE_ENABLED
+            value: ${DR_RELATIONS_RECONCILE_ENABLED}
+          - name: DR_WORKSPACE_RECONCILE_ENABLED
+            value: ${DR_WORKSPACE_RECONCILE_ENABLED}
+          - name: CELERY_WORKER_CONCURRENCY
+            value: ${CELERY_WORKER_CONCURRENCY}
           - name: NOTIFICATIONS_TOPIC
             value: ${NOTIFICATIONS_TOPIC}
           - name: EXTERNAL_SYNC_TOPIC
@@ -532,6 +567,8 @@ objects:
             value: ${SA_NAME}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: EPH_ENV
+            value: ${EPH_ENV}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -568,6 +605,8 @@ objects:
             value: ${ROOT_SCOPE_PERMISSIONS}
           - name: TENANT_SCOPE_PERMISSIONS
             value: ${TENANT_SCOPE_PERMISSIONS}
+          - name: DEFAULT_SCOPE_PERMISSIONS
+            value: ${DEFAULT_SCOPE_PERMISSIONS}
           - name: WORKSPACE_ACCESS_TIMING_ENABLED
             value: ${WORKSPACE_ACCESS_TIMING_ENABLED}
           - name: RBAC_KAFKA_CONSUMER_TOPIC
@@ -638,6 +677,8 @@ objects:
             value: ${IT_BYPASS_PERMISSIONS_MODIFY_SERVICE_ACCOUNTS}
           - name: IT_BYPASS_TOKEN_VALIDATION
             value: ${IT_BYPASS_TOKEN_VALIDATION}
+          - name: IT_BYPASS_SYSTEM_USER_ID
+            value: ${IT_BYPASS_SYSTEM_USER_ID}
           - name: IT_SERVICE_BASE_PATH
             value: ${IT_SERVICE_BASE_PATH}
           - name: IT_SERVICE_HOST
@@ -646,14 +687,20 @@ objects:
             value: ${IT_SERVICE_PORT}
           - name: IT_SERVICE_PROTOCOL_SCHEME
             value: ${IT_SERVICE_PROTOCOL_SCHEME}
+          - name: IT_SERVICE_REALM
+            value: ${IT_SERVICE_REALM}
           - name: IT_SERVICE_TIMEOUT_SECONDS
             value: ${IT_SERVICE_TIMEOUT_SECONDS}
           - name: IT_TOKEN_JKWS_CACHE_LIFETIME
             value: ${IT_TOKEN_JKWS_CACHE_LIFETIME}
+          - name: MCP_ENABLED
+            value: ${MCP_ENABLED}
           - name: V2_APIS_ENABLED
             value: ${V2_APIS_ENABLED}
           - name: V2_READ_ONLY_API_MODE
             value: ${V2_READ_ONLY_API_MODE}
+          - name: V2_EDIT_API_ENABLED
+            value: ${V2_EDIT_API_ENABLED}
           - name: V1_ROLE_PERMISSION_BLOCK_LIST
             value: ${V1_ROLE_PERMISSION_BLOCK_LIST}
           - name: READ_ONLY_API_MODE
@@ -662,6 +709,8 @@ objects:
             value: ${ADD_UNGROUPED_HOSTS_ID}
           - name: REMOVE_NULL_VALUE
             value: ${REMOVE_NULL_VALUE}
+          - name: MCP_WRITE_ENABLED
+            value: ${MCP_WRITE_ENABLED}
           - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
             value: ${SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID}
           - name: SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID
@@ -674,6 +723,16 @@ objects:
             value: ${ROOT_SCOPE_PERMISSIONS}
           - name: TENANT_SCOPE_PERMISSIONS
             value: ${TENANT_SCOPE_PERMISSIONS}
+          - name: DEFAULT_SCOPE_PERMISSIONS
+            value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: PARITY_CHECK_ENABLED
+            value: ${PARITY_CHECK_ENABLED}
+          - name: PARITY_CHECK_INTERVAL_SECONDS
+            value: ${PARITY_CHECK_INTERVAL_SECONDS}
+          - name: PARITY_CHECK_TENANT_SAMPLE_SIZE
+            value: ${PARITY_CHECK_TENANT_SAMPLE_SIZE}
+          - name: PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE
+            value: ${PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE}
 
     - name: rbac-kafka-consumer
       minReplicas: ${{RBAC_KAFKA_CONSUMER_REPLICAS}}
@@ -732,6 +791,8 @@ objects:
             value: ${RBAC_KAFKA_CUSTOM_CONSUMER_BROKER}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: EPH_ENV
+            value: ${EPH_ENV}
           - name: RELATION_API_SERVER
             value: ${RELATION_API_SERVER}
           # Relations API variables
@@ -759,6 +820,8 @@ objects:
             value: ${ROOT_SCOPE_PERMISSIONS}
           - name: TENANT_SCOPE_PERMISSIONS
             value: ${TENANT_SCOPE_PERMISSIONS}
+          - name: DEFAULT_SCOPE_PERMISSIONS
+            value: ${DEFAULT_SCOPE_PERMISSIONS}
           - name: REDHAT_SSO
             value: ${REDHAT_SSO}
         livenessProbe:
@@ -785,63 +848,66 @@ objects:
             cpu: ${RBAC_KAFKA_CONSUMER_CPU_REQUEST}
             memory: ${RBAC_KAFKA_CONSUMER_MEMORY_REQUEST}
 
+    - name: rbac-postgres-exporter
+      minReplicas: ${{MIN_POSTGRES_EXPORTER_REPLICAS}}
+      podSpec:
+        image: ${POSTGRES_EXPORTER_IMAGE}
+        args:
+        - "--extend.query-path=/etc/config.yaml"
+        env:
+        - name: DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              key: host
+              name: db-clone
+              optional: false
+        - name: DATABASE_PORT
+          valueFrom:
+            secretKeyRef:
+              key: port
+              name: db-clone
+              optional: false
+        - name: DATABASE_NAME
+          valueFrom:
+            secretKeyRef:
+              key: db
+              name: db-clone
+              optional: false
+        - name: DATA_SOURCE_URI
+          value: "$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)?sslmode=${PGSSLMODE}"
+        - name: DATA_SOURCE_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: db-clone
+              optional: false
+        - name: DATA_SOURCE_PASS
+          valueFrom:
+            secretKeyRef:
+              key: pass
+              name: db-clone
+              optional: false
+        volumes:
+        - name: postgres-exporter-queries
+          configMap:
+            name: rbac-postgres-exporter-queries
+            optional: true
+        volumeMounts:
+        - name: postgres-exporter-queries
+          mountPath: /etc/config.yaml
+          subPath: queries.yaml
+        resources:
+          requests:
+            cpu: ${POSTGRES_EXPORTER_CPU_REQUEST}
+            memory: ${POSTGRES_EXPORTER_MEMORY_REQUEST}
+          limits:
+            cpu: ${POSTGRES_EXPORTER_CPU_LIMIT}
+            memory: ${POSTGRES_EXPORTER_MEMORY_LIMIT}
+      webServices:
+        metrics:
+          enabled: true
+
     jobs:
-      - name: tenant-org-id-populator
-        podSpec:
-          image: quay.io/cloudservices/tenant-utils:latest
-          command:
-            - ./org-id-column-populator
-            - -C
-            - -a
-            - account_id
-            - -o
-            - org_id
-            - -t
-            - api_tenant
-            - --ean-translator-addr
-            - http://${TENANT_TRANSLATOR_HOST}:${TENANT_TRANSLATOR_PORT}
-            - --batch-size
-            - "50"
-          env:
-            - name: LOG_FORMAT
-              value: ${LOG_FORMAT}
-            - name: LOG_BATCH_FREQUENCY
-              value: '1'
-          resources:
-            limits:
-              cpu: 300m
-              memory: 1Gi
-            requests:
-              cpu: 50m
-              memory: 512Mi
-      - name: cross-account-request-target-org-populator
-        podSpec:
-          image: quay.io/cloudservices/tenant-utils:latest
-          command:
-            - ./org-id-column-populator
-            - -C
-            - -a
-            - target_account
-            - -o
-            - target_org
-            - -t
-            - api_crossaccountrequest
-            - --ean-translator-addr
-            - http://${TENANT_TRANSLATOR_HOST}:${TENANT_TRANSLATOR_PORT}
-            - --batch-size
-            - "50"
-          env:
-            - name: LOG_FORMAT
-              value: ${LOG_FORMAT}
-            - name: LOG_BATCH_FREQUENCY
-              value: '1'
-          resources:
-            limits:
-              cpu: 300m
-              memory: 1Gi
-            requests:
-              cpu: 50m
-              memory: 512Mi
       - name: user-id-populator
         podSpec:
           image: quay.io/cloudservices/rbac:latest
@@ -1218,6 +1284,8 @@ objects:
               value: ${ROOT_SCOPE_PERMISSIONS}
             - name: TENANT_SCOPE_PERMISSIONS
               value: ${TENANT_SCOPE_PERMISSIONS}
+            - name: DEFAULT_SCOPE_PERMISSIONS
+              value: ${DEFAULT_SCOPE_PERMISSIONS}
             ######## Following envs are different from worker
             - name: S3_AWS_ACCESS_KEY_ID
               valueFrom:
@@ -1265,14 +1333,13 @@ objects:
               cpu: 50m
               memory: 512Mi
           env: *workspace_job_env_vars
-      - name: fix-duplicate-role-binding-uuids
+      - name: fix-orphan-relations
         podSpec:
-          image: quay.io/cloudservices/rbac:latest
+          image: ${IMAGE}:${IMAGE_TAG}
           command:
             - /opt/rbac/rbac/manage.py
-            - fix_duplicate_role_binding_uuids
-            - "--batch-size"
-            - "1000"
+            - fix_orphan_relations
+            - "--all"
           resources:
             limits:
               cpu: 300m
@@ -1280,8 +1347,53 @@ objects:
             requests:
               cpu: 50m
               memory: 512Mi
-          env: *workspace_job_env_vars
-
+          env: *common_env_vars
+      - name: remove-legacy-root-workspace-tenant-parent
+        podSpec:
+          image: ${IMAGE}:${IMAGE_TAG}
+          command:
+            - /opt/rbac/rbac/manage.py
+            - remove_legacy_root_workspace_tenant_parent_relations
+            - "--all"
+          resources:
+            limits:
+              cpu: 300m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 512Mi
+          env: *common_env_vars
+      - name: replicate-default-workspaces
+        podSpec:
+          image: ${IMAGE}:${IMAGE_TAG}
+          command:
+            - /opt/rbac/rbac/manage.py
+            - replicate_default_workspaces
+            - "--all"
+          resources:
+            limits:
+              cpu: 300m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 512Mi
+          env: *common_env_vars
+      - name: replicate-root-workspace-tenants
+        podSpec:
+          image: ${IMAGE}:${IMAGE_TAG}
+          command:
+            - /opt/rbac/rbac/manage.py
+            - replicate_root_workspace_tenants
+            - "--all"
+            - "--sleep-sec=0.5"
+          resources:
+            limits:
+              cpu: 300m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 512Mi
+          env: *common_env_vars
 - apiVersion: v1
   kind: ConfigMap
   metadata:
@@ -1321,7 +1433,7 @@ objects:
     name: system-users
   data:
     system-users.json: >-
-      ewogICAgImluc2VydF9zdWJfaGVyZSI6IHsKICAgICAgICAiYWRtaW4iOiB0cnVlLAogICAgICAgICJpc19zZXJ2aWNlX2FjY291bnQiOiB0cnVlLAogICAgICAgICJhbGxvd19hbnlfb3JnIjogdHJ1ZQogICAgfQp9Cg==
+      ewogICAgIm1vY2tlZC11c2VyLWlkLWJlY2F1c2UtdG9rZW4tdmFsaWRhdGlvbi1pcy1kaXNhYmxlZCI6IHsKICAgICAgICAiYWRtaW4iOiB0cnVlLAogICAgICAgICJpc19zZXJ2aWNlX2FjY291bnQiOiB0cnVlLAogICAgICAgICJhbGxvd19hbnlfb3JnIjogdHJ1ZQogICAgfQp9Cg==
   type: Opaque
 - apiVersion: v1
   kind: Secret
@@ -1370,6 +1482,20 @@ objects:
       requests:
         storage: 2Gi
 
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: rbac-postgres-exporter
+    labels:
+      app: rbac-postgres-exporter
+  spec:
+    ports:
+    - name: 9187-tcp
+      port: 9187
+      targetPort: 9187
+    selector:
+      pod: rbac-postgres-exporter
+    type: ClusterIP
 parameters:
 - description: Image name
   name: IMAGE
@@ -1477,12 +1603,12 @@ parameters:
 - description: Application allow list for role creation in RBAC
   name: ROLE_CREATE_ALLOW_LIST
   value: cost-management,remediations,inventory,policies,advisor,vulnerability,compliance,automation-analytics,notifications,patch,integrations,ros,staleness,config-manager,idmsvc,subscriptions
-- description: Application exclude list for v2 migration (all permissions)
+- description: Comma-separated apps excluded from v2 migration; same list filters the v2 roles list API only
   name: V2_MIGRATION_APP_EXCLUDE_LIST
-  value: approval
+  value: ansible,automation-analytics,cost-management,hybrid-committed-spend,idmsvc,ocm,ocp-advisor,policies,sources
 - description: Whether or not to bootstrap tenants using V2 logic (i.e. creating workspaces and relations).
   name: V2_BOOTSTRAP_TENANT
-  value: 'False'
+  value: 'True'
 - description: Timestamp expiration allowance on destructive actions through the internal RBAC API
   name: RBAC_DESTRUCTIVE_API_ENABLED_UNTIL
   value: ''
@@ -1531,6 +1657,10 @@ parameters:
   displayName: Memory Limit
   name: CELERY_WORKER_MEMORY_LIMIT
   value: 512Mi
+- description: Number of concurrent Celery worker processes. 0 uses Celery default (CPU count).
+  displayName: Celery Worker Concurrency
+  name: CELERY_WORKER_CONCURRENCY
+  value: "0"
 - description: Initial amount of CPU the init worker container will request.
   displayName: RBAC worker init container CPU Resource Request
   name: INIT_WORKER_CPU_REQUEST
@@ -1592,10 +1722,9 @@ parameters:
 - description: Enable sending out notification events of Red Hat changes
   name: NOTIFICATIONS_RH_ENABLED
   value: 'False'
-- name: TENANT_TRANSLATOR_HOST
-  required: true
-- name: TENANT_TRANSLATOR_PORT
-  value: '8892'
+- description: Enable sending out notification events (typo variant used by service deployer)
+  name: NOTIFICATONS_ENABLED
+  value: 'False'
 - name: GUNICORN_WORKER_MULTIPLIER
   value: '2'
 - name: GUNICORN_THREAD_LIMIT
@@ -1605,6 +1734,15 @@ parameters:
 - description: Enable kafka
   name: KAFKA_ENABLED
   value: 'False'
+- description: Enable disaster recovery reconciliation endpoint and Celery task
+  name: DR_RELATIONS_RECONCILE_ENABLED
+  value: 'False'
+- description: Enable disaster recovery workspace recovery endpoint and Celery task
+  name: DR_WORKSPACE_RECONCILE_ENABLED
+  value: 'False'
+- description: Kafka consumer group ID for DR reconciliation reader
+  name: DR_KAFKA_CONSUMER_GROUP_ID
+  value: 'rbac-dr-consumer-group'
 - name: EXTERNAL_SYNC_TOPIC
   value: 'platform.rbac.sync'
 - name: EXTERNAL_CHROME_TOPIC
@@ -1626,6 +1764,11 @@ parameters:
 - name: IT_BYPASS_TOKEN_VALIDATION
   description: Bypass validating the token that the user must provide in the Authorization header for making IT calls?
   value: 'False'
+- name: IT_BYPASS_SYSTEM_USER_ID
+  description: >
+    System user ID used when IT_BYPASS_TOKEN_VALIDATION is enabled.
+    Must match a key in the SYSTEM_USERS secret for s2s auth to succeed.
+  value: 'mocked-user-id-because-token-validation-is-disabled'
 - name: IT_SERVICE_BASE_PATH
   description: Path of the IT service's API
   value: '/auth/realms/redhat-external/apis'
@@ -1638,6 +1781,9 @@ parameters:
 - name: IT_SERVICE_PROTOCOL_SCHEME
   description: Protocol scheme of the IT service
   value: 'https'
+- name: IT_SERVICE_REALM
+  description: Realm path of the IT service (used to build the OIDC discovery URL and token issuer)
+  value: '/auth/realms/redhat-external'
 - name: IT_SERVICE_TIMEOUT_SECONDS
   description: Number of seconds to wait for a response from IT before timing out and failing the request
   value: '10'
@@ -1666,6 +1812,15 @@ parameters:
 - name: UMB_PORT
   description: Port of the UMB service
   value: '61612'
+- name: PARITY_CHECK_ENABLED
+  description: Enable Kessel-RBAC parity checks background job
+  value: 'False'
+- name: PARITY_CHECK_ORG_IDS
+  description: Comma-separated list of org_ids for parity checks
+  value: ''
+- name: PARITY_CHECK_SCHEDULE
+  description: Cron expression for parity check schedule (minute hour day_of_month month_of_year day_of_week)
+  value: '0 0 * * *'
 - name: SA_NAME
   description: Name of the rbac service account
   value: 'nonprod-hcc-rbac'
@@ -1683,15 +1838,25 @@ parameters:
   value: "https://sso.stage.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
 - name: REPLICATION_TO_RELATION_ENABLED
   description: Enable replication to Relation API
-  value: "False"
+  value: "True"
+- name: EPH_ENV
+  description: Flag indicating deployment is in an ephemeral environment
+  value: 'False'
+- name: MCP_ENABLED
+  description: Flag to enable the MCP (Model Context Protocol) agent-to-service endpoint. Set to False to fully disable the MCP server.
+  value: 'False'
 - name: V2_APIS_ENABLED
   description: Flag to explicitly enable v2 API endpoints
+  value: 'True'
 - name: V2_READ_ONLY_API_MODE
   description: Enforce GET only on RBAC v2 APIs only
   value: 'False'
+- name: V2_EDIT_API_ENABLED
+  description: Fallback for feature flag to enable v2 edit APIs and block v1 write APIs per org
+  value: 'False'
 - name: V1_ROLE_PERMISSION_BLOCK_LIST
   description: Comma-separated list of exact permission strings to hide from v1 API (e.g., rbac:role:read,rbac:group:write)
-  value: ''
+  value: 'rbac:role_binding:view,rbac:role_binding:grant,rbac:role_binding:revoke'
 - name: READ_ONLY_API_MODE
   description: Enforce GET only on RBAC APIs
   value: 'False'
@@ -1721,22 +1886,25 @@ parameters:
   value: 'group.id'
 - description: Flag to enable returning workspace hierarchy in v1 access
   name: WORKSPACE_HIERARCHY_ENABLED
-  value: 'False'
+  value: 'True'
 - name: ADD_UNGROUPED_HOSTS_ID
   description: Add ungrouped hosts workspace id in addition to null
   value: 'False'
 - name: REMOVE_NULL_VALUE
   description: Remove null value from the list of workspace id
   value: 'False'
+- name: MCP_WRITE_ENABLED
+  description: Enable MCP write tools (create groups, roles, etc). Disabled by default for read-only MCP deployments.
+  value: 'False'
 - name: WORKSPACE_ORG_CREATION_LIMIT
-  description: The limit of workspaces for all organisations
+  description: The limit of workspaces for all organizations
   value: '3000'
 - name: WORKSPACE_HIERARCHY_DEPTH_LIMIT
   description: The limit of workspace hierarchy depth
   value: '5'
 - name: WORKSPACE_RESTRICT_DEFAULT_PEERS
   description: When true, prevents the ability to create peer workspaces against the default workspace
-  value: 'False'
+  value: 'True'
 - name: READ_YOUR_WRITES_TIMEOUT_SECONDS
   description: Timeout in seconds for read-your-writes consistency check after workspace creation
   value: '10'
@@ -1747,8 +1915,8 @@ parameters:
   description: The grant type for token generation
   value: 'client_credentials'
 - name: REDHAT_SSO
-  description: The SSO url for rbac environment
-  value: 'sso.stage.redhat.com'
+  description: The SSO url for rbac environment. Leave empty for ephemeral/local to skip JWT auth.
+  value: ''
 - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
   description: The UUID for the role for default root workspace level
   value: ''
@@ -1778,13 +1946,13 @@ parameters:
   value: 300Mi
 - name: RBAC_KAFKA_CONSUMER_TOPIC
   description: The name of the topic for the RBAC Kafka consumer
-  value: 'outbox.event.rbac-consumer-replication-event'
+  value: 'outbox.event.relations-replication-event'
 - name: RBAC_KAFKA_CONSUMER_GROUP_ID
   description: The consumer group ID for the RBAC Kafka consumer
-  value: 'rbac-consumer-group'
+  value: 'connect-relations-sink-connector'
 - name: RBAC_KAFKA_CONSUMER_REPLICAS
   description: The number of replicas for the RBAC Kafka consumer (set to 0 to disable)
-  value: '0'
+  value: '1'
 - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
   description: Custom Kafka broker URL for the RBAC Kafka consumer (if empty, uses default Clowder/localhost configuration)
   value: ''
@@ -1794,6 +1962,39 @@ parameters:
 - name: TENANT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to tenant scope (supports wildcards like rbac:*:*)
   value: ''
+- name: DEFAULT_SCOPE_PERMISSIONS
+  description: Comma-separated list of permissions that bind to default workspace scope (more specific patterns override broader TENANT_SCOPE_PERMISSIONS entries)
+  value: ''
 - name: WORKSPACE_ACCESS_TIMING_ENABLED
   description: Enable detailed timing logs for v2 workspace access checks (for performance investigation)
   value: 'False'
+- name: PARITY_CHECK_ENABLED
+  description: Enable parity access checks between RBAC and Inventory API
+  value: ''
+- name: PARITY_CHECK_INTERVAL_SECONDS
+  description: Time in seconds in which job runs
+  value: '300'
+- name: PARITY_CHECK_TENANT_SAMPLE_SIZE
+  description: Max tenants per run
+  value: '10'
+- name: PARITY_CHECK_PRINCIPAL_SAMPLE_SIZE
+  description: Max principals per tenant
+  value: '50'
+- name: MIN_POSTGRES_EXPORTER_REPLICAS
+  description: Minimum replicas for postgres-exporter
+  value: '0'
+- name: POSTGRES_EXPORTER_IMAGE
+  description: Postgres exporter image
+  value: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
+- name: POSTGRES_EXPORTER_CPU_REQUEST
+  description: Postgres exporter CPU request
+  value: 1m
+- name: POSTGRES_EXPORTER_MEMORY_REQUEST
+  description: Postgres exporter memory request
+  value: 16Mi
+- name: POSTGRES_EXPORTER_CPU_LIMIT
+  description: Postgres exporter CPU limit
+  value: 100m
+- name: POSTGRES_EXPORTER_MEMORY_LIMIT
+  description: Postgres exporter memory limit
+  value: 64Mi

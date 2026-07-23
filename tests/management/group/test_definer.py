@@ -15,10 +15,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the group definer."""
+
 from unittest.mock import ANY, call, patch
 from api.models import Tenant
 
 from django.conf import settings
+from django.test import override_settings
 from management.group.definer import (
     seed_group,
     add_roles,
@@ -32,6 +34,7 @@ from tests.core.test_kafka import copy_call_args
 from management.models import Group, Role, Policy
 
 
+@override_settings(ATOMIC_RETRY_DISABLED=True)
 class GroupDefinerTests(IdentityRequest):
     """Test the group definer functions."""
 

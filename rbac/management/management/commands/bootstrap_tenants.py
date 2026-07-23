@@ -14,7 +14,6 @@ from management.tenant_service.tenant_service import BootstrappedTenant
 
 from api.models import Tenant
 
-
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 

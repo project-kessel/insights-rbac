@@ -15,6 +15,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Functions for importing users data."""
+
 import csv
 import os
 
@@ -28,7 +29,6 @@ from management.tenant_service.v2 import V2TenantBootstrapService
 from management.workspace.model import Workspace
 
 from api.models import Tenant, User
-
 
 BOOT_STRAP_SERVICE = V2TenantBootstrapService(OutboxReplicator())
 

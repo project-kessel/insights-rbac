@@ -15,13 +15,13 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Producer to send messages to kafka server."""
+
 import json
 import logging
 
 from django.conf import settings
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
-
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 

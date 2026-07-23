@@ -16,6 +16,7 @@
 #
 
 """Handler for system defined group."""
+
 import logging
 from typing import Optional, Tuple, Union
 from uuid import uuid4
@@ -39,6 +40,7 @@ from management.policy.model import Policy
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.model import Role
+from management.role_binding.service import RoleBindingService
 from management.tenant_service.v2 import V2TenantBootstrapService, lock_tenant_for_bootstrap
 from management.utils import clear_pk
 from rest_framework import serializers
@@ -146,6 +148,10 @@ def clone_default_group_in_public_schema(group, tenant) -> Optional[Group]:
             public_default_roles, remove_default_access_from=bootstrapped_tenant.mapping
         )
         dual_write_handler.replicate()
+
+        # Delete USER default role bindings since tenant now has custom default group
+        role_binding_service = RoleBindingService(tenant=tenant)
+        role_binding_service.delete_user_default_bindings()
 
     return group
 

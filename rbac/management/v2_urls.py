@@ -14,17 +14,41 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Describes the urls and patterns for the management application."""
+
 from django.urls import include, path
+from management.role.v2_view import RoleV2ViewSet
 from management.views import (
     RoleBindingViewSet,
     WorkspaceViewSet,
 )
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import DefaultRouter, Route
 
 
-ROUTER = DefaultRouter()
+class V2Router(DefaultRouter):
+    """Router for V2 view sets."""
+
+    routes = DefaultRouter.routes + [
+        Route(
+            url=r"^{prefix}:batchCreate{trailing_slash}$",
+            mapping={"post": "batch_create"},
+            name="{basename}-batch-create",
+            detail=False,
+            initkwargs={"suffix": "BatchCreate"},
+        ),
+        Route(
+            url=r"^{prefix}:batchDelete{trailing_slash}$",
+            mapping={"post": "bulk_destroy"},
+            name="{basename}-bulk-destroy",
+            detail=False,
+            initkwargs={"suffix": "BulkDestroy"},
+        ),
+    ]
+
+
+ROUTER = V2Router()
 ROUTER.register(r"workspaces", WorkspaceViewSet, basename="workspace")
 ROUTER.register(r"role-bindings", RoleBindingViewSet, basename="role-bindings")
+ROUTER.register(r"roles", RoleV2ViewSet, basename="roles")
 
 # pylint: disable=invalid-name
 urlpatterns = [

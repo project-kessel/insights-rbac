@@ -30,7 +30,6 @@ from rest_framework import mixins, viewsets
 
 from api.models import Tenant
 
-
 logger = logging.getLogger(__name__)
 TENANTS = TenantCache()
 

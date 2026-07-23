@@ -16,6 +16,7 @@
 #
 
 """View for openapi documentation."""
+
 import json
 
 from rest_framework import permissions

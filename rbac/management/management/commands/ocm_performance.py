@@ -8,7 +8,6 @@
 # optional req: 2 groups per principle, 5 roles per group with 10 permissions each
 """Baseline tests for OCM RBAC performance."""
 
-
 from django.core.management.base import BaseCommand
 from tests.performance.test_performance_concurrent import (
     test_full_sync,

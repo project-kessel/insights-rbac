@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Defines the Admin Access Permissions class."""
+
 from django.urls import reverse
 from management.utils import validate_and_get_key
 from rest_framework import permissions

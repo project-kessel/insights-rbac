@@ -52,12 +52,20 @@
       "description": "Operations about workspaces."
     },
     {
-    "name": "Inventory",
-    "description": "Operations related to inventory api."
+      "name": "Inventory",
+      "description": "Operations related to inventory api."
     },
     {
-    "name": "Relations",
-    "description": "Operations related to relations api."
+      "name": "Relations",
+      "description": "Operations related to relations api."
+    },
+    {
+      "name": "Permission",
+      "description": "Operations about permissions."
+    },
+    {
+      "name": "Migration",
+      "description": "Operations about migrations."
     }
   ],
   "paths": {
@@ -211,6 +219,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RolePagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/roles/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/roles/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "name": "Catalog Administrator",
+                      "display_name": "Catalog Administrator",
+                      "uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                      "system": true,
+                      "platform_default": false,
+                      "admin_default": false,
+                      "policyCount": 1,
+                      "accessCount": 5,
+                      "applications": [
+                        "catalog"
+                      ],
+                      "created": "2019-01-21T17:32:28Z",
+                      "modified": "2019-03-04T07:25:58Z"
+                    }
+                  ]
                 }
               }
             }
@@ -319,6 +355,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GroupPagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/groups/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/groups/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "name": "Default access",
+                      "description": "Default access group",
+                      "uuid": "1c4da003-569d-433f-8159-fd77e6984de1",
+                      "principalCount": 5,
+                      "roleCount": 3,
+                      "system": true,
+                      "platform_default": true,
+                      "admin_default": false,
+                      "created": "2019-01-21T17:32:28Z",
+                      "modified": "2019-03-04T07:25:58Z"
+                    }
+                  ]
                 }
               }
             }
@@ -442,6 +503,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RolePagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/groups/uuid/roles/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/groups/uuid/roles/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "name": "Catalog Administrator",
+                      "display_name": "Catalog Administrator",
+                      "uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                      "system": true,
+                      "platform_default": false,
+                      "admin_default": false,
+                      "policyCount": 1,
+                      "accessCount": 5,
+                      "applications": [
+                        "catalog"
+                      ],
+                      "created": "2019-01-21T17:32:28Z",
+                      "modified": "2019-03-04T07:25:58Z"
+                    }
+                  ]
                 }
               }
             }
@@ -551,6 +640,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GroupPagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/principal/smithj/groups/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/principal/smithj/groups/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "name": "Default access",
+                      "description": "Default access group",
+                      "uuid": "1c4da003-569d-433f-8159-fd77e6984de1",
+                      "principalCount": 5,
+                      "roleCount": 3,
+                      "system": true,
+                      "platform_default": true,
+                      "admin_default": false,
+                      "created": "2019-01-21T17:32:28Z",
+                      "modified": "2019-03-04T07:25:58Z"
+                    }
+                  ]
                 }
               }
             }
@@ -657,6 +771,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RolePagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/principal/smithj/groups/uuid/roles/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/principal/smithj/groups/uuid/roles/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "name": "Catalog Administrator",
+                      "display_name": "Catalog Administrator",
+                      "uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                      "system": true,
+                      "platform_default": false,
+                      "admin_default": false,
+                      "policyCount": 1,
+                      "accessCount": 5,
+                      "applications": [
+                        "catalog"
+                      ],
+                      "created": "2019-01-21T17:32:28Z",
+                      "modified": "2019-03-04T07:25:58Z"
+                    }
+                  ]
                 }
               }
             }
@@ -829,6 +971,27 @@
                       "$ref": "#/components/schemas/ServiceAccountInGroupResponse"
                     }
                   ]
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/12345/groups/uuid/principals/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/12345/groups/uuid/principals/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "username": "smithj",
+                      "email": "smithj@mytechco.com",
+                      "first_name": "John",
+                      "last_name": "Smith",
+                      "is_active": true,
+                      "is_org_admin": false
+                    }
+                  ]
                 }
               }
             }
@@ -896,6 +1059,29 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TenantPagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 2
+                  },
+                  "links": {
+                    "first": "/integrations/tenant/?offset=0&limit=10",
+                    "next": null,
+                    "previous": null,
+                    "last": "/integrations/tenant/?offset=0&limit=10"
+                  },
+                  "data": [
+                    {
+                      "id": 1,
+                      "org_id": "12345",
+                      "account_id": "54321"
+                    },
+                    {
+                      "id": 2,
+                      "org_id": "67890",
+                      "account_id": "09876"
+                    }
+                  ]
                 }
               }
             }
@@ -929,7 +1115,7 @@
         }
       }
     },
-    "/api/utils/cars/clean/": {
+    "/api/cars/clean/": {
       "get": {
         "tags": [
           "Utils",
@@ -940,7 +1126,24 @@
         "operationId": "getCars",
         "responses": {
           "200": {
-            "description": "Info of cars with custom roles."
+            "description": "Info of cars with custom roles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {}
+                  }
+                },
+                "example": {
+                  "request-uuid-1": [
+                    1,
+                    "Role Display Name"
+                  ]
+                }
+              }
+            }
           },
           "405": {
             "description": "Invalid method, only 'Get' and 'POST' are allowed.",
@@ -974,7 +1177,15 @@
         "operationId": "cleanCars",
         "responses": {
           "200": {
-            "description": "Deleted cars with custom roles."
+            "description": "Deleted cars with custom roles.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Cars cleaned up."
+              }
+            }
           },
           "400": {
             "description": "Destructive operations disallowed.",
@@ -1054,6 +1265,30 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OrgAdminPagination"
+                },
+                "example": {
+                  "meta": {
+                    "count": 1
+                  },
+                  "links": {
+                    "first": "/api/utils/get_org_admin/12345/?type=org_id&limit=10&offset=0",
+                    "next": "/api/utils/get_org_admin/12345/?type=org_id&limit=10&offset=10",
+                    "previous": "/api/utils/get_org_admin/12345/?type=org_id&limit=10&offset=0",
+                    "last": "/api/utils/get_org_admin/12345/?type=org_id&limit=10&offset=0"
+                  },
+                  "data": [
+                    {
+                      "id": 123,
+                      "username": "jdoe",
+                      "first_name": "John",
+                      "last_name": "Doe",
+                      "locale": "en_US",
+                      "email": "jdoe@gmail.com",
+                      "is_active": true,
+                      "is_org_admin": true,
+                      "is_internal": false
+                    }
+                  ]
                 }
               }
             }
@@ -1110,7 +1345,15 @@
         ],
         "responses": {
           "204": {
-            "description": "Role deleted"
+            "description": "Role deleted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Role 'RoleName' deleted."
+              }
+            }
           },
           "400": {
             "description": "Bad Input"
@@ -1161,7 +1404,15 @@
         ],
         "responses": {
           "204": {
-            "description": "Permission deleted"
+            "description": "Permission deleted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Permission 'app:resource:verb' deleted."
+              }
+            }
           },
           "400": {
             "description": "Bad Input"
@@ -1220,7 +1471,15 @@
         ],
         "responses": {
           "202": {
-            "description": "Data migration from V1 to V2 are running in a background worker."
+            "description": "Data migration from V1 to V2 are running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Data migration from V1 to V2 are running in a background worker."
+              }
+            }
           },
           "405": {
             "description": "Invalid method, only 'POST' is allowed.",
@@ -1262,7 +1521,12 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["True", "False", "outbox", "logging"],
+              "enum": [
+                "True",
+                "False",
+                "outbox",
+                "logging"
+              ],
               "default": "True"
             }
           }
@@ -1284,6 +1548,10 @@
                       "description": "The replication mode being used"
                     }
                   }
+                },
+                "example": {
+                  "message": "Binding scope migration is running in a background worker.",
+                  "write_relationships": "True"
                 }
               }
             }
@@ -1353,6 +1621,11 @@
                       "description": "Whether this is a dry run"
                     }
                   }
+                },
+                "example": {
+                  "message": "Cleanup task for tenant 12345 is running in a background worker.",
+                  "org_id": "12345",
+                  "dry_run": false
                 }
               }
             }
@@ -1434,6 +1707,14 @@
                       "description": "Number of parent relations actually added (0 if dry_run)"
                     }
                   }
+                },
+                "example": {
+                  "org_id": "12345",
+                  "dry_run": false,
+                  "workspaces_checked": 10,
+                  "workspaces_missing_parent": 2,
+                  "relations_to_add": 2,
+                  "relations_added": 2
                 }
               }
             }
@@ -1517,7 +1798,44 @@
         ],
         "responses": {
           "200": {
-            "description": "Bootstrap tenant with org_id finished. When force_admin_only=true, returns JSON with results array containing admin_bindings_replicated count or error for each org_id."
+            "description": "Bootstrap tenant with org_id finished. When force_admin_only=true, returns JSON with results array containing admin_bindings_replicated count or error for each org_id.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bootstrapping tenants with org_ids ['12345'] were finished."
+              },
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "org_id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "results": [
+                    {
+                      "org_id": "12345",
+                      "status": "ok"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request, must supply the 'org_id' query parameter.",
@@ -1578,6 +1896,12 @@
                       "description": "List of unbootstrapped tenant IDs."
                     }
                   }
+                },
+                "example": {
+                  "org_ids": [
+                    "12345",
+                    "67890"
+                  ]
                 }
               }
             }
@@ -1596,7 +1920,7 @@
         }
       }
     },
-    "/fetch_replication_data": {
+    "/api/utils/fetch_replication_data/": {
       "get": {
         "tags": [
           "V2",
@@ -1678,6 +2002,32 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "replication_slots": [
+                    [
+                      "debezium",
+                      "logical"
+                    ]
+                  ],
+                  "publications": [
+                    [
+                      12345,
+                      "dbz_publication"
+                    ]
+                  ],
+                  "publication_tables": [
+                    [
+                      "dbz_publication",
+                      "management_outbox"
+                    ]
+                  ],
+                  "wal_lsn": [
+                    [
+                      "0/A000000",
+                      "0/9FF0000"
+                    ]
+                  ]
                 }
               }
             }
@@ -1712,7 +2062,7 @@
         }
       }
     },
-    "/api/utils/bindings/": {
+    "/api/utils/bindings/{role_uuid}/": {
       "get": {
         "tags": [
           "V2",
@@ -1725,20 +2075,43 @@
         "parameters": [
           {
             "name": "role_uuid",
-            "in": "query",
+            "in": "path",
             "required": true,
-            "description": "Defines the uuid of the role.",
+            "description": "UUID of the role.",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "format": "uuid"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "List of bindingmappings for a role."
+            "description": "List of bindingmappings for a role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Binding mapping object"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 1,
+                    "role": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "resource_type_namespace": "rbac",
+                    "resource_type_name": "workspace"
+                  }
+                ]
+              }
+            }
           },
-          "400": {
-            "description": "Invalid request, must supply the 'role_uuid' query parameter.",
+          "404": {
+            "description": "Role not found."
+          },
+          "405": {
+            "description": "Invalid method, only 'GET' or 'DELETE' is allowed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1747,8 +2120,61 @@
               }
             }
           },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "V2",
+          "Role",
+          "Utils",
+          "Destructive"
+        ],
+        "summary": "Delete bindingmappings for a role",
+        "description": "Delete bindingmappings for a role. Supports the same filter query parameters as GET.",
+        "operationId": "DeleteBinding",
+        "parameters": [
+          {
+            "name": "role_uuid",
+            "in": "path",
+            "required": true,
+            "description": "UUID of the role.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bindingmappings deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Deletion result with details"
+                },
+                "example": {
+                  "deleted_count": 3,
+                  "role_uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Role not found."
+          },
           "405": {
-            "description": "Invalid method, only 'GET' is allowed.",
+            "description": "Invalid method, only 'GET' or 'DELETE' is allowed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1796,7 +2222,15 @@
         ],
         "responses": {
           "200": {
-            "description": "Mappings of the binding."
+            "description": "Mappings of the binding.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Binding mapping {'id': 1, 'role': 'uuid'} cleaned."
+              }
+            }
           },
           "400": {
             "description": "Invalid request, must supply the 'users' or 'groups' in field.",
@@ -1868,7 +2302,15 @@
         ],
         "responses": {
           "202": {
-            "description": "Resource deletion is running in a background worker."
+            "description": "Resource deletion is running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Resource deletion is running in a background worker."
+              }
+            }
           },
           "400": {
             "description": "Invalid request, must supply the 'resource' query parameter.",
@@ -1937,7 +2379,21 @@
         ],
         "responses": {
           "200": {
-            "description": "Listing the list of resource ids."
+            "description": "Listing the list of resource ids.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "example": [
+                  "uuid-1",
+                  "uuid-2"
+                ]
+              }
+            }
           },
           "400": {
             "description": "Invalid request, must supply the 'resource' query parameter.",
@@ -1983,7 +2439,15 @@
         "operationId": "ViewTenantReadyFalse",
         "responses": {
           "200": {
-            "description": "Total of tenants not set to be ready."
+            "description": "Total of tenants not set to be ready.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Total of 5 tenants not set to be ready."
+              }
+            }
           },
           "405": {
             "description": "Invalid method.",
@@ -2028,7 +2492,15 @@
         ],
         "responses": {
           "200": {
-            "description": "0 tenant with ready flag equal to false."
+            "description": "0 tenant with ready flag equal to false.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Total of 5 tenants has been updated. 0 tenant with ready flag equal to false."
+              }
+            }
           },
           "400": {
             "description": "Invalid request, must supply the 'max_expected' query parameter.",
@@ -2142,6 +2614,18 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "message": "Tenant org_id population completed.",
+                  "tenants_checked": 100,
+                  "mappings_from_bop": 95,
+                  "statistics": {
+                    "updated": 93,
+                    "deleted_no_mapping": 5,
+                    "deleted_duplicate": 2,
+                    "errors": 0,
+                    "error_details": []
+                  }
                 }
               }
             }
@@ -2221,7 +2705,15 @@
         ],
         "responses": {
           "200": {
-            "description": "Tenants deleting in worker."
+            "description": "Tenants deleting in worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Tenants deleting in worker."
+              }
+            }
           },
           "400": {
             "description": "Destructive operations disallowed."
@@ -2296,14 +2788,76 @@
       }
     },
     "/api/utils/principal/": {
+      "get": {
+        "tags": [
+          "Principal",
+          "Utils"
+        ],
+        "summary": "List principals that would be deleted",
+        "description": "Preview which principals would be deleted based on the provided usernames and type. For user type, checks BOP to identify inactive users.",
+        "operationId": "ListPrincipalsToDelete",
+        "parameters": [
+          {
+            "name": "usernames",
+            "in": "query",
+            "required": true,
+            "description": "Comma separated list of usernames of the principals.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_type",
+            "in": "query",
+            "required": true,
+            "description": "The user type to search principals.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "user",
+                "service-account"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of principals that would be deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Principals to be deleted: ['user1', 'user2']"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Input - missing usernames or user_type parameter."
+          },
+          "405": {
+            "description": "Invalid method."
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "Principal",
           "Destructive",
           "Utils"
         ],
-        "summary": "Delete principals without user_id and inactive.",
-        "description": "Delete principals without principals and inactive..",
+        "summary": "Delete principals that are inactive",
+        "description": "Delete principals that are not active in BOP. For user type, checks BOP to confirm inactivity before deletion.",
         "operationId": "DeletePrincipal",
         "parameters": [
           {
@@ -2331,20 +2885,21 @@
         ],
         "responses": {
           "204": {
-            "description": "Principals deleted"
-          },
-          "400": {
-            "description": "Bad Input"
-          },
-          "404": {
-            "description": "Not Found",
+            "description": "Principals deleted",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
+                  "type": "string"
+                },
+                "example": "Users deleted: ['user1', 'user2']"
               }
             }
+          },
+          "400": {
+            "description": "Bad Input - missing parameters or destructive operations disallowed."
+          },
+          "405": {
+            "description": "Invalid method."
           },
           "500": {
             "description": "Unexpected Error",
@@ -2392,7 +2947,15 @@
         "operationId": "ListUsername",
         "responses": {
           "200": {
-            "description": "List of uppercase username."
+            "description": "List of uppercase username.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Usernames to be updated: ['UserA'] to ['usera']"
+              }
+            }
           },
           "405": {
             "description": "Invalid method.",
@@ -2426,7 +2989,15 @@
         "operationId": "LowerUsername",
         "responses": {
           "200": {
-            "description": "All uppercase username updated to lowercase."
+            "description": "All uppercase username updated to lowercase.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Updated 3 usernames"
+              }
+            }
           },
           "400": {
             "description": "Invalid request.",
@@ -2581,6 +3152,27 @@
                     "email_address",
                     "groups"
                   ]
+                },
+                "example": {
+                  "username": "smithj",
+                  "email_address": "smithj@redhat.com",
+                  "groups": [
+                    {
+                      "name": "Default access",
+                      "description": "Default access group",
+                      "roles": [
+                        {
+                          "name": "Catalog Administrator",
+                          "display_name": "Catalog Administrator",
+                          "description": "A role for catalog admins",
+                          "permissions": [
+                            "catalog | portfolios | read",
+                            "catalog | portfolios | write"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
                 }
               }
             }
@@ -2639,7 +3231,36 @@
         "operationId": "GetUngrouped",
         "responses": {
           "201": {
-            "description": "The ungrouped hosts workspace of the org."
+            "description": "The ungrouped hosts workspace of the org.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "parent_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "id": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                  "name": "Ungrouped Hosts",
+                  "type": "standard",
+                  "parent_id": "b9e44675-739g-5fca-ce6a-7b3059cgc42f"
+                }
+              }
+            }
           },
           "405": {
             "description": "Invalid method.",
@@ -2686,7 +3307,33 @@
         ],
         "responses": {
           "200": {
-            "description": "The number of resource definitions that would be corrected."
+            "description": "The number of resource definitions that would be corrected.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "5 bad resource definitions"
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 1,
+                    "operation": "in",
+                    "value": [
+                      "val1",
+                      "val2"
+                    ]
+                  }
+                ]
+              }
+            }
           },
           "405": {
             "description": "Invalid method.",
@@ -2731,7 +3378,22 @@
         ],
         "responses": {
           "200": {
-            "description": "The number of resource definitions that were corrected."
+            "description": "The number of resource definitions that were corrected.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "bulk": {
+                    "value": "Updated 5 bad resource definitions"
+                  },
+                  "single": {
+                    "value": "Resource definition id = 123 updated."
+                  }
+                }
+              }
+            }
           },
           "405": {
             "description": "Invalid method.",
@@ -2756,7 +3418,7 @@
         }
       }
     },
-    "/_private/api/utils/workspace/": {
+    "/api/utils/workspace/": {
       "get": {
         "tags": [
           "Workspace"
@@ -2801,6 +3463,30 @@
                       "example": "5 standard workspace(s) eligible for removal."
                     }
                   ]
+                },
+                "examples": {
+                  "count_only": {
+                    "summary": "Count only (detail=false)",
+                    "value": "5 standard workspace(s) eligible for removal."
+                  },
+                  "detailed": {
+                    "summary": "Detailed list (detail=true)",
+                    "value": {
+                      "count": 2,
+                      "data": [
+                        {
+                          "id": "57e60f90-8c0c-4bd1-87a0-2143759aae1c",
+                          "name": "My Workspace",
+                          "parent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                          "description": "A standard workspace",
+                          "created": "2024-01-21T17:32:28Z",
+                          "modified": "2024-03-04T07:25:58Z",
+                          "type": "standard",
+                          "tenant_id": 1
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2823,7 +3509,7 @@
           "Destructive"
         ],
         "summary": "Delete standard workspaces.",
-        "description": "Deletes one or all standard workspaces. If `id` is provided, deletes one workspace; otherwise deletes all.",
+        "description": "Deletes one or all standard workspaces. If `id` is provided, deletes one workspace; otherwise deletes all. Use `without_child_only=true` to delete only leaf workspaces.",
         "parameters": [
           {
             "name": "id",
@@ -2832,6 +3518,16 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "without_child_only",
+            "in": "query",
+            "description": "If true, only delete standard workspaces that have no children. Default is false (delete all).",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           }
         ],
@@ -2889,7 +3585,7 @@
         }
       }
     },
-    "/_private/api/relations/lookup_resource/": {
+    "/api/relations/lookup_resource/": {
       "post": {
         "tags": [
           "Relations"
@@ -2920,7 +3616,56 @@
         },
         "responses": {
           "200": {
-            "description": "Resource returned."
+            "description": "Resource returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "resource": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "object",
+                                "properties": {
+                                  "namespace": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "id": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "resources": [
+                    {
+                      "resource": {
+                        "type": {
+                          "namespace": "rbac",
+                          "name": "group"
+                        },
+                        "id": "bob_club"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
           },
           "204": {
             "description": "No resource found."
@@ -2952,7 +3697,7 @@
         }
       }
     },
-    "/_private/api/relations/check_relation/": {
+    "/api/relations/check_relation/": {
       "post": {
         "tags": [
           "Relations"
@@ -2997,6 +3742,9 @@
                       "example": true
                     }
                   }
+                },
+                "example": {
+                  "allowed": true
                 }
               }
             }
@@ -3040,7 +3788,7 @@
         }
       }
     },
-    "/_private/api/relations/read_tuples/": {
+    "/api/relations/read_tuples/": {
       "post": {
         "tags": [
           "Relations"
@@ -3155,73 +3903,98 @@
         }
       }
     },
-  "/_private/api/relations/bootstrap_tenants/{org_id}/": {
-    "post": {
-      "tags": [
-        "Relations"
-      ],
-      "summary": "Check if a tenant is correctly bootstrapped in the relations API",
-      "description": "Checks if the tenant's bootstrapped resources and relationships are correctly replicated in the Relations API.",
-      "parameters": [
-        {
-          "name": "org_id",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "type": "string"
-          },
-          "description": "The organization ID of the tenant to check."
-        }
-      ],
-      "responses": {
-        "200": {
-          "description": "Bootstrapped tenant check result.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "org_id": {
-                    "type": "string",
-                    "example": "example-org-id"
-                  },
-                  "bootstrapped_correct": {
-                    "type": "boolean",
-                    "example": true
+    "/api/inventory/bootstrap_tenants/{org_id}/": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "summary": "Check if a tenant is correctly bootstrapped in the inventory API",
+        "description": "Checks if the tenant's bootstrapped resources and relationships are correctly replicated in the Inventory API.",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The organization ID of the tenant to check."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bootstrapped tenant check result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "org_id": {
+                      "type": "string",
+                      "example": "example-org-id"
+                    },
+                    "bootstrapped_correct": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "relations_checked": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "check": {
+                            "type": "string"
+                          },
+                          "result": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
                   }
+                },
+                "example": {
+                  "org_id": "12345",
+                  "bootstrapped_correct": true,
+                  "relations_checked": [
+                    {
+                      "check": "default_group",
+                      "result": true
+                    }
+                  ]
                 }
               }
             }
-          }
-        },
-        "404": {
-          "description": "Tenant not found.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Error404"
+          },
+          "404": {
+            "description": "Tenant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error404"
+                }
               }
             }
-          }
-        },
-        "500": {
-          "description": "Unexpected Error",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Error500"
-              },
-              "examples": {
-                "gRPCError": {
-                  "value": {
-                    "detail": "Error occurred in gRPC call",
-                    "error": "gRPC Error"
-                  }
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error500"
                 },
-                "GeneralError": {
-                  "value": {
-                    "detail": "Error occurred during bootstrapped tenant check",
-                    "error": "Unexpected error"
+                "examples": {
+                  "gRPCError": {
+                    "value": {
+                      "detail": "Error occurred in gRPC call",
+                      "error": "gRPC Error"
+                    }
+                  },
+                  "GeneralError": {
+                    "value": {
+                      "detail": "Error occurred during bootstrapped tenant check",
+                      "error": "Unexpected error"
+                    }
                   }
                 }
               }
@@ -3229,18 +4002,45 @@
           }
         }
       }
-    }
-  },
-    "/_private/api/group_assignments/{group_uuid}": {
+    },
+    "/api/inventory/group_assignments/{group_uuid}/": {
       "post": {
         "tags": [
-          "Relations"
+          "Inventory"
         ],
-        "summary": "Check group assignments are correct on relations api.",
-        "description": "Returns resource from relations api.",
+        "summary": "Check group-principal assignments are correct on inventory API",
+        "description": "Calculates expected group-principal relations and checks them against the inventory API.",
         "responses": {
           "200": {
-            "description": "Resource returned."
+            "description": "Group assignment check results returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "principal": {
+                        "type": "string"
+                      },
+                      "relation_correct": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "example": [
+                  {
+                    "principal": "user1",
+                    "relation_correct": true
+                  },
+                  {
+                    "principal": "user2",
+                    "relation_correct": false
+                  }
+                ]
+              }
+            }
           },
           "204": {
             "description": "No resource found."
@@ -3272,72 +4072,88 @@
         }
       }
     },
-    "/_private/api/inventory/check/": {
-    "post": {
-      "tags": [
-        "Inventory"
-      ],
-      "summary": "Check a relationship in the inventory api.",
-      "description": "Returns whether a relationship exists between a subject and a resource on inventory api.",
-      "requestBody": {
-        "content": {
-          "application/json": {
-            "example": {
-              "resource": {
-                "resource_id": "bob_club",
-                "resource_type": "group",
-                "reporter": {
-                  "type": "rbac"
-                }
-              },
-              "relation": "member",
-              "subject": {
+    "/api/inventory/check/": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "summary": "Check a relationship in the inventory api.",
+        "description": "Returns whether a relationship exists between a subject and a resource on inventory api.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
                 "resource": {
-                  "resource_id": "bob",
-                  "resource_type": "principal",
+                  "resource_id": "bob_club",
+                  "resource_type": "group",
                   "reporter": {
                     "type": "rbac"
                   }
-                }
-              }
-            }
-          }
-        }
-      },
-      "responses": {
-        "200": {
-          "description": "Relation evaluated and returned."
-        },
-        "204": {
-          "description": "No relation found."
-        },
-        "400": {
-          "description": "gRPC Error",
-          "content": {
-            "application/json": {
-              "examples": {
-                "gRPCError": {
-                  "value": {
-                    "detail": "Error occurred in gRPC call",
-                    "error": "gRPC Error"
+                },
+                "relation": "member",
+                "subject": {
+                  "resource": {
+                    "resource_id": "bob",
+                    "resource_type": "principal",
+                    "reporter": {
+                      "type": "rbac"
+                    }
                   }
                 }
               }
             }
           }
         },
-        "500": {
-          "description": "Unexpected Error",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Error500"
-              },
-              "examples": {
-                "Error": {
-                  "value": {
-                    "detail": "Error occurred in call to check inventory endpoint",
-                    "error": "Error message"
+        "responses": {
+          "200": {
+            "description": "Relation evaluated and returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "allowed": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "example": {
+                  "allowed": true
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No relation found."
+          },
+          "400": {
+            "description": "gRPC Error",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "gRPCError": {
+                    "value": {
+                      "detail": "Error occurred in gRPC call",
+                      "error": "gRPC Error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error500"
+                },
+                "examples": {
+                  "Error": {
+                    "value": {
+                      "detail": "Error occurred in call to check inventory endpoint",
+                      "error": "Error message"
+                    }
                   }
                 }
               }
@@ -3345,15 +4161,14 @@
           }
         }
       }
-    }
-  },
-    "/_private/api/inventory/check_workspace/{workspace_uuid}/": {
-    "post": {
-      "tags": [
-        "Inventory"
-      ],
-      "summary": "Check a relationship in the inventory api.",
-      "description": "Returns whether a relationship exists between a parent-child workspaces on inventory api.",
+    },
+    "/api/inventory/check_workspace/{workspace_uuid}/": {
+      "post": {
+        "tags": [
+          "Inventory"
+        ],
+        "summary": "Check a relationship in the inventory api.",
+        "description": "Returns whether a relationship exists between a parent-child workspaces on inventory api.",
         "parameters": [
           {
             "name": "descendants",
@@ -3365,40 +4180,70 @@
             }
           }
         ],
-      "responses": {
-        "200": {
-          "description": "Relation evaluated and returned."
-        },
-        "204": {
-          "description": "No relation found."
-        },
-        "400": {
-          "description": "gRPC Error",
-          "content": {
-            "application/json": {
-              "examples": {
-                "gRPCError": {
-                  "value": {
-                    "detail": "gRPC error occurred during inventory workspace relation check",
-                    "error": "gRPC Error"
+        "responses": {
+          "200": {
+            "description": "Relation evaluated and returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "org_id": {
+                      "type": "string"
+                    },
+                    "workspace_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "workspace_parent_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "workspace_relation_correct": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "example": {
+                  "org_id": "12345",
+                  "workspace_id": "ws-uuid",
+                  "workspace_parent_id": "parent-uuid",
+                  "workspace_relation_correct": true
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No relation found."
+          },
+          "400": {
+            "description": "gRPC Error",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "gRPCError": {
+                    "value": {
+                      "detail": "gRPC error occurred during inventory workspace relation check",
+                      "error": "gRPC Error"
+                    }
                   }
                 }
               }
             }
-          }
-        },
-        "500": {
-          "description": "Unexpected Error",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Error500"
-              },
-              "examples": {
-                "Error": {
-                  "value": {
-                    "detail": "Unexpected error during inventory workspace relation check",
-                    "error": "Error message"
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error500"
+                },
+                "examples": {
+                  "Error": {
+                    "value": {
+                      "detail": "Unexpected error during inventory workspace relation check",
+                      "error": "Error message"
+                    }
                   }
                 }
               }
@@ -3406,9 +4251,8 @@
           }
         }
       }
-    }
     },
-    "/_private/api/inventory/check_role/{role_uuid}/": {
+    "/api/inventory/check_role/{role_uuid}/": {
       "post": {
         "tags": [
           "Inventory"
@@ -3453,6 +4297,13 @@
                         }
                       }
                     }
+                  }
+                },
+                "example": {
+                  "V2_role_checks": {
+                    "v1_role_uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "v1_role_name": "Catalog Administrator",
+                    "V2_role_relations_correct": true
                   }
                 }
               }
@@ -3504,7 +4355,985 @@
         }
       }
     },
-    "/utils/kafka_test_message/": {
+    "/api/inventory/check_cross_account_request/{request_id}/": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "summary": "Check an approved cross account request has correct relations on Inventory API.",
+        "description": "Re-runs the CAR dual writer with an in-memory replicator to determine the expected relation tuples, then verifies each tuple exists in the Inventory API. Only approved requests can be checked.",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "UUID of the cross account request to check.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cross account request check result returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cross_account_request_checks": {
+                      "type": "object",
+                      "properties": {
+                        "request_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "example": "a8d33564-628f-4eba-bd59-6a2948bfb31e"
+                        },
+                        "target_org": {
+                          "type": "string",
+                          "example": "12345"
+                        },
+                        "user_id": {
+                          "type": "string",
+                          "example": "user123"
+                        },
+                        "status": {
+                          "type": "string",
+                          "example": "approved"
+                        },
+                        "roles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "example": ["a8d33564-628f-4eba-bd59-6a2948bfb31e"]
+                        },
+                        "relations_correct": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "cross_account_request_checks": {
+                    "request_id": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "target_org": "12345",
+                    "user_id": "user123",
+                    "status": "approved",
+                    "roles": ["b9e44675-739g-5fca-ce6a-7b3059cgc42f"],
+                    "relations_correct": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request not approved or gRPC error.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "notApproved": {
+                    "value": {
+                      "detail": "Cross account request a8d33564-... is not approved (status: pending)."
+                    }
+                  },
+                  "gRPCError": {
+                    "value": {
+                      "detail": "gRPC error occurred during inventory cross account request check",
+                      "error": "gRPC Error"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Cross account request not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error500"
+                },
+                "examples": {
+                  "Error": {
+                    "value": {
+                      "detail": "Unexpected error during inventory cross account request check"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tenant/unmodified/": {
+      "get": {
+        "tags": [
+          "Tenant",
+          "Utils"
+        ],
+        "summary": "List unmodified tenants",
+        "description": "Returns a list of tenant org_ids that have not been modified (no custom roles or groups).",
+        "operationId": "listUnmodifiedTenants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QueryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/QueryOffset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of unmodified tenant org_ids.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "unmodified_tenants": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "unmodified_tenants_count": {
+                      "type": "integer"
+                    },
+                    "total_tenants_count": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "example": {
+                  "unmodified_tenants": [
+                    "12345",
+                    "67890"
+                  ],
+                  "unmodified_tenants_count": 2,
+                  "total_tenants_count": 50
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tenant/": {
+      "get": {
+        "tags": [
+          "Tenant",
+          "Utils"
+        ],
+        "summary": "List tenant details",
+        "description": "Returns lists of ready and not-ready tenants with counts.",
+        "operationId": "listTenantDetails",
+        "parameters": [
+          {
+            "name": "ready",
+            "in": "query",
+            "required": false,
+            "description": "Filter tenants by ready status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/QueryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/QueryOffset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant details with ready/not-ready breakdown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ready_tenants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "ready_tenants_count": {
+                      "type": "integer"
+                    },
+                    "not_ready_tenants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "not_ready_tenants_count": {
+                      "type": "integer"
+                    },
+                    "tenants_without_account_id": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "tenants_without_account_id_count": {
+                      "type": "integer"
+                    },
+                    "total_tenants_count": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "example": {
+                  "ready_tenants": [
+                    {
+                      "id": 1,
+                      "tenant_name": "acct12345",
+                      "account_id": "12345",
+                      "org_id": "67890"
+                    }
+                  ],
+                  "ready_tenants_count": 1,
+                  "not_ready_tenants": [],
+                  "not_ready_tenants_count": 0,
+                  "tenants_without_account_id": [],
+                  "tenants_without_account_id_count": 0,
+                  "total_tenants_count": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tenant/{org_id}/": {
+      "delete": {
+        "tags": [
+          "Tenant",
+          "Destructive"
+        ],
+        "summary": "Delete an unmodified tenant",
+        "description": "Delete a tenant by org_id. Only unmodified tenants (no custom roles or groups) can be deleted. Requires destructive operations to be enabled.",
+        "operationId": "deleteTenant",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "description": "Organization ID of the tenant to delete.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Tenant deleted."
+          },
+          "400": {
+            "description": "Tenant cannot be deleted (modified or destructive operations disallowed)."
+          },
+          "404": {
+            "description": "Tenant not found."
+          },
+          "405": {
+            "description": "Invalid method, only DELETE is allowed."
+          }
+        }
+      }
+    },
+    "/api/roles/{uuid}/": {
+      "get": {
+        "tags": [
+          "Role",
+          "Utils"
+        ],
+        "summary": "Get a role by UUID",
+        "description": "Retrieve a role's details including system, admin_default, and platform_default flags.",
+        "operationId": "getRole",
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "description": "UUID of the role.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Role retrieved successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "object",
+                      "properties": {
+                        "uuid": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "system": {
+                          "type": "boolean"
+                        },
+                        "admin_default": {
+                          "type": "boolean"
+                        },
+                        "platform_default": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "message": "Role retrieved successfully",
+                  "role": {
+                    "uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "name": "Example Role",
+                    "system": true,
+                    "admin_default": false,
+                    "platform_default": true
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Role not found."
+          },
+          "405": {
+            "description": "Invalid request method."
+          },
+          "500": {
+            "description": "Unexpected Error"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Role",
+          "Utils"
+        ],
+        "summary": "Update role flags",
+        "description": "Update a role's system, admin_default, and/or platform_default flags.",
+        "operationId": "updateRole",
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "description": "UUID of the role.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "system": {
+                    "type": "string",
+                    "description": "Set system flag (true/false as string)."
+                  },
+                  "platform_default": {
+                    "type": "string",
+                    "description": "Set platform_default flag (true/false as string)."
+                  },
+                  "admin_default": {
+                    "type": "string",
+                    "description": "Set admin_default flag (true/false as string)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "object",
+                      "properties": {
+                        "uuid": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "system": {
+                          "type": "boolean"
+                        },
+                        "admin_default": {
+                          "type": "boolean"
+                        },
+                        "platform_default": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "message": "Role updated successfully",
+                  "role": {
+                    "uuid": "a8d33564-628f-4eba-bd59-6a2948bfb31e",
+                    "name": "Example Role",
+                    "system": true,
+                    "admin_default": false,
+                    "platform_default": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid attributes in request body."
+          },
+          "404": {
+            "description": "Role not found."
+          },
+          "405": {
+            "description": "Invalid request method."
+          },
+          "500": {
+            "description": "Unexpected Error"
+          }
+        }
+      }
+    },
+    "/api/migrations/run/": {
+      "post": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Run migrations",
+        "description": "Trigger database migrations in a background worker.",
+        "operationId": "runMigrations",
+        "responses": {
+          "202": {
+            "description": "Migrations are running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Migrations are running in a background worker."
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/migrations/progress/": {
+      "get": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Check migration progress",
+        "description": "Check the progress of a specific migration across all tenants.",
+        "operationId": "migrationProgress",
+        "parameters": [
+          {
+            "name": "migration_name",
+            "in": "query",
+            "required": true,
+            "description": "Name of the migration to check progress for.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app",
+            "in": "query",
+            "required": false,
+            "description": "Django app name (default: management).",
+            "schema": {
+              "type": "string",
+              "default": "management"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/QueryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/QueryOffset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration progress information.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "migration_name": {
+                      "type": "string"
+                    },
+                    "app_name": {
+                      "type": "string"
+                    },
+                    "tenants_completed_count": {
+                      "type": "integer"
+                    },
+                    "total_tenants_count": {
+                      "type": "integer"
+                    },
+                    "incomplete_tenants": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "percent_completed": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "example": {
+                  "migration_name": "0042_auto_role_binding",
+                  "app_name": "management",
+                  "tenants_completed_count": 95,
+                  "total_tenants_count": 100,
+                  "incomplete_tenants": [
+                    "org1",
+                    "org2",
+                    "org3",
+                    "org4",
+                    "org5"
+                  ],
+                  "percent_completed": 95
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing migration_name query parameter."
+          },
+          "405": {
+            "description": "Invalid method, only GET is allowed."
+          }
+        }
+      }
+    },
+    "/api/seeds/run/": {
+      "post": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Run seeds",
+        "description": "Trigger seed operations (permissions, roles, groups) in a background worker.",
+        "operationId": "runSeeds",
+        "parameters": [
+          {
+            "name": "seed_types",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated seed types to run.",
+            "schema": {
+              "type": "string",
+              "example": "permissions,roles,groups"
+            }
+          },
+          {
+            "name": "force_create_relationships",
+            "in": "query",
+            "required": false,
+            "description": "Force create relationships. Cannot be true when force_update_relationships is true.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "force_update_relationships",
+            "in": "query",
+            "required": false,
+            "description": "Force update relationships. Cannot be true when force_create_relationships is true.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Seeds are running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Seeds are running in a background worker."
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or conflicting force options."
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/cars/expire/": {
+      "post": {
+        "tags": [
+          "CAR",
+          "Utils"
+        ],
+        "summary": "Run cross-account request expiry",
+        "description": "Trigger cross-account request expiration checks in a background worker.",
+        "operationId": "expireCars",
+        "responses": {
+          "202": {
+            "description": "Expiry checks are running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Expiry checks are running in a background worker."
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/sentry_debug/": {
+      "get": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Trigger a Sentry diagnostic error",
+        "description": "Raises a diagnostic error to confirm Sentry integration is working correctly.",
+        "operationId": "sentryDebug",
+        "responses": {
+          "500": {
+            "description": "Sentry diagnostic error triggered."
+          }
+        }
+      }
+    },
+    "/api/utils/sync_schemas/": {
+      "post": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Sync public and tenant schemas",
+        "description": "Trigger schema synchronization in a background worker. Optionally specify a comma-separated list of schemas.",
+        "operationId": "syncSchemas",
+        "parameters": [
+          {
+            "name": "schemas",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated list of schemas to sync. If not provided, syncs all.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Running schema sync in background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Running schema sync in background worker."
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/utils/populate_tenant_account_id/": {
+      "post": {
+        "tags": [
+          "Tenant",
+          "Utils"
+        ],
+        "summary": "Populate tenant account_id values",
+        "description": "Trigger background worker to set account_id on all Tenant objects.",
+        "operationId": "populateTenantAccountId",
+        "responses": {
+          "200": {
+            "description": "Tenant objects account_id values being updated in background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Tenant objects account_id values being updated in background worker."
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/utils/invalid_default_admin_groups/": {
+      "get": {
+        "tags": [
+          "Group",
+          "Utils"
+        ],
+        "summary": "List invalid default admin groups",
+        "description": "Returns a list of groups with admin_default=true but system=false and platform_default=false.",
+        "operationId": "listInvalidDefaultAdminGroups",
+        "responses": {
+          "200": {
+            "description": "List of invalid default admin groups.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invalid_default_admin_groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "invalid_default_admin_groups_count": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "example": {
+                  "invalid_default_admin_groups": [
+                    {
+                      "name": "GroupA",
+                      "admin_default": true,
+                      "system": false,
+                      "platform_default": false,
+                      "tenant": 1
+                    }
+                  ],
+                  "invalid_default_admin_groups_count": 1
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Group",
+          "Utils",
+          "Destructive"
+        ],
+        "summary": "Delete invalid default admin groups",
+        "description": "Delete all groups with admin_default=true but system=false and platform_default=false. Requires destructive operations to be enabled.",
+        "operationId": "deleteInvalidDefaultAdminGroups",
+        "responses": {
+          "204": {
+            "description": "Invalid default admin groups deleted."
+          },
+          "400": {
+            "description": "Destructive operations disallowed."
+          },
+          "405": {
+            "description": "Invalid method."
+          }
+        }
+      }
+    },
+    "/api/utils/ocm_performance/": {
+      "post": {
+        "tags": [
+          "Utils"
+        ],
+        "summary": "Run OCM performance tests",
+        "description": "Trigger OCM performance tests in a background worker.",
+        "operationId": "runOcmPerformance",
+        "responses": {
+          "202": {
+            "description": "OCM performance tests are running in a background worker.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "OCM performance tests are running in a background worker."
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/utils/fix_missing_binding_base_tuples/": {
+      "post": {
+        "tags": [
+          "V2",
+          "Utils"
+        ],
+        "summary": "Fix missing binding base tuples",
+        "description": "Fix missing t_role and t_binding tuples for bindings created before replication was enabled. Triggers a background worker to replicate all tuples for the specified bindings. Kessel/SpiceDB handles duplicate tuples gracefully.",
+        "operationId": "fixMissingBindingBaseTuples",
+        "parameters": [
+          {
+            "name": "binding_ids",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated list of binding IDs to fix. If not provided, fixes ALL bindings.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Fix missing binding base tuples is running in a background worker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "binding_ids": {
+                      "description": "List of binding IDs being fixed, or 'all'."
+                    }
+                  }
+                },
+                "example": {
+                  "message": "Fix missing binding base tuples is running in a background worker.",
+                  "binding_ids": "all"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/utils/clean_invalid_workspace_resource_definitions/": {
+      "post": {
+        "tags": [
+          "V2",
+          "Utils"
+        ],
+        "summary": "Clean resource definitions with invalid workspace IDs",
+        "description": "Finds custom roles with resource definitions pointing to non-existent workspaces, removes invalid workspace IDs from resource definitions, and deletes bindings to non-existent workspaces. Runs in a background worker.",
+        "operationId": "cleanInvalidWorkspaceResourceDefinitions",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "description": "If true, only report what would be changed without making changes.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Clean task running in background worker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "dry_run": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "example": {
+                  "message": "Clean invalid workspace resource definitions is running in a background worker.",
+                  "dry_run": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method, only POST is allowed."
+          }
+        }
+      }
+    },
+    "/api/utils/kafka_test_message/": {
       "get": {
         "tags": [
           "Utils"
@@ -3607,6 +5436,88 @@
           }
         }
       }
+    },
+    "/api/utils/kessel_parity_check/": {
+      "post": {
+        "tags": [
+          "Utils",
+          "Kessel"
+        ],
+        "summary": "Trigger on-demand Kessel parity check",
+        "description": "Triggers Kessel-RBAC parity checks for the specified org(s) regardless of the PARITY_CHECK_ENABLED setting. The checks run asynchronously in a Celery worker. The scheduled Celery Beat cron job behavior is unchanged.",
+        "operationId": "triggerKesselParityCheck",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "org_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "A list of organization IDs to run parity checks for.",
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "org_ids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Parity check task enqueued successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Kessel parity check enqueued."
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "description": "Celery task ID for tracking the async operation"
+                    },
+                    "org_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (missing or invalid org_ids)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed (only POST is accepted)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [
@@ -3696,8 +5607,20 @@
                   "example": "Some error message"
                 }
               },
-              "required": ["detail", "error"]
+              "required": [
+                "detail",
+                "error"
+              ]
             }
+          }
+        }
+      },
+      "Error404": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "example": "Not found."
           }
         }
       },

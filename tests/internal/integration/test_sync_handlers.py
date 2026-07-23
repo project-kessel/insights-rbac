@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the caching system."""
+
 from unittest import skipIf
 from unittest.mock import patch
 from rbac.settings import KAFKA_ENABLED, MOCK_KAFKA

@@ -16,6 +16,7 @@
 #
 
 """Shared application utilities."""
+
 import datetime
 
 import pytz

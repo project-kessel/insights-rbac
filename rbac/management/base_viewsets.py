@@ -14,6 +14,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Base viewset for v2 APIs."""
+
 from rest_framework import mixins, viewsets
 from rest_framework.settings import api_settings
 

@@ -19,6 +19,7 @@
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/2.0/topics/http/urls/
 """
+
 import os
 
 from django.conf import settings
@@ -40,6 +41,10 @@ urlpatterns = [
     path("_private/", include(("internal.urls", "internal"))),
     path("", include("django_prometheus.urls")),
 ]
+
+if settings.MCP_ENABLED:
+    urlpatterns.insert(2, path(settings.A2S_PATH_PREFIX.lstrip("/"), include(("management.mcp_urls", "mcp"))))
+
 
 if settings.V2_APIS_ENABLED:
     urlpatterns.extend(

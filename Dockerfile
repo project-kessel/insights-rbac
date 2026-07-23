@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7-1764794109 AS base
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1782708562 AS base
 
 USER root
 
@@ -33,7 +33,7 @@ LABEL summary="$SUMMARY" \
       maintainer="Red Hat Insights" \
       distribution-scope="private" \
       release="1" \
-      url="https://github.com/RedHatInsights/insights-rbac" \
+      url="https://github.com/project-kessel/insights-rbac" \
       vendor="Red Hat, Inc."
 
 
@@ -60,7 +60,7 @@ RUN python3.12 -m venv /pipenv-venv
 ENV PATH="/pipenv-venv/bin:$PATH"
 # Install pipenv into the virtual env
 RUN \
-    pip install --upgrade pip && \
+    pip install --upgrade "pip>=26.0" && \
     pip install pipenv
 
 WORKDIR ${APP_ROOT}
@@ -87,6 +87,9 @@ ENV \
 
 # copy the src files into the workdir
 COPY . .
+
+# Copy license to /licenses for Red Hat certification
+RUN mkdir -p /licenses && cp LICENSE /licenses/
 
 # unleash cache dir
 RUN mkdir -p /tmp/unleash_cache && chmod -R 777 /tmp/unleash_cache

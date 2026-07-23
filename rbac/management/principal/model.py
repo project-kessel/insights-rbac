@@ -16,6 +16,7 @@
 #
 
 """Model for principal management."""
+
 from typing import Optional
 from uuid import uuid4
 
@@ -60,4 +61,5 @@ class Principal(TenantAwareModel):
         ordering = ["username"]
         constraints = [
             models.UniqueConstraint(fields=["username", "tenant"], name="unique principal username per tenant"),
+            models.UniqueConstraint(fields=["user_id"], name="management_principal_user_id_key"),
         ]

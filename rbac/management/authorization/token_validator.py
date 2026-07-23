@@ -16,6 +16,7 @@
 #
 
 """A token introspector class which validates that the given token is valid."""
+
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -100,9 +101,10 @@ class ITSSOTokenValidator(TokenValidator):
         self.it_port = settings.IT_SERVICE_PORT
         self.it_request_timeout_seconds = settings.IT_SERVICE_TIMEOUT_SECONDS
         self.it_scheme = settings.IT_SERVICE_PROTOCOL_SCHEME
+        self.it_realm = settings.IT_SERVICE_REALM
 
         # The host contains the URL including the port...
-        self.host = f"{self.it_scheme}://{self.it_host}:{self.it_port}/auth/realms/redhat-external"
+        self.host = f"{self.it_scheme}://{self.it_host}:{self.it_port}{self.it_realm}"
         # ... but the issuer does not. We need to make this distinction so that when validating the token, the issuer
         # correctly matches.
         self.oidc_configuration_url = f"{self.host}/.well-known/openid-configuration"
@@ -192,7 +194,7 @@ class ITSSOTokenValidator(TokenValidator):
 
     def reset_jwks_source(self) -> None:
         """Reset the JWKS source to the default OIDC configuration source."""
-        self.issuer = f"{self.it_scheme}://{self.it_host}/auth/realms/redhat-external"
+        self.issuer = f"{self.it_scheme}://{self.it_host}{self.it_realm}"
         self._jwks_source = JWKSCacheSource(jwks_source=OIDCConfigurationJWKSSource(self.oidc_configuration_url))
 
     def validate_token(self, request: HttpRequest, additional_scopes_to_validate: set[ScopeClaims]) -> str:
@@ -222,7 +224,7 @@ class ITSSOTokenValidator(TokenValidator):
         """
         if settings.IT_BYPASS_TOKEN_VALIDATION:
             user = User()
-            user.user_id = "mocked-user-id-because-token-validation-is-disabled"
+            user.user_id = settings.IT_BYPASS_SYSTEM_USER_ID
             user.username = "mocked-username-because-token-validation-is-disabled"
             user.org_id = "mocked-org-id-because-token-validation-is-disabled"
             user.account = "mocked-account-number-because-token-validation-is-disabled"

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Class to manage interactions with the IT service accounts service."""
+
 import logging
 import time
 import uuid

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Celery setup."""
+
 from __future__ import absolute_import, unicode_literals
 
 import logging
@@ -28,7 +29,6 @@ from celery.schedules import crontab
 from celery.signals import worker_ready
 from django.conf import settings
 from prometheus_client import CollectorRegistry, multiprocess, start_http_server
-
 
 logger = logging.getLogger("__name__")
 
@@ -67,6 +67,27 @@ else:
     app.conf.beat_schedule["principal-cleanup-every-sevenish-days"] = {
         "task": "management.tasks.principal_cleanup",
         "schedule": crontab(0, 0, day_of_month="7-28/7"),
+        "args": [],
+    }
+
+if settings.PARITY_CHECK_ENABLED:
+    app.conf.beat_schedule["parity-access-checks"] = {
+        "task": "management.tasks.run_parity_access_checks_in_worker",
+        "schedule": settings.PARITY_CHECK_INTERVAL_SECONDS,
+        "args": [],
+    }
+
+    # Parse cron expression: "minute hour day_of_month month_of_year day_of_week"
+    _parity_cron = settings.PARITY_CHECK_SCHEDULE.split()
+    app.conf.beat_schedule["kessel-parity-check"] = {
+        "task": "management.tasks.run_kessel_parity_checks_in_worker",
+        "schedule": crontab(
+            minute=_parity_cron[0] if len(_parity_cron) > 0 else "0",
+            hour=_parity_cron[1] if len(_parity_cron) > 1 else "0",
+            day_of_month=_parity_cron[2] if len(_parity_cron) > 2 else "*",
+            month_of_year=_parity_cron[3] if len(_parity_cron) > 3 else "*",
+            day_of_week=_parity_cron[4] if len(_parity_cron) > 4 else "*",
+        ),
         "args": [],
     }
 

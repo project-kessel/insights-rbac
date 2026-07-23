@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Defines the Permission Access Permissions class."""
+
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT

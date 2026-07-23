@@ -49,7 +49,7 @@ OPENSHIFT_HOST='127.0.0.1'
 OPENSHIFT_PORT='8443'
 OPENSHIFT_USER='system:admin'
 OPENSHIFT_TEMPLATE_PATH='openshift/rbac-template.yaml'
-CODE_REPO='https://github.com/RedHatInsights/insights-rbac.git'
+CODE_REPO='https://github.com/project-kessel/insights-rbac.git'
 REPO_BRANCH='master'
 DJANGO_DEBUG='False'
 

@@ -16,6 +16,7 @@
 #
 
 """Custom RBAC Dev Middleware."""
+
 from base64 import b64encode
 from json import dumps as json_dumps
 

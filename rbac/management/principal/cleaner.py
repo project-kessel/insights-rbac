@@ -16,6 +16,7 @@
 #
 
 """Handler for principal clean up."""
+
 import logging
 import os
 import ssl
@@ -38,7 +39,6 @@ from stompest.protocol import StompSpec
 from stompest.sync import Stomp
 
 from api.models import Tenant, User
-
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 

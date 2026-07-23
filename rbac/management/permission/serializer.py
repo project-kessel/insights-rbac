@@ -16,6 +16,7 @@
 #
 
 """Serializer for permission management."""
+
 from management.models import Permission
 from management.serializer_override_mixin import SerializerCreateOverrideMixin
 from rest_framework import serializers

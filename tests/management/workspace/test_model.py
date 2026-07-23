@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the workspace model."""
+
 from api.models import Tenant
 from management.models import Workspace
 from tests.identity_request import IdentityRequest

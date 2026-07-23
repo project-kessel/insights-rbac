@@ -31,6 +31,11 @@ from rbac.middleware import is_no_auth
 class IsNoAuthFunctionTest(TestCase):
     """Unit tests for the is_no_auth function to ensure proper authentication bypass."""
 
+    def test_ready_endpoint_no_auth(self):
+        """Test that the ready endpoint does not require auth."""
+        mock_request = Mock(path=reverse("v1_api:server-ready"))
+        self.assertTrue(is_no_auth(mock_request))
+
     def test_status_endpoint_no_auth(self):
         """Test that the status endpoint does not require auth."""
         mock_request = Mock(path=reverse("v1_api:server-status"))

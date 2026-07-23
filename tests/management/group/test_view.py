@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the group viewset."""
+
 import json
 import random
 from datetime import timedelta
@@ -66,7 +67,8 @@ from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
 from tests.management.role.test_dual_write import RbacFixture
 from tests.management.role.test_view import find_in_list, relation_api_tuple
-from tests.v2_util import assert_v2_custom_roles_consistent
+from tests.util import assert_v1_v2_tuples_fully_consistent
+from tests.v2_util import seed_v2_role_from_v1
 
 
 def generate_group_member_relation_entry(group_uuid, principal_user_id):
@@ -196,6 +198,7 @@ class GroupViewsetTests(IdentityRequest):
             system=True,
             tenant=self.tenant,
         )
+        seed_v2_role_from_v1(self.role)
         self.ext_tenant = ExtTenant.objects.create(name="foo")
         self.ext_role_relation = ExtRoleRelation.objects.create(role=self.role, ext_tenant=self.ext_tenant)
         self.policy = Policy.objects.create(name="policyA", group=self.group, tenant=self.tenant)
@@ -282,17 +285,13 @@ class GroupViewsetTests(IdentityRequest):
 
     def tearDown(self):
         """Tear down group viewset tests."""
-        Group.objects.all().delete()
-        Principal.objects.all().delete()
-        Role.objects.all().delete()
-        Policy.objects.all().delete()
-        Workspace.objects.filter(parent__isnull=False).delete()
-        Workspace.objects.filter(parent__isnull=True).delete()
         # Clear the principal cache for the test tenant to avoid test isolation issues
         from management.utils import PRINCIPAL_CACHE
 
         PRINCIPAL_CACHE.delete_all_principals_for_tenant("100001")
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
+
+        super().tearDown()
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
@@ -958,7 +957,8 @@ class GroupViewsetTests(IdentityRequest):
             al_response = al_client.get(al_url, **self.headers)
             retrieve_data = al_response.data.get("data")
             al_list = retrieve_data
-            al_dict = al_list[1]
+            # Audit logs are now ordered by -created (newest first), so delete action is at index 0
+            al_dict = al_list[0]
 
             al_dict_principal_username = al_dict["principal_username"]
             al_dict_description = al_dict["description"]
@@ -1479,7 +1479,7 @@ class GroupViewsetTests(IdentityRequest):
             client = APIClient()
             org_id = self.customer_data["org_id"]
 
-            default_role = Role.objects.create(
+            default_role: Role = Role.objects.create(
                 name="default_role",
                 description="A default role for a group.",
                 platform_default=True,
@@ -1496,13 +1496,16 @@ class GroupViewsetTests(IdentityRequest):
             # We use a system role for this test because the test roles created in setUp do not go through the normal
             # role creation machinery, and thus are not in the expected state for use with relations (e.g. the custom
             # roles will have no BindingMappings created).
-            system_role = Role.objects.create(
+            system_role: Role = Role.objects.create(
                 name="system_role",
                 description="A default role for a group.",
                 platform_default=False,
                 system=True,
                 tenant=self.public_tenant,
             )
+
+            seed_v2_role_from_v1(default_role)
+            seed_v2_role_from_v1(system_role)
 
             self.defGroup.policies.first().roles.add(default_role)
 
@@ -1675,6 +1678,20 @@ class GroupViewsetTests(IdentityRequest):
             ]
             kafka_mock.assert_has_calls(notification_messages, any_order=True)
 
+            # Verify that custom default group creation is recorded in audit logs
+            al_url = "/api/rbac/v1/auditlogs/"
+            al_client = APIClient()
+            al_response = al_client.get(al_url, **self.headers)
+            al_list = al_response.data.get("data")
+            # Find the audit log entry for the custom default group creation
+            create_entries = [
+                entry for entry in al_list if entry["action"] == "create" and entry["resource_type"] == "group"
+            ]
+            self.assertTrue(len(create_entries) > 0, "Expected audit log for custom default group creation")
+            create_entry = create_entries[0]
+            self.assertIn("Custom default access", create_entry["description"])
+            self.assertEqual(create_entry["principal_username"], self.user_data["username"])
+
     @override_settings(V2_BOOTSTRAP_TENANT=True)
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("core.kafka.RBACProducer.send_kafka_message")
@@ -1701,6 +1718,9 @@ class GroupViewsetTests(IdentityRequest):
                 tenant=self.public_tenant,
                 permission=Permission.objects.create(tenant=self.public_tenant, permission="tenant:resource:verb"),
             )
+
+            seed_v2_role_from_v1(default_role)
+            seed_v2_role_from_v1(default_role_to_keep_in_group)
 
             self.defGroup.policies.first().roles.add(default_role)
             self.defGroup.policies.first().roles.add(default_role_to_keep_in_group)
@@ -1841,6 +1861,9 @@ class GroupViewsetTests(IdentityRequest):
                 system=True,
                 tenant=self.public_tenant,
             )
+
+            seed_v2_role_from_v1(default_role)
+
             self.defGroup.policies.first().roles.add(default_role)
             self.assertTrue(self.defGroup.system)
 
@@ -1929,6 +1952,17 @@ class GroupViewsetTests(IdentityRequest):
                 ),
             ]
             kafka_mock.assert_has_calls(notification_messages, any_order=True)
+
+            # Verify that custom default group creation is recorded in audit logs
+            al_url = "/api/rbac/v1/auditlogs/"
+            al_client = APIClient()
+            al_response = al_client.get(al_url, **self.headers)
+            al_list = al_response.data.get("data")
+            create_entries = [
+                entry for entry in al_list if entry["action"] == "create" and entry["resource_type"] == "group"
+            ]
+            self.assertTrue(len(create_entries) > 0, "Expected audit log for custom default group creation")
+            self.assertIn("Custom default access", create_entries[0]["description"])
 
     def test_add_group_roles_bad_group_guid(self):
         """Test that adding a role to invalid group returns 400."""
@@ -4536,18 +4570,12 @@ class GroupViewNonAdminTests(IdentityRequest):
 
     def tearDown(self):
         """Tear down group view tests."""
-        Group.objects.all().delete()
-        Principal.objects.all().delete()
-        Permission.objects.all().delete()
-        Access.objects.all().delete()
-        Role.objects.all().delete()
-        Policy.objects.all().delete()
-        Workspace.objects.filter(parent__isnull=False).delete()
-        Workspace.objects.filter(parent__isnull=True).delete()
         # Clear the principal cache for the test tenant to avoid test isolation issues
         from management.utils import PRINCIPAL_CACHE
 
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
+
+        super().tearDown()
 
     @staticmethod
     def _create_group_with_user_access_administrator_role(tenant: Tenant) -> Group:
@@ -4572,6 +4600,8 @@ class GroupViewNonAdminTests(IdentityRequest):
         user_access_admin_role.tenant = tenant
         user_access_admin_role.version = 3
         user_access_admin_role.save()
+
+        seed_v2_role_from_v1(user_access_admin_role)
 
         # Associate the role and the permission.
         access = Access()
@@ -7165,7 +7195,7 @@ class GroupViewNonAdminTests(IdentityRequest):
             )
 
 
-@override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+@override_settings(REPLICATION_TO_RELATION_ENABLED=True, ATOMIC_RETRY_DISABLED=True)
 class GroupReplicationTests(IdentityRequest):
     def setUp(self):
         super().setUp()
@@ -7195,6 +7225,8 @@ class GroupReplicationTests(IdentityRequest):
 
         self.fixture.bootstrap_tenant(self.tenant)
 
+        self.fixture.new_principals_in_tenant(["2222222"], self.fixture.new_tenant("car_source").tenant)
+
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_remove_role_does_not_remove_binding_if_cross_account_granted(self, replicate):
         replicate.side_effect = self.in_memory_replicator.replicate
@@ -7214,7 +7246,6 @@ class GroupReplicationTests(IdentityRequest):
 
         # Now approve a CAR for the tenant and the same role
         request = CrossAccountRequest.objects.create(
-            target_account=self.tenant.account_id,
             target_org=self.tenant.org_id,
             user_id="2222222",
             end_date=timezone.now() + timedelta(10),
@@ -7240,11 +7271,11 @@ class GroupReplicationTests(IdentityRequest):
         sr1_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 # a subject relation
@@ -7260,7 +7291,9 @@ class GroupReplicationTests(IdentityRequest):
 
         self.assertEqual(len(sr1_bindings), 1, f"Expected 1 binding but got {len(sr1_bindings)}")
 
-        subjects = {t.subject_id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"}
+        subjects = {
+            t.subject.subject.id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"
+        }
 
         # Assert the bindings are to both subjects
         self.assertCountEqual(subjects, [str(test_group.uuid), "redhat/2222222"])
@@ -7275,11 +7308,11 @@ class GroupReplicationTests(IdentityRequest):
         sr1_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 # a subject relation
@@ -7298,7 +7331,9 @@ class GroupReplicationTests(IdentityRequest):
         self.assertEqual(len(sr1_bindings), 1, f"Expected 1 binding but got {len(sr1_bindings)}")
 
         # Collect all the bound roles by iterating over the bindings and getting the subjects of the role relation
-        subjects = {t.subject_id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"}
+        subjects = {
+            t.subject.subject.id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"
+        }
 
         self.assertCountEqual(subjects, ["redhat/2222222"])
 
@@ -7321,7 +7356,6 @@ class GroupReplicationTests(IdentityRequest):
 
         # Now approve a CAR for the tenant and the same role
         request = CrossAccountRequest.objects.create(
-            target_account=self.tenant.account_id,
             target_org=self.tenant.org_id,
             user_id="2222222",
             end_date=timezone.now() + timedelta(10),
@@ -7347,11 +7381,11 @@ class GroupReplicationTests(IdentityRequest):
         sr1_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 # a subject relation
@@ -7367,7 +7401,9 @@ class GroupReplicationTests(IdentityRequest):
 
         self.assertEqual(len(sr1_bindings), 1, f"Expected 1 binding but got {len(sr1_bindings)}")
 
-        subjects = {t.subject_id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"}
+        subjects = {
+            t.subject.subject.id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"
+        }
 
         # Assert the bindings are to both subjects
         self.assertCountEqual(subjects, [str(test_group.uuid), "redhat/2222222"])
@@ -7381,11 +7417,11 @@ class GroupReplicationTests(IdentityRequest):
         sr1_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is one of the default role bindings...
             group_filter=lambda group: group[0] == "rbac"
             and group[1] == "role_binding"
-            and group[2] in {str(binding.subject_id) for binding in default_bindings},
+            and group[2] in {str(binding.subject.subject.id) for binding in default_bindings},
             # and where one of the tuples from that binding has...
             predicates=[
                 # a subject relation
@@ -7404,7 +7440,9 @@ class GroupReplicationTests(IdentityRequest):
         self.assertEqual(len(sr1_bindings), 1, f"Expected 1 binding but got {len(sr1_bindings)}")
 
         # Collect all the bound roles by iterating over the bindings and getting the subjects of the role relation
-        subjects = {t.subject_id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"}
+        subjects = {
+            t.subject.subject.id for _, tuples in sr1_bindings.items() for t in tuples if t.relation == "subject"
+        }
         self.assertCountEqual(subjects, [str(test_group.uuid)])
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
@@ -7469,7 +7507,7 @@ class GroupReplicationTests(IdentityRequest):
         sr1_bindings, _ = self.relations.find_group_with_tuples(
             # Tuples which are...
             # grouped by resource
-            group_by=lambda t: (t.resource_type_namespace, t.resource_type_name, t.resource_id),
+            group_by=lambda t: (t.resource.type.namespace, t.resource.type.name, t.resource.id),
             # where the resource is ...
             group_filter=lambda group: group[0] == "rbac" and group[1] == "role_binding",
             # and where one of the tuples from that binding has...
@@ -7519,4 +7557,4 @@ class GroupReplicationTests(IdentityRequest):
         self.assertCountEqual([role], group.roles())
 
         self.assertEqual(1, CustomRoleV2.objects.filter(v1_source=role).count())
-        assert_v2_custom_roles_consistent(test=self, tuples=tuples)
+        assert_v1_v2_tuples_fully_consistent(test=self, tuples=tuples)

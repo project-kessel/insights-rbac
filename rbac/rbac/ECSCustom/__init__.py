@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Custom ecs formatter."""
+
 from urllib.parse import urlparse
 
 import django
@@ -44,6 +45,10 @@ class ECSCustomFormatter(StdlibFormatter):
 
             if isinstance(request, django.core.handlers.wsgi.WSGIRequest):
                 result = self.add_info_from_WSGIRequest(result, request)
+
+        if hasattr(record, "env_name"):
+            result["labels"] = result.get("labels", {})
+            result["labels"]["env"] = record.env_name
 
         # Remove some field not following standard:
         # https://www.elastic.co/guide/en/ecs/1.6/ecs-field-reference.html

@@ -14,6 +14,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Describes the urls and patterns for the V2 API application."""
+
 from django.urls import path
 
 from api.openapi.view import openapi_v2

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Contains helpers for handling platform groups (i.e. those built-in to RBAC)."""
+
 from typing import ClassVar, Optional
 from uuid import UUID
 

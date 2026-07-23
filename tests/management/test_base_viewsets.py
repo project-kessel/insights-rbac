@@ -14,6 +14,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Tests for base viewset for v2 APIs."""
+
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
 from importlib import reload

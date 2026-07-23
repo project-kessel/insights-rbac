@@ -14,16 +14,18 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Describes the urls and patterns for the API application."""
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from api.views import CrossAccountRequestViewSet, openapi, status
+from api.views import CrossAccountRequestViewSet, openapi, ready, status
 
 ROUTER = DefaultRouter()
 ROUTER.register(r"cross-account-requests", CrossAccountRequestViewSet, basename="cross")
 
 # pylint: disable=invalid-name
 urlpatterns = [
+    path("ready/", ready, name="server-ready"),
     path("status/", status, name="server-status"),
     path("openapi.json", openapi, name="openapi"),
     path("", include(ROUTER.urls)),

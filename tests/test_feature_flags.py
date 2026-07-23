@@ -15,8 +15,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the feature flags module."""
+
 import threading
 import time
+from django.conf import settings
 from django.test import TestCase
 from feature_flags import FEATURE_FLAGS
 
@@ -115,3 +117,11 @@ class FeatureFlagsTest(TestCase):
 
     def _truthy_fallback(self, feature_name, context):
         return True
+
+    def test_is_use_role_binding_view_permission_enabled_defaults_to_true(self):
+        """Test that is_use_role_binding_view_permission_enabled defaults to True from settings."""
+        FEATURE_FLAGS.client = None
+        # When no feature flag client is available, it should fallback to settings.USE_ROLE_BINDING_VIEW_PERMISSION
+        # which defaults to True
+        self.assertTrue(settings.USE_ROLE_BINDING_VIEW_PERMISSION)
+        self.assertTrue(FEATURE_FLAGS.is_use_role_binding_view_permission_enabled())

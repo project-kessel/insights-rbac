@@ -16,6 +16,7 @@
 #
 
 """View for principal management."""
+
 import requests
 from management.authorization.scope_claims import ScopeClaims
 from management.authorization.token_validator import ITSSOTokenValidator

@@ -167,6 +167,8 @@ class WorkspaceAccessPermission(permissions.BasePermission):
 
         # For list/detail operations, allow request to proceed
         # FilterBackend handles access filtering via queryset
+        # For list: users with no real workspace access get fallback workspaces
+        # (root, default, ungrouped) via FilterBackend instead of 403
         # This ensures 404 for both non-existing and inaccessible workspaces
         return True
 

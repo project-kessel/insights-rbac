@@ -16,6 +16,7 @@
 #
 
 """Serializer for Audit Logs."""
+
 from management.models import AuditLog
 from rest_framework import serializers
 

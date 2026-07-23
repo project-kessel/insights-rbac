@@ -16,6 +16,7 @@
 #
 
 """Notification handlers of object change."""
+
 import json
 import logging
 import os
@@ -23,7 +24,6 @@ from datetime import datetime
 
 from core.kafka import RBACProducer
 from django.conf import settings
-
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 sync_producer = RBACProducer()

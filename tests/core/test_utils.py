@@ -16,6 +16,7 @@
 #
 
 """Test the shared application utilities."""
+
 from core.utils import *
 from django.test import TestCase, override_settings
 from datetime import datetime, timedelta

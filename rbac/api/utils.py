@@ -11,7 +11,6 @@ from management.workspace.model import Workspace
 
 from api.models import Tenant
 
-
 RESOURCE_MODEL_MAPPING = {
     "workspace": Workspace,
     "mapping": TenantMapping,

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Test the project middleware."""
+
 import collections
 from functools import partial
 import json
@@ -360,6 +361,74 @@ class IdentityHeaderMiddlewareTest(IdentityRequest):
         self.assertTrue(tenant.ready)
 
     @patch("rbac.middleware.resolve")
+    def test_process_updates_null_account_id(self, mock_resolve):
+        """If a tenant exists with null account_id and user has account, account_id is updated."""
+        tenant = Tenant.objects.create(tenant_name="test_user", org_id=self.org_id, account_id=None)
+        tenant.ready = True
+        tenant.save()
+
+        mock_request = self.request
+        middleware = IdentityHeaderMiddleware(get_response=Mock())
+        middleware(mock_request)
+
+        tenant = Tenant.objects.get(org_id=self.org_id)
+        self.assertEqual(tenant.account_id, self.customer["account_id"])
+        self.assertTrue(tenant.ready)
+
+    @patch("rbac.middleware.resolve")
+    def test_process_preserves_existing_account_id(self, mock_resolve):
+        """If a tenant exists with an account_id, it should not be overwritten."""
+        existing_account_id = "existing_account_123"
+        tenant = Tenant.objects.create(tenant_name="test_user", org_id=self.org_id, account_id=existing_account_id)
+        tenant.ready = True
+        tenant.save()
+
+        mock_request = self.request
+        middleware = IdentityHeaderMiddleware(get_response=Mock())
+        middleware(mock_request)
+
+        tenant = Tenant.objects.get(org_id=self.org_id)
+        self.assertEqual(tenant.account_id, existing_account_id)
+        self.assertTrue(tenant.ready)
+
+    @patch("rbac.middleware.resolve")
+    def test_process_updates_both_ready_and_account_id(self, mock_resolve):
+        """If a tenant is not ready and has null account_id, both should be updated."""
+        tenant = Tenant.objects.create(tenant_name="test_user", org_id=self.org_id, account_id=None)
+        tenant.ready = False
+        tenant.save()
+
+        mock_request = self.request
+        middleware = IdentityHeaderMiddleware(get_response=Mock())
+        middleware(mock_request)
+
+        tenant = Tenant.objects.get(org_id=self.org_id)
+        self.assertEqual(tenant.account_id, self.customer["account_id"])
+        self.assertTrue(tenant.ready)
+
+    @patch("rbac.middleware.resolve")
+    def test_process_no_update_when_user_has_no_account(self, mock_resolve):
+        """If user has no account, tenant account_id should remain null."""
+        tenant = Tenant.objects.create(tenant_name="test_user", org_id=self.org_id, account_id=None)
+        tenant.ready = True
+        tenant.save()
+
+        # Create a request with a user that has no account
+        customer = self._create_customer_data()
+        del customer["account_id"]
+        request_context = self._create_request_context(customer, self.user_data)
+        mock_request = request_context["request"]
+        mock_request.path = "/api/v1/providers/"
+        mock_request.META["QUERY_STRING"] = ""
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock())
+        middleware(mock_request)
+
+        tenant = Tenant.objects.get(org_id=self.org_id)
+        self.assertIsNone(tenant.account_id)
+        self.assertTrue(tenant.ready)
+
+    @patch("rbac.middleware.resolve")
     def test_process_no_customer(self, mock_resolve):
         """Test that the customer, tenant and user are not created."""
         customer = self._create_customer_data()
@@ -504,6 +573,8 @@ class NoIdentityHeaderMiddleware(IdentityRequest):
             /api/rbac/v1/status/
             /api/rbac/v1/openapi.json
             /metrics
+
+        Note: /api/rbac/v1/ready/ is not included - it returns 503 when seeding is incomplete.
         """
         urls = [
             reverse("v1_api:server-status"),

@@ -16,35 +16,50 @@
 #
 
 """Class to handle Dual Write API related operations."""
+
 import logging
 from abc import ABC
 from typing import Any, Iterable, Optional
 
 from django.conf import settings
 from django.db.models import Model
-from kessel.relations.v1beta1 import common_pb2
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.models import Workspace
 from management.permission.scope_service import ImplicitResourceService, Scope, bound_model_for_scope
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import DualWriteException, PartitionKey
-from management.relation_replicator.relation_replicator import RelationReplicator
-from management.relation_replicator.relation_replicator import ReplicationEvent
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.relation_replicator.relation_replicator import (
+    DualWriteException,
+    PartitionKey,
+    RelationReplicator,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.relation_replicator.types import RelationTuple
 from management.role.model import BindingMapping, Role
-from management.role.platform import platform_v2_role_uuid_for
-from management.role.relations import deduplicate_role_permission_relationships, role_child_relationship
-from management.role.v2_model import CustomRoleV2, RoleBinding
+from management.role.platform import (
+    admin_platform_parent_scopes_for_seeded_system_role,
+    platform_v2_role_uuid_for,
+)
+from management.role.relations import (
+    deduplicate_role_permission_relationships,
+    role_child_relationship,
+    role_owner_relationship,
+)
+from management.role.v2_model import CustomRoleV2
+from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import DefaultAccessType
+from management.tenant_mapping.v2_activation import assert_v1_write_allowed
 from migration_tool.migrate_role import migrate_role, relation_tuples_for_bindings
 from migration_tool.models import V2boundresource
-from migration_tool.sharedSystemRolesReplicatedRoleBindings import v1_perm_to_v2_perm
+from migration_tool.sharedSystemRolesReplicatedRoleBindings import (
+    bound_resource_resolver_from_map,
+    v1_perm_to_v2_perm,
+    with_workspace_scope_inheritance,
+)
 from migration_tool.utils import create_relationship
 
-
 from api.models import Tenant
-
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -78,7 +93,7 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
     """Class to handle Dual Write API related operations specific to the seeding process."""
 
     _replicator: RelationReplicator
-    _current_role_relations: list[common_pb2.Relationship]
+    _current_role_relations: list[RelationTuple]
 
     _public_tenant: Optional[Tenant] = None
 
@@ -99,7 +114,7 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         """Generate & store role's current relations."""
         if not self.replication_enabled():
             return
-        self._current_role_relations = self._generate_relations_for_role(list_all_possible_scopes_for_removal=True)
+        self._current_role_relations = self._generate_relations_for_role(for_removal=True)
 
     def replicate_update_system_role(self):
         """Replicate update of system role."""
@@ -133,48 +148,59 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         self._replicate(
             ReplicationEventType.DELETE_SYSTEM_ROLE,
             self._create_metadata_from_role(),
-            self._generate_relations_for_role(list_all_possible_scopes_for_removal=True),
+            self._generate_relations_for_role(for_removal=True),
             [],
         )
 
-    def _check_create_admin_platform_relation(self, role, role_scope):
-        create_relations = []
-        """Check system role and create admin and platform system role parent-child relationship."""
-        if role.admin_default:
-            try:
-                parent_uuid = platform_v2_role_uuid_for(
-                    DefaultAccessType.ADMIN,
-                    role_scope,
-                    GlobalPolicyIdService.shared(),
-                )
+    def _check_create_admin_platform_relation(self, role, *, for_removal: bool):
+        """
+        Check system role and create admin and platform system role parent-child relationship.
 
-                create_parent_child_relationship = role_child_relationship(parent_uuid, self.role.uuid)
-                create_relations.append(create_parent_child_relationship)
-            except DefaultGroupNotAvailableError:
-                # Default groups may not exist yet during seeding, skip parent relationship
-                logging.warning(f"Default groups may not exist yet during seeding for admin scope {role_scope}")
-                pass
+        Set for_removal to True when computing relations to remove; this will ensure that parent relations for all
+        scopes are removed (regardless of the role's current scopes).
+        """
+        if for_removal:
+            binding_scopes = set(Scope)
+            admin_scopes = binding_scopes
+        else:
+            binding_scopes = set(self.implicit_resource_service.binding_scopes_for_role(role))
+            admin_scopes = set(admin_platform_parent_scopes_for_seeded_system_role(role.name, binding_scopes))
+
+        create_relations = []
+
+        if role.admin_default:
+            for scope in admin_scopes:
+                try:
+                    parent_uuid = platform_v2_role_uuid_for(
+                        DefaultAccessType.ADMIN,
+                        scope,
+                        GlobalPolicyIdService.shared(),
+                    )
+
+                    create_parent_child_relationship = role_child_relationship(parent_uuid, self.role.uuid)
+                    create_relations.append(create_parent_child_relationship)
+                except DefaultGroupNotAvailableError:
+                    # Default groups may not exist yet during seeding, skip parent relationship
+                    logging.warning(f"Default groups may not exist yet during seeding for admin scope {scope}")
 
         if role.platform_default:
-            try:
-                parent_uuid = platform_v2_role_uuid_for(
-                    DefaultAccessType.USER,
-                    role_scope,
-                    GlobalPolicyIdService.shared(),
-                )
+            for scope in binding_scopes:
+                try:
+                    parent_uuid = platform_v2_role_uuid_for(
+                        DefaultAccessType.USER,
+                        scope,
+                        GlobalPolicyIdService.shared(),
+                    )
 
-                create_parent_child_relationship = role_child_relationship(parent_uuid, self.role.uuid)
-                create_relations.append(create_parent_child_relationship)
-            except DefaultGroupNotAvailableError:
-                # Default groups may not exist yet during seeding, skip parent relationship
-                logging.warning(f"Default groups may not exist yet during seeding for platform scope {role_scope}")
-                pass
+                    create_parent_child_relationship = role_child_relationship(parent_uuid, self.role.uuid)
+                    create_relations.append(create_parent_child_relationship)
+                except DefaultGroupNotAvailableError:
+                    # Default groups may not exist yet during seeding, skip parent relationship
+                    logging.warning(f"Default groups may not exist yet during seeding for platform scope {scope}")
 
         return create_relations
 
-    def _generate_relations_for_role(
-        self, list_all_possible_scopes_for_removal=False
-    ) -> list[common_pb2.Relationship]:
+    def _generate_relations_for_role(self, for_removal=False) -> list[RelationTuple]:
         """Generate system role permissions."""
         relations = []
         # Gather v1 and v2 permissions for the role
@@ -185,14 +211,8 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             v2_perm = v1_perm_to_v2_perm(v1_perm)
             v2_permissions.append(v2_perm)
 
-            # When deleting, generate relationships for all possible scopes
-        if list_all_possible_scopes_for_removal is True:
-            for scope in Scope:
-                relations.extend(self._check_create_admin_platform_relation(self.role, scope))
-        else:
-            # Determine highest scope for the role's permissions
-            highest_scope: Scope = self.implicit_resource_service.scope_for_role(self.role)
-            relations.extend(self._check_create_admin_platform_relation(self.role, highest_scope))
+        # When deleting, generate relationships for all possible scopes
+        relations.extend(self._check_create_admin_platform_relation(self.role, for_removal=for_removal))
 
         for permission in v2_permissions:
             relations.append(
@@ -213,8 +233,8 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         self,
         event_type: ReplicationEventType,
         metadata: dict[str, object],
-        remove: list[common_pb2.Relationship],
-        add: list[common_pb2.Relationship],
+        remove: list[RelationTuple],
+        add: list[RelationTuple],
     ):
         if not self.replication_enabled():
             return
@@ -284,8 +304,8 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             return
         try:
             self.event_type = event_type
-            self.role_relations: list[common_pb2.Relationship] = []
-            self.current_role_relations: list[common_pb2.Relationship] = []
+            self.role_relations: list[RelationTuple] = []
+            self.current_role_relations: list[RelationTuple] = []
             self.role = role
             self.binding_mappings: dict[int, BindingMapping] = {}
             self.role_bindings: dict[int, RoleBinding] = {}
@@ -306,6 +326,8 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             self.default_workspace = Workspace.objects.default(tenant=binding_tenant)
 
             self.resource_service = ImplicitResourceService.from_settings()
+
+            assert_v1_write_allowed(self.tenant)
         except Exception as e:
             logger.error(f"Failed to initialize RelationApiDualWriteHandler with error: {e}")
             raise DualWriteException(e)
@@ -334,6 +356,11 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
                 return
 
             self.current_role_relations = relation_tuples_for_bindings(self.binding_mappings.values())
+
+            tenant_resource_id = self.tenant.tenant_resource_id()
+            if tenant_resource_id:
+                for v2_role in self.v2_roles.values():
+                    self.current_role_relations.append(role_owner_relationship(v2_role.uuid, tenant_resource_id))
         except Exception as e:
             logger.error(f"Failed to generated relations for v2 role & role bindings: {e}")
             raise DualWriteException(e)
@@ -390,18 +417,24 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         try:
             logger.info("[Dual Write] Generate new relations from role(%s): '%s'", self.role.uuid, self.role.name)
 
-            target_model = bound_model_for_scope(
-                scope=self.resource_service.scope_for_role(self.role),
-                tenant=self.tenant,
-                root_workspace=self.root_workspace,
-                default_workspace=self.default_workspace,
+            binding_scopes = self.resource_service.binding_scopes_for_role(self.role)
+            resource_map = with_workspace_scope_inheritance(
+                {
+                    scope: V2boundresource.for_model(
+                        bound_model_for_scope(
+                            scope=scope,
+                            tenant=self.tenant,
+                            root_workspace=self.root_workspace,
+                            default_workspace=self.default_workspace,
+                        )
+                    )
+                    for scope in binding_scopes
+                }
             )
-
-            target_resource = V2boundresource.for_model(target_model)
 
             relations, migrate_result = migrate_role(
                 self.role,
-                default_resource=target_resource,
+                resource_for_scope=bound_resource_resolver_from_map(resource_map),
                 current_bindings=self.binding_mappings.values(),
                 current_v2_roles=self.v2_roles.values(),
             )
@@ -419,9 +452,14 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
             self.role_bindings = _by_pk(migrate_result.role_bindings)
             self.v2_roles = _by_pk(migrate_result.v2_roles)
 
+            tenant_resource_id = self.tenant.tenant_resource_id()
+            if tenant_resource_id:
+                for v2_role in self.v2_roles.values():
+                    self.role_relations.append(role_owner_relationship(v2_role.uuid, tenant_resource_id))
+
             return relations
         except Exception as e:
             logger.error(
-                f"Failed to generate relations and mappings for role {self.role.name}, UUID :{self.role.uuid}: {e}"
+                f"Failed to generate relations and mappings for role {self.role.name!r}, UUID: {self.role.uuid}: {e}"
             )
             raise DualWriteException(e)
