@@ -7,8 +7,10 @@ from management.relation_replicator.types import (
     SubjectReference,
 )
 
+FAKE_WS_UUID = "00000000-0000-0000-0000-000000000123"
 
-def _make_tuple(resource_type="workspace", resource_id="ws-123", relation="parent"):
+
+def _make_tuple(resource_type="workspace", resource_id=FAKE_WS_UUID, relation="parent"):
     """Build a RelationTuple for DR test fixtures."""
     return RelationTuple(
         resource=ObjectReference(
