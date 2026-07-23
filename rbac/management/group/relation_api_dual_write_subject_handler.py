@@ -18,7 +18,7 @@
 """Class to handle Dual Write API related operations."""
 
 import logging
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 from uuid import uuid4
 
 from django.conf import settings
@@ -459,3 +459,46 @@ class RelationApiDualWriteSubjectHandler:
 
         role_handler.prepare_for_update()
         role_handler.replicate_new_or_updated_role(role)
+
+    @staticmethod
+    def _with_system_roles_for_share(roles: Iterable[Role]) -> list[Role]:
+        """
+        Return the provided roles, with all system roles reloaded and locked FOR SHARE.
+
+        Principally, this ensures that the role will not be changed by seeding while this lock is held (since seeding
+        locks the role FOR UPDATE).
+
+        It is expected that the call has already locked all provided custom roles FOR UPDATE.
+        """
+        roles = set(roles)
+
+        custom: list[Role] = list()
+        system: list[Role] = list()
+
+        for role in roles:
+            if role.system:
+                system.append(role)
+            else:
+                custom.append(role)
+
+        if len(system) > 0:
+            id_params = ", ".join(["%s"] * len(system))
+
+            locked_system = list(
+                Role.objects.raw(
+                    f"SELECT * FROM management_role WHERE system = TRUE AND id IN ({id_params}) FOR SHARE",
+                    [r.id for r in system],
+                )
+            )
+        else:
+            locked_system = []
+
+        final_roles = custom + locked_system
+
+        requested_ids = {r.id for r in roles}
+        final_ids = {r.id for r in final_roles}
+
+        if final_ids != requested_ids:
+            raise RuntimeError(f"Could not find roles with the following IDs: {requested_ids - final_ids}")
+
+        return final_roles
