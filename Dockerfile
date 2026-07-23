@@ -119,7 +119,7 @@ ARG GIT_COMMIT=undefined
 ENV GIT_COMMIT=${GIT_COMMIT}
 
 # Runtime stage
-FROM registry.access.redhat.com/hi/core-runtime:2.42-openssl-fips
+FROM registry.access.redhat.com/hi/core-runtime:2.43-openssl-fips
 
 ENV APP_ROOT=/opt/rbac \
     APP_HOME=/opt/rbac/rbac \
