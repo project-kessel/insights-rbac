@@ -9,28 +9,7 @@ from management.disaster_recovery.corrective_writer import (
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
 from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
-from management.relation_replicator.types import (
-    ObjectReference,
-    ObjectType,
-    RelationTuple,
-    SubjectReference,
-)
-
-
-def _make_tuple(resource_type="workspace", resource_id="ws-123"):
-    return RelationTuple(
-        resource=ObjectReference(
-            type=ObjectType(namespace="rbac", name=resource_type),
-            id=resource_id,
-        ),
-        relation="parent",
-        subject=SubjectReference(
-            subject=ObjectReference(
-                type=ObjectType(namespace="rbac", name="workspace"),
-                id="ws-parent",
-            ),
-        ),
-    )
+from tests.management.disaster_recovery.helpers import FAKE_WS_UUID, _make_tuple
 
 
 def _make_event(relations_to_add=None, relations_to_remove=None, offset=0):
@@ -48,7 +27,7 @@ class GenerateCorrectiveActionsTest(TestCase):
     def test_add_exists_skip(self):
         t = _make_tuple()
         event = _make_event(relations_to_add=[t])
-        existence_map = {("workspace", "ws-123"): True}
+        existence_map = {("workspace", FAKE_WS_UUID): True}
 
         actions = generate_corrective_actions([event], existence_map)
 
@@ -59,7 +38,7 @@ class GenerateCorrectiveActionsTest(TestCase):
     def test_add_not_exists_corrective_delete(self):
         t = _make_tuple()
         event = _make_event(relations_to_add=[t])
-        existence_map = {("workspace", "ws-123"): False}
+        existence_map = {("workspace", FAKE_WS_UUID): False}
 
         actions = generate_corrective_actions([event], existence_map)
 
@@ -70,7 +49,7 @@ class GenerateCorrectiveActionsTest(TestCase):
     def test_remove_exists_corrective_add(self):
         t = _make_tuple()
         event = _make_event(relations_to_remove=[t])
-        existence_map = {("workspace", "ws-123"): True}
+        existence_map = {("workspace", FAKE_WS_UUID): True}
 
         actions = generate_corrective_actions([event], existence_map)
 
@@ -81,7 +60,7 @@ class GenerateCorrectiveActionsTest(TestCase):
     def test_remove_not_exists_skip(self):
         t = _make_tuple()
         event = _make_event(relations_to_remove=[t])
-        existence_map = {("workspace", "ws-123"): False}
+        existence_map = {("workspace", FAKE_WS_UUID): False}
 
         actions = generate_corrective_actions([event], existence_map)
 
@@ -119,7 +98,7 @@ class GenerateCorrectiveActionsTest(TestCase):
     def test_preserves_source_event_info(self):
         t = _make_tuple()
         event = _make_event(relations_to_add=[t], offset=42)
-        existence_map = {("workspace", "ws-123"): False}
+        existence_map = {("workspace", FAKE_WS_UUID): False}
 
         actions = generate_corrective_actions([event], existence_map)
 
@@ -134,7 +113,7 @@ class WriteCorrectiveEventsTest(TestCase):
 
         t = _make_tuple()
         event = _make_event(relations_to_remove=[t])
-        existence_map = {("workspace", "ws-123"): True}
+        existence_map = {("workspace", FAKE_WS_UUID): True}
         actions = generate_corrective_actions([event], existence_map)
 
         result = write_corrective_events(actions, replicator)
@@ -156,7 +135,7 @@ class WriteCorrectiveEventsTest(TestCase):
 
         t = _make_tuple()
         event = _make_event(relations_to_add=[t])
-        existence_map = {("workspace", "ws-123"): False}
+        existence_map = {("workspace", FAKE_WS_UUID): False}
         actions = generate_corrective_actions([event], existence_map)
 
         result = write_corrective_events(actions, replicator)
@@ -176,7 +155,7 @@ class WriteCorrectiveEventsTest(TestCase):
 
         t = _make_tuple()
         event = _make_event(relations_to_add=[t])
-        existence_map = {("workspace", "ws-123"): True}
+        existence_map = {("workspace", FAKE_WS_UUID): True}
         actions = generate_corrective_actions([event], existence_map)
 
         result = write_corrective_events(actions, replicator)
