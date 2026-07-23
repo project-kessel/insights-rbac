@@ -1,7 +1,7 @@
 name: Check Quay Image
 
 on:
-  check_suite:
+  check_run:
     types:
       - completed
 
@@ -9,14 +9,15 @@ jobs:
   check-image:
     runs-on: ubuntu-latest
     if: >-
-      github.event.check_suite.head_branch == 'master' &&
-      github.event.check_suite.conclusion == 'success' &&
-      github.event.check_suite.app.slug == 'red-hat-konflux'
+      github.event.check_run.name == 'insights-rbac-on-push' &&
+      github.event.check_run.check_suite.head_branch == 'master' &&
+      github.event.check_run.conclusion == 'success' &&
+      github.event.check_run.app.slug == 'red-hat-konflux'
     steps:
       - name: Wait for Quay image
         uses: petracihalova/check-quay-image@v1
         with:
           quay_repo: redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac
-          commit_sha: ${{ github.event.check_suite.head_sha }}
+          commit_sha: ${{ github.event.check_run.head_sha }}
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           delay_minutes: 5
