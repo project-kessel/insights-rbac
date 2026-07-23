@@ -54,6 +54,7 @@ from migration_tool.in_memory_tuples import (
     subject,
 )
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 from rbac import urls
 from rbac.middleware import (
     HttpResponseUnauthorizedRequest,
@@ -1580,7 +1581,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
 
         def _run():
             middleware = IdentityHeaderMiddleware(get_response=get_response)
-            middleware(self.request)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
             # req_id should be a valid UUID
             req_id = self.request.req_id
             self.assertIsNotNone(req_id)
@@ -1613,7 +1615,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
 
         def _run():
             middleware = IdentityHeaderMiddleware(get_response=get_response)
-            middleware(self.request)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
             self.assertEqual(self.request.req_id, "my-custom-id-123")
             # Context var must be populated inside the middleware's context
             self.assertEqual(captured["request_id"], "my-custom-id-123")
@@ -1641,7 +1644,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
 
         def _run():
             middleware = IdentityHeaderMiddleware(get_response=get_response)
-            middleware(self.request)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
             self.assertEqual(self.request.req_id, "legit-idINFO Injected log line")
             self.assertEqual(captured["request_id"], "legit-idINFO Injected log line")
 
@@ -1668,7 +1672,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
 
         def _run():
             middleware = IdentityHeaderMiddleware(get_response=get_response)
-            middleware(self.request)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
             self.assertEqual(captured["org_id"], self.customer["org_id"])
             # user_id is hardcoded as "1111111" in _build_identity
             self.assertEqual(captured["user_id"], "1111111")
@@ -1704,7 +1709,8 @@ class RequestContextMiddlewareTest(IdentityRequest):
 
         def _run():
             middleware = IdentityHeaderMiddleware(get_response=get_response)
-            middleware(sa_request)
+            returned = middleware(sa_request)
+            self.assertIs(returned, response)
             self.assertEqual(captured["org_id"], self.customer["org_id"])
             # Service accounts have user_id=None; client_id is used instead
             self.assertEqual(captured["user_id"], sa_data["client_id"])
@@ -1773,3 +1779,119 @@ class RequestContextMiddlewareTest(IdentityRequest):
             self.assertNotIn("request_id", log_object)
             self.assertNotIn("org_id", log_object)
             self.assertNotIn("user_id", log_object)
+
+
+@override_settings(V2_APIS_ENABLED=True)
+class V2MetricsTest(IdentityRequest):
+    """Tests for V2-specific Prometheus metrics (Counter and Histogram)."""
+
+    def setUp(self):
+        """Set up V2 metrics tests."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.META["QUERY_STRING"] = ""
+        # Ensure resolver_match is None so middleware falls through to resolve().
+        self.request.resolver_match = None
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+    def tearDown(self):
+        """Clean up V2 configuration and URL caches to prevent test pollution."""
+        super().tearDown()
+        clear_url_caches()
+        reload(urls)
+
+    def test_v2_request_increments_counter(self):
+        """Test that V2 requests increment rbac_v2_api_requests_total."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+        self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 200)
+
+    def test_v2_request_records_duration(self):
+        """Test that V2 requests observe rbac_v2_api_request_duration_seconds."""
+        from rbac.middleware import rbac_v2_request_duration
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "POST"
+
+        before = rbac_v2_request_duration.labels(method="POST")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=201))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_request_duration.labels(method="POST")._sum.get()
+        self.assertGreater(after, before)
+        self.assertEqual(response.status_code, 201)
+
+    def test_v2_error_increments_5xx_counter(self):
+        """Test that V2 5xx responses are recorded with status='5xx'."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(method="GET", status="5xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=500))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(method="GET", status="5xx")._value.get()
+        self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 500)
+
+    def test_v1_request_does_not_increment_v2_counter(self):
+        """Test that V1 requests do not increment V2 metrics."""
+        from rbac.middleware import rbac_v2_request_duration, rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(method="GET")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        self.assertEqual(after - before, 0)
+        self.assertEqual(duration_after, duration_before)
+        self.assertEqual(response.status_code, 200)
+
+    def test_unresolved_path_does_not_increment_v2_counter_or_500(self):
+        """Test that an unresolvable path does not increment V2 metrics and does not crash."""
+        from rbac.middleware import rbac_v2_request_duration, rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/nonexistent-endpoint/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(method="GET")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=404))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        self.assertEqual(after - before, 0)
+        self.assertEqual(duration_after, duration_before)
+        self.assertNotEqual(response.status_code, 500)
