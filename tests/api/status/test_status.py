@@ -66,6 +66,20 @@ class StatusViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class RootViewTest(TestCase):
+    """Tests the root path handler for infrastructure probes."""
+
+    def test_root_returns_200(self):
+        """Test that GET / returns 200 for kube-probe health checks."""
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_root_head_returns_200(self):
+        """Test that HEAD / returns 200."""
+        response = self.client.head("/")
+        self.assertEqual(response.status_code, 200)
+
+
 class ReadyViewTest(TestCase):
     """Tests the ready (readiness probe) view."""
 
