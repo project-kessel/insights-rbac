@@ -119,6 +119,7 @@ def catch_integrity_error(func):
 def is_no_auth(request):
     """Check condition for needing to authenticate the user."""
     no_auth_list = [
+        "/",
         reverse("v1_api:server-ready"),
         reverse("v1_api:server-status"),
         reverse("v1_api:openapi"),
