@@ -66,7 +66,7 @@ services:
         rbac-scheduler:
           condition: service_healthy
       healthcheck:
-        test: curl -q http://localhost:8080/metrics
+        test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/metrics')\""]
         interval: 5s
         timeout: 5s
         retries: 10
