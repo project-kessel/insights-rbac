@@ -7,7 +7,6 @@ from django.test import TestCase, override_settings
 
 from management.disaster_recovery.kafka_reader import (
     DisasterRecoveryError,
-    ParsedReplicationEvent,
     _parse_debezium_payload,
     _parse_event,
     read_events_in_window,

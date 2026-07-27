@@ -229,7 +229,7 @@ class AccessViewTests(IdentityRequest):
 
     def test_get_empty_access_with_service_account(self):
         """Test the service account that not belongs to any custom group returns no permissions."""
-        url = reverse("v1_management:access") + f"?application="
+        url = reverse("v1_management:access") + "?application="
         client = APIClient()
         response = client.get(url, **self.headers_service_account)
         self.assertEqual(response.status_code, status.HTTP_200_OK)

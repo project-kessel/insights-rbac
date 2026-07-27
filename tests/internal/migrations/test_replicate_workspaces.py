@@ -1,6 +1,5 @@
 import datetime
 from collections.abc import Iterable
-from datetime import timezone
 
 from django.test import TestCase, override_settings
 from internal.migrations.replicate_workspaces import replicate_default_workspaces, replicate_updated_workspaces

@@ -260,7 +260,7 @@ def test_full_sync():
 
     def get_tenants():
         response = client.get(
-            f"/_private/api/v1/integrations/tenant/?external_tenant=ocm&modified_only=true",
+            "/_private/api/v1/integrations/tenant/?external_tenant=ocm&modified_only=true",
             **identity.META,
             follow=True,
         )

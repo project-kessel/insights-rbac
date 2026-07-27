@@ -21,7 +21,7 @@ import signal
 import sys
 from io import StringIO
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from django.core.management import call_command
 from django.test import TestCase
 

@@ -454,7 +454,7 @@ class IntegrationViewsTests(IdentityRequest):
     def test_tenants(self):
         """Test that we get tenants back on /tenant/"""
         response = self.client.get(
-            f"/_private/api/v1/integrations/tenant/",
+            "/_private/api/v1/integrations/tenant/",
             **self.request.META,
             follow=True,
         )
@@ -464,7 +464,7 @@ class IntegrationViewsTests(IdentityRequest):
     def test_tenants_modified(self):
         """Test that we get tenants back on /tenant/"""
         response = self.client.get(
-            f"/_private/api/v1/integrations/tenant/?modified_only=true",
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
             **self.request.META,
             follow=True,
         )

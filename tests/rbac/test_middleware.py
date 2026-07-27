@@ -1562,8 +1562,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
         import contextvars
         import uuid
 
-        from rbac.request_context import request_id_var
-
         # Ensure the header is not set
         self.request.META.pop("HTTP_X_RH_INSIGHTS_REQUEST_ID", None)
 
@@ -1598,8 +1596,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """When X-RH-INSIGHTS-REQUEST-ID header is present, it is used as-is."""
         import contextvars
 
-        from rbac.request_context import request_id_var
-
         self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "my-custom-id-123"
 
         response = Mock(status_code=200)
@@ -1627,8 +1623,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """CRLF characters in X-RH-INSIGHTS-REQUEST-ID header are stripped to prevent log injection."""
         import contextvars
 
-        from rbac.request_context import request_id_var
-
         self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "legit-id\r\nINFO Injected log line"
 
         response = Mock(status_code=200)
@@ -1655,7 +1649,7 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """org_id_var and user_id_var are populated from the identity header."""
         import contextvars
 
-        from rbac.request_context import org_id_var, user_id_var, user_type_var
+        from rbac.request_context import user_type_var
 
         response = Mock(status_code=200)
         response.get = Mock(return_value=None)
@@ -1685,7 +1679,7 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """Service accounts populate user_id_var with client_id and user_type_var with 'service_account'."""
         import contextvars
 
-        from rbac.request_context import org_id_var, user_id_var, user_type_var
+        from rbac.request_context import user_type_var
 
         sa_data = self._create_service_account_data()
         request_context = self._create_request_context(self.customer, None, service_account_data=sa_data)

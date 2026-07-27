@@ -22,7 +22,7 @@ from uuid import UUID
 from django.conf import settings
 from django.test.utils import override_settings
 from management.group.definer import seed_group
-from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.group.platform import GlobalPolicyIdService
 from management.models import (
     Access,
     ExtRoleRelation,

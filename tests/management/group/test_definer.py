@@ -31,7 +31,7 @@ from management.group.definer import (
 from management.role.definer import seed_roles
 from tests.identity_request import IdentityRequest
 from tests.core.test_kafka import copy_call_args
-from management.models import Group, Role, Policy
+from management.models import Group, Role
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

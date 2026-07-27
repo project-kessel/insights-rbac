@@ -20,7 +20,7 @@ from importlib import reload
 from unittest.mock import MagicMock, Mock, patch
 
 import requests
-from django.test import TestCase, TransactionTestCase
+from django.test import TransactionTestCase
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
 from kessel.inventory.v1beta2 import allowed_pb2

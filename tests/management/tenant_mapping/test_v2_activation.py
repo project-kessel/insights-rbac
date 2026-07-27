@@ -19,7 +19,6 @@
 from django.test import TestCase
 from django.db import transaction
 
-from api.models import Tenant
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_mapping.v2_activation import (
     V1WriteBlockedError,

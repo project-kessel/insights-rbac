@@ -41,8 +41,6 @@ from migration_tool.in_memory_tuples import (
 )
 from tests.identity_request import IdentityRequest
 
-from api.models import Tenant
-
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class RoleV2ServiceTests(IdentityRequest):

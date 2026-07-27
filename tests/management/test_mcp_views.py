@@ -16,16 +16,14 @@
 #
 """Test the MCP views via _private/_a2s/ path."""
 
-import concurrent.futures
 import inspect
 import json
-import threading
 import time
 from importlib import reload
 from unittest.mock import MagicMock, patch
 
 from django.test import override_settings
-from django.urls import clear_url_caches, reverse
+from django.urls import clear_url_caches
 from django.utils import timezone
 from management.mcp_views import (
     ApiVersion,
@@ -7994,7 +7992,6 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
     def test_confirmation_token_not_passed_to_tool_function(self):
         """The confirmation_token argument is stripped before calling the tool function."""
         import dataclasses
-        from unittest.mock import MagicMock
 
         token = self._get_confirmation_token("create_group", {"name": "Token Strip Test"})
         original_config = _TOOL_CONFIG["create_group"]

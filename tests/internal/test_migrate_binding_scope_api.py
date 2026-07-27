@@ -16,13 +16,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import uuid
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from django.contrib.auth.models import User as DjangoUser
 from django.test import TestCase, override_settings
-from management.group.definer import add_roles, clone_default_group_in_public_schema, seed_group
+from management.group.definer import add_roles
 from management.group.model import Group
-from management.group.platform import GlobalPolicyIdService
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.models import Access, BindingMapping, Permission, Workspace
 from management.permission.scope_service import ImplicitResourceService, Scope
@@ -31,11 +30,10 @@ from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.definer import seed_roles
 from management.role.model import ResourceDefinition, Role
-from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2
+from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
-from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
@@ -54,8 +52,6 @@ from migration_tool.migrate_binding_scope import (
     migrate_system_role_bindings_for_group,
     system_role_source,
 )
-from migration_tool.utils import create_relationship
-from tests.management.group.test_view import find_relation_in_list
 from tests.management.role.test_dual_write import DualWriteTestCase, RbacFixture
 from tests.util import (
     assert_v1_v2_locally_consistent,
@@ -306,7 +302,7 @@ class BindingScopeMigrationTupleVerificationTest(TestCase):
 
         # Verify scope was correctly determined as ROOT
         self.assertCountEqual(
-            actual_scopes, {Scope.ROOT}, f"Handler should determine ROOT scope for rbac:* permissions"
+            actual_scopes, {Scope.ROOT}, "Handler should determine ROOT scope for rbac:* permissions"
         )
 
         # Verify binding is at root workspace

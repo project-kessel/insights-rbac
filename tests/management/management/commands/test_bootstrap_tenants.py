@@ -1,11 +1,9 @@
-import datetime
 from unittest.mock import patch
 
 from django.conf import settings
 from django.core.management import call_command, CommandError
 from django.test.utils import override_settings
 
-from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_mapping.model import TenantMapping
@@ -23,7 +21,7 @@ from migration_tool.in_memory_tuples import (
 from tests.management.role.test_dual_write import DualWriteTestCase
 
 from api.models import Tenant
-from management.models import Group, Role
+from management.models import Group
 
 
 @override_settings(
@@ -143,7 +141,7 @@ class TestBootstrapTenants(DualWriteTestCase):
         self.assertEqual(len(self.tuples), 0)
 
         # Force bootstrapping should actually replicate something.
-        self._invoke(f"--org-id", self.tenant.org_id, "--force")
+        self._invoke("--org-id", self.tenant.org_id, "--force")
         self.assertGreater(len(self.tuples), 0)
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")

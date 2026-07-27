@@ -17,10 +17,8 @@
 """Tests for parity access checker."""
 
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
-from django.db import transaction
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from management.group.model import Group
 from management.parity_check.checker import (

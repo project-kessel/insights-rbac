@@ -22,7 +22,7 @@ from management.models import BindingMapping, Workspace
 from management.principal.model import Principal
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.role.model import Role
-from management.role.v2_model import CustomRoleV2, SeededRoleV2
+from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding
 from management.tenant_service import V2TenantBootstrapService
 from management.workspace.service import WorkspaceService

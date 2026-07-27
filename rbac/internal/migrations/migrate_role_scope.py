@@ -44,7 +44,7 @@ class _CheckResult:
 
     def __post_init__(self):
         if self.can_migrate != (self.scope_state is not None):
-            raise TypeError(f"Expected a scope state to be present iff can_migrate is true.")
+            raise TypeError("Expected a scope state to be present iff can_migrate is true.")
 
     @classmethod
     def failed(cls):
@@ -65,7 +65,7 @@ def _check_migration(
     role = Role.objects.filter(pk=role.pk).first()
 
     if role is None:
-        logger.info(f"System role concurrently deleted; not updating binding scopes.")
+        logger.info("System role concurrently deleted; not updating binding scopes.")
         return _CheckResult.failed()
 
     if not role.system:

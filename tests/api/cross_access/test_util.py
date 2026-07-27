@@ -18,30 +18,20 @@
 
 from api.cross_access import util
 from api.models import CrossAccountRequest, Tenant
-from api.cross_access.util import get_cross_principal_name
 from django.urls import reverse
-from django.utils import timezone
-from management.models import Role, Principal
-from management.notifications.notification_handlers import EVENT_TYPE_RH_TAM_REQUEST_CREATED
-from rest_framework import status
-from rest_framework.test import APIClient
 
 from datetime import timedelta
 from unittest.mock import patch
 from management.workspace.model import Workspace
 from migration_tool.in_memory_tuples import (
     all_of,
-    one_of,
     relation,
     resource,
-    resource_id,
     subject,
-    InMemoryRelationReplicator,
 )
 from tests.api.cross_access.fixtures import CrossAccountRequestTest
 
 from django.test.utils import override_settings
-from functools import partial
 
 URL_LIST = reverse("v1_api:cross-list")
 

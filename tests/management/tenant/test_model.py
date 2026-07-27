@@ -20,17 +20,13 @@ from typing import Optional, Tuple
 import uuid
 
 from django.conf import settings
-from unittest.mock import patch
 from django.test import TestCase
 from management.group.definer import seed_group
 from management.group.model import Group
 from management.policy.model import Policy
 from management.principal.model import Principal
 from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
-    WorkspaceEvent,
     WorkspaceEventStream,
-    ReplicationEvent,
     ReplicationEventType,
     PartitionKey,
 )

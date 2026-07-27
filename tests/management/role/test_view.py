@@ -17,12 +17,11 @@
 """Test the role viewset."""
 
 import json
-from typing import Optional
 from uuid import uuid4
 from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from django.test.utils import override_settings
-from django.urls import reverse, resolve
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 from api.models import Tenant
@@ -40,10 +39,6 @@ from management.models import (
     Workspace,
     BindingMapping,
 )
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.role.v2_model import CustomRoleV2
-from management.role_binding.model import RoleBinding
-from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     all_of,
     InMemoryRelationReplicator,
@@ -51,14 +46,13 @@ from migration_tool.in_memory_tuples import (
     relation,
     resource,
     subject,
-    resource_type,
 )
 
 from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
-from tests.util import assert_v1_v2_tuples_fully_consistent, assert_v1_v2_locally_consistent
+from tests.util import assert_v1_v2_locally_consistent
 from tests.v2_util import bootstrap_tenant_for_v2_test
-from unittest.mock import ANY, patch, call, Mock
+from unittest.mock import ANY, patch, Mock
 
 URL = reverse("v1_management:role-list")
 

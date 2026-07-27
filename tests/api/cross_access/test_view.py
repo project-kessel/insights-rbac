@@ -35,17 +35,13 @@ from management.role.model import BindingMapping
 from management.workspace.model import Workspace
 from migration_tool.in_memory_tuples import (
     all_of,
-    one_of,
     relation,
     resource,
-    resource_id,
     subject,
-    InMemoryRelationReplicator,
 )
 from tests.api.cross_access.fixtures import CrossAccountRequestTest
 
 from django.test.utils import override_settings
-from functools import partial
 
 from tests.util import assert_v1_v2_locally_consistent
 

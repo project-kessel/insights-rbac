@@ -24,17 +24,14 @@ from rest_framework import serializers
 from api.models import Tenant
 from management.models import (
     CustomRoleV2,
-    Group,
     Permission,
     PlatformRoleV2,
     Role,
     RoleV2,
     SeededRoleV2,
 )
-from management.principal.model import Principal
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
+from management.relation_replicator.types import RelationTuple
 from management.role.relations import role_owner_relationship
-from management.role_binding.model import RoleBindingPrincipal
 from migration_tool.models import role_permission_tuple
 from tests.identity_request import IdentityRequest
 from tests.v2_util import seed_v2_role_from_v1

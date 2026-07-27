@@ -32,7 +32,6 @@ from management.models import Role, Workspace
 from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType, PartitionKey
-from management.role.relations import role_owner_relationship
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import DefaultAccessType
@@ -42,7 +41,7 @@ from management.tenant_mapping.v2_activation import (
 )
 from management.tenant_service.v2 import lock_tenant_for_bootstrap, TenantBootstrapLock
 from migration_tool.in_memory_tuples import RelationTuple
-from migration_tool.models import V2boundresource, role_permission_tuple
+from migration_tool.models import V2boundresource
 from migration_tool.utils import create_relationship
 from psycopg2.errors import DeadlockDetected, SerializationFailure
 from kessel.relations.v1beta1.common_pb2 import Relationship
@@ -772,7 +771,7 @@ def _run_removal_with_retry(tenant: Tenant, read_tuples_fn, dry_run: bool):
 
         # OperationalError is here based on actual serialization failures we've seen.
         # DeadlockDetected and SerializationFailure are here based on the psycopg code.
-        except (OperationalError, DeadlockDetected, SerializationFailure) as e:
+        except (OperationalError, DeadlockDetected, SerializationFailure):
             attempts_remaining -= 1
 
             logger.info(

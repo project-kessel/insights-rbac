@@ -20,7 +20,7 @@ from django.db import connection
 from django.test import TestCase
 
 from api.models import Tenant
-from management.models import Permission, RoleV2, Workspace
+from management.models import RoleV2, Workspace
 
 
 class GinTrigramIndexTests(TestCase):

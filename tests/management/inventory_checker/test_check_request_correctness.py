@@ -15,13 +15,11 @@ For workspace parent relations:
 The child workspace is the RESOURCE (object), the parent workspace is the SUBJECT.
 """
 
-import unittest
 import uuid
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from django.conf import settings
 from django.test import TestCase, override_settings
-from kessel.inventory.v1beta2.check_response_pb2 import CheckResponse
 from management.group.model import Group
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,

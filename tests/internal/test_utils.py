@@ -31,7 +31,6 @@ from management.group.model import Group
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.models import BindingMapping, Workspace, Access, Permission
 from management.permission.scope_service import Scope
-from management.policy.model import Policy
 from management.principal.model import Principal
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.relation_replicator import ReplicationEventType
@@ -43,7 +42,6 @@ from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBin
 from management.role_binding.service import RoleBindingService, CreateBindingRequest
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
-from management.tenant_service import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     InMemoryTuples,
     InMemoryRelationReplicator,
@@ -62,9 +60,8 @@ from internal.utils import (
 )
 from migration_tool.models import V2role, V2rolebinding, V2boundresource
 from migration_tool.utils import create_relationship
-from rbac.settings import ROOT_SCOPE_PERMISSIONS, TENANT_SCOPE_PERMISSIONS
 from tests.management.role.test_dual_write import DualWriteTestCase
-from tests.util import assert_v2_tuples_consistent, assert_v1_v2_tuples_fully_consistent
+from tests.util import assert_v1_v2_tuples_fully_consistent
 from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
 

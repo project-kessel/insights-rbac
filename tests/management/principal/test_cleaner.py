@@ -22,7 +22,7 @@ import uuid
 
 from unittest.mock import MagicMock, patch
 
-from django.db import connections, transaction
+from django.db import connections
 from django.test import override_settings
 from prometheus_client import REGISTRY
 from rest_framework import status

@@ -6,7 +6,7 @@ from django.db.models import Exists, OuterRef, UUIDField
 from django.db.models.functions import Cast
 
 from api.models import Tenant
-from management.atomic_transactions import atomic, atomic_with_retry
+from management.atomic_transactions import atomic_with_retry
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import (
     RelationReplicator,
