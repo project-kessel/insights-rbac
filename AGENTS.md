@@ -118,6 +118,7 @@ Run manually: `pre-commit run --all-files`
 - **Error format**: V2 APIs use RFC 7807 Problem JSON via `ProblemJSONRenderer`. Build error responses with `v2response_error_from_errors()`. V1 uses flat `errors` arrays.
 - **Two-layer access control (v2)**: Every v2 endpoint needs both a `*AccessPermission` class (endpoint-level 403) and a `*AccessFilterBackend` (queryset-level filtering). Detail views return 404 for inaccessible objects to prevent existence leakage.
 - **Feature flag gating**: V2 routes only register when `V2_APIS_ENABLED=True`. Never register v2 routes unconditionally. V2 writes additionally require `V2WriteRequiresWorkspacesEnabled`.
+- **V2 endpoint metrics**: Prometheus metrics (`rbac_v2_api_requests_total` counter, `rbac_v2_api_request_duration_seconds` histogram) are auto-recorded by `IdentityHeaderMiddleware` for all V2 requests. The `endpoint` label is the Django URL `url_name` (e.g. `workspace-list`, `roles-detail`). When adding new V2 endpoints, verify: (1) the new `url_name` appears in metric labels automatically, (2) Grafana dashboards in `dashboards/` include the new endpoint in any endpoint-filtered panels, (3) PrometheusRule alerts in app-interface are updated if the new endpoint has different latency/error-rate expectations. See `docs/integration-guidelines.md` §12 and `rbac/rbac/middleware.py` (`_V2_APP_NAMES`).
 
 ### Testing
 

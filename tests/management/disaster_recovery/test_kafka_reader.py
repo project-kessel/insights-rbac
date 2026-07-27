@@ -29,7 +29,10 @@ def _make_debezium_message(relations_to_add=None, relations_to_remove=None, even
     return json.dumps({"schema": {}, "payload": json.dumps(inner)}).encode()
 
 
-def _make_relation_dict(resource_type="workspace", resource_id="ws-123", relation="parent"):
+FAKE_WS_UUID = "00000000-0000-0000-0000-000000000123"
+
+
+def _make_relation_dict(resource_type="workspace", resource_id=FAKE_WS_UUID, relation="parent"):
     return {
         "resource": {"type": {"namespace": "rbac", "name": resource_type}, "id": resource_id},
         "relation": relation,
@@ -85,7 +88,7 @@ class ParseEventTest(TestCase):
         event = _parse_event(payload, offset=5, partition=0, timestamp_ms=1000)
         self.assertEqual(len(event.relations_to_add), 1)
         self.assertEqual(event.relations_to_add[0].resource.type.name, "workspace")
-        self.assertEqual(event.relations_to_add[0].resource.id, "ws-123")
+        self.assertEqual(event.relations_to_add[0].resource.id, FAKE_WS_UUID)
         self.assertEqual(event.offset, 5)
 
     def test_parses_relations_to_remove(self):

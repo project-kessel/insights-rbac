@@ -1806,53 +1806,53 @@ class V2MetricsTest(IdentityRequest):
         reload(urls)
 
     def test_v2_request_increments_counter(self):
-        """Test that V2 requests increment rbac_v2_api_requests_total."""
+        """Test that V2 requests increment rbac_v2_api_requests_total with endpoint label."""
         from rbac.middleware import rbac_v2_requests_total
 
         self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "GET"
 
-        before = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+        before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
 
         get_response = Mock(return_value=HttpResponse(status=200))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(self.request)
 
-        after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
+        after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
         self.assertEqual(after - before, 1)
         self.assertEqual(response.status_code, 200)
 
     def test_v2_request_records_duration(self):
-        """Test that V2 requests observe rbac_v2_api_request_duration_seconds."""
+        """Test that V2 requests observe rbac_v2_api_request_duration_seconds with endpoint label."""
         from rbac.middleware import rbac_v2_request_duration
 
         self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "POST"
 
-        before = rbac_v2_request_duration.labels(method="POST")._sum.get()
+        before = rbac_v2_request_duration.labels(endpoint="workspace-list", method="POST")._sum.get()
 
         get_response = Mock(return_value=HttpResponse(status=201))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(self.request)
 
-        after = rbac_v2_request_duration.labels(method="POST")._sum.get()
+        after = rbac_v2_request_duration.labels(endpoint="workspace-list", method="POST")._sum.get()
         self.assertGreater(after, before)
         self.assertEqual(response.status_code, 201)
 
     def test_v2_error_increments_5xx_counter(self):
-        """Test that V2 5xx responses are recorded with status='5xx'."""
+        """Test that V2 5xx responses are recorded with status='5xx' and correct endpoint."""
         from rbac.middleware import rbac_v2_requests_total
 
         self.request.path = "/api/rbac/v2/workspaces/"
         self.request.method = "GET"
 
-        before = rbac_v2_requests_total.labels(method="GET", status="5xx")._value.get()
+        before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="5xx")._value.get()
 
         get_response = Mock(return_value=HttpResponse(status=500))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(self.request)
 
-        after = rbac_v2_requests_total.labels(method="GET", status="5xx")._value.get()
+        after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="5xx")._value.get()
         self.assertEqual(after - before, 1)
         self.assertEqual(response.status_code, 500)
 
@@ -1863,15 +1863,15 @@ class V2MetricsTest(IdentityRequest):
         self.request.path = "/api/rbac/v1/roles/"
         self.request.method = "GET"
 
-        before = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
-        duration_before = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        before = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(endpoint="role-list", method="GET")._sum.get()
 
         get_response = Mock(return_value=HttpResponse(status=200))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(self.request)
 
-        after = rbac_v2_requests_total.labels(method="GET", status="2xx")._value.get()
-        duration_after = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        after = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(endpoint="role-list", method="GET")._sum.get()
         self.assertEqual(after - before, 0)
         self.assertEqual(duration_after, duration_before)
         self.assertEqual(response.status_code, 200)
@@ -1883,15 +1883,37 @@ class V2MetricsTest(IdentityRequest):
         self.request.path = "/api/rbac/v2/nonexistent-endpoint/"
         self.request.method = "GET"
 
-        before = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
-        duration_before = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        before = rbac_v2_requests_total.labels(endpoint="unresolved", method="GET", status="4xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(endpoint="unresolved", method="GET")._sum.get()
 
         get_response = Mock(return_value=HttpResponse(status=404))
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(self.request)
 
-        after = rbac_v2_requests_total.labels(method="GET", status="4xx")._value.get()
-        duration_after = rbac_v2_request_duration.labels(method="GET")._sum.get()
+        after = rbac_v2_requests_total.labels(endpoint="unresolved", method="GET", status="4xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(endpoint="unresolved", method="GET")._sum.get()
         self.assertEqual(after - before, 0)
         self.assertEqual(duration_after, duration_before)
         self.assertNotEqual(response.status_code, 500)
+
+    def test_v2_different_endpoints_tracked_separately(self):
+        """Test that different V2 endpoints are tracked with distinct endpoint labels."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        # Request to workspaces endpoint
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        ws_before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+        role_before = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        ws_after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+        role_after = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+
+        self.assertEqual(ws_after - ws_before, 1)
+        self.assertEqual(role_after - role_before, 0)
+        self.assertEqual(response.status_code, 200)
