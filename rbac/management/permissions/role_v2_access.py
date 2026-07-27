@@ -24,6 +24,7 @@ from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
 )
 from management.principal.proxy import get_kessel_principal_id
+from management.role.v2_model import RoleV2
 from rest_framework import permissions
 
 logger = logging.getLogger(__name__)
@@ -33,10 +34,12 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
     """
     Permission class for Role V2 API access using Kessel Inventory API.
 
-    Checks if the principal has rbac_roles_read or rbac_roles_write permission
-    on the org resource via the Inventory API's CheckForUpdate gRPC call.
+    Read actions (list, retrieve) are always allowed at the endpoint level
+    so that all principals can view seeded (system) roles without additional
+    permission. The Kessel check result is stored on the request so the view
+    can restrict custom-role visibility via queryset filtering and
+    has_object_permission.
 
-    Read actions (list, retrieve) require rbac_roles_read.
     Write actions (create, update, bulk_destroy) require rbac_roles_write.
     """
 
@@ -53,16 +56,7 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
         return self.ROLES_READ_RELATION
 
     def has_permission(self, request, view):
-        """
-        Check if the user has permission to access Role V2 APIs.
-
-        Args:
-            request: The HTTP request object
-            view: The view being accessed
-
-        Returns:
-            bool: True if the user has permission, False otherwise
-        """
+        """Check if the user has permission to access Role V2 APIs."""
         tenant = getattr(request, "tenant", None)
         if tenant is None:
             logger.debug("Denied role access: no tenant on request")
@@ -86,8 +80,13 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
             principal_id=principal_id,
             relation=relation,
         )
+
+        action = getattr(view, "action", None)
+        if action not in self.WRITE_ACTIONS:
+            request._has_kessel_roles_read = has_access
+            return True
+
         if not has_access:
-            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
             logger.warning(
                 "Authorization denied",
                 extra={
@@ -102,3 +101,27 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
                 },
             )
         return has_access
+
+    def has_object_permission(self, request, view, obj):
+        """Defense-in-depth fallback; queryset filtering is the primary access gate."""
+        action = getattr(view, "action", None)
+        if action in self.WRITE_ACTIONS:
+            return True
+        if getattr(request, "_has_kessel_roles_read", False):
+            return True
+        if getattr(obj, "type", None) == RoleV2.Types.SEEDED:
+            return True
+        logger.warning(
+            "Authorization denied",
+            extra={
+                "action": request.method,
+                "resource_type": "role_v2",
+                "outcome": "failure",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "reason": "kessel_permission_denied",
+                "endpoint": request.path,
+                "required_relation": self.ROLES_READ_RELATION,
+            },
+        )
+        return False

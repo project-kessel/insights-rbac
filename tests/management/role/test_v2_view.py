@@ -34,7 +34,6 @@ from management import v2_urls
 from management.audit_log.model import AuditLog
 from management.models import Permission, Workspace
 from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
-from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.role.definer import seed_roles
 from management.role.v2_model import CustomRoleV2, PlatformRoleV2, RoleV2, SeededRoleV2
@@ -345,16 +344,35 @@ class RoleV2RetrieveViewTest(IdentityRequest):
         self.assertEqual(data["id"], str(self.custom_role.uuid))
         self.assertEqual(data["name"], "Test Custom Role")
 
-    def test_retrieve_role_permission_denied(self):
-        """Test retrieving a role when user lacks permission."""
+    def test_retrieve_custom_role_without_permission_returns_404(self):
+        """Custom role retrieve without Kessel read access returns 404 (not 403) to prevent existence leakage."""
         self.mock_check_access.return_value = False
 
         url = self._get_role_url(self.custom_role.uuid)
         response = self.client.get(url, **self.headers)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
         self.mock_check_access.return_value = True
+
+    def test_retrieve_seeded_role_without_permission_returns_200(self):
+        """Seeded roles are visible to all authenticated users regardless of Kessel read access."""
+        public_tenant, _ = Tenant.objects.get_or_create(tenant_name="public")
+        seeded_role = SeededRoleV2.objects.create(
+            name="Public Seeded Role",
+            description="Visible to all",
+            tenant=public_tenant,
+        )
+        self.mock_check_access.return_value = False
+
+        url = self._get_role_url(seeded_role.uuid)
+        response = self.client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "Public Seeded Role")
+
+        self.mock_check_access.return_value = True
+        seeded_role.delete()
 
     def test_retrieve_role_with_special_characters_in_name(self):
         """Test retrieving a role with special characters in name and description."""
@@ -573,6 +591,28 @@ class RoleV2ViewSetTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["data"]), 1)
         self.assertEqual(response.data["data"][0]["name"], "test_role")
+
+    def test_list_roles_without_permission_returns_only_seeded(self):
+        """List returns only seeded roles when user lacks rbac_roles_read."""
+        public_tenant, _ = Tenant.objects.get_or_create(tenant_name="public")
+        seeded_role = SeededRoleV2.objects.create(
+            name="Seeded List Role",
+            description="Visible without permission",
+            tenant=public_tenant,
+        )
+
+        with patch(
+            "management.permissions.role_v2_access.WorkspaceInventoryAccessChecker.check_resource_access",
+            return_value=False,
+        ):
+            response = self.client.get(self.list_url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        role_names = [r["name"] for r in response.data["data"]]
+        self.assertIn("Seeded List Role", role_names)
+        self.assertNotIn("test_role", role_names)
+
+        seeded_role.delete()
 
     def test_list_roles_with_custom_fields(self):
         """Test that fields parameter returns only requested fields."""
@@ -2052,7 +2092,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         response = self.client.put(update_url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        self._assert_audit_log(action=AuditLog.EDIT, description=f"V2 role A Better Role:\nEdited name")
+        self._assert_audit_log(action=AuditLog.EDIT, description="V2 role A Better Role:\nEdited name")
 
     # ==========================================================================
     # Tests for POST /api/v2/roles:bulkDelete/ (bulk destroy)

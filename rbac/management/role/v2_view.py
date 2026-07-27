@@ -75,7 +75,10 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         base_qs = RoleV2.objects.for_tenant(self.request.tenant).assignable().with_fields(fields)
 
         if self.action in ("list", "retrieve"):
-            return base_qs.excluding_out_of_scope_v2_roles()
+            qs = base_qs.excluding_out_of_scope_v2_roles()
+            if not getattr(self.request, "_has_kessel_roles_read", False):
+                qs = qs.filter(type=RoleV2.Types.SEEDED)
+            return qs
         if self.action in ("update", "bulk_destroy"):
             return base_qs
         return base_qs.filter(type=RoleV2.Types.CUSTOM)
@@ -127,6 +130,8 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         service = RoleV2Service(tenant=request.tenant)
         queryset = service.list(validated_params)
+        if not getattr(request, "_has_kessel_roles_read", False):
+            queryset = queryset.filter(type=RoleV2.Types.SEEDED)
 
         context = {
             "request": request,

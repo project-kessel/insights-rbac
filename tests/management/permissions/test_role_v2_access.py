@@ -142,9 +142,11 @@ class RoleV2KesselAccessPermissionTest(TestCase):
 
     @patch("management.permissions.role_v2_access.get_kessel_principal_id")
     @patch("management.permissions.role_v2_access.WorkspaceInventoryAccessChecker")
-    def test_access_denied_when_checker_returns_false(self, mock_checker_class, mock_get_principal_id):
-        """Permission should be denied when checker returns False."""
-        mock_get_principal_id.return_value = "redhat/test-user-123"
+    def test_read_allowed_but_kessel_flag_false_when_checker_returns_false(
+        self, mock_checker_class, mock_get_principal
+    ):
+        """Read actions pass has_permission but store Kessel result for downstream filtering."""
+        mock_get_principal.return_value = "redhat/test-user-123"
 
         mock_checker = MagicMock()
         mock_checker.check_resource_access.return_value = False
@@ -152,6 +154,24 @@ class RoleV2KesselAccessPermissionTest(TestCase):
 
         request = self._make_request()
         view = self._make_view("list")
+
+        result = self.permission.has_permission(request, view)
+
+        self.assertTrue(result)
+        self.assertFalse(request._has_kessel_roles_read)
+
+    @patch("management.permissions.role_v2_access.get_kessel_principal_id")
+    @patch("management.permissions.role_v2_access.WorkspaceInventoryAccessChecker")
+    def test_write_denied_when_checker_returns_false(self, mock_checker_class, mock_get_principal_id):
+        """Write actions should be denied when checker returns False."""
+        mock_get_principal_id.return_value = "redhat/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = False
+        mock_checker_class.return_value = mock_checker
+
+        request = self._make_request()
+        view = self._make_view("create")
 
         result = self.permission.has_permission(request, view)
 
@@ -205,11 +225,12 @@ class RoleV2KesselAccessPermissionTest(TestCase):
 
     @patch("management.permissions.role_v2_access.get_kessel_principal_id")
     @patch("management.permissions.role_v2_access.WorkspaceInventoryAccessChecker")
-    def test_denied_on_inventory_connectivity_error(self, mock_checker_class, mock_get_principal_id):
-        """Permission should be denied when Inventory API is unreachable (fail closed).
+    def test_read_allowed_on_inventory_connectivity_error(self, mock_checker_class, mock_get_principal_id):
+        """Read actions pass has_permission even on connectivity error; Kessel flag is False.
 
         WorkspaceInventoryAccessChecker.check_resource_access returns False on
-        gRPC connectivity errors internally, so the permission class sees False.
+        gRPC connectivity errors internally. Read actions still pass but downstream
+        filtering restricts to seeded roles only.
         """
         mock_get_principal_id.return_value = "redhat/test-user-123"
 
@@ -219,6 +240,25 @@ class RoleV2KesselAccessPermissionTest(TestCase):
 
         request = self._make_request()
         view = self._make_view("list")
+
+        result = self.permission.has_permission(request, view)
+
+        self.assertTrue(result)
+        self.assertFalse(request._has_kessel_roles_read)
+        mock_checker.check_resource_access.assert_called_once()
+
+    @patch("management.permissions.role_v2_access.get_kessel_principal_id")
+    @patch("management.permissions.role_v2_access.WorkspaceInventoryAccessChecker")
+    def test_write_denied_on_inventory_connectivity_error(self, mock_checker_class, mock_get_principal_id):
+        """Write actions should be denied when Inventory API is unreachable (fail closed)."""
+        mock_get_principal_id.return_value = "redhat/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = False
+        mock_checker_class.return_value = mock_checker
+
+        request = self._make_request()
+        view = self._make_view("create")
 
         result = self.permission.has_permission(request, view)
 
