@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from django.test.utils import override_settings
 from django.urls import clear_url_caches
+from management.group.model import Group
 from management.models import Principal
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -263,6 +264,7 @@ class PrincipalV2ViewTests(IdentityRequest):
         self.assertIn("type", principal)
         self.assertIn("user_id", principal)
         self.assertIn("service_account_id", principal)
+        self.assertIn("group_count", principal)
 
     def test_invalid_type_filter(self):
         """Invalid type filter value returns 400."""
@@ -303,6 +305,121 @@ class PrincipalV2ViewTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertIsNone(response.data["data"][0]["user_id"])
+
+
+@override_settings(V2_APIS_ENABLED=True)
+class PrincipalV2GroupCountTests(IdentityRequest):
+    """Test group_count field in the Principal V2 API responses."""
+
+    def setUp(self):
+        """Set up principals and groups for group_count tests."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.tenant.save()
+
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+        self.principal_no_groups = Principal.objects.create(
+            username="loner",
+            type=Principal.Types.USER,
+            user_id="200001",
+            tenant=self.tenant,
+        )
+        self.principal_one_group = Principal.objects.create(
+            username="single_group_user",
+            type=Principal.Types.USER,
+            user_id="200002",
+            tenant=self.tenant,
+        )
+        self.principal_multi_groups = Principal.objects.create(
+            username="multi_group_user",
+            type=Principal.Types.USER,
+            user_id="200003",
+            tenant=self.tenant,
+        )
+
+        self.group_a = Group.objects.create(name="Group A", tenant=self.tenant)
+        self.group_b = Group.objects.create(name="Group B", tenant=self.tenant)
+        self.group_c = Group.objects.create(name="Group C", tenant=self.tenant)
+
+        self.group_a.principals.add(self.principal_one_group)
+        self.group_a.principals.add(self.principal_multi_groups)
+        self.group_b.principals.add(self.principal_multi_groups)
+        self.group_c.principals.add(self.principal_multi_groups)
+
+    def test_list_group_count_zero(self):
+        """Principal with no groups has group_count 0."""
+        client = APIClient()
+        response = client.get(f"{V2_URL}?username=loner", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["group_count"], 0)
+
+    def test_list_group_count_one(self):
+        """Principal in one group has group_count 1."""
+        client = APIClient()
+        response = client.get(f"{V2_URL}?username=single_group_user", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["group_count"], 1)
+
+    def test_list_group_count_multiple(self):
+        """Principal in multiple groups has correct group_count."""
+        client = APIClient()
+        response = client.get(f"{V2_URL}?username=multi_group_user", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["group_count"], 3)
+
+    def test_retrieve_group_count(self):
+        """Retrieve endpoint includes group_count."""
+        client = APIClient()
+        url = f"{V2_URL}{self.principal_multi_groups.uuid}/"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["group_count"], 3)
+
+    def test_retrieve_group_count_zero(self):
+        """Retrieve endpoint returns group_count 0 for ungrouped principal."""
+        client = APIClient()
+        url = f"{V2_URL}{self.principal_no_groups.uuid}/"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["group_count"], 0)
+
+    def test_group_count_service_account(self):
+        """Service accounts also get group_count."""
+        sa = Principal.objects.create(
+            username="service-account-xyz",
+            type=Principal.Types.SERVICE_ACCOUNT,
+            service_account_id="xyz",
+            tenant=self.tenant,
+        )
+        self.group_a.principals.add(sa)
+
+        client = APIClient()
+        response = client.get(f"{V2_URL}?username=service-account-xyz", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"][0]["group_count"], 1)
+
+    def test_group_count_excludes_cross_tenant_groups(self):
+        """Cross-tenant group membership does not inflate group_count."""
+        other_tenant = Tenant.objects.create(tenant_name="other_org", org_id="99999")
+        cross_tenant_group = Group.objects.create(name="Cross-Tenant Group", tenant=other_tenant)
+        cross_tenant_group.principals.add(self.principal_one_group)
+
+        client = APIClient()
+        response = client.get(f"{V2_URL}?username=single_group_user", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"][0]["group_count"], 1)
 
 
 @override_settings(V2_APIS_ENABLED=True)
