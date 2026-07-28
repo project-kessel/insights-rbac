@@ -9,7 +9,7 @@ metadata:
     iconClass: "icon-python"
     openshift.io/long-description: "This template defines resources needed to run the RBAC application, including a build configuration, application deployment configuration, and database deployment configuration."
     openshift.io/provider-display-name: "Red Hat, Inc."
-    openshift.io/documentation-url: "https://insight-rbac.readthedocs.io/en/latest/"
+    openshift.io/documentation-url: "https://github.com/project-kessel/insights-rbac"
 labels:
   app: ${NAME}
   template: ${NAME}-redis-template
