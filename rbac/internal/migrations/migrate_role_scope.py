@@ -242,10 +242,10 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
     migrated_groups = 0
     migrated_cars = 0
 
-    for group_batch in itertools.batched(groups, 20):
+    for group_batch in itertools.batched(groups, 10):
         migrated_groups += _migrate_group_batch(context=context, groups=list(group_batch))
 
-    for car_batch in itertools.batched(cars, 20):
+    for car_batch in itertools.batched(cars, 10):
         migrated_cars += _migrate_car_batch(context=context, cars=list(car_batch))
 
     logger.info(

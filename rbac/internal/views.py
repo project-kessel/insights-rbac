@@ -2939,14 +2939,25 @@ def replicate_default_workspaces(request):
 def replicate_updated_workspaces(request):
     """Replicate workspaces updated since the provided time.
 
-    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>&exclude_unchanged_default_workspaces=<bool>
+    POST /_private/api/utils/replicate_updated_workspaces/
+        ?since=<timestamp>
+        &stream=<stream>
+        &exclude_unchanged_default_workspaces=<bool>
 
     since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
+    stream must be either "standard" or "bulk".
 
     Returns:
         JSON response indicating the task has been queued
     """
+    if "since" not in request.GET:
+        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+
+    if "stream" not in request.GET:
+        return JsonResponse({"field": "stream", "detail": 'missing query parameter "stream"'}, status=400)
+
     since = request.GET["since"]
+    stream = request.GET["stream"]
     exclude_unchanged_default_workspaces = (
         request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
     )
@@ -2956,14 +2967,21 @@ def replicate_updated_workspaces(request):
     except ValueError as e:
         return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
+    if stream not in ("standard", "bulk"):
+        return JsonResponse({"field": "stream", "detail": f"invalid stream name: {stream}"}, status=400)
+
     try:
         replicate_updated_workspaces_in_worker.delay(
-            since=since, exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces
+            since=since,
+            stream=stream,
+            exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
         )
+
         return JsonResponse(
             {
                 "message": "Replication enqueued in background worker.",
                 "since": since,
+                "stream": stream,
                 "exclude_unchanged_default_workspaces": exclude_unchanged_default_workspaces,
             },
             status=202,
