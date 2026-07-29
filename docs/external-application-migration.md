@@ -1033,13 +1033,6 @@ GET /api/rbac/v2/role-bindings/by-subject/?subject_id={user_or_group_uuid}
 }
 ```
 
-**Get bindings for a resource:**
-
-```bash
-# By resource (returns all bindings on a workspace)
-GET /api/rbac/v2/role-bindings/by-resource/?resource_id={workspace_uuid}&resource_type=workspace
-```
-
 ### Deleting Role Bindings
 
 **V2 API does not yet provide a DELETE endpoint for role bindings.** Work with the RBAC team to remove bindings during the migration period.
@@ -1927,8 +1920,8 @@ rbac_client.batch_create_role_bindings([binding])
 
 ### RBAC API Documentation
 
-- **V2 API Spec**: [docs/source/specs/v2/openapi.yaml](source/specs/v2/openapi.yaml)
-- **TypeSpec Source**: [docs/source/specs/typespec/main.tsp](source/specs/typespec/main.tsp)
+- **V2 API Spec**: [source/specs/v2/openapi.yaml](source/specs/v2/openapi.yaml)
+- **TypeSpec Source**: [source/specs/typespec/main.tsp](source/specs/typespec/main.tsp)
 - **Role Bindings Deep Dive**: [role_bindings.md](role_bindings.md)
 
 ### Kessel Documentation
@@ -2221,15 +2214,15 @@ def sync_project_to_rbac(project_id):
         )
 
 def get_existing_bindings(workspace_id):
-    """Query existing bindings to avoid duplicates."""
-    response = requests.get(
-        f"{RBAC_BASE_URL}/api/rbac/v2/role-bindings/by-resource/",
-        params={"resource_id": workspace_id, "resource_type": "workspace"},
-        headers={"x-rh-identity": get_service_identity()}
-    )
-    bindings = response.json().get('data', [])
-    # Return set of (subject_id, role_id) tuples
-    return {(b['subject']['id'], b['role']['id']) for b in bindings}
+    """
+    Query existing bindings to avoid duplicates.
+
+    Note: V2 API doesn't provide a by-resource endpoint yet. For now, you'll need to:
+    1. Query all bindings for relevant subjects via /api/rbac/v2/role-bindings/by-subject/
+    2. Or work with RBAC team to bulk-load initial bindings without deduplication
+    """
+    # This is a placeholder - implement based on your needs
+    return set()
 ```
 
 #### Permission Check Migration
@@ -3277,148 +3270,12 @@ class TestSecurityBypass(TestCase):
 
 ---
 
-## Common Pitfalls
-
-### 1. Returning 403 Instead of 404
-
-**Problem**: Returning 403 Forbidden for inaccessible resources reveals existence to unauthorized users.
-
-```python
-# WRONG: Reveals host exists
-def get_host(request, host_id):
-    host = Host.objects.get(id=host_id)
-    if not check_permission(request, 'myapp:hosts:read', host):
-        return HttpResponseForbidden()  # ❌ Reveals host exists
-    return host
-
-# CORRECT: Returns 404, prevents existence leakage
-def get_host(request, host_id):
-    host = Host.objects.get(id=host_id)
-    if not check_permission(request, 'myapp:hosts:read', host):
-        raise Http404()  # ✅ Hides existence
-    return host
-```
-
-### 2. Forgetting to Filter List Endpoints
-
-**Problem**: List endpoints return all resources, bypassing permission checks.
-
-```python
-# WRONG: Returns all hosts, ignoring permissions
-def list_hosts(request):
-    return Host.objects.all()  # ❌
-
-# CORRECT: Filters by accessible workspaces
-def list_hosts(request):
-    accessible_workspaces = rbac_client.list_accessible_resources(
-        principal=request.user.username,
-        permission='myapp:hosts:read'
-    )
-    workspace_ids = [r['id'] for r in accessible_workspaces]
-    return Host.objects.filter(workspace_id__in=workspace_ids)  # ✅
-```
-
-### 3. Not Handling RBAC API Failures
-
-**Problem**: Network errors or RBAC downtime break your application.
-
-```python
-# WRONG: Exception bubbles up, breaks request
-def check_permission(principal, permission, resource_id):
-    return rbac_client.check_permission(principal, permission, resource_id)  # ❌
-
-# CORRECT: Graceful degradation
-def check_permission(principal, permission, resource_id):
-    try:
-        return rbac_client.check_permission(principal, permission, resource_id)
-    except requests.exceptions.Timeout:
-        logger.error("RBAC timeout, denying access")
-        metrics.increment('rbac.timeout')
-        return False  # Fail closed
-    except Exception as e:
-        logger.error(f"RBAC error: {e}", exc_info=True)
-        metrics.increment('rbac.error')
-        # Option 1: Fail closed (deny access)
-        return False
-        # Option 2: Fail open (allow access) - only for non-critical resources
-        # return True
-```
-
-### 4. Caching Too Aggressively
-
-**Problem**: Long cache TTLs mean permission changes don't take effect promptly.
-
-```python
-# RISKY: 1-hour cache means revoked access persists for up to 1 hour
-cache.set(cache_key, result, timeout=3600)  # ⚠️
-
-# SAFER: 5-minute cache balances performance and staleness
-cache.set(cache_key, result, timeout=300)  # ✅
-```
-
-**Recommendation**: Cache for 5 minutes by default. For sensitive resources (billing, admin functions), cache for 1 minute or skip caching entirely.
-
-### 5. Hardcoding Workspace IDs
-
-**Problem**: Workspace UUIDs differ across environments (dev, staging, prod).
-
-```python
-# WRONG: Hardcoded UUID breaks in other environments
-ADMIN_WORKSPACE_ID = "12345678-1234-1234-1234-123456789012"  # ❌
-
-# CORRECT: Fetch dynamically or use environment variable
-def get_admin_workspace_id():
-    return os.getenv('ADMIN_WORKSPACE_ID') or fetch_from_rbac()  # ✅
-```
-
-### 6. Not Testing Cross-Tenant Isolation
-
-**Problem**: Missing `org_id` filter allows cross-tenant data leakage.
-
-```python
-# Test that users from org A cannot access org B's resources
-def test_cross_tenant_isolation(self):
-    # Create host for org A
-    org_a_host = Host.objects.create(name="host-a", tenant=org_a)
-
-    # Authenticate as user from org B
-    self.client.force_authenticate(user=org_b_user)
-
-    # Attempt to access org A's host
-    response = self.client.get(f'/api/hosts/{org_a_host.id}/')
-
-    # Should return 404 (or 403), never 200
-    self.assertIn(response.status_code, [403, 404])
-```
-
-### 7. Overloading Permission Granularity
-
-**Problem**: Too many fine-grained permissions make roles unusable.
-
-```python
-# TOO GRANULAR: 100+ permissions for one resource type
-myapp:host:read_name
-myapp:host:read_ip
-myapp:host:read_os
-myapp:host:write_name
-myapp:host:write_ip
-# ... 95 more
-
-# BETTER: Operation-level permissions
-myapp:hosts:read   # Read all host fields
-myapp:hosts:write  # Write all host fields
-```
-
-**Guideline**: Aim for 3-10 permissions per resource type. Common pattern: `read`, `write`, `delete`, plus occasional special ops like `execute`, `export`.
-
----
-
 ## Resources
 
 ### RBAC API Documentation
 
-- **V2 API Spec**: [docs/source/specs/v2/openapi.yaml](source/specs/v2/openapi.yaml)
-- **TypeSpec Source**: [docs/source/specs/typespec/main.tsp](source/specs/typespec/main.tsp)
+- **V2 API Spec**: [source/specs/v2/openapi.yaml](source/specs/v2/openapi.yaml)
+- **TypeSpec Source**: [source/specs/typespec/main.tsp](source/specs/typespec/main.tsp)
 
 ### Kessel Documentation
 
