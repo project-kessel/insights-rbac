@@ -78,10 +78,19 @@ sh .cursor/skills/internal-api/scripts/internal-api.sh stage POST \
 
 ### Bootstrap tenant by org ID
 
+By default returns 404 if the Tenant row is missing. Pass `create_missing=true` to create it. Optional `ungrouped_hosts_id` creates the ungrouped-hosts workspace with that UUID.
+
 ```bash
+# Legacy body (tenant must already exist)
 sh .cursor/skills/internal-api/scripts/internal-api.sh stage POST \
   utils/bootstrap_tenant/ \
   '{"org_ids":["1234567"]}'
+
+# Create missing tenant + optional ungrouped-hosts workspace UUID
+sh .cursor/skills/internal-api/scripts/internal-api.sh stage POST \
+  utils/bootstrap_tenant/ \
+  create_missing=true \
+  '{"tenants":[{"org_id":"1234567","ungrouped_hosts_id":"0194a1b2-c3d4-7890-abcd-ef1234567890"}]}'
 ```
 
 ### Bootstrap pending tenants

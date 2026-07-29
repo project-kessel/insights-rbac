@@ -28,7 +28,7 @@ from typing import Optional
 
 import jsonschema
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.urls import resolve
 from internal.pg_notify_wait import replicate_with_notify
@@ -900,25 +900,90 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
     return results
 
 
+class UngroupedWorkspaceError(ValueError):
+    """Raised when ungrouped-hosts workspace cannot be created with the requested ID."""
+
+
 @transaction.atomic
-def get_or_create_ungrouped_workspace(tenant: str) -> Workspace:
+def get_or_create_ungrouped_workspace(tenant: Tenant, workspace_id: Optional[uuid.UUID] = None) -> Workspace:
     """
-    Retrieve the ungrouped workspace for the given tenant.
+    Retrieve or create the ungrouped-hosts workspace for the given tenant.
 
     Args:
-        tenant (str): The tenant for which to retrieve the ungrouped workspace.
+        tenant: The tenant for which to retrieve/create the ungrouped workspace.
+        workspace_id: Optional UUID to use when creating the workspace. When the tenant
+            already has an ungrouped-hosts workspace, it must match this ID if provided.
+
     Returns:
         Workspace: The ungrouped workspace object for the given tenant.
+
+    Raises:
+        UngroupedWorkspaceError: If workspace_id conflicts with an existing workspace.
     """
-    # fetch parent only once
     default_ws = Workspace.objects.get(tenant=tenant, type=Workspace.Types.DEFAULT)
 
-    # single select_for_update + get_or_create
-    workspace, created = Workspace.objects.select_for_update().get_or_create(
-        tenant=tenant,
-        type=Workspace.Types.UNGROUPED_HOSTS,
-        defaults={"name": Workspace.SpecialNames.UNGROUPED_HOSTS, "parent": default_ws},
+    existing = (
+        Workspace.objects.select_for_update().filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).first()
     )
+    if existing:
+        if workspace_id is not None and existing.id != workspace_id:
+            raise UngroupedWorkspaceError(
+                f"Tenant org_id={tenant.org_id} already has ungrouped-hosts workspace "
+                f"{existing.id}, which does not match requested id {workspace_id}."
+            )
+        return existing
+
+    if workspace_id is not None:
+        conflict = Workspace.objects.filter(id=workspace_id).first()
+        if conflict is not None:
+            raise UngroupedWorkspaceError(
+                f"Workspace id {workspace_id} already exists "
+                f"(tenant org_id={conflict.tenant.org_id}, type={conflict.type})."
+            )
+        workspace = Workspace(
+            id=workspace_id,
+            tenant=tenant,
+            type=Workspace.Types.UNGROUPED_HOSTS,
+            name=Workspace.SpecialNames.UNGROUPED_HOSTS,
+            parent=default_ws,
+            description=Workspace.SpecialDescriptions.UNGROUPED_HOSTS,
+        )
+        try:
+            # Nested savepoint so IntegrityError does not poison the outer atomic block.
+            with transaction.atomic():
+                workspace.save()
+            created = True
+        except IntegrityError:
+            # Savepoint rolled back; outer transaction can continue with retry queries.
+            raced = (
+                Workspace.objects.select_for_update()
+                .filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS)
+                .first()
+            )
+            if raced is not None:
+                if raced.id != workspace_id:
+                    raise UngroupedWorkspaceError(
+                        f"Tenant org_id={tenant.org_id} already has ungrouped-hosts workspace "
+                        f"{raced.id}, which does not match requested id {workspace_id}."
+                    ) from None
+                workspace = raced
+                created = False
+            else:
+                conflict = Workspace.objects.select_for_update().filter(id=workspace_id).first()
+                if conflict is not None:
+                    raise UngroupedWorkspaceError(
+                        f"Workspace id {workspace_id} already exists "
+                        f"(tenant org_id={conflict.tenant.org_id}, type={conflict.type})."
+                    ) from None
+                raise UngroupedWorkspaceError(
+                    f"Workspace id {workspace_id} conflicted during creation but is no longer found."
+                ) from None
+    else:
+        workspace, created = Workspace.objects.select_for_update().get_or_create(
+            tenant=tenant,
+            type=Workspace.Types.UNGROUPED_HOSTS,
+            defaults={"name": Workspace.SpecialNames.UNGROUPED_HOSTS, "parent": default_ws},
+        )
 
     if created:
         RelationApiDualWriteWorkspaceHandler(
@@ -926,6 +991,52 @@ def get_or_create_ungrouped_workspace(tenant: str) -> Workspace:
         ).replicate_new_workspace()
 
     return workspace
+
+
+def parse_bootstrap_tenant_request(body: dict) -> list[tuple[str, Optional[uuid.UUID]]]:
+    """
+    Parse bootstrap_tenant request body into (org_id, ungrouped_hosts_id) pairs.
+
+    Accepts either:
+      {"org_ids": ["12345", "67890"]}
+      {"tenants": [{"org_id": "12345", "ungrouped_hosts_id": "<uuid>"}]}
+
+    Raises:
+        ValueError: If the body is invalid.
+    """
+    if not isinstance(body, dict):
+        raise ValueError("Invalid request: body must be a JSON object.")  # pyright: ignore[reportUnreachable]
+
+    if "tenants" in body and "org_ids" in body:
+        raise ValueError('Invalid request: supply either "org_ids" or "tenants", not both.')
+
+    if "tenants" in body:
+        tenants = body["tenants"]
+        if not isinstance(tenants, list) or len(tenants) == 0:
+            raise ValueError('Invalid request: the "tenants" array must contain at least one entry.')
+
+        parsed: list[tuple[str, Optional[uuid.UUID]]] = []
+        for entry in tenants:
+            if not isinstance(entry, dict) or not entry.get("org_id"):
+                raise ValueError('Invalid request: each tenants entry must include a non-empty "org_id".')
+            org_id = str(entry["org_id"])
+            raw_id = entry.get("ungrouped_hosts_id")
+            if raw_id is None or raw_id == "":
+                parsed.append((org_id, None))
+                continue
+            try:
+                parsed.append((org_id, as_uuid(raw_id)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'Invalid ungrouped_hosts_id for org_id {org_id}: "{raw_id}".') from exc
+        return parsed
+
+    if "org_ids" in body:
+        org_ids = body["org_ids"]
+        if not isinstance(org_ids, list) or len(org_ids) == 0:
+            raise ValueError('Invalid request: the "org_ids" array in the body must contain at least one org_id')
+        return [(str(org_id), None) for org_id in org_ids]
+
+    raise ValueError('Invalid request: must supply "org_ids" or "tenants" in body.')
 
 
 def validate_relations_input(action, request_data) -> bool:

@@ -611,7 +611,12 @@ class GroupViewSet(
         # want to skip calling IT
         it_service = ITService()
         if not settings.IT_BYPASS_IT_CALLS:
-            it_service_accounts = it_service.request_service_accounts(bearer_token=user.bearer_token)
+            # We are only interested in the clients with IDs that have been passed to us, so we specifically request
+            # those clients.
+            it_service_accounts = it_service.request_service_accounts(
+                bearer_token=user.bearer_token,
+                client_ids=[specified_sa["clientId"] for specified_sa in service_accounts],
+            )
 
             # Organize them by their client ID.
             it_service_accounts_by_client_ids: dict[str, dict] = {}

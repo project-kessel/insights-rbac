@@ -40,10 +40,12 @@ from internal.custom_v2_role_tenant_migration import replicate_custom_v2_role_ow
 from internal.errors import SentryDiagnosticError, UserNotFoundError
 from internal.jwt_utils import JWTManager, JWTProvider
 from internal.utils import (
+    UngroupedWorkspaceError,
     delete_bindings,
     fix_admin_default_bindings,
     get_or_create_ungrouped_workspace,
     load_request_body,
+    parse_bootstrap_tenant_request,
     read_tuples_from_kessel,
     rebuild_tenant_workspace_relations as rebuild_workspace_relations_util,
     validate_inventory_input,
@@ -1114,9 +1116,16 @@ def fetch_replication_data(request):
 def bootstrap_tenant(request):
     """View method for bootstrapping a tenant.
 
-    POST /_private/api/utils/bootstrap_tenant/?force=false&force_admin_only=false
+    POST /_private/api/utils/bootstrap_tenant/?force=false&force_admin_only=false&create_missing=false
 
-    Body: {"org_ids": ["12345", "67890"]}
+    Body (legacy):
+        {"org_ids": ["12345", "67890"]}
+
+    Body (extended):
+        {"tenants": [{"org_id": "12345", "ungrouped_hosts_id": "<uuid>"}]}
+
+    When ungrouped_hosts_id is provided, an ungrouped-hosts workspace is created with
+    that UUID under the default workspace and replicated to Relations.
 
     force:
         Whether or not to force replication to happen, even if the Tenant is already bootstrapped.
@@ -1126,23 +1135,44 @@ def bootstrap_tenant(request):
         Re-replicate only admin default bindings. This is SAFE even when replication is on because
         admin default bindings are NOT customizable (unlike platform default bindings).
         Use this to fix tenants that were bootstrapped before admin default groups were seeded.
+        Ignores ungrouped_hosts_id and create_missing.
+
+    create_missing:
+        When 'true', create a Tenant row if one does not exist for the org_id, then bootstrap it.
+        Default is 'false' (return 404 for missing tenants) to avoid accidental tenant creation.
     """
     if request.method != "POST":
         return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
     logger.info("Running bootstrap tenant.")
 
     if not request.body:
-        return HttpResponse('Invalid request, must supply the "org_ids" in body.', status=400)
+        return HttpResponse('Invalid request, must supply "org_ids" or "tenants" in body.', status=400)
 
-    org_ids_data = json.loads(request.body.decode("utf-8").replace("'", '"'))
+    try:
+        raw_body = request.body.decode("utf-8")
+        try:
+            body = json.loads(raw_body)
+        except json.JSONDecodeError as primary_exc:
+            # Legacy org_ids clients may send single-quoted JSON. Do not apply this
+            # rewrite when the payload uses the tenants format — apostrophes in values
+            # (e.g. org_id "O'Reilly") would be silently corrupted.
+            try:
+                legacy_body = json.loads(raw_body.replace("'", '"'))
+            except json.JSONDecodeError:
+                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+            if isinstance(legacy_body, dict) and "tenants" in legacy_body:
+                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+            body = legacy_body
+        tenants_to_bootstrap = parse_bootstrap_tenant_request(body)
+    except UnicodeDecodeError:
+        return HttpResponse("Invalid request: body must be valid UTF-8.", status=400, content_type="text/plain")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return HttpResponse(str(exc), status=400, content_type="text/plain")
+
     force = request.GET.get("force", "false").lower() == "true"
     force_admin_only = request.GET.get("force_admin_only", "false").lower() == "true"
-
-    if "org_ids" not in org_ids_data or len(org_ids_data["org_ids"]) == 0:
-        return HttpResponse(
-            'Invalid request: the "org_ids" array in the body must contain at least one org_id', status=400
-        )
-    org_ids = org_ids_data["org_ids"]
+    create_missing = request.GET.get("create_missing", "false").lower() == "true"
+    org_ids = [org_id for org_id, _ in tenants_to_bootstrap]
 
     # force=true has race condition risk with custom default group creation
     # force_admin_only=true is safe because admin default bindings are not customizable
@@ -1158,11 +1188,22 @@ def bootstrap_tenant(request):
         results = [fix_admin_default_bindings(org_id) for org_id in org_ids]
         return JsonResponse({"results": results}, status=200)
 
-    with transaction.atomic():
-        bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
-        for org_id in org_ids:
-            tenant = get_object_or_404(Tenant, org_id=org_id)
-            bootstrap_service.bootstrap_tenant(tenant, force=force)
+    try:
+        with transaction.atomic():
+            bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
+            for org_id, ungrouped_hosts_id in tenants_to_bootstrap:
+                if create_missing:
+                    tenant, _ = Tenant.objects.get_or_create(
+                        org_id=org_id,
+                        defaults={"tenant_name": f"org{org_id}", "ready": False},
+                    )
+                else:
+                    tenant = get_object_or_404(Tenant, org_id=org_id)
+                bootstrap_service.bootstrap_tenant(tenant, force=force)
+                if ungrouped_hosts_id is not None:
+                    get_or_create_ungrouped_workspace(tenant, workspace_id=ungrouped_hosts_id)
+    except UngroupedWorkspaceError as exc:
+        return HttpResponse(str(exc), status=400, content_type="text/plain")
     # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
     logger.info(
         "Internal API: Tenant bootstrap completed",
@@ -1174,6 +1215,7 @@ def bootstrap_tenant(request):
             "username": getattr(request.user, "username", None),
             "target_org_ids": org_ids,
             "force": force,
+            "create_missing": create_missing,
         },
     )
     return HttpResponse(f"Bootstrapping tenants with org_ids {org_ids} were finished.", status=200)

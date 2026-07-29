@@ -16,10 +16,12 @@
 #
 """Class to manage interactions with the IT service accounts service."""
 
+import itertools
 import logging
+import math
 import time
 import uuid
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Iterable, Optional, Tuple
 
 import requests
 from django.conf import settings
@@ -39,6 +41,13 @@ KEY_SERVICE_ACCOUNT = "service-account-"
 
 # IT path to fetch the service accounts.
 IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
+
+# Maximum number of service accounts to request at once. This is a limit set by the IT service.
+IT_SERVICE_ACCOUNT_BATCH_SIZE = 100
+
+# Maximum number of different service account client IDs to request from IT at once.
+# This is a limit set by the IT service.
+IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS = 10
 
 # Set up the metrics for the IT calls.
 it_request_all_service_accounts_time_tracking = Histogram(
@@ -95,62 +104,144 @@ class ITService:
         self.it_url = f"{self.protocol}://{self.host}:{self.port}{self.base_path}{IT_PATH_GET_SERVICE_ACCOUNTS}"
 
     @it_request_all_service_accounts_time_tracking.time()
-    def request_service_accounts(self, bearer_token: str, client_ids: Optional[list[str]] = None) -> list[dict]:
-        """Request the service accounts for a tenant and returns the entire list that IT has."""
+    def request_service_accounts(self, bearer_token: str, client_ids: Optional[Iterable[str]] = None) -> list[dict]:
+        """
+        Request the service accounts for a tenant.
+
+        If client_ids is None, request all of the service accounts that IT has. Otherwise, request only the service
+        accounts with the specified IDs.
+        """
         # We cannot talk to IT if we don't have a bearer token.
         if not bearer_token:
             raise MissingAuthorizationError()
 
+        if client_ids is not None:
+            client_ids = set(client_ids)
+
+            # If we are filtering by an empty set client IDs, no service accounts will ever match.
+            if len(client_ids) == 0:
+                return []
+
+            # We want to minimize the number of requests we make. At time of writing, we can request up to 100 service
+            # accounts at once. However, we can only specify at most 10 client IDs as query parameters.
+            #
+            # So, if we make requests with client IDs, we make ceil(len(client_ids) / 10) requests. If we make requests
+            # without client IDs, we make ceil([# of service accounts in IT] / 100) requests. So, we should only pass
+            # client IDs if the number of IDs is less than 1/10 of all service accounts in IT.
+            #
+            # Unfortunately, we have no way to make an educated guess with only RBAC's database, since RBAC's database
+            # is not necessarily in sync with IT. (For instance, at time of writing, stage has a tenant with ~7000
+            # service accounts in RBAC's database but only 13 in IT.) So, we make a single request in order to
+            # determine which strategy is better (by determining if the number of service accounts in IT is more than
+            # 10 times the number of client IDs).
+            #
+            # As a special case, if we would have to make two or fewer requests using client IDs (i.e. if we care about
+            # fewer than 20 client IDs), then we can always just do that, since we'd always be making at least two
+            # requests anyway (one to see how many service accounts exist and at least one to actually fetch them).
+
+            use_remote_client_ids = len(
+                client_ids
+            ) <= 2 * IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS or self._it_service_account_count_at_least(
+                bearer_token=bearer_token,
+                count=math.ceil(len(client_ids) / IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS) * IT_SERVICE_ACCOUNT_BATCH_SIZE,
+            )
+
+            if use_remote_client_ids:
+                results: list[dict] = []
+
+                for batch in itertools.batched(client_ids, IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS):
+                    results.extend(
+                        self._request_service_accounts_transformed(
+                            bearer_token=bearer_token,
+                            client_ids=list(batch),
+                        )
+                    )
+
+                return results
+            else:
+                # Request every service account and filter them locally.
+                return [
+                    account
+                    for account in self._request_service_accounts_transformed(
+                        bearer_token=bearer_token, client_ids=None
+                    )
+                    if account["clientId"] in client_ids
+                ]
+
+        # Here, we have no client IDs to worry about, so just request every service account.
+        return self._request_service_accounts_transformed(
+            bearer_token=bearer_token,
+            client_ids=None,
+        )
+
+    def _request_service_accounts_raw(
+        self, bearer_token: str, client_ids: Optional[list[str]], offset: int, limit: int
+    ) -> list[dict]:
+        """
+        Make a single request to IT's service accounts API and return the result.
+
+        This function does not perform any form of iteration or processing of the results. It assumes that its inputs
+        have already been validated. client_ids shall have size no greater than IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS.
+        """
+        assert bearer_token
+        assert client_ids is None or len(client_ids) > 0
+        assert client_ids is None or len(client_ids) <= IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS
+
+        parameters: dict[str, int | list[str]] = {"first": offset, "max": limit}
+
+        if client_ids is not None:
+            parameters["clientId"] = client_ids
+
+        # Call IT.
+        response = requests.get(
+            url=self.it_url,
+            headers={"Authorization": f"Bearer {bearer_token}"},
+            params=parameters,
+            timeout=self.it_request_timeout,
+        )
+
+        # Save the metrics for the successful call. Successful does not mean that we received an OK response,
+        # but that we were able to reach IT's SSO instead and get a response from them.
+        it_request_status_count.labels(method="GET", status=response.status_code).inc()
+
+        if not status.is_success(response.status_code):
+            LOGGER.error(
+                "Unexpected status code '%s' received from IT when fetching service accounts. " "Response body: %s",
+                response.status_code,
+                response.content,
+            )
+
+            raise UnexpectedStatusCodeFromITError()
+
+        # Extract the body contents.
+        return response.json()
+
+    def _request_service_accounts_transformed(self, bearer_token: str, client_ids: Optional[list[str]]) -> list[dict]:
+        """
+        Request service accounts for a tenant and return the list that IT has (optionally filtering by client ID).
+
+        If client_ids is None, all service accounts are requested from IT. This assumes that bearer_token and client_ids
+        have already been validated. client_ids shall have size no greater than IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS.
+        """
         received_service_accounts: list[dict] = []
 
         # Attempt fetching all the service accounts for the tenant.
         try:
             # Define some sane initial values.
             offset = 0
-            limit = 100
-
-            # If the offset is zero, that means that we need to call the service at least once to get the first
-            # service accounts. If it equals the limit, that means that there are more pages to fetch.
-            parameters: dict[str, Union[int, list[str]]] = {"first": offset, "max": limit}
-            # If we were given client IDs to filter the collection with, do it!
-            if client_ids:
-                parameters["clientId"] = client_ids
+            limit = IT_SERVICE_ACCOUNT_BATCH_SIZE
 
             continue_fetching: bool = True
             while continue_fetching:
-                # Recreate the parameters dictionary every time since otherwise the "assert_has_calls" statement of the
-                # tests only sees the last value for the offset when attempting to fetch multiple pages.
-                parameters = {"first": offset, "max": limit}
-                if client_ids:
-                    parameters["clientId"] = client_ids
-
-                # Call IT.
-                response = requests.get(
-                    url=self.it_url,
-                    headers={"Authorization": f"Bearer {bearer_token}"},
-                    params=parameters,
-                    timeout=self.it_request_timeout,
+                body_contents = self._request_service_accounts_raw(
+                    bearer_token=bearer_token,
+                    client_ids=client_ids,
+                    offset=offset,
+                    limit=limit,
                 )
 
-                # Save the metrics for the successful call. Successful does not mean that we received an OK response,
-                # but that we were able to reach IT's SSO instead and get a response from them.
-                it_request_status_count.labels(method="GET", status=response.status_code).inc()
-
-                if not status.is_success(response.status_code):
-                    LOGGER.error(
-                        "Unexpected status code '%s' received from IT when fetching service accounts. "
-                        "Response body: %s",
-                        response.status_code,
-                        response.content,
-                    )
-
-                    raise UnexpectedStatusCodeFromITError()
-
-                # Extract the body contents.
-                body_contents = response.json()
-
                 # Merge the previously received service accounts with the new ones.
-                received_service_accounts = received_service_accounts + body_contents
+                received_service_accounts.extend(body_contents)
 
                 # Reassess if we need to keep fetching pages from IT. They don't return page metadata, so we need to
                 # keep looping until the incoming body is an empty array.
@@ -190,6 +281,22 @@ class ITService:
 
         return service_accounts
 
+    def _it_service_account_count_at_least(self, bearer_token: str, count: int) -> bool:
+        """Determine whether IT has at least count service accounts."""
+        if count <= 0:
+            return True
+
+        # IT returns an empty array when offset is at least as many accounts as exist. (For example, if there are 10
+        # accounts, requesting an offset of 10 will return an empty array because there is no account at 0-based index
+        # 10.) In order to detect whether an Nth account exists, we need to request offset (N-1). The subtraction is
+        # safe because we have just ensured that count > 0.
+
+        body_contents = self._request_service_accounts_raw(
+            bearer_token=bearer_token, client_ids=None, offset=(count - 1), limit=1
+        )
+
+        return len(body_contents) > 0
+
     def is_service_account_valid_by_client_id(self, user: User, service_account_client_id: str) -> bool:
         """Check if the specified service account is valid."""
         if settings.IT_BYPASS_IT_CALLS:
@@ -216,24 +323,15 @@ class ITService:
         if settings.IT_BYPASS_IT_CALLS:
             return True
         else:
-            # In theory, we should be able to pass the client ID to the function below to just get the specified
-            # service account and check if it is present or not. However, due to a bug, we need to fetch the whole
-            # collection for now. More details in https://issues.redhat.com/browse/RHCLOUD-31265 .
-            service_accounts: list[dict] = self.request_service_accounts(bearer_token=user.bearer_token)
+            service_accounts: list[dict] = self.request_service_accounts(
+                bearer_token=user.bearer_token,
+                client_ids=[client_id],
+            )
 
-            for sa in service_accounts:
-                if client_id == sa.get("clientId"):
-                    return True
-
-            return False
+            return any(client_id == account.get("clientId") for account in service_accounts)
 
     def get_service_accounts(self, user: User, options: dict[str, Any] = {}) -> Tuple[list[dict], int]:
         """Request and returns the service accounts for the given tenant."""
-        # We might want to bypass calls to the IT service on ephemeral or test environments.
-        it_service_accounts: list[dict] = []
-        if not settings.IT_BYPASS_IT_CALLS:
-            it_service_accounts = self.request_service_accounts(bearer_token=user.bearer_token)
-
         # Get the service accounts from the database. The weird filter is to fetch the service accounts depending on
         # the account number or the organization ID the user gave.
         service_account_principals = Principal.objects.filter(type=Principal.Types.SERVICE_ACCOUNT).filter(
@@ -280,23 +378,10 @@ class ITService:
         else:
             service_account_principals = service_account_principals.order_by("-username")
 
-        # If we are in an ephemeral or test environment, we will take all the service accounts of the user that are
-        # stored in the database and generate a mocked response for them, simulating that IT has the corresponding
-        # service account to complement the information.
-        if settings.IT_BYPASS_IT_CALLS:
-            it_service_accounts = self._get_mock_service_accounts(
-                service_account_principals=service_account_principals
-            )
-
-        # Put the service accounts in a dict by for a quicker search.
-        sap_dict: dict[str, Principal] = {}
-        for sap in service_account_principals:
-            sap_dict[sap.service_account_id] = sap
-
-        # Filter the incoming service accounts. Also, transform them to the payload we will
-        # be returning.
-        service_accounts: list[dict] = self._merge_principals_it_service_accounts(
-            service_account_principals=sap_dict, it_service_accounts=it_service_accounts, options=options
+        service_accounts = self._filtered_service_accounts(
+            user=user,
+            service_account_principals=service_account_principals,
+            options=options,
         )
 
         # We always set a default offset and a limit if the user doesn't specify them, so it is safe to simply put the
@@ -343,12 +428,6 @@ class ITService:
     def get_service_accounts_group(self, group: Group, user: User, options: dict[str, Any] = {}) -> list[dict]:
         """Get the service accounts for the given group."""
         username_only: str = options.get("username_only", "false")
-        # We might want to bypass calls to the IT service
-        #        - on ephemeral or test environments
-        #        - when query param username_only == 'true'
-        it_service_accounts: list[dict[str, Union[str, int]]] = []
-        if not settings.IT_BYPASS_IT_CALLS and username_only == "false":
-            it_service_accounts = self.request_service_accounts(bearer_token=user.bearer_token)
 
         # Fetch the service accounts from the group.
         group_service_account_principals = group.principals.filter(type=Principal.Types.SERVICE_ACCOUNT)
@@ -377,27 +456,15 @@ class ITService:
                     service_account_id__contains=principal_username
                 )
 
-        # If we are in an ephemeral or test environment, we will take all the service accounts of the user that are
-        # stored in the database and generate a mocked response for them, simulating that IT has the corresponding
-        # service account to complement the information.
-        if settings.IT_BYPASS_IT_CALLS:
-            it_service_accounts = self._get_mock_service_accounts(
-                service_account_principals=group_service_account_principals
-            )
-
-        # Put the service accounts in a dict by for a quicker search.
-        sap_dict: dict[str, Principal] = {}
-        for sap in group_service_account_principals:
-            sap_dict[sap.service_account_id] = sap
-
-        service_accounts: list[dict] = []
+        # We do not need to make a request to IT if only usernames are requested.
         if username_only == "true":
             # Grab the service account usernames
             service_accounts = [{"username": sa.username} for sa in group_service_account_principals]
         else:
-            # Filter the incoming service accounts. Also, transform them to the payload we will be returning.
-            service_accounts = self._merge_principals_it_service_accounts(
-                service_account_principals=sap_dict, it_service_accounts=it_service_accounts, options=options
+            service_accounts = self._filtered_service_accounts(
+                user=user,
+                service_account_principals=group_service_account_principals,
+                options=options,
             )
 
         # If either the description or name filters were specified, we need to only keep the service accounts that
@@ -511,6 +578,27 @@ class ITService:
 
         return service_account
 
+    def _service_accounts_by_id(self, principals: Iterable[Principal]) -> dict[str, Principal]:
+        """
+        Transform an iterable of service account Principals into a dict keyed by service_account_id.
+
+        Raises a ValueError if any Principal does not have a service_account_id.
+        """
+        sap_dict: dict[str, Principal] = {}
+
+        for principal in principals:
+            account_id = principal.service_account_id
+
+            if account_id is None or account_id == "":
+                raise ValueError(
+                    "Expected Principal to have service_account_id set, but it did not."
+                    + f"Principal UUID: {principal.uuid}",
+                )
+
+            sap_dict[account_id] = principal
+
+        return sap_dict
+
     def _merge_principals_it_service_accounts(
         self, service_account_principals: dict[str, Principal], it_service_accounts: list[dict], options: dict
     ) -> list[dict]:
@@ -541,7 +629,7 @@ class ITService:
 
         return service_accounts
 
-    def _get_mock_service_accounts(self, service_account_principals: list[Principal]) -> list[dict]:
+    def _get_mock_service_accounts(self, service_account_principals: Iterable[Principal]) -> list[dict]:
         """Mock an IT service call which returns service accounts. Useful for development or testing."""
         mocked_service_accounts: list[dict] = []
         for sap in service_account_principals:
@@ -561,3 +649,40 @@ class ITService:
             )
 
         return mocked_service_accounts
+
+    def _filtered_service_accounts(
+        self,
+        user: User,
+        service_account_principals: Iterable[Principal],
+        options: dict,
+    ) -> list[dict]:
+        """
+        Retrieve the service accounts accessible to use that exist both locally and in IT.
+
+        service_account_principals must consist solely of Principals that represent service accounts (i.e. have a
+        service_account_id). The options argument has the same meaning as in _merge_principals_it_service_accounts.
+        """
+        sap_dict: dict[str, Principal] = self._service_accounts_by_id(service_account_principals)
+
+        if not settings.IT_BYPASS_IT_CALLS:
+            # Below, in _merge_principals_it_service_accounts, we take the intersection of the principals in the
+            # database and the principals returned by IT. So, we are only interested in any principals that already
+            # exist in the database, and the keys of sap_dict are thus all of the client_ids we're interested in.
+            it_service_accounts = self.request_service_accounts(
+                bearer_token=user.bearer_token,
+                client_ids=sap_dict.keys(),
+            )
+        else:
+            # If we are in an ephemeral or test environment, we will take all the service accounts of the user that are
+            # stored in the database and generate a mocked response for them, simulating that IT has the corresponding
+            # service account to complement the information.
+            it_service_accounts = self._get_mock_service_accounts(
+                service_account_principals=service_account_principals,
+            )
+
+        # Filter the incoming service accounts. Also, transform them to the payload we will be returning.
+        return self._merge_principals_it_service_accounts(
+            service_account_principals=sap_dict,
+            it_service_accounts=it_service_accounts,
+            options=options,
+        )
