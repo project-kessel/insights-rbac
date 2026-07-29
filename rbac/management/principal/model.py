@@ -43,7 +43,7 @@ class Principal(TenantAwareModel):
     username = models.CharField(max_length=150)
     cross_account = models.BooleanField(default=False)
     type = models.CharField(null=False, default=Types.USER, choices=Types.choices, max_length=20, db_index=True)
-    service_account_id = models.TextField(null=True, db_index=True)
+    service_account_id = models.CharField(max_length=255, null=True, db_index=True)
     user_id = models.CharField(max_length=256, null=True, db_index=True)
 
     def principal_resource_id(self) -> Optional[str]:

@@ -246,20 +246,25 @@ def _parse_logging_handlers(raw_value):
     """Parse comma-separated handler names, strip whitespace, and deduplicate.
 
     'console' and 'ecs' both write to stderr.  Having both produces duplicate
-    log lines for every event.  When both are specified, keep only 'ecs'
-    (structured JSON for CloudWatch / log aggregation).
-    Use DJANGO_LOG_HANDLERS=console for plain-text development output.
+    log lines for every event.  When both are specified, keep only 'console'
+    (plain text for pod stdout / ``oc logs``).  CloudWatch receives structured
+    JSON via the separate watchtower handler, which always uses ecs_formatter.
+    Use DJANGO_LOG_HANDLERS=ecs to force JSON on stdout (e.g. for local testing).
     """
     handlers = [h.strip() for h in raw_value.split(",") if h.strip()]
     if "console" in handlers and "ecs" in handlers:
-        handlers = [h for h in handlers if h != "console"]
+        handlers = [h for h in handlers if h != "ecs"]
     return handlers
 
 
 LOGGING_HANDLERS = _parse_logging_handlers(os.getenv("DJANGO_LOG_HANDLERS", "console"))
 
 ENV_NAME = os.getenv("ENV_NAME", "stage")
-VERBOSE_FORMATTING = "%(levelname)s %(asctime)s [%(env_name)s] %(module)s %(process)d %(thread)d %(message)s"
+VERBOSE_FORMATTING = (
+    "%(levelname)s %(asctime)s [%(env_name)s]"
+    " [req=%(request_id)s org=%(org_id)s user=%(user_id)s type=%(user_type)s]"
+    " %(module)s %(process)d %(thread)d %(message)s"
+)
 
 if DEBUG and "ecs" in LOGGING_HANDLERS:
     DEBUG_LOG_HANDLERS = [v for v in LOGGING_HANDLERS if v != "ecs"]
@@ -280,34 +285,50 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "env_name": {"()": "rbac.logging_filters.EnvironmentFilter", "env_name": ENV_NAME},
+        "request_context": {"()": "rbac.logging_filters.RequestContextFilter"},
     },
     "formatters": {
         "verbose": {"format": VERBOSE_FORMATTING},
-        "simple": {"format": "[%(asctime)s] %(levelname)s [%(env_name)s]: %(message)s"},
+        "simple": {
+            "format": "[%(asctime)s] %(levelname)s [%(env_name)s]"
+            " [req=%(request_id)s org=%(org_id)s user=%(user_id)s type=%(user_type)s]: %(message)s"
+        },
         "ecs_formatter": {"()": "rbac.ECSCustom.ECSCustomFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": LOGGING_FORMATTER, "filters": ["env_name"]},
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": LOGGING_FORMATTER,
+            "filters": ["env_name", "request_context"],
+        },
         "file": {
             "level": RBAC_LOGGING_LEVEL,
             "class": "logging.FileHandler",
             "filename": LOGGING_FILE,
             "formatter": LOGGING_FORMATTER,
-            "filters": ["env_name"],
+            "filters": ["env_name", "request_context"],
         },
-        "ecs": {"class": "logging.StreamHandler", "formatter": "ecs_formatter", "filters": ["env_name"]},
+        "ecs": {
+            "class": "logging.StreamHandler",
+            "formatter": "ecs_formatter",
+            "filters": ["env_name", "request_context"],
+        },
     },
     "loggers": {
-        "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL},
+        "django": {"handlers": LOGGING_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
         "django.server": {"handlers": DEBUG_LOG_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
         "django.request": {"handlers": DEBUG_LOG_HANDLERS, "level": DJANGO_LOGGING_LEVEL, "propagate": False},
-        "api": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "internal": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "rbac": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "management": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "migration_tool": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL},
-        "feature_flags": {"handlers": DEBUG_LOG_HANDLERS, "level": "DEBUG"},
+        "api": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "internal": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "rbac": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "management": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "core": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "migration_tool": {"handlers": LOGGING_HANDLERS, "level": RBAC_LOGGING_LEVEL, "propagate": False},
+        "feature_flags": {"handlers": DEBUG_LOG_HANDLERS, "level": "DEBUG", "propagate": False},
     },
+    # Attach default handlers to root so that loggers without explicit
+    # handlers still have a fallback output instead of silently dropping records.
+    "root": {"handlers": LOGGING_HANDLERS, "level": "WARNING"},
 }
 
 if CW_AWS_ACCESS_KEY_ID:
@@ -324,16 +345,19 @@ if CW_AWS_ACCESS_KEY_ID:
         aws_secret_access_key=CW_AWS_SECRET_ACCESS_KEY,
     )
 
+    # Formatter is hardcoded to ecs_formatter so CloudWatch always receives
+    # structured JSON, regardless of the DJANGO_LOG_FORMATTER env var which
+    # only controls the stdout/console handler format.
     WATCHTOWER_HANDLER = {
         "level": RBAC_LOGGING_LEVEL,
         "class": "watchtower.CloudWatchLogHandler",
         "boto3_client": boto3_logs_client,
         "log_group_name": CW_LOG_GROUP,
         "stream_name": CW_STREAM_NAME,
-        "formatter": LOGGING_FORMATTER,
+        "formatter": "ecs_formatter",
         "use_queues": True,
         "create_log_group": CW_CREATE_LOG_GROUP,
-        "filters": ["env_name"],
+        "filters": ["env_name", "request_context"],
     }
     LOGGING["handlers"]["watchtower"] = WATCHTOWER_HANDLER
 
@@ -590,6 +614,7 @@ IT_SERVICE_BASE_PATH = ENVIRONMENT.get_value("IT_SERVICE_BASE_PATH", default="/a
 IT_SERVICE_HOST = ENVIRONMENT.get_value("IT_SERVICE_HOST", default="localhost")
 IT_SERVICE_PORT = ENVIRONMENT.int("IT_SERVICE_PORT", default="443")
 IT_SERVICE_PROTOCOL_SCHEME = ENVIRONMENT.get_value("IT_SERVICE_PROTOCOL_SCHEME", default="https")
+IT_SERVICE_REALM = ENVIRONMENT.get_value("IT_SERVICE_REALM", default="/auth/realms/redhat-external")
 IT_SERVICE_TIMEOUT_SECONDS = ENVIRONMENT.int("IT_SERVICE_TIMEOUT_SECONDS", default=10)
 IT_TOKEN_JKWS_CACHE_LIFETIME = ENVIRONMENT.int("IT_TOKEN_JKWS_CACHE_LIFETIME", default=28800)
 
@@ -707,6 +732,14 @@ PARITY_CHECK_SCHEDULE = ENVIRONMENT.str("PARITY_CHECK_SCHEDULE", default="0 0 * 
 DR_RELATIONS_RECONCILE_ENABLED = ENVIRONMENT.bool("DR_RELATIONS_RECONCILE_ENABLED", default=False)
 DR_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("DR_KAFKA_CONSUMER_GROUP_ID", default="rbac-dr-consumer-group")
 DR_MAX_EVENTS_PER_RECONCILE = ENVIRONMENT.int("DR_MAX_EVENTS_PER_RECONCILE", default=10000)
+DR_SKIP_EVENT_TYPES = [
+    t.strip()
+    for t in ENVIRONMENT.get_value(
+        "DR_SKIP_EVENT_TYPES",
+        default="",
+    ).split(",")
+    if t.strip()
+]
 
 # Org level permissons parent role uuids
 SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID = ENVIRONMENT.get_value("SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID", default="")

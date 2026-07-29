@@ -100,7 +100,8 @@
                   "add",
                   "edit",
                   "create",
-                  "remove"
+                  "remove",
+                  "read"
                 ]
               }
             }

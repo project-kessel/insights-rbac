@@ -26,7 +26,7 @@ import sentry_sdk
 from app_common_python import LoadedConfig
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_ready
+from celery.signals import worker_ready, worker_shutdown
 from django.conf import settings
 from prometheus_client import CollectorRegistry, multiprocess, start_http_server
 
@@ -110,3 +110,18 @@ def start_metrics_server(sender=None, **kwargs):
         logger.error(f"Failed to start metrics server: {e}")
         # Exit the entire process, we don't want to spin up the worker without metrics
         sys.exit(1)
+
+
+@worker_shutdown.connect
+def log_worker_shutdown(sender=None, **kwargs):
+    """Log Celery worker shutdown."""
+    # Graceful shutdown - SEC-MON-REQ-1 compliance (EOI-5 process_status)
+    logger.info(
+        "Celery worker shutting down",
+        extra={
+            "action": "SHUTDOWN",
+            "resource_type": "celery_worker",
+            "outcome": "success",
+            "principal": "system:celery:worker",
+        },
+    )

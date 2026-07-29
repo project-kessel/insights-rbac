@@ -131,9 +131,15 @@ def delete_tenant_with_resources(tenant):
     Uses migration_resource_deletion to properly handle workspace deletion
     (children before parents due to PROTECT constraints).
 
+    Cache invalidation happens AFTER deletion to avoid the race condition
+    where concurrent readers could re-populate the cache with stale data
+    between cache clear and actual deletion.
+
     Args:
         tenant: Tenant object to delete
     """
+    org_id = tenant.org_id
+
     # Delete workspaces first (handles children-before-parents automatically)
     workspaces = Workspace.objects.filter(tenant=tenant).order_by("id")
     # Delete workspaces without children first (due to PROTECT on parent)
@@ -144,6 +150,12 @@ def delete_tenant_with_resources(tenant):
 
     # Now tenant can be safely deleted (all workspaces are gone)
     tenant.delete()
+
+    # Invalidate workspace cache after deletion to prevent stale re-population
+    if org_id:
+        from management.cache import WORKSPACE_CACHE
+
+        WORKSPACE_CACHE.delete_workspaces_for_tenant(org_id)
 
 
 def chunk_delete(queryset):
@@ -170,19 +182,46 @@ def reset_imported_tenants(query: str, limit: int, excluded: list[str]):
         logger.info("Limit is 0, nothing to do.")
         return
 
-    with connection.cursor() as cursor:
-        if limit > 0:
-            subquery = f"SELECT id {query}"
-            cursor.execute(
-                "WITH delete_batch AS (" + subquery + ") "
-                "DELETE FROM api_tenant as t USING delete_batch as del where t.id = del.id",
-                (tuple(excluded),),
-            )
-        else:
-            cursor.execute(
-                "DELETE " + query,
-                (tuple(excluded),),
-            )
-        result = cursor.rowcount
+    try:
+        with connection.cursor() as cursor:
+            if limit > 0:
+                subquery = f"SELECT id {query}"
+                cursor.execute(
+                    "WITH delete_batch AS (" + subquery + ") "
+                    "DELETE FROM api_tenant as t USING delete_batch as del where t.id = del.id",
+                    (tuple(excluded),),
+                )
+            else:
+                cursor.execute(
+                    "DELETE " + query,
+                    (tuple(excluded),),
+                )
+            result = cursor.rowcount
 
-    logger.info(f"Deleted {result} tenants.")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            f"Deleted {result} tenants.",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "resource_id": f"bulk_deletion_{result}_tenants",
+                "outcome": "success",
+                "principal": "system:celery:reset_imported_tenants",
+                "deleted_count": result,
+                "limit": limit,
+            },
+        )
+    except Exception:
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Bulk tenant deletion failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "outcome": "failure",
+                "principal": "system:celery:reset_imported_tenants",
+                "reason": "deletion_error",
+                "limit": limit,
+            },
+        )
+        raise

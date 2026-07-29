@@ -17,6 +17,7 @@
 
 """View for Audit Logs."""
 
+from django.db.models import F
 from django_filters import rest_framework as filters
 from management.audit_log.filters import AuditLogFilter
 from management.models import AuditLog
@@ -38,10 +39,10 @@ class AuditLogViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     permission_classes = (AuditLogAccessPermission,)
     filter_backends = (filters.DjangoFilterBackend, OrderingFilter)
     filterset_class = AuditLogFilter
-    ordering_fields = ("created", "principal_username", "resource_type", "action")
-    ordering = ("-created",)
+    ordering_fields = ("sequence", "created", "principal_username", "resource_type", "action")
+    ordering = ("-id",)
 
     def list(self, request, *args, **kwargs):
         """List all of the audit logs within database by tenant."""
-        self.queryset = filter_queryset_by_tenant(AuditLog.objects.all(), request.tenant)
+        self.queryset = filter_queryset_by_tenant(AuditLog.objects.all(), request.tenant).annotate(sequence=F("id"))
         return super().list(request=request, args=args, kwargs=kwargs)

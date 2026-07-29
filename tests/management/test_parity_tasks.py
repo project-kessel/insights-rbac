@@ -1163,7 +1163,7 @@ class ParityCheckTasksTest(IdentityRequest):
             run_kessel_parity_checks_in_worker()
 
         log_text = self._collect_log_text(mock_logger)
-        self.assertIn("MISSING: rbac/workspace:ws-root#parent@rbac/workspace:ws-2", log_text)
+        self.assertIn("MISSING: rbac/workspace:ws-2#parent@rbac/workspace:ws-root", log_text)
         self.assertNotIn("rbac/workspace:ws-1", log_text)
 
     @override_settings(PARITY_CHECK_ENABLED=True, PARITY_CHECK_ORG_IDS="test_org_id")
@@ -1266,7 +1266,7 @@ class ParityCheckTasksTest(IdentityRequest):
             run_kessel_parity_checks_in_worker()
 
         log_text = self._collect_log_text(mock_logger)
-        self.assertIn("MISSING: rbac/workspace:root#parent@rbac/workspace:ws-0", log_text)
-        self.assertIn("MISSING: rbac/workspace:root#parent@rbac/workspace:ws-19", log_text)
+        self.assertIn("MISSING: rbac/workspace:ws-0#parent@rbac/workspace:root", log_text)
+        self.assertIn("MISSING: rbac/workspace:ws-19#parent@rbac/workspace:root", log_text)
         self.assertNotIn("ws-20", log_text)
         self.assertIn("... and 5 more", log_text)

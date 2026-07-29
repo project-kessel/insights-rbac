@@ -137,6 +137,7 @@ urlpatterns = [
     path("api/disaster_recovery/workspaces/", views.recover_workspace_events),
     path("api/disaster_recovery/reconcile/", views.disaster_recovery_reconcile),
     path("api/utils/kessel_parity_check/", views.kessel_parity_check),
+    path("api/utils/bootstrap_users_from_user_ids/", views.bootstrap_users_from_user_ids),
 ]
 
 urlpatterns.extend(integration_urlpatterns)

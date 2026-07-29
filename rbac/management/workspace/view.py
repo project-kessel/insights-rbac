@@ -26,6 +26,7 @@ from django_filters import rest_framework as filters
 from management.atomic_transactions import atomic_with_retry
 from management.audit_log.model import AuditLog
 from management.base_viewsets import BaseV2ViewSet
+from management.cache import WORKSPACE_CACHE
 from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
 from management.utils import v2response_error_from_errors, validate_and_get_key
@@ -40,13 +41,98 @@ from rest_framework.response import Response
 
 from api.common.pagination import V2ResultsSetPagination
 from .model import Workspace
-from .serializer import WorkspaceListInputSerializer, WorkspaceSerializer, WorkspaceWithAncestrySerializer
+from .serializer import (
+    WorkspaceListInputSerializer,
+    WorkspaceQueryInputSerializer,
+    WorkspaceSerializer,
+    WorkspaceWithAncestrySerializer,
+)
 from ..utils import flatten_validation_error, validate_uuid
 
 INCLUDE_ANCESTRY_KEY = "include_ancestry"
 VALID_BOOLEAN_VALUES = ["true", "false"]
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+
+def _workspace_retrieve_cache_key(pk: str, include_ancestry: str = "false") -> str:
+    """Build response cache key for a workspace retrieve.
+
+    Includes include_ancestry so that requests with/without ancestry data
+    are cached independently (different serializers produce different payloads).
+    """
+    return f"retrieve::{pk}::ancestry={include_ancestry}"
+
+
+def _workspace_list_cache_key(ws_type: str, offset: str, limit: str, order_by: str = "name") -> str:
+    """Build response cache key for a workspace list filtered by built-in type.
+
+    Includes order_by for correctness even though built-in type filters (root, default)
+    currently return at most one workspace per tenant, making ordering irrelevant in practice.
+    """
+    return f"list::{ws_type}::{offset}::{limit}::{order_by}"
+
+
+# Valid ordering fields for workspace list — used to sanitize cache keys.
+_WORKSPACE_ORDERING_FIELDS = frozenset(("name", "created", "modified", "type"))
+
+
+def _normalize_cache_params(query_params, max_limit: int = 3000, default_limit: int = 10):
+    """Normalize and validate pagination/ordering params for cache key construction.
+
+    Ensures cache keys match the actual paginated response regardless of raw input:
+    - offset: non-negative integer, default 0
+    - limit: positive integer clamped to [1, max_limit], default default_limit
+    - order_by: must be a recognised field (with optional '-' prefix), default 'name'
+
+    Non-positive limit values use default_limit to match DRF paginator behavior.
+    This prevents cache pollution from arbitrary strings and avoids key/content
+    mismatches when the paginator clamps values differently from the raw input.
+    """
+    try:
+        offset = max(0, int(query_params.get("offset", "0")))
+    except (ValueError, TypeError):
+        offset = 0
+
+    try:
+        limit = int(query_params.get("limit", str(default_limit)))
+        limit = min(limit, max_limit) if limit > 0 else default_limit
+    except (ValueError, TypeError):
+        limit = default_limit
+
+    order_by = query_params.get("order_by", "name")
+    field = order_by.lstrip("-")
+    if field not in _WORKSPACE_ORDERING_FIELDS:
+        order_by = "name"
+
+    return str(offset), str(limit), order_by
+
+
+def _get_cached_response(org_id: str, key: str):
+    """Return a cached workspace API response or None."""
+    return WORKSPACE_CACHE.get_response(org_id, key)
+
+
+def _set_cached_response(org_id: str, key: str, data: dict):
+    """Write a workspace API response to cache."""
+    WORKSPACE_CACHE.cache_response(org_id, key, data)
+
+
+def is_cacheable_builtin_type(validated_params):
+    """Check if a workspace list request filters for exactly one built-in type with no other filters.
+
+    Returns the workspace type string ('root' or 'default') if cacheable, None otherwise.
+    """
+    if validated_params.get("name") or validated_params.get("parent_id") or validated_params.get("ids"):
+        return None
+
+    type_filter = validated_params.get("type")
+    if type_filter and len(type_filter) == 1:
+        ws_type = type_filter[0]
+        if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+            return ws_type
+
+    return None
 
 
 class WorkspacePagination(V2ResultsSetPagination):
@@ -91,9 +177,12 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 return WorkspaceWithAncestrySerializer
         return super().get_serializer_class()
 
+    # Actions that use POST but are semantically read-only (no select_for_update needed)
+    READ_ONLY_POST_ACTIONS = frozenset({"query"})
+
     def get_queryset(self):
         """Get queryset override."""
-        if self.request.method not in SAFE_METHODS:
+        if self.request.method not in SAFE_METHODS and self.action not in self.READ_ONLY_POST_ACTIONS:
             return super().get_queryset().select_for_update()
         return super().get_queryset()
 
@@ -142,13 +231,37 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         super().perform_create(serializer)
         workspace = serializer.instance
         self._log_audit(self.request, AuditLog.CREATE, workspace, f"Created workspace: {workspace.name}")
+        # CREATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace created",
+            extra={
+                "action": "CREATE",
+                "resource_type": "workspace",
+                "resource_id": str(workspace.id),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def create(self, request, *args, **kwargs):
         """Create a Workspace."""
         try:
             return self._create_atomic(request, *args, **kwargs)
         except TimeoutError as e:
-            logger.exception("TimeoutError in workspace creation operation")
+            # Failed operation - SEC-MON-REQ-1 compliance (EOI-11 warnings_or_errors, EOI-1 pii_manipulation)
+            logger.error(
+                "Workspace creation failed: TimeoutError",
+                extra={
+                    "action": "CREATE",
+                    "resource_type": "workspace",
+                    "outcome": "failure",
+                    "reason": "timeout",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                },
+                exc_info=True,
+            )
             return Response(
                 {"detail": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -178,9 +291,89 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                     raise serializers.ValidationError(error_message)
             raise
 
+    @staticmethod
+    def _get_org_id(request):
+        """Resolve org_id from the request tenant."""
+        tenant = getattr(request, "tenant", None)
+        return getattr(tenant, "org_id", None) if tenant else None
+
     def retrieve(self, request, *args, **kwargs):
-        """Get a workspace."""
-        return super().retrieve(request=request, args=args, kwargs=kwargs)
+        """Get a workspace, with response caching for built-in workspaces.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch() before this
+        method is called. The queryset-level WorkspaceAccessFilterBackend is intentionally
+        bypassed on cache hit because root/default workspaces are never access-restricted
+        within a tenant — every authenticated user in the org can read them.
+        """
+        org_id = self._get_org_id(request)
+        pk = kwargs.get("pk")
+        include_ancestry = validate_and_get_key(
+            request.query_params, INCLUDE_ANCESTRY_KEY, VALID_BOOLEAN_VALUES, "false"
+        )
+
+        if org_id and pk:
+            key = _workspace_retrieve_cache_key(pk, include_ancestry)
+            cached = _get_cached_response(org_id, key)
+            if cached is not None:
+                return Response(cached)
+
+        response = super().retrieve(request, *args, **kwargs)
+
+        if org_id and pk and response.status_code == 200:
+            ws_type = response.data.get("type")
+            if ws_type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+                _set_cached_response(org_id, _workspace_retrieve_cache_key(pk, include_ancestry), response.data)
+
+        return response
+
+    def _filtered_list_response(self, validated_params):
+        """Shared implementation for list and query actions.
+
+        Both endpoints produce the same paginated workspace response; the only
+        difference is how validated_params are obtained (query string vs POST body).
+
+        Responses for built-in workspace types (root, default) are cached when requested
+        as a single type filter with no other filters. The cache key includes pagination
+        parameters (offset, limit) and order_by so different pages/orderings are cached
+        independently.
+
+        Access control note: The response cache is only populated for root and default
+        workspace types, which are universally visible to all users within a tenant.
+        WorkspaceAccessPermission (endpoint-level) still runs in dispatch(). The
+        queryset-level WorkspaceAccessFilterBackend is intentionally bypassed on cache hit
+        because root/default workspaces are never access-restricted within a tenant.
+        """
+        # Bridge param to access layer; read by WorkspaceAccessFilterBackend
+        # via getattr(request, "with_ancestry", False) and passed to
+        # is_user_allowed_v2(with_ancestry=...).
+        self.request.with_ancestry = validated_params.get("with_ancestry", False)
+
+        org_id = self._get_org_id(self.request)
+        cacheable_type = is_cacheable_builtin_type(validated_params)
+
+        cache_key = None
+        if org_id and cacheable_type:
+            offset, limit, order_by = _normalize_cache_params(
+                self.request.query_params, self.pagination_class.max_limit
+            )
+            cache_key = _workspace_list_cache_key(cacheable_type, offset, limit, order_by)
+            cached = _get_cached_response(org_id, cache_key)
+            if cached is not None:
+                return Response(cached)
+
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = self._service.list(queryset, validated_params)
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        response = self.get_paginated_response(serializer.data)
+
+        if cache_key:
+            _set_cached_response(org_id, cache_key, response.data)
+
+        return response
 
     def list(self, request, *args, **kwargs):
         """Get a list of workspaces.
@@ -189,21 +382,30 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         Ordering is handled by OrderingFilter (supports ?order_by=name or ?order_by=-name).
         Domain filters (type, name, parent_id, ids) are validated by
         WorkspaceListInputSerializer and applied by WorkspaceService.list().
+
+        Responses for built-in workspace types (root, default) are cached when requested
+        as a single type filter with no other filters.
         """
         input_serializer = WorkspaceListInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
-        validated_params = input_serializer.validated_data
+        return self._filtered_list_response(input_serializer.validated_data)
 
-        # Bridge query param to access layer; read by WorkspaceAccessFilterBackend and
-        # passed explicitly to is_user_allowed_v2(with_ancestry=...).
-        request.with_ancestry = validated_params.get("with_ancestry", False)
+    @action(detail=False, methods=["post"], url_path="query")
+    def query(self, request, *args, **kwargs):
+        """Query workspaces by a list of IDs via POST body.
 
-        queryset = self.filter_queryset(self.get_queryset())
-        queryset = self._service.list(queryset, validated_params)
+        POST /v2/workspaces/query/
 
-        page = self.paginate_queryset(queryset)
-        serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        Accepts a JSON body with a list of workspace IDs, avoiding URL length limits
+        when querying many workspaces at once. Returns the same paginated response
+        as GET /v2/workspaces/?ids=...
+
+        Pagination query parameters (limit, offset, order_by) are still read from
+        the URL query string, consistent with DRF conventions.
+        """
+        input_serializer = WorkspaceQueryInputSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        return self._filtered_list_response(input_serializer.validated_data)
 
     @atomic_with_retry(retries=3)
     def destroy(self, request, *args, **kwargs):
@@ -216,11 +418,33 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
 
     def perform_destroy(self, instance):
         """Delegate to service for destroy logic and log audit entry."""
+        workspace_id = str(instance.id)
         self._service.destroy(instance)
         self._log_audit(self.request, AuditLog.DELETE, instance, f"Deleted workspace: {instance.name}")
+        # DELETE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace deleted",
+            extra={
+                "action": "DELETE",
+                "resource_type": "workspace",
+                "resource_id": workspace_id,
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def perform_update(self, serializer):
-        """Update workspace and log audit entry."""
+        """Update workspace and log audit entry.
+
+        Invalidates workspace cache for built-in types (default) to prevent
+        serving stale data. ROOT workspaces are blocked at the service layer,
+        but we guard both types defensively.
+
+        Cache invalidation is deferred via transaction.on_commit() so it only
+        fires after the DB transaction commits, avoiding the race where a
+        concurrent reader re-populates the cache with pre-commit data.
+        """
         instance = serializer.instance
         audit_log = AuditLog()
         description = audit_log.find_edited_field(
@@ -228,6 +452,23 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         )
         super().perform_update(serializer)
         self._log_audit(self.request, AuditLog.EDIT, instance, description)
+        # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "workspace",
+                "resource_id": str(instance.id),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
+
+        if instance.type in (Workspace.Types.ROOT, Workspace.Types.DEFAULT):
+            org_id = self._get_org_id(self.request)
+            if org_id:
+                transaction.on_commit(lambda: WORKSPACE_CACHE.delete_workspaces_for_tenant(org_id))
 
     @transaction.atomic()
     def update(self, request, *args, **kwargs):
@@ -258,6 +499,19 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             AuditLog.EDIT,
             workspace,
             f"Moved workspace: {workspace.name} to parent {workspace.parent.name}",
+        )
+        # MOVE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Workspace moved",
+            extra={
+                "action": "MOVE",
+                "resource_type": "workspace",
+                "resource_id": str(workspace.id),
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "target_parent_id": str(target_workspace_id),
+            },
         )
         return result
 
@@ -304,10 +558,20 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         ws_context = f", ws_id='{ws_id}'" if ws_id else ""
         if hasattr(error, "__cause__"):
             if isinstance(error.__cause__, SerializationFailure):
+                # Failed operation - SEC-MON-REQ-1 compliance (EOI-11 warnings_or_errors)
                 logger.error(
                     "SerializationFailure in workspace %s operation after all retries exhausted%s",
                     operation,
                     ws_context,
+                    extra={
+                        "action": operation.upper(),
+                        "resource_type": "workspace",
+                        "resource_id": ws_id if ws_id else "unknown",
+                        "outcome": "failure",
+                        "reason": "serialization_failure",
+                        "org_id": getattr(self.request.user, "org_id", None),
+                        "username": getattr(self.request.user, "username", None),
+                    },
                 )
                 response = Response(
                     {
@@ -319,10 +583,20 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 response["Retry-After"] = "1"
                 return response
             elif isinstance(error.__cause__, DeadlockDetected):
+                # Failed operation - SEC-MON-REQ-1 compliance (EOI-11 warnings_or_errors)
                 logger.error(
                     "DeadlockDetected in workspace %s operation after all retries exhausted%s",
                     operation,
                     ws_context,
+                    extra={
+                        "action": operation.upper(),
+                        "resource_type": "workspace",
+                        "resource_id": ws_id if ws_id else "unknown",
+                        "outcome": "failure",
+                        "reason": "deadlock_detected",
+                        "org_id": getattr(self.request.user, "org_id", None),
+                        "username": getattr(self.request.user, "username", None),
+                    },
                 )
                 return Response(
                     {"detail": "Internal server error in concurrent updates. Please try again later."},

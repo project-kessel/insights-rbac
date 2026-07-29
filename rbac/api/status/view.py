@@ -77,6 +77,17 @@ def ready(request):
 
 @api_view(["GET", "HEAD"])
 @permission_classes((permissions.AllowAny,))
+def root(request):
+    """Root path handler for infrastructure probes (e.g. kube-probe).
+
+    Returns 200 to prevent probe GET / requests from generating
+    WARNING-level 404 log entries (~1 req/sec from Kubernetes probes).
+    """
+    return Response(status=200)
+
+
+@api_view(["GET", "HEAD"])
+@permission_classes((permissions.AllowAny,))
 def status(request):
     """Provide the server status information.
 

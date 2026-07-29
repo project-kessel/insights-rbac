@@ -16,10 +16,14 @@
 #
 """Defines the Policy Access Permissions class."""
 
+import logging
+
 from management.permissions.utils import is_scope_principal
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
 
 
 class PolicyAccessPermission(permissions.BasePermission):
@@ -42,4 +46,17 @@ class PolicyAccessPermission(permissions.BasePermission):
             if policy_write:
                 return True
 
+        # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+        logger.warning(
+            "Authorization denied",
+            extra={
+                "action": request.method,
+                "resource_type": "policy",
+                "outcome": "failure",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "reason": "insufficient_permissions",
+                "endpoint": request.path,
+            },
+        )
         return False

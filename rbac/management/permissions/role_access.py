@@ -16,10 +16,14 @@
 #
 """Defines the Role Access Permissions class."""
 
-from management.permissions.utils import is_scope_principal
+import logging
+
+from management.permissions.utils import check_v2_kessel_access, is_scope_principal
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
 
 
 class RoleAccessPermission(permissions.BasePermission):
@@ -40,8 +44,22 @@ class RoleAccessPermission(permissions.BasePermission):
             role_read = request.user.access.get("role", {}).get("read", [])
             if role_read:
                 return True
+            return check_v2_kessel_access(request)
         else:
             role_write = request.user.access.get("role", {}).get("write", [])
             if role_write:
                 return True
+        # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+        logger.warning(
+            "Authorization denied",
+            extra={
+                "action": request.method,
+                "resource_type": "role",
+                "outcome": "failure",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "reason": "insufficient_permissions",
+                "endpoint": request.path,
+            },
+        )
         return False

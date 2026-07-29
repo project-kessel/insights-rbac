@@ -9,11 +9,13 @@ objects:
     name: ${CONNECTOR_NAME}
     annotations:
       strimzi.io/use-connector-resources: "true"
+      strimzi.io/connector-offsets: "${CONNECTOR_OFFSETS_RESET}"
     labels:
       strimzi.io/cluster: ${KAFKA_CONNECT_INSTANCE}
   spec:
     class: io.debezium.connector.postgresql.PostgresConnector
     tasksMax: ${{MAX_TASKS}}
+    state: ${CONNECTOR_STATE}
     config:
       database.server.name: ${DB_SERVERNAME}
       database.dbname: ${DB_NAME}
@@ -78,6 +80,12 @@ parameters:
 - name: DEBEZIUM_HEARTBEAT_INTERVAL_MS
   value: "300000"
   description: The interval for the Debezium heartbeat in ms
+- name: CONNECTOR_STATE
+  description: "Defines the state the connector should be deployed in ('stopped', 'running', 'paused' only)"
+  value: running
 - name: SNAPSHOT_MODE
   value: "initial"
   description: The snapshot mode for the connector
+- name: CONNECTOR_OFFSETS_RESET
+  value: ""
+  description: "Set to 'reset' to clear connector offsets via Strimzi annotation (connector must be stopped first)"

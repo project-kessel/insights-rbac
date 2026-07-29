@@ -16,20 +16,20 @@
 #
 """Test the principal model."""
 
-import requests
+import typing
 import uuid
-
-from django.conf import settings
-from django.test import override_settings
-
-from management.group.model import Group
-from management.principal.model import Principal
-from management.principal.it_service import ITService, UnexpectedStatusCodeFromITError
-from rest_framework import serializers, status
-from tests.identity_request import IdentityRequest
 from unittest import mock
 
-from api.models import User, Tenant
+import requests
+from django.conf import settings
+from django.test import override_settings
+from management.group.model import Group
+from management.principal.it_service import ITService, UnexpectedStatusCodeFromITError
+from management.principal.model import Principal
+from rest_framework import serializers, status
+from tests.identity_request import IdentityRequest
+
+from api.models import Tenant, User
 
 # IT path to fetch the service accounts.
 IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
@@ -155,7 +155,9 @@ class ITServiceTests(IdentityRequest):
     def _assert_created_sa_and_result_are_same(
         self, created_database_sa_principals: list[Principal], function_result: list[dict]
     ) -> None:
-        """Assert that the "get_service_accounts" function's result is correct
+        """Assert that the returned representation of service accounts matches the Principals found in the database.
+
+        This verifies the output of, e.g., get_service_accounts.
 
         The assertions make sure that the returned results from the function actually match the created service
         account principals in the test.
@@ -303,20 +305,82 @@ class ITServiceTests(IdentityRequest):
                 "the time created and created at fields for the RBAC and IT models do not match",
             )
 
+    def _assert_service_account_call(
+        self, call, client_ids_assert: typing.Callable[[list[str]], None], *args, **kwargs
+    ):
+        # This must be checked using client_ids_condition.
+        assert kwargs.get("params", {}).get("clientId") is None
+
+        self.assertEqual(call.args, args, "Incorrect positional arguments for call.")
+
+        call_kwargs: dict[str, typing.Any] = dict(call.kwargs)
+        call_params: dict[str, typing.Any] = dict(call.kwargs.get("params", {}))
+
+        call_client_ids = call_params.pop("clientId", [])
+        call_kwargs["params"] = call_params
+
+        client_ids_assert(call_client_ids)
+        self.assertEqual(kwargs, call_kwargs, "Incorrect keyword arugments for call.")
+
+    def _assert_service_account_mock_called(self, mock: mock.Mock, *args, **kwargs):
+        """Assert that a mock has a call to IT's service accounts endpoint is as expected."""
+        if "params" in kwargs and "clientId" in kwargs["params"]:
+            # We do not care about the order of client IDs.
+
+            actual_client_ids = mock.call_args.kwargs["params"]["clientId"]
+
+            self.assertCountEqual(actual_client_ids, kwargs["params"]["clientId"], "Client IDs did not match call.")
+
+            # Now that the IDs have been verified, just make the expectation match reality.
+            kwargs = dict(kwargs)
+            kwargs["params"] = dict(kwargs["params"])
+            kwargs["params"]["clientId"] = actual_client_ids
+
+        mock.assert_called_with(*args, **kwargs)
+
+    class FakeIT:
+        _service_accounts: list[dict]
+
+        def __init__(self, service_accounts: list[dict]):
+            self._service_accounts = list(service_accounts)
+
+        def get(self, *args, **kwargs) -> mock.Mock:
+            first = kwargs["params"]["first"]
+            max = kwargs["params"]["max"]
+
+            filtered: list[dict]
+
+            raw_client_ids = kwargs["params"].get("clientId", [])
+
+            if raw_client_ids:
+                client_ids = set(raw_client_ids)
+                filtered = [account for account in self._service_accounts if account["clientId"] in client_ids]
+            else:
+                filtered = self._service_accounts
+
+            # The underlying IT API returns an empty array for a request out of range, and so will this.
+            result = filtered[first : (first + max)]
+
+            return mock.Mock(
+                json=lambda: result,
+                status_code=status.HTTP_200_OK,
+            )
+
     @mock.patch("management.principal.it_service.requests.get")
     def test_request_service_accounts_single_page(self, get: mock.Mock):
         """Test that the function under test can handle fetching a single page of service accounts from IT"""
-        # Create the mocked response from IT.
+        # Create a fake IT service with service accounts.
         mocked_service_accounts = self._create_mock_it_service_accounts(5)
+        requested_service_accounts = mocked_service_accounts[0:3]
 
         get.__name__ = "get"
-        get.return_value = mock.Mock(
-            json=lambda: mocked_service_accounts,
-            status_code=status.HTTP_200_OK,
-        )
+        get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
 
         bearer_token_mock = "bearer-token-mock"
-        client_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+
+        # client_ids being small means that this will trigger the fast path in request_service_accounts, and only a
+        # single request will be made.
+        client_ids = [account["clientId"] for account in requested_service_accounts]
 
         # Call the function under test.
         result: list[dict] = self.it_service.request_service_accounts(
@@ -333,7 +397,8 @@ class ITServiceTests(IdentityRequest):
         parameters = {"first": 0, "max": 100, "clientId": client_ids}
 
         # Assert that the "get" function was called with the expected arguments.
-        get.assert_called_with(
+        self._assert_service_account_mock_called(
+            get,
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -342,13 +407,150 @@ class ITServiceTests(IdentityRequest):
 
         # Assert that the payload is correct.
         self._assert_IT_to_RBAC_model_transformations(
-            it_service_accounts=mocked_service_accounts, rbac_service_accounts=result
+            it_service_accounts=requested_service_accounts, rbac_service_accounts=result
+        )
+
+    @mock.patch("management.principal.it_service.requests.get")
+    def test_request_service_accounts_client_ids_small(self, get: mock.Mock):
+        """Test that the function under test uses client IDs when few service accounts are needed."""
+        # Create a fake IT service with service accounts.
+        mocked_service_accounts = self._create_mock_it_service_accounts(400)
+        requested_service_accounts = mocked_service_accounts[0:5]
+
+        get.__name__ = "get"
+        get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
+
+        bearer_token_mock = "bearer-token-mock"
+
+        # Request several additional client IDs to ensure they are properly filtered out.
+        # Ensure the total count is greater than 20 to avoid the fast path.
+        # Ensure the total count is fewer than 40 so that client IDs are used (rather than requesting all accounts).
+        client_ids = [account["clientId"] for account in requested_service_accounts] + [
+            str(uuid.uuid4()) for _ in range(20)
+        ]
+
+        # Call the function under test.
+        result: list[dict] = self.it_service.request_service_accounts(
+            bearer_token=bearer_token_mock, client_ids=client_ids
+        )
+
+        # Build IT's URL for the function call's assertion.
+        it_url = (
+            f"{settings.IT_SERVICE_PROTOCOL_SCHEME}://{settings.IT_SERVICE_HOST}:{settings.IT_SERVICE_PORT}"
+            f"{settings.IT_SERVICE_BASE_PATH}{IT_PATH_GET_SERVICE_ACCOUNTS}"
+        )
+
+        # We expect one call to determine what strategy to use, then three additional calls to request actual data.
+        calls = get.call_args_list
+        self.assertEqual(4, len(calls))
+
+        # Check for the initial call to determine how many service accounts exist.
+        self._assert_service_account_call(
+            call=calls[0],
+            url=it_url,
+            headers={"Authorization": f"Bearer {bearer_token_mock}"},
+            params={"first": 299, "max": 1},
+            timeout=settings.IT_SERVICE_TIMEOUT_SECONDS,
+            client_ids_assert=lambda call_client_ids: self.assertEqual([], call_client_ids),
+        )
+
+        # Build the expected parameters to be seen in the "get" function's assertion call, other than clientId.
+        base_parameters = {"first": 0, "max": 100}
+
+        seen_client_ids = set()
+
+        for call in calls[1:]:
+            self._assert_service_account_call(
+                call=call,
+                client_ids_assert=lambda call_client_ids: self.assertTrue(
+                    seen_client_ids.isdisjoint(call_client_ids),
+                    f"Duplicate client IDs requested. Seen: {seen_client_ids}. This batch: {call_client_ids}.",
+                ),
+                url=it_url,
+                headers={"Authorization": f"Bearer {bearer_token_mock}"},
+                params=base_parameters,
+                timeout=settings.IT_SERVICE_TIMEOUT_SECONDS,
+            )
+
+            seen_client_ids.update(call.kwargs["params"]["clientId"])
+
+        self.assertSetEqual(set(client_ids), seen_client_ids, "Expected all client IDs to be requested.")
+
+        # Check that we filtered out unexpected service accounts.
+        self.assertTrue(set(client_ids).issuperset(set(account["clientId"] for account in result)))
+
+        # Assert that the payload is correct.
+        self._assert_IT_to_RBAC_model_transformations(
+            it_service_accounts=requested_service_accounts, rbac_service_accounts=result
+        )
+
+    @mock.patch("management.principal.it_service.requests.get")
+    def test_request_service_accounts_client_ids_large(self, get: mock.Mock):
+        """Test that the function under test uses client IDs when many service accounts are needed."""
+        # Create a fake IT service with service accounts.
+        mocked_service_accounts = self._create_mock_it_service_accounts(400)
+        requested_service_accounts = mocked_service_accounts[0:5]
+
+        get.__name__ = "get"
+        get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
+
+        bearer_token_mock = "bearer-token-mock"
+
+        # Request several additional client IDs to ensure they are properly filtered out.
+        # Ensure the total count is greater than 20 to avoid the fast path.
+        # Ensure the total count is greater than 40 so that all service accounts are requested.
+        client_ids = [account["clientId"] for account in requested_service_accounts] + [
+            str(uuid.uuid4()) for _ in range(40)
+        ]
+
+        # Call the function under test.
+        result: list[dict] = self.it_service.request_service_accounts(
+            bearer_token=bearer_token_mock, client_ids=client_ids
+        )
+
+        # Build IT's URL for the function call's assertion.
+        it_url = (
+            f"{settings.IT_SERVICE_PROTOCOL_SCHEME}://{settings.IT_SERVICE_HOST}:{settings.IT_SERVICE_PORT}"
+            f"{settings.IT_SERVICE_BASE_PATH}{IT_PATH_GET_SERVICE_ACCOUNTS}"
+        )
+
+        # We expect one call to determine what strategy to use, then five additional calls to request actual data
+        # (starting at 0, 100, 200, 300, and 400).
+        calls = get.call_args_list
+        self.assertEqual(6, len(calls))
+
+        # Check for the initial call to determine how many service accounts exist.
+        self._assert_service_account_call(
+            call=calls[0],
+            url=it_url,
+            headers={"Authorization": f"Bearer {bearer_token_mock}"},
+            params={"first": 499, "max": 1},
+            timeout=settings.IT_SERVICE_TIMEOUT_SECONDS,
+            client_ids_assert=lambda call_client_ids: self.assertEqual([], call_client_ids),
+        )
+
+        for data_call_index, call in enumerate(calls[1:]):
+            self._assert_service_account_call(
+                call=call,
+                client_ids_assert=lambda call_client_ids: self.assertEqual([], call_client_ids),
+                url=it_url,
+                headers={"Authorization": f"Bearer {bearer_token_mock}"},
+                params={"first": data_call_index * 100, "max": 100},
+                timeout=settings.IT_SERVICE_TIMEOUT_SECONDS,
+            )
+
+        # Check that we filtered out unexpected service accounts.
+        self.assertTrue(set(client_ids).issuperset(set(account["clientId"] for account in result)))
+
+        # Assert that the payload is correct.
+        self._assert_IT_to_RBAC_model_transformations(
+            it_service_accounts=requested_service_accounts, rbac_service_accounts=result
         )
 
     @mock.patch("management.principal.it_service.requests.get")
     def test_request_service_accounts_multiple_pages(self, get: mock.Mock):
         """Test that the function under test can handle fetching multiple pages from IT"""
-        # Create the mocked response from IT.
+        # Create a fake IT service with service accounts.
         mocked_service_accounts = self._create_mock_it_service_accounts(300)
 
         # Make sure the "get" function returns multiple pages of service accounts.
@@ -377,14 +579,9 @@ class ITServiceTests(IdentityRequest):
         ]
 
         bearer_token_mock = "bearer-token-mock"
-        # For multiple pages giving just three client IDs does not make sense, but we are going to give them anyway to
-        # check that the parameter is included.
-        client_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
 
         # Call the function under test.
-        result: list[dict] = self.it_service.request_service_accounts(
-            bearer_token=bearer_token_mock, client_ids=client_ids
-        )
+        result: list[dict] = self.it_service.request_service_accounts(bearer_token=bearer_token_mock)
 
         # Build IT's URL for the function call's assertion.
         it_url = (
@@ -393,10 +590,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         # Assert that the "get" function is called with the expected arguments for the multiple pages.
-        parameters_first_call = {"first": 0, "max": 100, "clientId": client_ids}
-        parameters_second_call = {"first": 100, "max": 100, "clientId": client_ids}
-        parameters_third_call = {"first": 200, "max": 100, "clientId": client_ids}
-        parameters_fourth_call = {"first": 300, "max": 100, "clientId": client_ids}
+        parameters_first_call = {"first": 0, "max": 100}
+        parameters_second_call = {"first": 100, "max": 100}
+        parameters_third_call = {"first": 200, "max": 100}
+        parameters_fourth_call = {"first": 300, "max": 100}
 
         get.assert_has_calls(
             [
@@ -465,7 +662,8 @@ class ITServiceTests(IdentityRequest):
         parameters = {"first": 0, "max": 100, "clientId": client_ids}
 
         # Assert that the "get" function was called with the expected arguments.
-        get.assert_called_with(
+        self._assert_service_account_mock_called(
+            get,
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -504,7 +702,8 @@ class ITServiceTests(IdentityRequest):
         parameters = {"first": 0, "max": 100, "clientId": client_ids}
 
         # Assert that the "get" function was called with the expected arguments.
-        get.assert_called_with(
+        self._assert_service_account_mock_called(
+            get,
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -541,7 +740,8 @@ class ITServiceTests(IdentityRequest):
         parameters = {"first": 0, "max": 100, "clientId": client_ids}
 
         # Assert that the "get" function was called with the expected arguments.
-        get.assert_called_with(
+        self._assert_service_account_mock_called(
+            get,
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -570,19 +770,14 @@ class ITServiceTests(IdentityRequest):
         _is_service_account_valid.assert_called_with(user=user, client_id=str(client_uuid))
 
     @mock.patch("management.principal.it_service.ITService.request_service_accounts")
+    @override_settings(IT_BYPASS_IT_CALLS=True)
     def test_is_service_account_valid_bypass_it_calls(self, _):
         """Test that the function under test assumes service accounts to always be valid when bypassing IT calls."""
-        original_bypass_it_calls_value = settings.IT_BYPASS_IT_CALLS
-        try:
-            settings.IT_BYPASS_IT_CALLS = True
-
-            self.assertEqual(
-                True,
-                self.it_service._is_service_account_valid(user=User(), client_id="mocked-cid"),
-                "when IT calls are bypassed, a service account should always be validated as if it existed",
-            )
-        finally:
-            settings.IT_BYPASS_IT_CALLS = original_bypass_it_calls_value
+        self.assertEqual(
+            True,
+            self.it_service._is_service_account_valid(user=User(), client_id="mocked-cid"),
+            "when IT calls are bypassed, a service account should always be validated as if it existed",
+        )
 
     @mock.patch("management.principal.it_service.ITService.request_service_accounts")
     def test_is_service_account_valid(self, request_service_accounts: mock.Mock):
@@ -1571,6 +1766,104 @@ class ITServiceTests(IdentityRequest):
                 f' "{expected_first_username}" or "{expected_second_username}", got the following service account:'
                 f" {filtered_result}",
             )
+
+    @mock.patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_filtered_service_accounts(self, request_service_accounts: mock.Mock):
+        """Test that the function properly requests service accounts from IT and merges them with local accounts."""
+        user = User()
+        user.bearer_token = "mocked-bt"
+
+        principals_tenant_one, _ = self._create_database_service_account_principals_two_tenants()
+
+        # Select one principal to remove in order to ensure that the local and IT account lists are merged properly.
+        selected_principals = principals_tenant_one[1:]
+
+        request_service_accounts.return_value = self.it_service._get_mock_service_accounts(selected_principals)
+
+        filtered = self.it_service._filtered_service_accounts(
+            user=user,
+            service_account_principals=principals_tenant_one,
+            options={},
+        )
+
+        self.assertEqual(
+            1,
+            request_service_accounts.call_count,
+            "Expected request_service_accounts to be called once.",
+        )
+
+        self.assertSetEqual(
+            {principal.service_account_id for principal in principals_tenant_one},
+            set(request_service_accounts.call_args.kwargs["client_ids"]),
+            "Expected request_service_accounts to be called with the service_account_ids passed to _filtered_service_accounts.",
+        )
+
+        self._assert_created_sa_and_result_are_same(
+            created_database_sa_principals=selected_principals,
+            function_result=filtered,
+        )
+
+    @override_settings(IT_BYPASS_IT_CALLS=True)
+    @mock.patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_filtered_service_accounts_bypass_it(self, request_service_accounts: mock.Mock):
+        """Test that the function does not use request_service_accounts when IT_BYPASS_IT_CALLS is set."""
+        user = User()
+        user.bearer_token = "mocked-bt"
+
+        principals_tenant_one, _ = self._create_database_service_account_principals_two_tenants()
+
+        # When IT_BYPASS_IT_CALLS is set, _filter_service_accounts should return mocked accounts.
+        request_service_accounts.side_effect = lambda **kwargs: self.fail(
+            "Expected request_service_accounts to not be called when IT_BYPASS_IT_CALLS is set."
+        )
+
+        filtered = self.it_service._filtered_service_accounts(
+            user=user,
+            service_account_principals=principals_tenant_one,
+            options={},
+        )
+
+        self._assert_created_sa_and_result_are_same(
+            created_database_sa_principals=principals_tenant_one,
+            function_result=filtered,
+        )
+
+    @mock.patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_filtered_service_accounts_username_only(self, request_service_accounts: mock.Mock):
+        """Test that the function returns only usernames when username_only is true."""
+        user = User()
+        user.bearer_token = "mocked-bt"
+
+        principals_tenant_one, _ = self._create_database_service_account_principals_two_tenants()
+
+        # Select one principal to remove in order to ensure that the local and IT account lists are merged properly.
+        selected_principals = principals_tenant_one[1:]
+        expected_usernames = {principal.username for principal in selected_principals}
+
+        request_service_accounts.return_value = self.it_service._get_mock_service_accounts(selected_principals)
+
+        # request_service_accounts being called with the correct arguments is tested above.
+
+        filtered = self.it_service._filtered_service_accounts(
+            user=user,
+            service_account_principals=principals_tenant_one,
+            options={"username_only": "true"},
+        )
+
+        self.assertEqual(
+            len(selected_principals),
+            len(filtered),
+            "Expected the same number of accounts to be returned as provided.",
+        )
+
+        for account in filtered:
+            self.assertCountEqual(
+                ["username"],
+                account.keys(),
+                f"Expected each account to have a single key when username_only is true.",
+            )
+
+            self.assertIn(account["username"], expected_usernames)
 
     @override_settings(IT_BYPASS_IT_CALLS=True)
     def test_principal_filtering_without_username_match_criteria_exact_skipped(self):

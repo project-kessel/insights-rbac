@@ -16,11 +16,15 @@
 #
 """Defines the Group Access Permissions class."""
 
-from management.permissions.utils import is_scope_principal
+import logging
+
+from management.permissions.utils import check_v2_kessel_access, is_scope_principal
 from rest_framework import permissions
 from rest_framework.request import Request
 
 from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
 
 # Allowed methods to be able to modify principals from a group.
 ALLOWED_METHODS = ["DELETE", "POST"]
@@ -45,6 +49,7 @@ class GroupAccessPermission(permissions.BasePermission):
                     return username == request.user.username
                 if not username and is_scope_principal(request):
                     return True
+            return check_v2_kessel_access(request)
         else:
             group_write = request.user.access.get("group", {}).get("write", [])
 
@@ -55,9 +60,36 @@ class GroupAccessPermission(permissions.BasePermission):
                 if group_write and principal_write:
                     return True
                 else:
+                    # Authorization failure - SEC-MON-REQ-1 compliance
+                    # (EOI-8 authorization_failure, EOI-4 access_manipulation)
+                    logger.warning(
+                        "Authorization denied",
+                        extra={
+                            "action": request.method,
+                            "resource_type": "group",
+                            "outcome": "failure",
+                            "org_id": getattr(request.user, "org_id", None),
+                            "username": getattr(request.user, "username", None),
+                            "reason": "insufficient_permissions_for_principal_modification",
+                            "endpoint": request.path,
+                        },
+                    )
                     return False
 
             if group_write:
                 return True
 
+        # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+        logger.warning(
+            "Authorization denied",
+            extra={
+                "action": request.method,
+                "resource_type": "group",
+                "outcome": "failure",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "reason": "insufficient_permissions",
+                "endpoint": request.path,
+            },
+        )
         return False

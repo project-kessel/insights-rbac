@@ -158,8 +158,9 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
             skip_scope_validation=True,
         )
 
-    def _add_car_roles_v1(self, roles: set[Role]):
+    def _add_car_roles_v1(self, roles: Iterable[Role]):
         self._expect_v1_tenant()
+        roles = self._with_system_roles_for_share(roles)
 
         def add_principal_to_binding(mapping: BindingMapping):
             self.relations_to_add.append(mapping.assign_user_to_bindings(user_id, source_key))
@@ -191,6 +192,8 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
 
         principal = Principal.objects.get(user_id=self._user_id())
 
+        # We do not need to lock the roles here, since we're in a SERIALIZABLE transaction (and so is seeding each
+        # role).
         for role in roles:
             for scope in self._resource_service.binding_scopes_for_role(role):
                 v1_roles_by_scope.setdefault(scope, set()).add(role)
@@ -245,6 +248,8 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
             if removal is not None:
                 self.relations_to_remove.append(removal)
 
+        # We don't need to lock the roles, since we will handle any possible scope (without actually looking at the
+        # roles).
         for role in roles:
             for scope in Scope:
                 self._update_mapping_for_system_role(
@@ -263,6 +268,8 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
 
         v2_roles_to_remove: set[SeededRoleV2] = SeededRoleV2.for_v1_roles(roles)
 
+        # We don't need to lock the roles, since we will handle any possible scope (without actually looking at the
+        # roles).
         for scope in Scope:
             resource = scope_resources.resource_for(scope)
 

@@ -54,7 +54,22 @@ class V1WriteBlockedWhenWorkspacesEnabled(permissions.BasePermission):
         """Allow reads always; deny writes when v2 edit API is enabled for this org."""
         if request.method in permissions.SAFE_METHODS:
             return True
-        return not is_v2_edit_enabled_for_request(request)
+        if is_v2_edit_enabled_for_request(request):
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": view.basename if hasattr(view, "basename") else "unknown",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "v1_write_blocked_workspaces_enabled",
+                    "endpoint": request.path,
+                },
+            )
+            return False
+        return True
 
 
 class V1ApiBlockedWhenWorkspacesEnabled(permissions.BasePermission):
@@ -72,7 +87,22 @@ class V1ApiBlockedWhenWorkspacesEnabled(permissions.BasePermission):
 
     def has_permission(self, request, view):
         """Deny all requests when v2 edit API is enabled for this org."""
-        return not is_v2_edit_enabled_for_request(request)
+        if is_v2_edit_enabled_for_request(request):
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": view.basename if hasattr(view, "basename") else "unknown",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "v1_api_blocked_workspaces_enabled",
+                    "endpoint": request.path,
+                },
+            )
+            return False
+        return True
 
 
 class V2WriteRequiresWorkspacesEnabled(permissions.BasePermission):
@@ -93,4 +123,19 @@ class V2WriteRequiresWorkspacesEnabled(permissions.BasePermission):
         """Allow reads always; deny writes when v2 edit API is disabled for this org."""
         if request.method in permissions.SAFE_METHODS:
             return True
-        return is_v2_edit_enabled_for_request(request)
+        if not is_v2_edit_enabled_for_request(request):
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": view.basename if hasattr(view, "basename") else "unknown",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "v2_write_requires_workspaces_enabled",
+                    "endpoint": request.path,
+                },
+            )
+            return False
+        return True

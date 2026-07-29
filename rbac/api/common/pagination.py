@@ -134,16 +134,16 @@ class V2CursorPagination(CursorPagination):
     Available ordering fields (for subject_type=group):
     - group.name, group.description, group.user_count, group.uuid,
       group.created, group.modified
-    - role.name, role.uuid, role.created, role.modified
+    - role.name, role.created, role.modified
     - last_modified (max RoleBindingGroup/RoleBindingPrincipal created for the resource)
 
     Available ordering fields (for subject_type=user):
     - user.username, user.uuid
-    - role.name, role.uuid, role.created, role.modified
+    - role.name, role.created, role.modified
     - last_modified (max RoleBindingGroup/RoleBindingPrincipal created for the resource)
 
     Available ordering fields (for list endpoint, RoleBinding model):
-    - role.name, role.uuid, role.id, role.created, role.modified
+    - role.name, role.id, role.created, role.modified
     - resource.id, resource.type
     """
 
@@ -187,7 +187,6 @@ class V2CursorPagination(CursorPagination):
         "group.modified": "modified",
         # Role fields (accessed via related path from Group)
         "role.name": "role_binding_entries__binding__role__name",
-        "role.uuid": "role_binding_entries__binding__role__uuid",
         "role.modified": "role_binding_entries__binding__role__modified",
         "role.created": "role_binding_entries__binding__role__created",
         # Annotated in RoleBindingService (assignment time for this resource)
@@ -200,7 +199,6 @@ class V2CursorPagination(CursorPagination):
         "user.username": "username",
         "user.uuid": "uuid",
         "role.name": "role_binding_entries__binding__role__name",
-        "role.uuid": "role_binding_entries__binding__role__uuid",
         "role.modified": "role_binding_entries__binding__role__modified",
         "role.created": "role_binding_entries__binding__role__created",
         "last_modified": "latest_modified",
@@ -213,7 +211,6 @@ class V2CursorPagination(CursorPagination):
         # Role fields (annotated in RoleBindingQuerySet.with_expanded_platform_roles)
         "role.id": "effective_role_uuid",
         "role.name": "effective_role_name",
-        "role.uuid": "effective_role_uuid",
         "role.modified": "effective_role_modified",
         "role.created": "effective_role_created",
         # Resource fields (direct model attributes)

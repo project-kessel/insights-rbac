@@ -18,7 +18,7 @@
 """Class to handle Dual Write API related operations."""
 
 import logging
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 from uuid import uuid4
 
 from django.conf import settings
@@ -33,6 +33,7 @@ from management.relation_replicator.relation_replicator import (
 )
 from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
 from management.role.v2_model import SeededRoleV2
+from management.role.v2_role_scope import v2_role_excluded_applications
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from migration_tool.models import V2boundresource, V2role, V2rolebinding
 
@@ -398,6 +399,23 @@ class RelationApiDualWriteSubjectHandler:
         }
 
         if not mappings:
+            # Check if the role's permissions are entirely in migration-excluded apps
+            # (e.g. cost-management). These roles were intentionally skipped during bulk
+            # migration, so missing binding mappings is expected — not a bug.
+            if role.access.exists():
+                excluded_apps = v2_role_excluded_applications()
+                if excluded_apps:
+                    role_apps = set(role.access.values_list("permission__application", flat=True).distinct())
+                    if role_apps and role_apps <= excluded_apps:
+                        logger.info(
+                            "[Dual Write] Skipping unmigrated role(%s): '%s' — all permissions "
+                            "are in migration-excluded apps (%s). No binding mappings expected.",
+                            role.uuid,
+                            role.name,
+                            ", ".join(sorted(role_apps)),
+                        )
+                        return
+
             logger.warning(
                 "[Dual Write] Binding mappings not found for role(%s): '%s'. "
                 "Assuming no current relations exist. "
@@ -405,6 +423,7 @@ class RelationApiDualWriteSubjectHandler:
                 role.uuid,
                 role.name,
             )
+            return
 
         # Check for the case where a custom role exists, has BindingMappings, but does not yet have RoleBindings
         # (because it has not been re-migrated since the dual-write code started creating RoleBindings).
@@ -459,3 +478,49 @@ class RelationApiDualWriteSubjectHandler:
 
         role_handler.prepare_for_update()
         role_handler.replicate_new_or_updated_role(role)
+
+    @staticmethod
+    def _with_system_roles_for_share(roles: Iterable[Role]) -> list[Role]:
+        """
+        Return the provided roles, with all system roles reloaded and locked FOR SHARE.
+
+        Principally, this ensures that the role will not be changed by seeding while this lock is held (since seeding
+        locks the role FOR UPDATE).
+
+        This should be used before any role (un)assignment operation, unless the operation doesn't actually depend on
+        the state of the role. (For instance, certain unassignment operations only care about the role's UUID.)
+
+        It is expected that the call has already locked all provided custom roles FOR UPDATE.
+        """
+        roles = set(roles)
+
+        custom: list[Role] = list()
+        system: list[Role] = list()
+
+        for role in roles:
+            if role.system:
+                system.append(role)
+            else:
+                custom.append(role)
+
+        if len(system) > 0:
+            id_params = ", ".join(["%s"] * len(system))
+
+            locked_system = list(
+                Role.objects.raw(
+                    f"SELECT * FROM management_role WHERE system = TRUE AND id IN ({id_params}) FOR SHARE",
+                    [r.id for r in system],
+                )
+            )
+        else:
+            locked_system = []
+
+        final_roles = custom + locked_system
+
+        requested_ids = {r.id for r in roles}
+        final_ids = {r.id for r in final_roles}
+
+        if final_ids != requested_ids:
+            raise RuntimeError(f"Could not find roles with the following IDs: {requested_ids - final_ids}")
+
+        return final_roles

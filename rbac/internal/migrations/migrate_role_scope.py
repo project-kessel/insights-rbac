@@ -60,8 +60,8 @@ def _check_migration(
     This should be run in the same SERIALIZABLE transaction as the actual migration (otherwise, the results of the
     check will be out of date).
     """
-    # We do not need to lock to prevent updates from concurrent seeding, since both this and seeding are in
-    # SERIALIZABLE transactions.
+    # Re-fetch the role to operate on its current state. When this function runs inside
+    # the SERIALIZABLE atomic_block(), this refetch is the authoritative concurrency check.
     role = Role.objects.filter(pk=role.pk).first()
 
     if role is None:
@@ -155,6 +155,17 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
 
     if replicator is None:
         replicator = OutboxReplicator()
+
+    # Early exit optimization outside the transaction. The authoritative concurrency
+    # check happens inside atomic_block() below via _check_migration().
+    v1_role = Role.objects.filter(pk=v1_role.pk).first()
+
+    if v1_role is None:
+        logger.info("System role concurrently deleted; not updating binding scopes.")
+        return
+
+    if not v1_role.system:
+        raise ValueError(f"Expected system role, but got pk={v1_role.pk!r}")
 
     resource_service = ImplicitResourceService.from_settings()
 

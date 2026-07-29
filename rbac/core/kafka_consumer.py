@@ -152,6 +152,19 @@ consistency_token_save_total = Counter(
     ["status"],  # success, lock_timeout, error
 )
 
+last_message_processed_time = Gauge(
+    "rbac_kafka_consumer_last_message_processed_timestamp_seconds",
+    "Unix timestamp of the last successfully processed message",
+)
+
+# Updated by the message loop on each consumed message AND by the health check
+# thread every 30s (even when the topic is idle), so the PollStalled alert only
+# fires when the consumer is truly unresponsive.
+last_poll_time = Gauge(
+    "rbac_kafka_consumer_last_poll_timestamp_seconds",
+    "Unix timestamp of the last successful Kafka poll (with or without messages)",
+)
+
 
 @dataclass
 class RetryConfig:
@@ -1025,42 +1038,47 @@ class RBACKafkaConsumer:
     def _health_check_loop(self):
         """Background thread that periodically updates health status."""
         while not self._stop_health_check.wait(self.health_check_interval):
-            try:
-                # Check if consumer is still alive and connected
-                if self.is_consuming and self.consumer is not None:
-                    # Try to check Kafka connection by getting partition metadata
-                    # This is a lightweight operation that verifies connectivity
-                    try:
-                        # This will raise an exception if Kafka is unreachable
-                        # Use partitions_for_topic which is more universally available
-                        self.consumer.partitions_for_topic(self.topic)
+            self._health_check_loop_iteration()
 
-                        # Consumer is alive and connected
-                        self._update_health_status(True)
-                        logger.debug("Health check passed: consumer is connected and ready")
+    def _health_check_loop_iteration(self):
+        """Run a single health check iteration."""
+        try:
+            # Check if consumer is still alive and connected
+            if self.is_consuming and self.consumer is not None:
+                # Try to check Kafka connection by getting partition metadata
+                # This is a lightweight operation that verifies connectivity
+                try:
+                    # This will raise an exception if Kafka is unreachable
+                    # Use partitions_for_topic which is more universally available
+                    self.consumer.partitions_for_topic(self.topic)
 
-                    except Exception as e:
-                        logger.warning(f"Health check failed: Kafka connectivity issue: {e}")
-                        # Don't immediately mark as unhealthy, give it a few tries
-                        # Only update liveness (consumer process is alive) but not readiness
-                        self.liveness_file.touch()
-                        if self.readiness_file.exists():
-                            self.readiness_file.unlink()
+                    # Consumer is alive and connected
+                    self._update_health_status(True)
+                    last_poll_time.set(time.time())
+                    logger.debug("Health check passed: consumer is connected and ready")
 
-                elif self.is_consuming:
-                    # Consumer should be running but isn't - this is a problem
-                    logger.error("Health check failed: consumer should be running but isn't")
-                    self._update_health_status(False)
-                else:
-                    # Consumer is not supposed to be running (stopped/stopping)
-                    logger.debug("Health check: consumer is not running (expected)")
+                except Exception as e:
+                    logger.warning(f"Health check failed: Kafka connectivity issue: {e}")
+                    # Don't immediately mark as unhealthy, give it a few tries
+                    # Only update liveness (consumer process is alive) but not readiness
+                    self.liveness_file.touch()
+                    if self.readiness_file.exists():
+                        self.readiness_file.unlink()
 
-            except Exception as e:
-                logger.error(f"Health check thread error: {e}")
-                # Keep liveness but remove readiness on thread errors
-                self.liveness_file.touch()
-                if self.readiness_file.exists():
-                    self.readiness_file.unlink()
+            elif self.is_consuming:
+                # Consumer should be running but isn't - this is a problem
+                logger.error("Health check failed: consumer should be running but isn't")
+                self._update_health_status(False)
+            else:
+                # Consumer is not supposed to be running (stopped/stopping)
+                logger.debug("Health check: consumer is not running (expected)")
+
+        except Exception as e:
+            logger.error(f"Health check thread error: {e}")
+            # Keep liveness but remove readiness on thread errors
+            self.liveness_file.touch()
+            if self.readiness_file.exists():
+                self.readiness_file.unlink()
 
     def _process_single(self, message_value: Dict[str, Any], message_partition: int, message_offset: int) -> bool:
         """Process a single message (parse and handle).
@@ -1559,6 +1577,11 @@ class RBACKafkaConsumer:
         self.offset_manager.store(topic_partition, message.offset, message.leader_epoch)
         if self.offset_manager.should_commit(message.offset):
             self.offset_manager.commit()  # Don't need to check return value here
+
+        # Update activity timestamp and heartbeat metric for tombstones too,
+        # so the consumer doesn't appear inactive when processing tombstones.
+        self.last_activity = time.time()
+        last_message_processed_time.set(self.last_activity)
         return True
 
     def _parse_message_value(self, message):
@@ -1634,8 +1657,9 @@ class RBACKafkaConsumer:
             else:
                 logger.debug(f"Offset {message.offset} stored, waiting for batch commit")
 
-            # Update activity timestamp
+            # Update activity timestamp and heartbeat metric
             self.last_activity = time.time()
+            last_message_processed_time.set(self.last_activity)
             return True  # Continue processing
         else:
             # Shutdown interrupted - InterruptedError
@@ -1727,6 +1751,10 @@ class RBACKafkaConsumer:
         last_committed_offsets = {}
 
         for message in self.consumer:
+            # Record poll activity — each iteration processes one message from a poll batch.
+            # During idle periods (no messages), the health check thread keeps this metric fresh.
+            last_poll_time.set(time.time())
+
             # Check if lock acquisition failed during rebalance
             if self.lock_acquisition_failed:
                 error_msg = (

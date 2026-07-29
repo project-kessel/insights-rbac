@@ -78,7 +78,11 @@ model Role {
     permissions?: KesselRBAC.Permission[];
     @doc("Number of permissions assigned to this role")
     permissions_count?: int32;
+    @doc("Timestamp of when the role was created")
+    created?: offsetDateTime;
     @doc("Timestamp of when the role was last modified")
+    modified?: offsetDateTime;
+    @doc("Timestamp of when the role was last modified (deprecated, use modified)")
     last_modified?: offsetDateTime;
     @doc("ID of the organization that owns this role. Will not be populated if roles belong to the Public Tenant.")
     org_id?: string;
@@ -525,8 +529,8 @@ namespace Workspaces {
               type: WorkspaceTypes.standard,
               name: "My first workspace",
               description: "This is a basic workspace.",
-              created: offsetDateTime.fromISO("2024-05-06T12:20-12-0700"),
-              modified: offsetDateTime.fromISO("2024-05-06T12:20-12-0700")
+              created: offsetDateTime.fromISO("2024-05-06T12:20:00-07:00"),
+              modified: offsetDateTime.fromISO("2024-05-06T12:20:00-07:00")
             }
           ]
         }
@@ -731,13 +735,91 @@ namespace Workspaces {
     ): MoveWorkspaceResponse
       | Problems.CommonProblems
       | Problems.Problem404;
+
+    @example(#{
+        ids: #[
+            "e4277742-b91c-43f1-a185-b827e8574345",
+            "c1f729e2-3e2b-4f9e-b247-a4b568393e11"
+        ]
+    })
+    model WorkspaceQueryRequest {
+        @doc("List of workspace UUIDs to filter by.")
+        @minItems(1)
+        @maxItems(3000)
+        ids: UUID[];
+
+        @doc("Filter by workspace type. Supports comma-separated values (e.g. standard,ungrouped-hosts). Defaults to standard when ids are provided without explicit type.")
+        @maxLength(200)
+        type?: string;
+
+        @doc("Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns.")
+        name?: string;
+
+        @doc("Filter by parent workspace UUID.")
+        parent_id?: UUID;
+
+        @doc("Include ancestor and fallback workspaces in the response.")
+        with_ancestry?: boolean = false;
+    }
+
+    @doc("Query workspaces by a list of IDs")
+    @summary("Query workspaces by a list of IDs")
+    @route("query/")
+    @opExample(#{
+        parameters: #{
+            limit: 10,
+            offset: 0,
+            body: #{
+                ids: #[
+                    "e4277742-b91c-43f1-a185-b827e8574345",
+                    "c1f729e2-3e2b-4f9e-b247-a4b568393e11"
+                ],
+                type: "standard"
+            }
+        },
+        returnType: #{
+            meta: #{
+                count: 2,
+                limit: 10,
+                offset: 0
+            },
+            links: #{
+                first: "/api/rbac/v2/workspaces/query/?limit=10&offset=0",
+                next: null,
+                previous: null,
+                last: "/api/rbac/v2/workspaces/query/?limit=10&offset=0"
+            },
+            data: #[
+                #{
+                    id: "e4277742-b91c-43f1-a185-b827e8574345",
+                    parent_id: "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
+                    type: WorkspaceTypes.standard,
+                    name: "My first workspace",
+                    description: "This is a basic workspace.",
+                    created: offsetDateTime.fromISO("2024-05-06T12:20:00-07:00"),
+                    modified: offsetDateTime.fromISO("2024-05-06T12:20:00-07:00")
+                }
+            ]
+        }
+    })
+    @post op query(
+        @query limit?: Limit = DefaultLimit;
+
+        @doc("Offset for offset-based pagination.")
+        @query offset?: Offset = DefaultOffset;
+
+        @doc("Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, created, modified, type.")
+        @query order_by?: string = "name";
+
+        @body body: WorkspaceQueryRequest;
+    ): WorkspaceListResponse | Problems.CommonProblems;
 }
 
 @route("/role-bindings/")
 @tag("Role Bindings")
 @doc("Operations about role bindings")
 namespace RoleBindings {
-    const DefaultRoleBindingBySubjectFieldMask: FieldMask = "resource(id),subject(id,type),roles(id)";
+    const DefaultRoleBindingBySubjectFieldMask: FieldMask = "resource(id),subject(id,type),roles(id,created,modified)";
 
     @doc("Subject kind for create/batch, by-subject, and list filters on the binding's subject (group UUID or user/principal UUID). Does not include principal as a separate type string; for external user ID use GET /role-bindings/ with granted_subject_type=principal and granted_subject.principal.user_id.")
     enum BindingSubjectType {
@@ -1314,7 +1396,7 @@ namespace RoleBindings {
         @query("granted_subject.principal.user_id") granted_subject_principal_user_id?: string;
 
         @doc("Control which fields are included in the response to optimize payload size.")
-        @query fields?: FieldMask = "resource(id),role(id),subject(id,type),sources(id)";
+        @query fields?: FieldMask = "resource(id),role(id,created,modified),subject(id,type),sources(id)";
 
         @doc("Default sort is by the time the role was first created. Prefix with '-' for descending order.")
         @query order_by?: OrderBy = "role.id";

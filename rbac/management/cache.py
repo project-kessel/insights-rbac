@@ -37,6 +37,12 @@ redis_disable_cache_get_total = Counter(
     "redis_disable_cache_get_total", "Total amount of times cache has been disabled"
 )
 
+workspace_cache_total = Counter(
+    "rbac_workspace_cache_total",
+    "Total workspace cache lookups",
+    ["cache_layer", "result"],
+)
+
 BATCH_DELETE_SIZE = 1000
 
 
@@ -403,6 +409,186 @@ class PrincipalCache(BasicCache):
                 count += 1
             pipeline.execute()
             logger.info(f"Deleted {count} principals for tenant {org_id}")
+
+
+class WorkspaceCache(BasicCache):
+    """Redis-based caching for immutable root and default workspaces.
+
+    Two cache layers with intentionally different TTLs and serialization:
+
+    Model cache (Layer 1):
+        - Stores pickled Workspace model instances for manager-level lookups
+          (``Workspace.objects.root()``, ``.default()``).
+        - TTL: ``PRINCIPAL_CACHE_LIFETIME`` (3600s) — longer because root/default
+          workspaces are per-tenant immutable singletons whose DB rows never change.
+        - Uses pickle (inherited from BasicCache contract shared with TenantCache,
+          AccessCache, PrincipalCache). A cross-cutting migration to JSON is tracked
+          separately.
+
+    Response cache (Layer 2):
+        - Stores JSON-serialized API responses for view-level caching
+          (``/v2/workspaces/?type=root``, retrieve by pk).
+        - TTL: ``ACCESS_CACHE_LIFETIME`` (600s) — shorter because serialized
+          responses depend on serializer code, so a code deploy with changed fields
+          should see fresh data sooner.
+        - Uses JSON (no model reconstruction needed, just pass-through to Response).
+
+    Only caches built-in (root/default) workspaces which are per-tenant immutable singletons.
+    Invalidation via ``delete_workspaces_for_tenant()`` clears both layers.
+    """
+
+    def key_for(self, org_id: str, workspace_type: str) -> str:
+        """Generate cache key for a workspace model."""
+        return f"rbac::workspace::{org_id}::{workspace_type}"
+
+    def response_key_for(self, org_id: str, cache_key: str) -> str:
+        """Generate cache key for a cached API response."""
+        return f"rbac::workspace::response::{org_id}::{cache_key}"
+
+    def set_cache(self, pipe: Pipeline, key: str, item):
+        """Set workspace model to cache."""
+        pipe.set(name=key, value=pickle.dumps(item))
+        pipe.expire(name=key, time=settings.PRINCIPAL_CACHE_LIFETIME)
+        pipe.execute()
+
+    def get_from_redis(self, key: str):
+        """Get workspace from redis."""
+        obj = self.connection.get(name=key)
+        if obj:
+            return pickle.loads(obj)
+        return None
+
+    def get_workspace(self, org_id: str, workspace_type: str):
+        """Fetch a workspace from cache by org_id and type.
+
+        :param org_id: The tenant's org_id.
+        :param workspace_type: The workspace type (root or default).
+        :returns: The Workspace instance or None.
+        """
+        if not settings.ACCESS_CACHE_ENABLED:
+            return None
+        result = super().get_cached(
+            self.key_for(org_id, workspace_type),
+            f"Unable to fetch workspace ({workspace_type}) from cache for org {org_id}",
+        )
+        workspace_cache_total.labels(cache_layer="model", result="hit" if result is not None else "miss").inc()
+        return result
+
+    def cache_workspace(self, org_id: str, workspace):
+        """Cache a workspace instance.
+
+        :param org_id: The tenant's org_id.
+        :param workspace: The Workspace model instance to cache.
+        """
+        if not settings.ACCESS_CACHE_ENABLED:
+            return
+        super().save(
+            key=self.key_for(org_id, workspace.type),
+            item=workspace,
+            obj_name="workspace",
+        )
+
+    def _get_json(self, key: str, err_msg: str):
+        """Fetch a JSON-serialized value from Redis with health check.
+
+        :param key: The full Redis key.
+        :param err_msg: Error message for logging on failure.
+        :returns: The deserialized data or None.
+        """
+        if not settings.ACCESS_CACHE_ENABLED or self._redis_mocked:
+            return None
+        try:
+            if not self.redis_health_check():
+                self.disable_caching()
+                return None
+            obj = self.connection.get(name=key)
+            return json.loads(obj) if obj else None
+        except (exceptions.RedisError, json.JSONDecodeError, ValueError):
+            logger.exception(err_msg)
+            return None
+
+    def _cache_json(self, key: str, data, ttl: int, log_msg: str, err_msg: str):
+        """Write a JSON-serialized value to Redis with a TTL.
+
+        :param key: The full Redis key.
+        :param data: The data to serialize (must be JSON-serializable).
+        :param ttl: Time-to-live in seconds.
+        :param log_msg: Debug message logged on write.
+        :param err_msg: Error message for logging on failure.
+        """
+        if not settings.ACCESS_CACHE_ENABLED or self._redis_mocked:
+            return
+        try:
+            logger.debug(log_msg)
+            with self.connection.pipeline() as pipe:
+                pipe.set(name=key, value=json.dumps(data))
+                pipe.expire(name=key, time=ttl)
+                pipe.execute()
+        except exceptions.RedisError:
+            logger.exception(err_msg)
+
+    def get_response(self, org_id: str, cache_key: str):
+        """Fetch a cached API response.
+
+        :param org_id: The tenant's org_id.
+        :param cache_key: The cache key suffix (e.g. workspace type or workspace id).
+        :returns: The cached response data (dict) or None.
+        """
+        if not settings.ACCESS_CACHE_ENABLED:
+            return None
+        result = self._get_json(
+            self.response_key_for(org_id, cache_key),
+            err_msg=f"Error fetching workspace response cache for org {org_id}",
+        )
+        workspace_cache_total.labels(cache_layer="response", result="hit" if result is not None else "miss").inc()
+        return result
+
+    def cache_response(self, org_id: str, cache_key: str, data):
+        """Cache an API response.
+
+        :param org_id: The tenant's org_id.
+        :param cache_key: The cache key suffix.
+        :param data: The response data (must be JSON-serializable).
+        """
+        self._cache_json(
+            self.response_key_for(org_id, cache_key),
+            data,
+            ttl=settings.ACCESS_CACHE_LIFETIME,
+            log_msg=f"Caching workspace response for org {org_id} key {cache_key}",
+            err_msg=f"Error writing workspace response cache for org {org_id}",
+        )
+
+    def delete_workspaces_for_tenant(self, org_id: str):
+        """Invalidate all workspace caches (model + response) for a tenant.
+
+        :param org_id: The tenant's org_id.
+        """
+        if self._redis_mocked:
+            return
+        err_msg = f"Error deleting workspace cache for tenant {org_id}"
+        with self.delete_handler(err_msg):
+            logger.info(f"Deleting entire workspace cache for tenant {org_id}")
+            count = 0
+            pipeline = self.connection.pipeline()
+            for key in self.connection.scan_iter(match=f"rbac::workspace::{org_id}::*", count=BATCH_DELETE_SIZE):
+                pipeline.delete(key)
+                count += 1
+                if count % BATCH_DELETE_SIZE == 0:
+                    pipeline.execute()
+                    pipeline = self.connection.pipeline()
+            for key in self.connection.scan_iter(
+                match=f"rbac::workspace::response::{org_id}::*", count=BATCH_DELETE_SIZE
+            ):
+                pipeline.delete(key)
+                count += 1
+                if count % BATCH_DELETE_SIZE == 0:
+                    pipeline.execute()
+                    pipeline = self.connection.pipeline()
+            pipeline.execute()
+            logger.info(f"Deleted {count} workspace cache entries for tenant {org_id}")
+
+
+WORKSPACE_CACHE = WorkspaceCache()
 
 
 def skip_purging_cache_for_public_tenant(tenant):

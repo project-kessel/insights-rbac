@@ -226,10 +226,10 @@ class IsNoAuthFunctionTest(TestCase):
         mock_request = Mock(path="")
         self.assertFalse(is_no_auth(mock_request))
 
-    def test_root_path_requires_auth(self):
-        """Test that root path requires authentication."""
+    def test_root_path_no_auth(self):
+        """Test that root path does not require auth (infrastructure probes)."""
         mock_request = Mock(path="/")
-        self.assertFalse(is_no_auth(mock_request))
+        self.assertTrue(is_no_auth(mock_request))
 
     def test_exact_match_only(self):
         """Test that only exact matches bypass authentication."""

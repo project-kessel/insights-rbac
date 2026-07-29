@@ -8,6 +8,7 @@ on:
       - 'docs/source/specs/typespec/package.json'
       - 'docs/source/specs/v2/openapi.json'
       - 'docs/source/specs/v2/openapi.yaml'
+  merge_group:
   push:
     branches: [master]
     paths:
@@ -28,7 +29,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 

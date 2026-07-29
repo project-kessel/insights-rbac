@@ -37,7 +37,7 @@ PERM_MAP = {
 }
 
 
-def operation_from_request(request) -> str:
+def operation_from_request(request, view=None) -> str:
     """
     Map HTTP request method to legacy operation ('read' or 'write').
 
@@ -45,10 +45,15 @@ def operation_from_request(request) -> str:
 
     Args:
         request: The HTTP request object
+        view: The view object (optional, used to detect read-like POST actions)
 
     Returns:
-        str: 'read' for safe methods (GET, HEAD, OPTIONS), 'write' for others
+        str: 'read' for safe methods (GET, HEAD, OPTIONS) and read-like POST
+             actions (e.g. 'query'), 'write' for others
     """
+    # The 'query' action uses POST but is semantically a read operation
+    if view and getattr(view, "action", None) == "query":
+        return "read"
     return "read" if request.method in permissions.SAFE_METHODS else "write"
 
 
@@ -58,7 +63,7 @@ def permission_from_request(request, view=None) -> str:
 
     Maps HTTP methods to workspace permissions:
     - GET -> view
-    - POST -> create
+    - POST -> create (except 'query' action which is semantically a read -> view)
     - PUT/PATCH -> edit (or 'move' if moving workspace to different parent)
     - DELETE -> delete
 
@@ -76,6 +81,12 @@ def permission_from_request(request, view=None) -> str:
     Raises:
         MethodNotAllowed: If the HTTP method is not supported
     """
+    # The 'query' action uses POST to accept a list of IDs in the request body
+    # (avoiding URL length limits), but is semantically a read/view operation.
+    # Map it to 'view' instead of 'create'.
+    if view and getattr(view, "action", None) == "query":
+        return "view"
+
     method = request.method.upper()
 
     try:

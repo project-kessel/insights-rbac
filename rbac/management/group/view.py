@@ -320,7 +320,24 @@ class GroupViewSet(
         """
         validate_group_name(request.data.get("name"))
         try:
-            create_group = super().create(request=request, args=args, kwargs=kwargs)
+            with transaction.atomic():
+                create_group = super().create(request=request, args=args, kwargs=kwargs)
+                if status.is_success(create_group.status_code):
+                    auditlog = AuditLog()
+                    auditlog.log_create(request, AuditLog.GROUP)
+                    # CREATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+                    group_uuid = create_group.data.get("uuid") if hasattr(create_group, "data") else None
+                    logger.info(
+                        "Group created",
+                        extra={
+                            "action": "CREATE",
+                            "resource_type": "group",
+                            "resource_id": str(group_uuid) if group_uuid else "unknown",
+                            "outcome": "success",
+                            "org_id": getattr(request.user, "org_id", None),
+                            "username": getattr(request.user, "username", None),
+                        },
+                    )
         except IntegrityError as e:
             if "unique constraint" in str(e.args):
                 raise serializers.ValidationError(
@@ -330,10 +347,6 @@ class GroupViewSet(
                 raise serializers.ValidationError(
                     {"group": "Unknown Integrity Error occurred while trying to add group for this tenant"}
                 )
-
-        if status.is_success(create_group.status_code):
-            auditlog = AuditLog()
-            auditlog.log_create(request, AuditLog.GROUP)
 
         return create_group
 
@@ -464,16 +477,32 @@ class GroupViewSet(
 
             dual_write_handler.replicate()
 
+            # Audit log inside same transaction as outbox write
+            if response.status_code == status.HTTP_204_NO_CONTENT:
+                auditlog = AuditLog()
+                auditlog.log_delete(request, AuditLog.GROUP, group)
+                # DELETE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+                logger.info(
+                    "Group deleted",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "group",
+                        "resource_id": str(group.uuid),
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
+
             # Restore USER default role bindings if custom default group was deleted
             if is_custom_default_group:
                 role_binding_service = RoleBindingService(tenant=group_tenant)
                 role_binding_service.restore_user_default_bindings()
 
+        # Notification is a non-DB side-effect, so it stays outside the transaction
+        # to avoid sending notifications that could be rolled back.
         if response.status_code == status.HTTP_204_NO_CONTENT:
             group_obj_change_notification_handler(request.user, group, "deleted")
-
-            auditlog = AuditLog()
-            auditlog.log_delete(request, AuditLog.GROUP, group)
         return response
 
     def update(self, request, *args, **kwargs):
@@ -508,11 +537,24 @@ class GroupViewSet(
 
         self.restrict_custom_default_group_renaming(request, group)
 
-        update_group = super().update(request=request, args=args, kwargs=kwargs)
+        with transaction.atomic():
+            update_group = super().update(request=request, args=args, kwargs=kwargs)
 
-        if status.is_success(update_group.status_code):
-            auditlog = AuditLog()
-            auditlog.log_edit(request, AuditLog.GROUP, group)
+            if status.is_success(update_group.status_code):
+                auditlog = AuditLog()
+                auditlog.log_edit(request, AuditLog.GROUP, group)
+                # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+                logger.info(
+                    "Group updated",
+                    extra={
+                        "action": "UPDATE",
+                        "resource_type": "group",
+                        "resource_id": str(group.uuid),
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
 
         return update_group
 
@@ -569,7 +611,12 @@ class GroupViewSet(
         # want to skip calling IT
         it_service = ITService()
         if not settings.IT_BYPASS_IT_CALLS:
-            it_service_accounts = it_service.request_service_accounts(bearer_token=user.bearer_token)
+            # We are only interested in the clients with IDs that have been passed to us, so we specifically request
+            # those clients.
+            it_service_accounts = it_service.request_service_accounts(
+                bearer_token=user.bearer_token,
+                client_ids=[specified_sa["clientId"] for specified_sa in service_accounts],
+            )
 
             # Organize them by their client ID.
             it_service_accounts_by_client_ids: dict[str, dict] = {}
@@ -1320,28 +1367,29 @@ class GroupViewSet(
                     assert_v1_write_allowed(request.tenant)
                     group = set_system_flag_before_update(group, request.tenant, request.user)
                     add_roles(group, roles, request.tenant, user=request.user)
+
+                    # Audit logs inside same transaction as outbox write
+                    response_data = GroupRoleSerializerIn(group)
+                    if group is not None and group.pk != original_group_pk:
+                        auditlog = AuditLog()
+                        auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+
+                    for role in response_data.data["data"]:
+                        auditlog = AuditLog()
+                        auditlog.log_group_assignment(
+                            request,
+                            AuditLog.GROUP,
+                            group,
+                            role,
+                            AuditLog.ROLE,
+                        )
             except V1WriteBlockedError:
                 return Response(
                     status=status.HTTP_403_FORBIDDEN,
                     data={"errors": [{"detail": v2_write_msg}]},
                 )
 
-            response_data = GroupRoleSerializerIn(group)
             response = Response(status=status.HTTP_200_OK, data=response_data.data)
-            if status.is_success(response.status_code):
-                if group is not None and group.pk != original_group_pk:
-                    auditlog = AuditLog()
-                    auditlog.log_create_from_object(request, AuditLog.GROUP, group)
-
-                for role in response_data.data["data"]:
-                    auditlog = AuditLog()
-                    auditlog.log_group_assignment(
-                        request,
-                        AuditLog.GROUP,
-                        group,
-                        role,
-                        AuditLog.ROLE,
-                    )
 
         elif request.method == "GET":
             serialized_roles = self.obtain_roles(request, group)
@@ -1368,27 +1416,26 @@ class GroupViewSet(
                         assert_v1_write_allowed(request.tenant)
                         group = set_system_flag_before_update(group, request.tenant, request.user)
                         remove_roles(group, role_ids, request.tenant, request.user)
+
+                        # Audit logs inside same transaction as outbox write
+                        if group is not None and group.pk != original_group_pk:
+                            auditlog = AuditLog()
+                            auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+
+                        roles = _roles_by_query_or_ids(role_ids, request.tenant)
+                        for role_info in roles:
+                            auditlog = AuditLog()
+                            auditlog.log_group_remove(
+                                request,
+                                AuditLog.GROUP,
+                                group,
+                                role_info,
+                                AuditLog.ROLE,
+                            )
                 except V1WriteBlockedError:
                     return Response(
                         status=status.HTTP_403_FORBIDDEN,
                         data={"errors": [{"detail": v2_write_msg}]},
-                    )
-
-                # Log custom default group creation if a new group was actually cloned
-                if group is not None and group.pk != original_group_pk:
-                    auditlog = AuditLog()
-                    auditlog.log_create_from_object(request, AuditLog.GROUP, group)
-
-                # Save the information to audit logs
-                roles = _roles_by_query_or_ids(role_ids, request.tenant)
-                for role_info in roles:
-                    auditlog = AuditLog()
-                    auditlog.log_group_remove(
-                        request,
-                        AuditLog.GROUP,
-                        group,
-                        role_info,
-                        AuditLog.ROLE,
                     )
             response = Response(status=status.HTTP_204_NO_CONTENT)
 

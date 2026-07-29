@@ -33,9 +33,43 @@ logger = logging.getLogger(__name__)
 @shared_task
 def principal_cleanup():
     """Celery task to clean up principals no longer existing."""
-    from management.principal.cleaner import clean_tenants_principals
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Principal cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "principal",
+            "outcome": "in_progress",
+            "principal": "system:celery:principal_cleanup",
+        },
+    )
+    try:
+        from management.principal.cleaner import clean_tenants_principals
 
-    clean_tenants_principals()
+        clean_tenants_principals()
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Principal cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "principal",
+                "outcome": "success",
+                "principal": "system:celery:principal_cleanup",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Principal cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "principal",
+                "outcome": "failure",
+                "principal": "system:celery:principal_cleanup",
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -55,7 +89,41 @@ def run_migrations_in_worker():
 @shared_task
 def run_seeds_in_worker(kwargs):
     """Celery task to run seeds."""
-    call_command("seeds", **kwargs)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Seeding task started",
+        extra={
+            "action": "SEED",
+            "resource_type": "permissions_roles_groups",
+            "outcome": "in_progress",
+            "principal": "system:celery:run_seeds_in_worker",
+        },
+    )
+    try:
+        call_command("seeds", **kwargs)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Seeding task completed",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "success",
+                "principal": "system:celery:run_seeds_in_worker",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Seeding task failed",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "failure",
+                "principal": "system:celery:run_seeds_in_worker",
+                "reason": "seeding_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -81,9 +149,43 @@ def run_redis_cache_health():
 @shared_task
 def migrate_data_in_worker(kwargs):
     """Celery task to migrate data from V1 to V2 spiceDB schema."""
-    from migration_tool.migrate import migrate_data
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Data migration task started",
+        extra={
+            "action": "MIGRATE",
+            "resource_type": "tenant_data",
+            "outcome": "in_progress",
+            "principal": "system:celery:migrate_data_in_worker",
+        },
+    )
+    try:
+        from migration_tool.migrate import migrate_data
 
-    migrate_data(**kwargs)
+        migrate_data(**kwargs)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Data migration task completed",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "tenant_data",
+                "outcome": "success",
+                "principal": "system:celery:migrate_data_in_worker",
+            },
+        )
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Data migration task failed",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "tenant_data",
+                "outcome": "failure",
+                "principal": "system:celery:migrate_data_in_worker",
+                "reason": "migration_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -91,7 +193,28 @@ def migrate_binding_scope_in_worker(sources: Optional[list[str]] = None):
     """Celery task to migrate role binding scopes."""
     from migration_tool.migrate_binding_scope import migrate_all_role_bindings
 
-    return migrate_all_role_bindings(sources=set(sources) if sources is not None else None)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Celery task: Migrate binding scope",
+        extra={
+            "action": "MIGRATE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:migrate_binding_scope",
+            "sources": sources,
+        },
+    )
+    result = migrate_all_role_bindings(sources=set(sources) if sources is not None else None)
+    logger.info(
+        "Celery task completed: Migrate binding scope",
+        extra={
+            "action": "MIGRATE",
+            "resource_type": "role_binding",
+            "outcome": "success",
+            "principal": "system:celery:migrate_binding_scope",
+        },
+    )
+    return result
 
 
 @shared_task
@@ -138,9 +261,48 @@ def cleanup_tenant_orphan_bindings_in_worker(org_id, dry_run=False):
     Returns:
         dict: Results with cleanup counts and migration results
     """
-    from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Orphan binding cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:cleanup_tenant_orphan_bindings",
+            "org_id": org_id,
+            "dry_run": dry_run,
+        },
+    )
+    try:
+        from internal.migrations.remove_orphan_relations import cleanup_tenant_orphan_bindings
 
-    return cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
+        result = cleanup_tenant_orphan_bindings(org_id=org_id, dry_run=dry_run)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Orphan binding cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "success",
+                "principal": "system:celery:cleanup_tenant_orphan_bindings",
+                "org_id": org_id,
+            },
+        )
+        return result
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Orphan binding cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "failure",
+                "principal": "system:celery:cleanup_tenant_orphan_bindings",
+                "org_id": org_id,
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -151,7 +313,45 @@ def bulk_cleanup_orphan_bindings_in_worker(tenant_limit: int):
     Args:
         tenant_limit (int): maximum number of tenants to process
     """
-    return call_command("fix_orphan_relations", tenant_limit=tenant_limit)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Bulk orphan binding cleanup task started",
+        extra={
+            "action": "DELETE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:bulk_cleanup_orphan_bindings",
+            "tenant_limit": tenant_limit,
+        },
+    )
+    try:
+        result = call_command("fix_orphan_relations", tenant_limit=tenant_limit)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Bulk orphan binding cleanup task completed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "success",
+                "principal": "system:celery:bulk_cleanup_orphan_bindings",
+                "tenant_limit": tenant_limit,
+            },
+        )
+        return result
+    except Exception:
+        # Failed admin operation - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "Bulk orphan binding cleanup task failed",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role_binding",
+                "outcome": "failure",
+                "principal": "system:celery:bulk_cleanup_orphan_bindings",
+                "tenant_limit": tenant_limit,
+                "reason": "cleanup_error",
+            },
+        )
+        raise
 
 
 @shared_task
@@ -167,7 +367,27 @@ def expire_orphaned_cross_account_requests_in_worker():
     """Celery task to expire orphaned cross-account requests."""
     from internal.utils import expire_orphaned_cross_account_requests
 
-    return expire_orphaned_cross_account_requests()
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Celery task: Expire orphaned cross-account requests",
+        extra={
+            "action": "CLEANUP",
+            "resource_type": "cross_account_request",
+            "outcome": "in_progress",
+            "principal": "system:celery:expire_orphaned_cross_account_requests",
+        },
+    )
+    result = expire_orphaned_cross_account_requests()
+    logger.info(
+        "Celery task completed: Expire orphaned cross-account requests",
+        extra={
+            "action": "CLEANUP",
+            "resource_type": "cross_account_request",
+            "outcome": "success",
+            "principal": "system:celery:expire_orphaned_cross_account_requests",
+        },
+    )
+    return result
 
 
 @shared_task
@@ -175,7 +395,27 @@ def remove_deleted_workspace_bindings_in_worker():
     """Celery task to remove role bindings that reference deleted workspaces."""
     from internal.migrations.remove_deleted_workspace_bindings import remove_deleted_workspace_bindings
 
-    return remove_deleted_workspace_bindings()
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Celery task: Remove deleted workspace bindings",
+        extra={
+            "action": "CLEANUP",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:remove_deleted_workspace_bindings",
+        },
+    )
+    result = remove_deleted_workspace_bindings()
+    logger.info(
+        "Celery task completed: Remove deleted workspace bindings",
+        extra={
+            "action": "CLEANUP",
+            "resource_type": "role_binding",
+            "outcome": "success",
+            "principal": "system:celery:remove_deleted_workspace_bindings",
+        },
+    )
+    return result
 
 
 @shared_task
@@ -183,7 +423,28 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
     """Celery task to replicate default workspaces."""
     from internal.migrations.replicate_workspaces import replicate_default_workspaces
 
-    return replicate_default_workspaces(limit=limit)
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Celery task: Replicate default workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "in_progress",
+            "principal": "system:celery:replicate_default_workspaces",
+            "limit": limit,
+        },
+    )
+    result = replicate_default_workspaces(limit=limit)
+    logger.info(
+        "Celery task completed: Replicate default workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "success",
+            "principal": "system:celery:replicate_default_workspaces",
+        },
+    )
+    return result
 
 
 @shared_task
@@ -191,10 +452,31 @@ def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default
     """Celery task to replicate updated workspaces."""
     from internal.migrations.replicate_workspaces import replicate_updated_workspaces
 
-    return replicate_updated_workspaces(
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Celery task: Replicate updated workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "in_progress",
+            "principal": "system:celery:replicate_updated_workspaces",
+            "since": since,
+        },
+    )
+    result = replicate_updated_workspaces(
         since=datetime.datetime.fromisoformat(since),
         exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
     )
+    logger.info(
+        "Celery task completed: Replicate updated workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "success",
+            "principal": "system:celery:replicate_updated_workspaces",
+        },
+    )
+    return result
 
 
 @shared_task
@@ -203,7 +485,29 @@ def recompute_tenant_role_bindings_in_worker(org_id: str):
     from api.models import Tenant
     from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 
-    return recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Celery task: Recompute tenant role bindings",
+        extra={
+            "action": "RECOMPUTE",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "principal": "system:celery:recompute_tenant_role_bindings",
+            "org_id": org_id,
+        },
+    )
+    result = recompute_tenant_role_bindings(tenant=Tenant.objects.get(org_id=org_id))
+    logger.info(
+        "Celery task completed: Recompute tenant role bindings",
+        extra={
+            "action": "RECOMPUTE",
+            "resource_type": "role_binding",
+            "outcome": "success",
+            "principal": "system:celery:recompute_tenant_role_bindings",
+            "org_id": org_id,
+        },
+    )
+    return result
 
 
 @shared_task
@@ -560,8 +864,8 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
                     if ws_missing_shown >= 20:
                         break
                     detail_lines.append(
-                        f"[PCH]       - MISSING: rbac/workspace:{r['parent_id']}"
-                        f"#parent@rbac/workspace:{r['workspace_id']}"
+                        f"[PCH]       - MISSING: rbac/workspace:{r['workspace_id']}"
+                        f"#parent@rbac/workspace:{r['parent_id']}"
                     )
                     ws_missing_shown += 1
                 if len(missing) > ws_missing_shown:
@@ -736,7 +1040,7 @@ def recover_workspace_events_in_worker(
 
         buffer_delta = datetime.timedelta(minutes=buffer_minutes)
         start_dt = restore_dt - buffer_delta
-        end_dt = datetime.datetime.now(datetime.timezone.utc)
+        end_dt = restore_dt
 
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)

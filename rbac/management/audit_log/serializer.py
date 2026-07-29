@@ -24,9 +24,12 @@ from rest_framework import serializers
 class AuditLogSerializer(serializers.ModelSerializer):
     """Serializer for Audit Log."""
 
+    sequence = serializers.IntegerField(source="id", read_only=True)
+
     class Meta:
         model = AuditLog
         fields = (
+            "sequence",
             "created",
             "principal_username",
             "description",

@@ -238,6 +238,18 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
     ):
         if not self.replication_enabled():
             return
+
+        # Guard: skip empty events so they don't reach the outbox as spurious warnings.
+        if not remove and not add:
+            logger.warning(
+                "[Dual Write] Skipping empty replication event for system role(%s): '%s'. "
+                "Both add and remove relations are empty. event_type='%s'",
+                self.role.uuid,
+                self.role.name,
+                event_type,
+            )
+            return
+
         try:
             self._replicator.replicate(
                 ReplicationEvent(
@@ -390,6 +402,18 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
 
         if self._expected_empty_relation_reason:
             logger.info(f"[Dual Write] Skipping empty replication event. {self._expected_empty_relation_reason}")
+            return
+
+        # Guard: skip empty events so they don't reach the outbox as spurious warnings.
+        # This can happen when a role has no binding mappings and no access permissions.
+        if not self.current_role_relations and not self.role_relations:
+            logger.info(
+                "[Dual Write] Skipping empty replication event for role(%s): '%s'. "
+                "Both current and new relations are empty. event_type='%s'",
+                self.role.uuid,
+                self.role.name,
+                self.event_type,
+            )
             return
 
         try:

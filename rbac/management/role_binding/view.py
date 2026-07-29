@@ -185,6 +185,19 @@ class RoleBindingViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             f"Created {len(created_bindings)} role binding(s) for {len(subjects)} subject(s)"
             f" on {len(resources)} resource(s)",
         )
+        # CREATE operation - SEC-MON-REQ-1 compliance (EOI-4 access_manipulation, EOI-1 pii_manipulation)
+        logger.info(
+            "Role bindings created",
+            extra={
+                "action": "CREATE",
+                "resource_type": "role_binding",
+                "resource_id": f"{len(created_bindings)}_bindings",
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "binding_count": len(created_bindings),
+            },
+        )
 
         fields = serializer.validated_data.get("fields")
         response_serializer = BatchCreateRoleBindingResponseItemSerializer(
@@ -263,6 +276,19 @@ class RoleBindingViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             AuditLog.EDIT,
             f"Updated role bindings for {result.subject_type} '{subject_name}'"
             f" on {result.resource_type} '{resource_label}': {len(result.roles)} role(s) assigned",
+        )
+        # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-4 access_manipulation, EOI-1 pii_manipulation)
+        logger.info(
+            "Role bindings updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "role_binding",
+                "resource_id": f"{result.subject_type}_{str(result.subject.uuid)}",
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "role_count": len(result.roles),
+            },
         )
 
         response_context = {

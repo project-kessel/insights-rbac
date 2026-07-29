@@ -229,8 +229,13 @@ class TestRecoverWorkspaceEventsTask(TestCase):
         mock_read.assert_called_once()
         call_kwargs = mock_read.call_args[1]
         self.assertEqual(call_kwargs["topic"], "outbox.event.workspace")
-        self.assertIn("start_timestamp_ms", call_kwargs)
-        self.assertIn("end_timestamp_ms", call_kwargs)
+        import datetime
+
+        restore_dt = datetime.datetime(2026, 5, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        restore_ms = int(restore_dt.timestamp() * 1000)
+        start_ms = restore_ms - 10 * 60 * 1000
+        self.assertEqual(call_kwargs["start_timestamp_ms"], start_ms)
+        self.assertEqual(call_kwargs["end_timestamp_ms"], restore_ms)
         self.assertEqual(result["kafka_events_read"], 0)
 
     @patch("management.workspace.dr_recovery.generate_corrective_workspace_events")
