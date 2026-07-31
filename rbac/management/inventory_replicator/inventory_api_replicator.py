@@ -38,10 +38,7 @@ from kessel.inventory.v1beta2 import (
     tuple_service_pb2_grpc,
 )
 from management.cache import JWTCacheOptimized
-from management.inventory_replicator.inventory_api_replicator import (
-    InventoryApiReplicator,
-    ReplicationEvent,
-)
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEvent
 from management.utils import create_client_channel_inventory
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -92,7 +89,7 @@ def execute_grpc_call(operation_name, grpc_callable, fencing_check=None, log_con
         raise
 
 
-class InventoryApiReplicator(InventoryApiReplicator):
+class InventoryApiReplicator(InventoryReplicator):
     """Replicates relations via Inventory API over gRPC."""
 
     def replicate(self, event: ReplicationEvent):

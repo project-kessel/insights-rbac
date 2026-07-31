@@ -253,7 +253,7 @@ class WorkspaceEventStream(Enum):
         raise AssertionError(f"Unexpected WorkspaceEventClass: {self!r}")
 
 
-class RelationReplicator(ABC):
+class InventoryReplicator(ABC):
     """Type responsible for replicating relations to Kessel Relations."""
 
     @abstractmethod
