@@ -63,14 +63,14 @@ api_migration_counter = Counter(
 # V2-specific metrics for alerting on error rate and latency.
 rbac_v2_requests_total = Counter(
     "rbac_v2_api_requests_total",
-    "Total V2 API requests by HTTP method and status class",
-    ["method", "status"],
+    "Total V2 API requests by endpoint, HTTP method, and status class",
+    ["endpoint", "method", "status"],
 )
 
 rbac_v2_request_duration = Histogram(
     "rbac_v2_api_request_duration_seconds",
-    "V2 API request duration in seconds",
-    ["method"],
+    "V2 API request duration in seconds by endpoint",
+    ["endpoint", "method"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
 
@@ -517,8 +517,8 @@ class IdentityHeaderMiddleware:
         # Record V2-specific metrics for error rate and latency alerting.
         if app_name in _V2_APP_NAMES:
             status_class = f"{response.status_code // 100}xx"
-            rbac_v2_requests_total.labels(method=request.method, status=status_class).inc()
-            rbac_v2_request_duration.labels(method=request.method).observe(request_duration)
+            rbac_v2_requests_total.labels(endpoint=view_name, method=request.method, status=status_class).inc()
+            rbac_v2_request_duration.labels(endpoint=view_name, method=request.method).observe(request_duration)
 
         IdentityHeaderMiddleware.log_request(request, response, is_internal_request, api_version)
         return response

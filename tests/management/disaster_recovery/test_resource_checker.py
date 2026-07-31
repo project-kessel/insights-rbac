@@ -12,31 +12,10 @@ from management.disaster_recovery.resource_checker import (
 )
 from management.group.model import Group
 from management.principal.model import Principal
-from management.relation_replicator.types import (
-    ObjectReference,
-    ObjectType,
-    RelationTuple,
-    SubjectReference,
-)
 from management.role.model import Role
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
-
-
-def _make_tuple(resource_type_name: str, resource_id: str) -> RelationTuple:
-    return RelationTuple(
-        resource=ObjectReference(
-            type=ObjectType(namespace="rbac", name=resource_type_name),
-            id=resource_id,
-        ),
-        relation="member",
-        subject=SubjectReference(
-            subject=ObjectReference(
-                type=ObjectType(namespace="rbac", name="principal"),
-                id="test-subject",
-            ),
-        ),
-    )
+from tests.management.disaster_recovery.helpers import _make_tuple
 
 
 class StripDomainPrefixTest(TestCase):

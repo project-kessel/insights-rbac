@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       !contains(github.event.pull_request.labels.*.name, 'bot')
+      && !startsWith(github.event.pull_request.title, 'chore(deps):')
     steps:
       - name: Check PR title for JIRA ticket
         env:

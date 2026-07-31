@@ -104,6 +104,7 @@ def _do_replicate(
         limited_count = total_count
 
     logger.info(f"About to replicate ~{limited_count} (out of ~{total_count} existing) {description}.")
+    logger.info(f"Replication config: {config}")
 
     replicated_count = 0
 
@@ -174,6 +175,7 @@ def replicate_default_workspaces(replicator: Optional[RelationReplicator] = None
 
 def replicate_updated_workspaces(
     since: datetime.datetime,
+    stream: WorkspaceEventStream,
     replicator: Optional[RelationReplicator] = None,
     exclude_unchanged_default_workspaces: bool = False,
 ):
@@ -207,7 +209,7 @@ def replicate_updated_workspaces(
             Q(type=Workspace.Types.DEFAULT) & LessThanOrEqual((F("modified") - F("created")), "00:00:00.001")
         )
 
-    config = _ReplicateConfig(event_stream=WorkspaceEventStream.STANDARD, with_update_event=True)
+    config = _ReplicateConfig(event_stream=stream, with_update_event=True)
 
     _do_replicate(
         replicator=replicator,

@@ -103,12 +103,15 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.workspace.modified = "2026-06-25T00:00:00Z"
         self.workspace.save()
 
-    def _do_replicate(self, **kwargs) -> list[WorkspaceEvent]:
+    def _do_replicate(self, stream: WorkspaceEventStream, **kwargs) -> list[WorkspaceEvent]:
         replicator = WorkspaceCacheReplicator(NoopReplicator())
-        replicate_updated_workspaces(replicator=replicator, **kwargs)
+        replicate_updated_workspaces(replicator=replicator, stream=stream, **kwargs)
 
-        self.assertEqual(len(replicator.workspace_events_for(WorkspaceEventStream.BULK)), 0)
-        return replicator.workspace_events_for(WorkspaceEventStream.STANDARD)
+        for possible_stream in WorkspaceEventStream:
+            if possible_stream != stream:
+                self.assertCountEqual([], replicator.workspace_events_for(possible_stream))
+
+        return replicator.workspace_events_for(stream)
 
     def _assert_event_ids(self, events: list[WorkspaceEvent], ids: Iterable[str]):
         ids = set(ids)
@@ -137,16 +140,34 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.assertEqual(ids_created, ids)
 
     def test_replication(self):
-        events = self._do_replicate(since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"))
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+        )
+
+        self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
+
+    def test_replication_bulk(self):
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.BULK,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+        )
+
         self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
 
     def test_exclude_past_modified(self):
-        events = self._do_replicate(since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"))
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"),
+        )
+
         self._assert_event_ids(events, [str(self.workspace.id)])
 
     def test_exclude_unmodified_default_workspace(self):
         events = self._do_replicate(
-            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"), exclude_unchanged_default_workspaces=True
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+            exclude_unchanged_default_workspaces=True,
         )
 
         self._assert_event_ids(events, [str(self.workspace.id)])
@@ -156,7 +177,9 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.default_workspace.save()
 
         events = self._do_replicate(
-            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"), exclude_unchanged_default_workspaces=True
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"),
+            exclude_unchanged_default_workspaces=True,
         )
 
         self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])

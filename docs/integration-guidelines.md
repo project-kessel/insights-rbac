@@ -198,3 +198,5 @@ All external service calls are instrumented. Follow these patterns:
 - Counters for errors (label: `error` or `error_type`)
 - Kafka consumer: `rbac_kafka_consumer_*` prefix for all consumer metrics
 - Replication latency: `rbac_replication_event_latency_seconds` (histogram with event_type label)
+- V2 API usage: `rbac_v2_api_requests_total` (counter with endpoint, method, status labels), `rbac_v2_api_request_duration_seconds` (histogram with endpoint, method labels)
+- API migration tracking: `rbac_api_migration_requests_total` (counter with api_version, client_id, user_agent, method labels)
