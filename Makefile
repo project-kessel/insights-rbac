@@ -27,7 +27,6 @@ Please use `make <target>` where <target> is one of:
 --- General Commands ---
   clean                    clean the project directory of any scratch files, bytecode, logs, etc.
   help                     show this message
-  html                     create html documentation for the project
   lint                     run linting against the project
   format                   format linting errors found by lint task
   typecheck                run type check
@@ -81,9 +80,6 @@ help:
 
 clean:
 	git clean -fdx -e .idea/ -e *env/
-
-html:
-	@pipenv run sphinx-build -b html docs/source docs/_build/html
 
 lint:
 	tox -elint
@@ -314,5 +310,3 @@ docker-down:
 
 generate_v2_spec:
 	cd docs/source/specs/typespec/ && npm ci --silent && ./compile_tsp_spec
-
-.PHONY: docs
