@@ -43,7 +43,7 @@ jsonschema = "*"
 unleashclient = "*"
 django-pgtransaction = "*"
 kessel-sdk = {extras = ["auth"], version = "*"}
-mcp = ">=1.26.0"
+mcp = ">=1.26.0,<2"
 
 [dev-packages]
 coverage = "==7.15.2"
