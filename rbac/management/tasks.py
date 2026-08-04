@@ -536,9 +536,10 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 
 
 @shared_task
-def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default_workspaces: bool):
+def replicate_updated_workspaces_in_worker(since: str, stream: str, exclude_unchanged_default_workspaces: bool):
     """Celery task to replicate updated workspaces."""
     from internal.migrations.replicate_workspaces import replicate_updated_workspaces
+    from management.relation_replicator.relation_replicator import WorkspaceEventStream
 
     # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
     logger.info(
@@ -549,12 +550,23 @@ def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default
             "outcome": "in_progress",
             "principal": "system:celery:replicate_updated_workspaces",
             "since": since,
+            "stream": stream,
         },
     )
+
+    if stream == "standard":
+        parsed_stream = WorkspaceEventStream.STANDARD
+    elif stream == "bulk":
+        parsed_stream = WorkspaceEventStream.BULK
+    else:
+        raise ValueError(f"Unknown stream name: {stream}")
+
     result = replicate_updated_workspaces(
         since=datetime.datetime.fromisoformat(since),
+        stream=parsed_stream,
         exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
     )
+
     logger.info(
         "Celery task completed: Replicate updated workspaces",
         extra={
@@ -564,6 +576,7 @@ def replicate_updated_workspaces_in_worker(since: str, exclude_unchanged_default
             "principal": "system:celery:replicate_updated_workspaces",
         },
     )
+
     return result
 
 

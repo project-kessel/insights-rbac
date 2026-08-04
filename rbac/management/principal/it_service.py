@@ -16,9 +16,7 @@
 #
 """Class to manage interactions with the IT service accounts service."""
 
-import itertools
 import logging
-import math
 import time
 import uuid
 from typing import Any, Iterable, Optional, Tuple
@@ -44,10 +42,6 @@ IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
 
 # Maximum number of service accounts to request at once. This is a limit set by the IT service.
 IT_SERVICE_ACCOUNT_BATCH_SIZE = 100
-
-# Maximum number of different service account client IDs to request from IT at once.
-# This is a limit set by the IT service.
-IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS = 10
 
 # Set up the metrics for the IT calls.
 it_request_all_service_accounts_time_tracking = Histogram(
@@ -123,38 +117,33 @@ class ITService:
                 return []
 
             # We want to minimize the number of requests we make. At time of writing, we can request up to 100 service
-            # accounts at once. However, we can only specify at most 10 client IDs as query parameters.
+            # accounts at once. However, we can only specify a single client ID as a query parameter.
             #
-            # So, if we make requests with client IDs, we make ceil(len(client_ids) / 10) requests. If we make requests
-            # without client IDs, we make ceil([# of service accounts in IT] / 100) requests. So, we should only pass
-            # client IDs if the number of IDs is less than 1/10 of all service accounts in IT.
+            # So, if we make requests with client IDs, we make len(client_ids) requests. If we make requests without
+            # client IDs, we make ceil([# of service accounts in IT] / 100) requests. So, we should only pass client
+            # IDs if the number of IDs is less than 1/100 of all service accounts in IT.
             #
             # Unfortunately, we have no way to make an educated guess with only RBAC's database, since RBAC's database
             # is not necessarily in sync with IT. (For instance, at time of writing, stage has a tenant with ~7000
             # service accounts in RBAC's database but only 13 in IT.) So, we make a single request in order to
             # determine which strategy is better (by determining if the number of service accounts in IT is more than
-            # 10 times the number of client IDs).
+            # 100 times the number of client IDs).
             #
-            # As a special case, if we would have to make two or fewer requests using client IDs (i.e. if we care about
-            # fewer than 20 client IDs), then we can always just do that, since we'd always be making at least two
-            # requests anyway (one to see how many service accounts exist and at least one to actually fetch them).
+            # As a special case, if we would have to request at most two client IDs, then we can always just do that,
+            # since we'd always be making at least two requests anyway (one to see how many service accounts exist
+            # and at least one to actually fetch them).
 
-            use_remote_client_ids = len(
-                client_ids
-            ) <= 2 * IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS or self._it_service_account_count_at_least(
+            use_remote_client_ids = len(client_ids) <= 2 or self._it_service_account_count_at_least(
                 bearer_token=bearer_token,
-                count=math.ceil(len(client_ids) / IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS) * IT_SERVICE_ACCOUNT_BATCH_SIZE,
+                count=len(client_ids) * IT_SERVICE_ACCOUNT_BATCH_SIZE,
             )
 
             if use_remote_client_ids:
                 results: list[dict] = []
 
-                for batch in itertools.batched(client_ids, IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS):
+                for client_id in client_ids:
                     results.extend(
-                        self._request_service_accounts_transformed(
-                            bearer_token=bearer_token,
-                            client_ids=list(batch),
-                        )
+                        self._request_service_accounts_transformed(bearer_token=bearer_token, client_id=client_id)
                     )
 
                 return results
@@ -162,35 +151,27 @@ class ITService:
                 # Request every service account and filter them locally.
                 return [
                     account
-                    for account in self._request_service_accounts_transformed(
-                        bearer_token=bearer_token, client_ids=None
-                    )
+                    for account in self._request_service_accounts_transformed(bearer_token=bearer_token)
                     if account["clientId"] in client_ids
                 ]
 
         # Here, we have no client IDs to worry about, so just request every service account.
-        return self._request_service_accounts_transformed(
-            bearer_token=bearer_token,
-            client_ids=None,
-        )
+        return self._request_service_accounts_transformed(bearer_token=bearer_token)
 
     def _request_service_accounts_raw(
-        self, bearer_token: str, client_ids: Optional[list[str]], offset: int, limit: int
+        self, bearer_token: str, client_id: Optional[str], offset: int, limit: int
     ) -> list[dict]:
         """
         Make a single request to IT's service accounts API and return the result.
 
-        This function does not perform any form of iteration or processing of the results. It assumes that its inputs
-        have already been validated. client_ids shall have size no greater than IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS.
+        This function does not perform any form of iteration or processing of the results.
         """
         assert bearer_token
-        assert client_ids is None or len(client_ids) > 0
-        assert client_ids is None or len(client_ids) <= IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS
 
         parameters: dict[str, int | list[str]] = {"first": offset, "max": limit}
 
-        if client_ids is not None:
-            parameters["clientId"] = client_ids
+        if client_id is not None:
+            parameters["clientId"] = [client_id]
 
         # Call IT.
         response = requests.get(
@@ -214,14 +195,24 @@ class ITService:
             raise UnexpectedStatusCodeFromITError()
 
         # Extract the body contents.
-        return response.json()
+        response_body = response.json()
 
-    def _request_service_accounts_transformed(self, bearer_token: str, client_ids: Optional[list[str]]) -> list[dict]:
+        # TODO: remove when no longer needed
+        LOGGER.info(
+            "Made service-account request: parameters=%s, url=%s; response: status=%s, body=%s",
+            parameters,
+            response.url,
+            response.status_code,
+            response_body,
+        )
+
+        return response_body
+
+    def _request_service_accounts_transformed(self, bearer_token: str, client_id: Optional[str] = None) -> list[dict]:
         """
         Request service accounts for a tenant and return the list that IT has (optionally filtering by client ID).
 
-        If client_ids is None, all service accounts are requested from IT. This assumes that bearer_token and client_ids
-        have already been validated. client_ids shall have size no greater than IT_SERVICE_ACCOUNT_MAX_CLIENT_IDS.
+        If client_id is None, all service accounts are requested from IT.
         """
         received_service_accounts: list[dict] = []
 
@@ -235,7 +226,7 @@ class ITService:
             while continue_fetching:
                 body_contents = self._request_service_accounts_raw(
                     bearer_token=bearer_token,
-                    client_ids=client_ids,
+                    client_id=client_id,
                     offset=offset,
                     limit=limit,
                 )
@@ -246,8 +237,12 @@ class ITService:
                 # Reassess if we need to keep fetching pages from IT. They don't return page metadata, so we need to
                 # keep looping until the incoming body is an empty array.
                 continue_fetching = limit == len(body_contents)
+
                 if continue_fetching:
                     offset = offset + len(body_contents)
+
+                if continue_fetching and (client_id is not None):
+                    raise AssertionError("Should not have to make multiple requests when a client ID is provided")
 
         except requests.exceptions.ConnectionError as exception:
             LOGGER.error(
@@ -292,7 +287,7 @@ class ITService:
         # safe because we have just ensured that count > 0.
 
         body_contents = self._request_service_accounts_raw(
-            bearer_token=bearer_token, client_ids=None, offset=(count - 1), limit=1
+            bearer_token=bearer_token, client_id=None, offset=(count - 1), limit=1
         )
 
         return len(body_contents) > 0

@@ -319,24 +319,10 @@ class ITServiceTests(IdentityRequest):
         call_client_ids = call_params.pop("clientId", [])
         call_kwargs["params"] = call_params
 
+        self.assertLessEqual(len(call_client_ids), 1, "IT only supports requesting a single client ID.")
+
         client_ids_assert(call_client_ids)
-        self.assertEqual(kwargs, call_kwargs, "Incorrect keyword arugments for call.")
-
-    def _assert_service_account_mock_called(self, mock: mock.Mock, *args, **kwargs):
-        """Assert that a mock has a call to IT's service accounts endpoint is as expected."""
-        if "params" in kwargs and "clientId" in kwargs["params"]:
-            # We do not care about the order of client IDs.
-
-            actual_client_ids = mock.call_args.kwargs["params"]["clientId"]
-
-            self.assertCountEqual(actual_client_ids, kwargs["params"]["clientId"], "Client IDs did not match call.")
-
-            # Now that the IDs have been verified, just make the expectation match reality.
-            kwargs = dict(kwargs)
-            kwargs["params"] = dict(kwargs["params"])
-            kwargs["params"]["clientId"] = actual_client_ids
-
-        mock.assert_called_with(*args, **kwargs)
+        self.assertEqual(kwargs, call_kwargs, "Incorrect keyword arguments for call.")
 
     class FakeIT:
         _service_accounts: list[dict]
@@ -353,8 +339,11 @@ class ITServiceTests(IdentityRequest):
             raw_client_ids = kwargs["params"].get("clientId", [])
 
             if raw_client_ids:
-                client_ids = set(raw_client_ids)
-                filtered = [account for account in self._service_accounts if account["clientId"] in client_ids]
+                if len(raw_client_ids) > 1:
+                    raise ValueError(f"Only a single clientId is supported, but got: {raw_client_ids}")
+
+                client_id = raw_client_ids[0]
+                filtered = [account for account in self._service_accounts if account["clientId"] == client_id]
             else:
                 filtered = self._service_accounts
 
@@ -371,21 +360,14 @@ class ITServiceTests(IdentityRequest):
         """Test that the function under test can handle fetching a single page of service accounts from IT"""
         # Create a fake IT service with service accounts.
         mocked_service_accounts = self._create_mock_it_service_accounts(5)
-        requested_service_accounts = mocked_service_accounts[0:3]
 
         get.__name__ = "get"
         get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
 
         bearer_token_mock = "bearer-token-mock"
 
-        # client_ids being small means that this will trigger the fast path in request_service_accounts, and only a
-        # single request will be made.
-        client_ids = [account["clientId"] for account in requested_service_accounts]
-
         # Call the function under test.
-        result: list[dict] = self.it_service.request_service_accounts(
-            bearer_token=bearer_token_mock, client_ids=client_ids
-        )
+        result: list[dict] = self.it_service.request_service_accounts(bearer_token=bearer_token_mock)
 
         # Build IT's URL for the function call's assertion.
         it_url = (
@@ -394,11 +376,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         # Build the expected parameters to be seen in the "get" function's assertion call.
-        parameters = {"first": 0, "max": 100, "clientId": client_ids}
+        parameters = {"first": 0, "max": 100}
 
         # Assert that the "get" function was called with the expected arguments.
-        self._assert_service_account_mock_called(
-            get,
+        get.assert_called_with(
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -407,7 +388,7 @@ class ITServiceTests(IdentityRequest):
 
         # Assert that the payload is correct.
         self._assert_IT_to_RBAC_model_transformations(
-            it_service_accounts=requested_service_accounts, rbac_service_accounts=result
+            it_service_accounts=mocked_service_accounts, rbac_service_accounts=result
         )
 
     @mock.patch("management.principal.it_service.requests.get")
@@ -415,18 +396,18 @@ class ITServiceTests(IdentityRequest):
         """Test that the function under test uses client IDs when few service accounts are needed."""
         # Create a fake IT service with service accounts.
         mocked_service_accounts = self._create_mock_it_service_accounts(400)
-        requested_service_accounts = mocked_service_accounts[0:5]
+        requested_service_accounts = mocked_service_accounts[0:2]
 
         get.__name__ = "get"
         get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
 
         bearer_token_mock = "bearer-token-mock"
 
-        # Request several additional client IDs to ensure they are properly filtered out.
-        # Ensure the total count is greater than 20 to avoid the fast path.
-        # Ensure the total count is fewer than 40 so that client IDs are used (rather than requesting all accounts).
+        # Request some additional client IDs to ensure they are properly filtered out.
+        # Ensure the total count is greater than 2 to avoid the fast path.
+        # Ensure the total count is at most 4 so that client IDs are used (rather than requesting all accounts).
         client_ids = [account["clientId"] for account in requested_service_accounts] + [
-            str(uuid.uuid4()) for _ in range(20)
+            str(uuid.uuid4()) for _ in range(2)
         ]
 
         # Call the function under test.
@@ -440,16 +421,16 @@ class ITServiceTests(IdentityRequest):
             f"{settings.IT_SERVICE_BASE_PATH}{IT_PATH_GET_SERVICE_ACCOUNTS}"
         )
 
-        # We expect one call to determine what strategy to use, then three additional calls to request actual data.
+        # We expect one call to determine what strategy to use, then four additional calls to request actual data.
         calls = get.call_args_list
-        self.assertEqual(4, len(calls))
+        self.assertEqual(5, len(calls))
 
         # Check for the initial call to determine how many service accounts exist.
         self._assert_service_account_call(
             call=calls[0],
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
-            params={"first": 299, "max": 1},
+            params={"first": 399, "max": 1},
             timeout=settings.IT_SERVICE_TIMEOUT_SECONDS,
             client_ids_assert=lambda call_client_ids: self.assertEqual([], call_client_ids),
         )
@@ -486,21 +467,21 @@ class ITServiceTests(IdentityRequest):
 
     @mock.patch("management.principal.it_service.requests.get")
     def test_request_service_accounts_client_ids_large(self, get: mock.Mock):
-        """Test that the function under test uses client IDs when many service accounts are needed."""
+        """Test that the function under test does not use client IDs when many service accounts are needed."""
         # Create a fake IT service with service accounts.
         mocked_service_accounts = self._create_mock_it_service_accounts(400)
-        requested_service_accounts = mocked_service_accounts[0:5]
+        requested_service_accounts = mocked_service_accounts[0:3]
 
         get.__name__ = "get"
         get.side_effect = ITServiceTests.FakeIT(mocked_service_accounts).get
 
         bearer_token_mock = "bearer-token-mock"
 
-        # Request several additional client IDs to ensure they are properly filtered out.
-        # Ensure the total count is greater than 20 to avoid the fast path.
-        # Ensure the total count is greater than 40 so that all service accounts are requested.
+        # Request some additional client IDs to ensure they are properly filtered out.
+        # Ensure the total count is greater than 2 to avoid the fast path.
+        # Ensure the total count is greater than 4 so that all service accounts are requested.
         client_ids = [account["clientId"] for account in requested_service_accounts] + [
-            str(uuid.uuid4()) for _ in range(40)
+            str(uuid.uuid4()) for _ in range(2)
         ]
 
         # Call the function under test.
@@ -639,11 +620,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         bearer_token_mock = "bearer-token-mock"
-        client_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
 
         # Call the function under test.
         try:
-            self.it_service.request_service_accounts(bearer_token=bearer_token_mock, client_ids=client_ids)
+            self.it_service.request_service_accounts(bearer_token=bearer_token_mock)
             self.fail("the function under test should have raised an exception on an unexpected status code")
         except Exception as e:
             self.assertIsInstance(
@@ -659,11 +639,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         # Build the expected parameters to be seen in the "get" function's assertion call.
-        parameters = {"first": 0, "max": 100, "clientId": client_ids}
+        parameters = {"first": 0, "max": 100}
 
         # Assert that the "get" function was called with the expected arguments.
-        self._assert_service_account_mock_called(
-            get,
+        get.assert_called_with(
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -677,11 +656,10 @@ class ITServiceTests(IdentityRequest):
         get.side_effect = requests.exceptions.ConnectionError
 
         bearer_token_mock = "bearer-token-mock"
-        client_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
 
         # Call the function under test.
         try:
-            self.it_service.request_service_accounts(bearer_token=bearer_token_mock, client_ids=client_ids)
+            self.it_service.request_service_accounts(bearer_token=bearer_token_mock)
             self.fail(
                 "the function under test should have raised an exception when hitting a connection error with IT"
             )
@@ -699,11 +677,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         # Build the expected parameters to be seen in the "get" function's assertion call.
-        parameters = {"first": 0, "max": 100, "clientId": client_ids}
+        parameters = {"first": 0, "max": 100}
 
         # Assert that the "get" function was called with the expected arguments.
-        self._assert_service_account_mock_called(
-            get,
+        get.assert_called_with(
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
@@ -717,11 +694,10 @@ class ITServiceTests(IdentityRequest):
         get.side_effect = requests.exceptions.Timeout
 
         bearer_token_mock = "bearer-token-mock"
-        client_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
 
         # Call the function under test.
         try:
-            self.it_service.request_service_accounts(bearer_token=bearer_token_mock, client_ids=client_ids)
+            self.it_service.request_service_accounts(bearer_token=bearer_token_mock)
             self.fail("the function under test should have raised an exception when having a timeout with IT")
         except Exception as e:
             self.assertIsInstance(
@@ -737,11 +713,10 @@ class ITServiceTests(IdentityRequest):
         )
 
         # Build the expected parameters to be seen in the "get" function's assertion call.
-        parameters = {"first": 0, "max": 100, "clientId": client_ids}
+        parameters = {"first": 0, "max": 100}
 
         # Assert that the "get" function was called with the expected arguments.
-        self._assert_service_account_mock_called(
-            get,
+        get.assert_called_with(
             url=it_url,
             headers={"Authorization": f"Bearer {bearer_token_mock}"},
             params=parameters,
