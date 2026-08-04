@@ -124,12 +124,17 @@ def validate_psk(psk, client_id):
     client_config = psks.get(client_id, {})
     primary_key = client_config.get("secret") or ""
     alt_key = client_config.get("alt-secret") or ""
+    has_primary_key = bool(primary_key)
+    has_alt_key = bool(alt_key)
     psk = psk or ""
 
     if psks:
-        primary_match = hmac.compare_digest(psk, primary_key)
-        alt_match = hmac.compare_digest(psk, alt_key)
-        return primary_match or alt_match
+        try:
+            primary_match = hmac.compare_digest(psk, primary_key)
+            alt_match = hmac.compare_digest(psk, alt_key)
+        except TypeError:
+            return False
+        return (has_primary_key and primary_match) or (has_alt_key and alt_match)
 
     return False
 

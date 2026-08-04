@@ -799,3 +799,10 @@ class ValidatePskTests(IdentityRequest):
     def test_empty_string_psk(self):
         """Test that empty string PSK does not match real secrets."""
         self.assertFalse(validate_psk("", "test-client"))
+        self.assertFalse(validate_psk("", "unknown-client"))
+
+    @override_settings(SERVICE_PSKS=PSK_CONFIG)
+    def test_non_ascii_psk(self):
+        """Test that non-ASCII PSK is rejected, not a TypeError."""
+        self.assertFalse(validate_psk("\u00e9\u00e8\u00ea", "test-client"))
+        self.assertFalse(validate_psk("\U0001f600", "test-client"))
