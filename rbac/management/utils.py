@@ -16,6 +16,7 @@
 #
 """Helper utilities for management module."""
 
+import hmac
 import logging
 import os
 import re
@@ -118,14 +119,17 @@ def create_client_channel_relation(addr):
 
 
 def validate_psk(psk, client_id):
-    """Validate the PSK for the client."""
+    """Validate the PSK for the client using constant-time comparison."""
     psks = settings.SERVICE_PSKS
     client_config = psks.get(client_id, {})
-    primary_key = client_config.get("secret")
-    alt_key = client_config.get("alt-secret")
+    primary_key = client_config.get("secret") or ""
+    alt_key = client_config.get("alt-secret") or ""
+    psk = psk or ""
 
     if psks:
-        return psk == primary_key or psk == alt_key
+        primary_match = hmac.compare_digest(psk, primary_key)
+        alt_match = hmac.compare_digest(psk, alt_key)
+        return primary_match or alt_match
 
     return False
 
