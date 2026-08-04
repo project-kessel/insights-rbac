@@ -652,6 +652,21 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertIn(expected_message, response.content.decode())
 
     @patch("internal.views.requests")
+    def test_get_org_admin_timeout(self, mock_requests):
+        """Test getting the org admin and timing out on BOP request."""
+        import requests as real_requests
+
+        mock_requests.get.side_effect = real_requests.exceptions.Timeout("Connection timed out")
+        mock_requests.exceptions = real_requests.exceptions
+        response = self.client.get(
+            "/_private/api/utils/get_org_admin/123456/?type=account_id",
+            **self.request.META,
+        )
+        expected_message = "Unable to connect for URL"
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertIn(expected_message, response.content.decode())
+
+    @patch("internal.views.requests")
     def test_get_org_admin_account(self, mock_proxy):
         """Test getting the org admin back with mock proxy using account id."""
         mockresponse = MagicMock()
