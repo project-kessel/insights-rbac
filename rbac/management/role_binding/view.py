@@ -25,7 +25,7 @@ from management.permissions.role_binding_access import (
     RoleBindingKesselAccessPermission,
     RoleBindingSystemUserAccessPermission,
 )
-from management.permissions.v2_edit_api_access import V2WriteRequiresWorkspacesEnabled
+from management.permissions.v2_edit_api_access import RequiresV2OptIn
 from management.v2_mixins import AtomicOperationsMixin
 from rest_framework import status
 from rest_framework.decorators import action
@@ -71,7 +71,7 @@ class RoleBindingViewSet(AtomicOperationsMixin, BaseV2ViewSet):
     permission_classes = (
         RoleBindingSystemUserAccessPermission,
         RoleBindingKesselAccessPermission,
-        V2WriteRequiresWorkspacesEnabled,
+        RequiresV2OptIn,
     )
     pagination_class = V2CursorPagination
 

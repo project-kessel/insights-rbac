@@ -41,8 +41,10 @@ class FeatureFlags:
     TOGGLE_WORKSPACE_ACCESS_CHECK_V2 = "rbac.workspace-access-check-v2.enabled"
     # When enabled, use 'role_binding_view' permission; when disabled, use 'view' permission for role binding access.
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
-    # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
+    # Per-org flag: when enabled, the org uses V2 APIs for write operations and V1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # Per-org flag: when enabled, the org can use V2 APIs for read operations.
+    TOGGLE_V2_READ_API_ENABLED = "hbi.rbac-v2"
 
     def __init__(self):
         """Add attributes."""
@@ -168,11 +170,28 @@ class FeatureFlags:
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.USE_ROLE_BINDING_VIEW_PERMISSION,
         )
 
+    def is_v2_read_api_enabled(self, org_id: str) -> bool:
+        """Check whether v2 read APIs are enabled for the given org.
+
+        When enabled, the org can use V2 read APIs. When disabled, the org generally cannot. (See RequiresV2OptIn for
+        the relevant exceptions.)
+
+        Uses orgId in context to match Unleash strategy constraints (contextName: orgId).
+        """
+        return self.is_enabled(
+            feature_name=self.TOGGLE_V2_READ_API_ENABLED,
+            context={"orgId": str(org_id)},
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_APIS_ENABLED,
+        )
+
     def is_v2_edit_api_enabled(self, org_id: str) -> bool:
         """Check whether v2 write APIs are enabled for the given org.
 
-        When enabled, the org should use v2 APIs and v1 write operations are blocked.
-        When disabled, the org should use v1 APIs and v2 write operations are blocked.
+        When enabled, the org should use V2 write APIs, and V1 write operations are blocked.
+        When disabled, the org should generally use V1 write APIs, and V2 write operations are generally blocked. (See
+        RequiresV2OptIn for the relevant exceptions.)
+
+        It is assumed that the TOGGLE_V2_EDIT_API_ENABLED flag will be set whenever TOGGLE_V2_READ_API_ENABLED is set.
 
         Uses orgId in context to match Unleash strategy constraints (contextName: orgId).
         """

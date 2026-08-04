@@ -30,28 +30,30 @@ from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from api.models import Tenant
 from management.audit_log.model import AuditLog
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
 from management.models import Group, Permission, Principal, Workspace
-from management.utils import PROBLEM_TYPES
 from management.permission.scope_service import Scope
 from management.role.definer import seed_roles
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
-from management.role_binding.service import RoleBindingService, API_PRINCIPAL_SOURCE
+from management.role_binding.service import API_PRINCIPAL_SOURCE, RoleBindingService
 from management.subject import SubjectType
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
+from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.tenant_service.v2 import V2TenantBootstrapService
+from management.utils import PROBLEM_TYPES
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator
-from rbac import urls
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
+
+from api.models import Tenant
+from rbac import urls
 
 
 def _coerce_api_datetime(value):
@@ -85,18 +87,11 @@ class RoleBindingListViewSetTest(IdentityRequest):
         super().setUp()
         self.client = APIClient()
 
-        # Create workspace hierarchy (root -> default -> standard)
-        self.root_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT,
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-        )
-        self.default_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT,
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            parent=self.root_workspace,
-        )
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+
         self.workspace = Workspace.objects.create(
             name="Test Workspace",
             description="Test workspace description",
@@ -403,6 +398,19 @@ class RoleBindingListViewSetTest(IdentityRequest):
             other_binding.delete()
             other_role.delete()
             other_tenant.delete()
+
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_list_blocked_when_feature_flag_disabled(self, mock_is_v2_read_api_enabled):
+        response = self.client.get(self._get_list_url(), **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("opted-in", str(response.data))
+
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_list_allowed_when_v2_written(self, mock_is_v2_read_api_enabled):
+        ensure_v2_write_activated(self.tenant)
+
+        response = self.client.get(self._get_list_url(), **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     # --- Functional: verify actual data content ---
 
@@ -2012,6 +2020,37 @@ class RoleBindingViewSetTest(IdentityRequest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
+        return_value=True,
+    )
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_by_subject_blocked_when_feature_flag_disabled(self, *args):
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("opted-in", str(response.data))
+
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
+        return_value=True,
+    )
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_by_subject_allowed_when_v2_written(self, *args):
+        ensure_v2_write_activated(self.tenant)
+
+        url = self._get_by_subject_url()
+        response = self.client.get(
+            f"{url}?resource_id={self.workspace.id}&resource_type=workspace",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     # Ordering tests using dot notation
 

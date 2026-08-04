@@ -19,17 +19,13 @@
 import uuid
 from collections.abc import Iterable
 from importlib import reload
-from urllib.parse import urlencode
 from unittest.mock import ANY, patch
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
 from django.utils.dateparse import parse_datetime
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from api.models import Tenant
 from management import v2_urls
 from management.audit_log.model import AuditLog
 from management.models import Permission, Workspace
@@ -40,11 +36,16 @@ from management.role.definer import seed_roles
 from management.role.v2_model import CustomRoleV2, PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_role_scope import v2_role_excluded_application_permission_ids_cache
 from management.role.v2_service import RoleV2Service
+from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.tenant_service import V2TenantBootstrapService
 from management.utils import PRINCIPAL_CACHE, as_uuid
-from rbac import urls
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
+
+from api.models import Tenant
+from rbac import urls
 
 CACHE_PATCH_TARGET = "management.role.v2_service.permission_scope_cache"
 
@@ -955,6 +956,20 @@ class RoleV2ViewSetTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["data"], [])
 
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_list_blocked_when_feature_flag_disabled(self, mock_is_v2_read_api_enabled):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("opted-in", str(response.data).lower())
+        mock_is_v2_read_api_enabled.assert_called_once_with(self.customer_data["org_id"])
+
+    @patch("management.permissions.v2_edit_api_access.FEATURE_FLAGS.is_v2_read_api_enabled", return_value=False)
+    def test_list_permitted_when_v2_written(self, mock_is_v2_read_api_enabled):
+        ensure_v2_write_activated(self.tenant)
+
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
     # ==========================================================================
     # Tests for GET /api/v2/roles/?resource_type=... (list with resource_type)
     # ==========================================================================
@@ -1228,7 +1243,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         }
         response = self.client.post(self.url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn("workspaces", str(response.data).lower())
+        self.assertIn("opted-in", str(response.data).lower())
         mock_is_v2_edit_enabled.assert_called_once_with(self.customer_data["org_id"])
 
     @override_settings(NOTIFICATIONS_ENABLED=True)
