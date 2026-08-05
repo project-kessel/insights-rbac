@@ -493,6 +493,38 @@ def replicate_updated_workspaces_in_worker(since: str, stream: str, exclude_unch
 
 
 @shared_task
+def replicate_deleted_workspaces_in_worker(since: str):
+    """Celery task to replicate deleted workspaces."""
+    from internal.migrations.replicate_workspaces import replicate_deleted_workspaces
+
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Celery task: Replicate deleted workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "in_progress",
+            "principal": "system:celery:replicate_deleted_workspaces",
+            "since": since,
+        },
+    )
+
+    result = replicate_deleted_workspaces(since=datetime.datetime.fromisoformat(since))
+
+    logger.info(
+        "Celery task completed: Replicate deleted workspaces",
+        extra={
+            "action": "REPLICATE",
+            "resource_type": "workspace",
+            "outcome": "success",
+            "principal": "system:celery:replicate_deleted_workspaces",
+        },
+    )
+
+    return result
+
+
+@shared_task
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
     from api.models import Tenant
