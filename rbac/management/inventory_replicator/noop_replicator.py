@@ -1,5 +1,5 @@
 #
-# Copyright 2025 Red Hat, Inc.
+# Copyright 2024 Red Hat, Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -14,8 +14,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Utility modules for role binding management."""
 
-from management.role_binding.util.inventory_api_client import lookup_binding_subjects, parse_resource_type
+"""A InventoryReplicator which does nothing."""
 
-__all__ = ["lookup_binding_subjects", "parse_resource_type"]
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEvent
+
+
+class NoopReplicator(InventoryReplicator):
+    """Noop replicator."""
+
+    def replicate(self, event: ReplicationEvent):
+        """Noop."""
+        pass

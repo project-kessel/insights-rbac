@@ -36,21 +36,21 @@ from internal.schemas import INVENTORY_INPUT_SCHEMAS, RELATION_INPUT_SCHEMAS
 from jsonschema import validate
 from management.atomic_transactions import atomic, atomic_block, atomic_with_retry
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.inventory_replicator.logging_replicator import LoggingReplicator, stringify_spicedb_relationship
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.types import RelationTuple
 from management.models import BindingMapping, Role, Workspace
 from management.permission.scope_service import TenantScopeResources
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy
-from management.relation_replicator.logging_replicator import LoggingReplicator, stringify_spicedb_relationship
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    PartitionKey,
-    RelationReplicator,
-    ReplicationEvent,
-    ReplicationEventType,
-)
-from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
-from management.relation_replicator.types import RelationTuple
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
@@ -63,18 +63,18 @@ from management.tenant_mapping.v2_activation import (
 from management.tenant_service.relations import default_role_binding_tuples
 from management.tenant_service.v2 import TenantNotBootstrappedError, lock_tenant_for_bootstrap
 from management.utils import as_uuid
-from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
+from management.workspace.inventory_api_dual_write_workspace_handler import InventoryApiDualWriteWorkspaceHandler
 from migration_tool.utils import create_relationship
 
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from api.cross_access.model import CrossAccountRequest
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
 from api.models import Tenant, User
 
 logger = logging.getLogger(__name__)
 PROXY = PrincipalProxy()
 
 
-def get_replicator(write_relationships: str) -> RelationReplicator:
+def get_replicator(write_relationships: str) -> InventoryReplicator:
     """
     Get the appropriate replicator based on write_relationships setting.
 
@@ -85,7 +85,7 @@ def get_replicator(write_relationships: str) -> RelationReplicator:
             - "False" or other: Create NoopReplicator (no replication)
 
     Returns:
-        RelationReplicator instance
+        InventoryReplicator instance
     """
     option = write_relationships.lower()
 
@@ -169,9 +169,9 @@ def delete_bindings(bindings):
 
 def read_tuples_from_kessel(resource_type: str, resource_id: str, relation: str, subject_type: str, subject_id: str):
     """
-    Read tuples from Kessel Relations API.
+    Read tuples from Kessel Inventory API.
 
-    This is a convenience wrapper around RelationsApiReplicator.read_tuples()
+    This is a convenience wrapper around InventoryApiReplicator.read_tuples()
     that uses the default "rbac" namespace.
 
     Args:
@@ -184,7 +184,7 @@ def read_tuples_from_kessel(resource_type: str, resource_id: str, relation: str,
     Returns:
         list[dict]: List of tuple dictionaries from Kessel
     """
-    replicator = RelationsApiReplicator()
+    replicator = InventoryApiReplicator()
     return replicator.read_tuples(
         resource_type=resource_type,
         resource_id=resource_id,
@@ -198,12 +198,12 @@ def iterate_tuples_from_kessel(
     resource_type: str, resource_id: str, relation: str, subject_type: str, subject_id: str
 ) -> Iterable[dict]:
     """
-    Read tuples from Kessel Relations API while handling pagination.
+    Read tuples from Kessel Inventory API while handling pagination.
 
     This is similar to read_tuples_from_kessel, except that it also returns subsequent pages from Kessel, and it does
     not necessarily return a list.
     """
-    replicator = RelationsApiReplicator()
+    replicator = InventoryApiReplicator()
 
     continuation_token = None
     first = True
@@ -986,7 +986,7 @@ def get_or_create_ungrouped_workspace(tenant: Tenant, workspace_id: Optional[uui
         )
 
     if created:
-        RelationApiDualWriteWorkspaceHandler(
+        InventoryApiDualWriteWorkspaceHandler(
             workspace, ReplicationEventType.CREATE_WORKSPACE
         ).replicate_new_workspace()
 
@@ -1204,7 +1204,7 @@ def fix_admin_default_bindings(org_id: str) -> dict:
         return {"org_id": org_id, "error": str(e)}
 
 
-def remove_unassigned_system_binding_mappings(replicator: Optional[RelationReplicator] = None):
+def remove_unassigned_system_binding_mappings(replicator: Optional[InventoryReplicator] = None):
     """
     Remove unassigned BindingMappings for system roles.
 
@@ -1341,7 +1341,7 @@ def remove_unassigned_system_binding_mappings(replicator: Optional[RelationRepli
 
 
 @atomic
-def _do_remove_orphaned_car(raw_car: CrossAccountRequest, replicator: RelationReplicator):
+def _do_remove_orphaned_car(raw_car: CrossAccountRequest, replicator: InventoryReplicator):
     logger.info(f"Processing orphaned CAR: pk={raw_car.pk!r}")
 
     orphaned_car: CrossAccountRequest = CrossAccountRequest.objects.select_for_update().filter(pk=raw_car.pk).first()
@@ -1416,7 +1416,7 @@ def _do_remove_orphaned_car(raw_car: CrossAccountRequest, replicator: RelationRe
     orphaned_car.status = "expired"
     orphaned_car.save()
 
-    dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+    dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
         cross_account_request=orphaned_car,
         event_type=ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
         replicator=replicator,
@@ -1436,7 +1436,7 @@ def _do_remove_orphaned_car(raw_car: CrossAccountRequest, replicator: RelationRe
 
 
 @atomic
-def expire_orphaned_cross_account_requests(replicator: Optional[RelationReplicator] = None):
+def expire_orphaned_cross_account_requests(replicator: Optional[InventoryReplicator] = None):
     """Expire cross-account requests that refer to a principal that no longer exists."""
     if replicator is None:
         replicator = OutboxReplicator()

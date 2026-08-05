@@ -76,9 +76,9 @@ for p in RoleV2.objects.filter(type='platform').prefetch_related('children'):
 
 ```bash
 oc exec -n ephemeral-<id> "$POD" -c rbac-service -- python rbac/manage.py shell -c "
-from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
+from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
 from management.role.v2_model import RoleV2
-replicator = RelationsApiReplicator()
+replicator = InventoryApiReplicator()
 parent = RoleV2.objects.get(name='User default Platform Role')
 child = RoleV2.objects.filter(type='seeded').first()
 resp = replicator.read_tuples(

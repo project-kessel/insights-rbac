@@ -26,8 +26,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--write-relationships",
             default="False",
-            choices=["True", "False", "relations-api", "outbox"],
-            help="Whether to replicate relationships and how. True is == 'relations-api' for compatibility.",
+            choices=["True", "False", "inventory-api", "outbox"],
+            help="Whether to replicate relationships and how. True is == 'inventory-api' for compatibility.",
         )
         parser.add_argument(
             "--skip-roles",

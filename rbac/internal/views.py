@@ -36,7 +36,9 @@ from django.views.decorators.http import require_http_methods
 from feature_flags import FEATURE_FLAGS
 from google.protobuf import json_format
 from grpc import RpcError
-from internal.custom_v2_role_tenant_migration import replicate_custom_v2_role_owner_relationships
+from internal.custom_v2_role_tenant_migration import (
+    replicate_custom_v2_role_owner_relationships,
+)
 from internal.errors import SentryDiagnosticError, UserNotFoundError
 from internal.jwt_utils import JWTManager, JWTProvider
 from internal.utils import (
@@ -69,7 +71,9 @@ from kessel.relations.v1beta1 import (
 )
 from management.audit_log.model import AuditLog
 from management.cache import JWTCache, TenantCache
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.relation_api_dual_write_group_handler import (
+    RelationApiDualWriteGroupHandler,
+)
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,
     CrossAccountRequestInventoryChecker,
@@ -77,7 +81,14 @@ from management.inventory_checker.inventory_api_check import (
     RoleRelationInventoryChecker,
     WorkspaceRelationInventoryChecker,
 )
-from management.models import BindingMapping, Group, Permission, Principal, ResourceDefinition, Role
+from management.models import (
+    BindingMapping,
+    Group,
+    Permission,
+    Principal,
+    ResourceDefinition,
+    Role,
+)
 from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
@@ -88,7 +99,11 @@ from management.principal.proxy import (
     external_principal_to_user,
 )
 from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
+from management.relation_replicator.relation_replicator import (
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+)
 from management.role.definer import delete_permission
 from management.role.model import Access
 from management.role.relation_api_dual_write_handler import (
@@ -129,9 +144,14 @@ from management.workspace.serializer import WorkspaceSerializer
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator, InMemoryTuples
 from rest_framework import status
 
-from api.common.pagination import StandardResultsSetPagination, WSGIRequestResultsSetPagination
+from api.common.pagination import (
+    StandardResultsSetPagination,
+    WSGIRequestResultsSetPagination,
+)
 from api.cross_access.model import RequestsRoles
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.cross_access.relation_api_dual_write_cross_access_handler import (
+    RelationApiDualWriteCrossAccessHandler,
+)
 from api.models import CrossAccountRequest, Tenant, User
 from api.tasks import (
     cross_account_cleanup,
@@ -480,14 +500,27 @@ def user_lookup(request):
 
     try:
         user_tenant = Tenant.objects.get(org_id=user_org_id)
-        logger.debug("queried rbac db for tenant: '%s' based on org_id: '%s'", user_tenant, user_org_id)
+        logger.debug(
+            "queried rbac db for tenant: '%s' based on org_id: '%s'",
+            user_tenant,
+            user_org_id,
+        )
     except Exception as err:
         logger.error(f"error querying for tenant with org_id: '{user_org_id}' in rbac, err: {err}")
         _log_user_lookup(caller, f"User lookup: error resolving tenant ({search_param})")
-        return handle_error(f"Internal error - failed to query rbac for tenant with org_id: '{user_org_id}'", 500)
+        return handle_error(
+            f"Internal error - failed to query rbac for tenant with org_id: '{user_org_id}'",
+            500,
+        )
 
     try:
-        principal = get_principal(username, request, verify_principal=False, from_query=False, user_tenant=user_tenant)
+        principal = get_principal(
+            username,
+            request,
+            verify_principal=False,
+            from_query=False,
+            user_tenant=user_tenant,
+        )
     except Exception as err:
         logger.error(f"error querying for principal with username: '{username}' in rbac, err: {err}")
         _log_user_lookup(caller, f"User lookup: error resolving principal ({search_param})")
@@ -528,7 +561,11 @@ def user_lookup(request):
 
     _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", principal=principal)
 
-    return HttpResponse(json.dumps(result, cls=DjangoJSONEncoder), content_type="application/json", status=200)
+    return HttpResponse(
+        json.dumps(result, cls=DjangoJSONEncoder),
+        content_type="application/json",
+        status=200,
+    )
 
 
 def _log_user_lookup(caller, description, principal=None):
@@ -624,7 +661,12 @@ def run_seeds(request):
         force_update_option = "force_update_relationships"
         skip_notifications_option = "skip_notifications"
 
-        valid_options = [type_option, force_create_option, force_update_option, skip_notifications_option]
+        valid_options = [
+            type_option,
+            force_create_option,
+            force_update_option,
+            skip_notifications_option,
+        ]
         valid_values = ["permissions", "roles", "groups"]
 
         for option in request.GET.keys():
@@ -640,7 +682,11 @@ def run_seeds(request):
                 return HttpResponse(f'Valid options for "{type_option}": {valid_values}.', status=400)
             args = {type: True for type in seed_types}
 
-        for option in [force_create_option, force_update_option, skip_notifications_option]:
+        for option in [
+            force_create_option,
+            force_update_option,
+            skip_notifications_option,
+        ]:
             value: Optional[str] = request.GET.get(option)
 
             if value is not None:
@@ -649,11 +695,15 @@ def run_seeds(request):
                 elif value == "false":
                     args[option] = False
                 else:
-                    return HttpResponse(f'Valid options for "{option}": {["true", "false"]}.', status=400)
+                    return HttpResponse(
+                        f'Valid options for "{option}": {["true", "false"]}.',
+                        status=400,
+                    )
 
         if args.get(force_create_option, False) and args.get(force_update_option, False):
             return HttpResponse(
-                f"{force_create_option} and {force_update_option} cannot both be set to true.", status=400
+                f"{force_create_option} and {force_update_option} cannot both be set to true.",
+                status=400,
             )
 
         # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
@@ -798,7 +848,12 @@ def populate_tenant_org_id_view(request):
                 return JsonResponse(
                     {
                         "message": "No tenants found with valid account_id to fetch org_id.",
-                        "statistics": {"updated": 0, "not_found": 0, "errors": 0, "error_details": []},
+                        "statistics": {
+                            "updated": 0,
+                            "not_found": 0,
+                            "errors": 0,
+                            "error_details": [],
+                        },
                     },
                     status=200,
                 )
@@ -1165,7 +1220,11 @@ def bootstrap_tenant(request):
             body = legacy_body
         tenants_to_bootstrap = parse_bootstrap_tenant_request(body)
     except UnicodeDecodeError:
-        return HttpResponse("Invalid request: body must be valid UTF-8.", status=400, content_type="text/plain")
+        return HttpResponse(
+            "Invalid request: body must be valid UTF-8.",
+            status=400,
+            content_type="text/plain",
+        )
     except (json.JSONDecodeError, ValueError) as exc:
         return HttpResponse(str(exc), status=400, content_type="text/plain")
 
@@ -1430,7 +1489,10 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
     if request.method == "GET":
         with connection.cursor() as cursor:
             if limit > 0:
-                cursor.execute("SELECT COUNT(*) FROM (SELECT 1 " + query + ") subquery", (tuple(excluded),))
+                cursor.execute(
+                    "SELECT COUNT(*) FROM (SELECT 1 " + query + ") subquery",
+                    (tuple(excluded),),
+                )
             else:
                 cursor.execute(
                     "SELECT COUNT(*) " + query,
@@ -1476,7 +1538,11 @@ def str_to_bool(value: str) -> bool:
 
 def handle_error(message: str, status_response: int) -> HttpResponse:
     """Return HttpResponse object."""
-    return HttpResponse(json.dumps({"error": message}), content_type="application/json", status=status_response)
+    return HttpResponse(
+        json.dumps({"error": message}),
+        content_type="application/json",
+        status=status_response,
+    )
 
 
 def get_role_response(role: Role) -> HttpResponse:
@@ -1618,7 +1684,10 @@ def correct_resource_definitions(request):
             resource_definition = get_object_or_404(ResourceDefinition, id=resource_definition_id)
             resource_definition.attributeFilter = normalize_attribute_filter(resource_definition.attributeFilter)
             resource_definition.save()
-            return HttpResponse(f"Resource definition id = {resource_definition_id} updated.", status=200)
+            return HttpResponse(
+                f"Resource definition id = {resource_definition_id} updated.",
+                status=200,
+            )
 
         count = 0
         with connection.cursor() as cursor:
@@ -1810,7 +1879,11 @@ def retrieve_ungrouped_workspace(request):
                 logger.info(f"[Tenant Bootstrap]Retrieving ungrouped workspace for org_id: {org_id}")
             ungrouped_hosts = get_or_create_ungrouped_workspace(tenant)
             data = WorkspaceSerializer(ungrouped_hosts).data
-        return HttpResponse(json.dumps(data, cls=DjangoJSONEncoder), content_type="application/json", status=201)
+        return HttpResponse(
+            json.dumps(data, cls=DjangoJSONEncoder),
+            content_type="application/json",
+            status=201,
+        )
     except Exception as e:
         error_details = {
             "function": "retrieve_ungrouped_workspace",
@@ -1836,7 +1909,10 @@ def lookup_resource(request):
     req_data = load_request_body(request)
 
     if not validate_relations_input("lookup_resources", req_data):
-        return JsonResponse({"detail": "Invalid request body provided in request to lookup_resources."}, status=500)
+        return JsonResponse(
+            {"detail": "Invalid request body provided in request to lookup_resources."},
+            status=500,
+        )
 
     # Request parameters for resource lookup on relations api from post request
     resource_type_name = req_data["resource_type"]["name"]
@@ -1858,7 +1934,10 @@ def lookup_resource(request):
                 relation=resource_relation,
                 subject=common_pb2.SubjectReference(
                     subject=common_pb2.ObjectReference(
-                        type=common_pb2.ObjectType(namespace=resource_type_namespace, name=resource_subject_name),
+                        type=common_pb2.ObjectType(
+                            namespace=resource_type_namespace,
+                            name=resource_subject_name,
+                        ),
                         id=resource_subject_id,
                     ),
                 ),
@@ -1881,7 +1960,11 @@ def lookup_resource(request):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
-            {"detail": "Error occurred in call to lookup resources endpoint", "error": str(e)}, status=500
+            {
+                "detail": "Error occurred in call to lookup resources endpoint",
+                "error": str(e),
+            },
+            status=500,
         )
 
 
@@ -1891,7 +1974,10 @@ def read_tuples(request):
     req_data = load_request_body(request)
 
     if not validate_relations_input("read_tuples", req_data):
-        return JsonResponse({"detail": "Invalid request body provided in request to read_tuples."}, status=500)
+        return JsonResponse(
+            {"detail": "Invalid request body provided in request to read_tuples."},
+            status=500,
+        )
 
     # Request parameters for read tuples on relations api from post request
     resource_namespace = req_data["filter"]["resource_namespace"]
@@ -1940,7 +2026,13 @@ def read_tuples(request):
         return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
-        return JsonResponse({"detail": "Error occurred in call to read tuples endpoint", "error": str(e)}, status=500)
+        return JsonResponse(
+            {
+                "detail": "Error occurred in call to read tuples endpoint",
+                "error": str(e),
+            },
+            status=500,
+        )
 
 
 def check_relation(request):
@@ -1949,7 +2041,10 @@ def check_relation(request):
     req_data = load_request_body(request)
 
     if not validate_relations_input("check_relation", req_data):
-        return JsonResponse({"detail": "Invalid request body provided in request to check_relation."}, status=500)
+        return JsonResponse(
+            {"detail": "Invalid request body provided in request to check_relation."},
+            status=500,
+        )
 
     # Request parameters for resource lookup on relations api from post request
     resource_name = req_data["resource"]["type"]["name"]
@@ -1996,7 +2091,11 @@ def check_relation(request):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
-            {"detail": "Error occurred in call to check relation endpoint", "error": str(e)}, status=500
+            {
+                "detail": "Error occurred in call to check relation endpoint",
+                "error": str(e),
+            },
+            status=500,
         )
 
 
@@ -2006,7 +2105,10 @@ def lookup_subjects(request):
     req_data = load_request_body(request)
 
     if not validate_relations_input("lookup_subjects", req_data):
-        return JsonResponse({"detail": "Invalid request body provided in request to lookup_subjects."}, status=500)
+        return JsonResponse(
+            {"detail": "Invalid request body provided in request to lookup_subjects."},
+            status=500,
+        )
 
     # Request parameters for subject lookup on relations api from post request
     resource_type_name = req_data["resource"]["type"]["name"]
@@ -2056,7 +2158,11 @@ def lookup_subjects(request):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
-            {"detail": "Error occurred in call to lookup subjects endpoint", "error": str(e)}, status=500
+            {
+                "detail": "Error occurred in call to lookup subjects endpoint",
+                "error": str(e),
+            },
+            status=500,
         )
 
 
@@ -2073,12 +2179,18 @@ def group_assignments(request, group_uuid):
         relation_assignments = relations_dual_write_handler._replicator.check_relationships(relationships)
     except RpcError as e:
         return JsonResponse(
-            {"detail": "gRPC error occurred during inventory group assignment check", "error": str(e)},
+            {
+                "detail": "gRPC error occurred during inventory group assignment check",
+                "error": str(e),
+            },
             status=400,
         )
     except Exception as e:
         return JsonResponse(
-            {"detail": "Unexpected error during inventory group assignment check", "error": str(e)},
+            {
+                "detail": "Unexpected error during inventory group assignment check",
+                "error": str(e),
+            },
             status=500,
         )
     return JsonResponse(relation_assignments, safe=False)
@@ -2090,7 +2202,10 @@ def check_inventory(request):
     req_data = load_request_body(request)
 
     if not validate_inventory_input("check", req_data):
-        return JsonResponse({"detail": "Invalid request body provided in request to check inventory."}, status=500)
+        return JsonResponse(
+            {"detail": "Invalid request body provided in request to check inventory."},
+            status=500,
+        )
 
     # Request parameters for check relation on inventory api from post request
     resource_id = req_data["resource"]["resource_id"]
@@ -2138,7 +2253,11 @@ def check_inventory(request):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
-            {"detail": "Error occurred in call to check inventory endpoint", "error": str(e)}, status=500
+            {
+                "detail": "Error occurred in call to check inventory endpoint",
+                "error": str(e),
+            },
+            status=500,
         )
 
 
@@ -2168,12 +2287,18 @@ def check_bootstrapped_tenants(request, org_id):
         )
     except RpcError as e:
         return JsonResponse(
-            {"detail": "gRPC error occurred during inventory bootstrapped tenant check", "error": str(e)},
+            {
+                "detail": "gRPC error occurred during inventory bootstrapped tenant check",
+                "error": str(e),
+            },
             status=400,
         )
     except Exception as e:
         return JsonResponse(
-            {"detail": "Unexpected error during inventory bootstrapped tenant check", "error": str(e)},
+            {
+                "detail": "Unexpected error during inventory bootstrapped tenant check",
+                "error": str(e),
+            },
             status=500,
         )
 
@@ -2212,7 +2337,10 @@ def check_workspace_relation(request, workspace_uuid):
             )
         except Exception as e:
             return JsonResponse(
-                {"detail": "Unexpected error during inventory workspace descendants relation check", "error": str(e)},
+                {
+                    "detail": "Unexpected error during inventory workspace descendants relation check",
+                    "error": str(e),
+                },
                 status=500,
             )
     elif workspace:
@@ -2238,12 +2366,18 @@ def check_workspace_relation(request, workspace_uuid):
             }
         except RpcError as e:
             return JsonResponse(
-                {"detail": "gRPC error occurred during inventory workspace relation check", "error": str(e)},
+                {
+                    "detail": "gRPC error occurred during inventory workspace relation check",
+                    "error": str(e),
+                },
                 status=400,
             )
         except Exception as e:
             return JsonResponse(
-                {"detail": "Unexpected error during inventory workspace relation check", "error": str(e)},
+                {
+                    "detail": "Unexpected error during inventory workspace relation check",
+                    "error": str(e),
+                },
                 status=500,
             )
     return JsonResponse(workspace_check_response, safe=False)
@@ -2301,12 +2435,19 @@ def check_role(request, role_uuid):
         raise
     except RpcError as e:
         return JsonResponse(
-            {"detail": "gRPC error occurred during inventory role relation check", "error": str(e)},
+            {
+                "detail": "gRPC error occurred during inventory role relation check",
+                "error": str(e),
+            },
             status=400,
         )
     except Exception as e:
         return JsonResponse(
-            {"detail": "Unexpected error occurred during inventory role relation check", "error": str(e)}, status=500
+            {
+                "detail": "Unexpected error occurred during inventory role relation check",
+                "error": str(e),
+            },
+            status=500,
         )
 
 
@@ -2669,7 +2810,11 @@ def bulk_cleanup_orphan_bindings(request):
     try:
         bulk_cleanup_orphan_bindings_in_worker.delay(tenant_limit=tenant_limit)
         return JsonResponse(
-            {"message": "Cleanup enqueued in background worker.", "tenant_limit": tenant_limit}, status=202
+            {
+                "message": "Cleanup enqueued in background worker.",
+                "tenant_limit": tenant_limit,
+            },
+            status=202,
         )
     except Exception as e:
         logger.exception(f"Error fixing orphan relations, {tenant_limit=}", exc_info=True)
@@ -2777,7 +2922,10 @@ def remove_unassigned_system_binding_mappings(request):
         return JsonResponse({"message": "Cleanup enqueued in background worker."}, status=202)
     except Exception as e:
         logger.exception("Error removing unassigned system binding mappings", exc_info=True)
-        return JsonResponse({"detail": f"Error removing unassigned system binding mappings: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error removing unassigned system binding mappings: {str(e)}"},
+            status=500,
+        )
 
 
 @require_http_methods(["POST"])
@@ -2813,7 +2961,10 @@ def remove_deleted_workspace_bindings(request):
         return JsonResponse({"message": "Cleanup enqueued in background worker."}, status=202)
     except Exception as e:
         logger.exception("Error removing bindings for deleted workspaces", exc_info=True)
-        return JsonResponse({"detail": f"Error removing bindings for deleted workspaces: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error removing bindings for deleted workspaces: {str(e)}"},
+            status=500,
+        )
 
 
 @require_http_methods(["POST"])
@@ -2868,7 +3019,7 @@ def mcp_tool_descriptions(request, tool_name=None):
                     "tool_name": name,
                     "default_description": default_desc,
                     "override_description": override,
-                    "active_description": override if override is not None else default_desc,
+                    "active_description": (override if override is not None else default_desc),
                 }
             )
         return JsonResponse({"tools": tools}, status=200)
@@ -2887,7 +3038,7 @@ def mcp_tool_descriptions(request, tool_name=None):
                 "tool_name": tool_name,
                 "default_description": default_desc,
                 "override_description": override,
-                "active_description": override if override is not None else default_desc,
+                "active_description": (override if override is not None else default_desc),
             },
             status=200,
         )
@@ -2906,7 +3057,12 @@ def mcp_tool_descriptions(request, tool_name=None):
         logger.info("mcp: description override removed for tool=%s", tool_name)
         default_desc = next((t.description or "" for t in _get_tools() if t.name == tool_name), "")
         return JsonResponse(
-            {"tool_name": tool_name, "override_description": None, "active_description": default_desc}, status=200
+            {
+                "tool_name": tool_name,
+                "override_description": None,
+                "active_description": default_desc,
+            },
+            status=200,
         )
 
 
@@ -2954,7 +3110,10 @@ def replicate_updated_workspaces(request):
         return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
 
     if "stream" not in request.GET:
-        return JsonResponse({"field": "stream", "detail": 'missing query parameter "stream"'}, status=400)
+        return JsonResponse(
+            {"field": "stream", "detail": 'missing query parameter "stream"'},
+            status=400,
+        )
 
     since = request.GET["since"]
     stream = request.GET["stream"]
@@ -3061,7 +3220,10 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     Returns 202 with task_id on success.
     """
     if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
-        return JsonResponse({"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"}, status=403)
+        return JsonResponse(
+            {"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"},
+            status=403,
+        )
 
     try:
         body = load_request_body(request)
@@ -3075,7 +3237,10 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     try:
         parsed_ts = datetime.datetime.fromisoformat(restore_timestamp)
     except (ValueError, TypeError):
-        return JsonResponse({"detail": "restore_timestamp must be a valid ISO 8601 datetime"}, status=400)
+        return JsonResponse(
+            {"detail": "restore_timestamp must be a valid ISO 8601 datetime"},
+            status=400,
+        )
 
     if parsed_ts.tzinfo is None:
         parsed_ts = parsed_ts.replace(tzinfo=datetime.timezone.utc)
@@ -3256,7 +3421,11 @@ def bootstrap_users_from_user_ids(request):
     dry_run = request.GET.get("dry_run", "false").lower() == "true"
     user_ids = [str(uid) for uid in user_ids]
 
-    logger.info("Bootstrap users from user_ids requested. count=%d dry_run=%s", len(user_ids), dry_run)
+    logger.info(
+        "Bootstrap users from user_ids requested. count=%d dry_run=%s",
+        len(user_ids),
+        dry_run,
+    )
 
     resp = PROXY.request_filtered_principals(
         user_ids,
@@ -3266,7 +3435,11 @@ def bootstrap_users_from_user_ids(request):
 
     if isinstance(resp, dict) and "errors" in resp:
         bop_status = resp.get("status_code", 500)
-        logger.error("BOP error during bootstrap_users_from_user_ids: status=%s errors=%s", bop_status, resp["errors"])
+        logger.error(
+            "BOP error during bootstrap_users_from_user_ids: status=%s errors=%s",
+            bop_status,
+            resp["errors"],
+        )
         return handle_error(f"Error querying BOP for user IDs: {resp['errors']}", 500)
 
     bop_users = resp.get("data", [])
@@ -3284,7 +3457,13 @@ def bootstrap_users_from_user_ids(request):
     for user_id in user_ids:
         bop_user = bop_user_by_id.get(user_id)
         if bop_user is None:
-            results.append({"user_id": user_id, "status": "not_found", "detail": "User not found in BOP"})
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "not_found",
+                    "detail": "User not found in BOP",
+                }
+            )
             continue
 
         user = external_principal_to_user(bop_user)
@@ -3347,7 +3526,12 @@ def bootstrap_users_from_user_ids(request):
                     }
                 )
         except Exception as err:
-            logger.exception("Error bootstrapping user_id=%s org_id=%s: %s", user_id, user.org_id, err)
+            logger.exception(
+                "Error bootstrapping user_id=%s org_id=%s: %s",
+                user_id,
+                user.org_id,
+                err,
+            )
             results.append(
                 {
                     "user_id": user_id,
