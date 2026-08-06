@@ -3520,7 +3520,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
             expected_tuples_to_remove.add(binding.subject_tuple(self.group))
             expected_tuples_to_remove.update(binding.binding_tuples())
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3552,7 +3552,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
             role=self.role2, resource_id=str(self.workspace.id), tenant=self.tenant
         )
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3597,7 +3597,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
             role=self.role2, resource_id=str(self.workspace.id), tenant=self.tenant
         )
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3627,7 +3627,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
         )
         self.group.principals.add(principal)
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3650,7 +3650,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
         )
         lonely_group.principals.add(principal)
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             lonely_group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3687,7 +3687,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
         )
         self.assertEqual(len(all_bindings), 3)
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,
@@ -3721,7 +3721,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
         self.group.platform_default = True
         self.group.save()
 
-        dual_write_handler = self.RelationApiDualWriteGroupHandler(
+        dual_write_handler = self.InventoryApiDualWriteGroupHandler(
             self.group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self.tracker,

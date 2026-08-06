@@ -173,7 +173,7 @@ class MigrateTests(TestCase):
         self.cross_account_request.roles.add(self.system_role_2)
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, PRINCIPAL_USER_DOMAIN="redhat", READ_ONLY_API_MODE=True)
-    @patch("migration_tool.migrate.RelationApiDualWriteGroupHandler.replicate")
+    @patch("migration_tool.migrate.InventoryApiDualWriteGroupHandler.replicate")
     def test_migration_of_data_no_replication_event_to_migrate_groups(self, replicate_method):
         """Test that we get the correct access for a principal."""
         kwargs = {"exclude_apps": ["app1"], "orgs": ["7654321"]}

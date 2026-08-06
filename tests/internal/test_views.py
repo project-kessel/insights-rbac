@@ -5443,7 +5443,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         }
 
         # Create this so that we can check that BindingMappings aren't accidentally created. (A previous implementation
-        # incorrectly used RelationApiDualWriteHandler for system roles.)
+        # incorrectly used InventoryApiDualWriteHandler for system roles.)
         Access.objects.create(
             tenant=self.public_tenant,
             role=self.role,

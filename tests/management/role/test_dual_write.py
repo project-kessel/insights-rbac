@@ -177,7 +177,7 @@ class DualWriteTestCase(TestCase):
     def dual_write_handler(
         self, role: Role, event_type: ReplicationEventType, replicator: Optional[InventoryReplicator] = None
     ) -> InventoryApiDualWriteHandler:
-        """Create a RelationApiDualWriteHandler for the given role and event type."""
+        """Create an InventoryApiDualWriteHandler for the given role and event type."""
         return InventoryApiDualWriteHandler(role, event_type, replicator=self._get_replicator(replicator))
 
     def _get_replicator(self, replicator: Optional[InventoryReplicator]) -> InventoryReplicator:
@@ -1270,7 +1270,7 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         # Don't generate any relations — simulate a no-op role assignment
         with enable_logging():
             with (
-                self.assertLogs("management.group.relation_api_dual_write_group_handler", level="INFO") as logs,
+                self.assertLogs("management.group.inventory_api_dual_write_group_handler", level="INFO") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 handler.replicate()

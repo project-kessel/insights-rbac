@@ -1834,7 +1834,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(mock_super_create.call_count, 1)
 
     @patch(
-        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+        "management.workspace.inventory_api_dual_write_workspace_handler.InventoryApiDualWriteWorkspaceHandler._replicate"
     )
     def test_create_dual_write_operational_error_propagates_for_retry(self, mock_replicate):
         """
@@ -1861,7 +1861,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response["Retry-After"], "1")
 
     @patch(
-        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+        "management.workspace.inventory_api_dual_write_workspace_handler.InventoryApiDualWriteWorkspaceHandler._replicate"
     )
     def test_create_dual_write_non_db_exception_raises_dual_write_error(self, mock_replicate):
         """
@@ -2753,7 +2753,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         self.assertEqual(mock_serializer_move.call_count, 1)
 
     @patch(
-        "management.workspace.relation_api_dual_write_workspace_handler.RelationApiDualWriteWorkspaceHandler._replicate"
+        "management.workspace.inventory_api_dual_write_workspace_handler.InventoryApiDualWriteWorkspaceHandler._replicate"
     )
     def test_move_dual_write_operational_error_propagates_for_retry(self, mock_replicate):
         """

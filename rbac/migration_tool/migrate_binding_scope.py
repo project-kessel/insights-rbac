@@ -45,7 +45,7 @@ def migrate_custom_role_bindings(raw_role: Role, replicator: InventoryReplicator
     """
     Migrate all bindings for a custom role to the correct scope.
 
-    Uses RelationApiDualWriteHandler to delete old bindings and create new ones at correct scope.
+    Uses InventoryApiDualWriteHandler to delete old bindings and create new ones at correct scope.
     Groups and users assigned to the role are preserved.
 
     Args:
@@ -94,7 +94,7 @@ def migrate_system_role_bindings_for_group(raw_group: Group, replicator: Invento
     """
     Migrate system role bindings for a group to correct scope.
 
-    Uses RelationApiDualWriteGroupHandler to rebind system roles at correct scope,
+    Uses InventoryApiDualWriteGroupHandler to rebind system roles at correct scope,
     then removes the group from any wrong-scoped bindings.
 
     Args:
@@ -342,8 +342,8 @@ def migrate_all_role_bindings(
     """
     Migrate all role bindings to correct scope.
 
-    - Custom roles: Migrated individually using RelationApiDualWriteHandler
-    - System roles: Migrated per group using RelationApiDualWriteGroupHandler
+    - Custom roles: Migrated individually using InventoryApiDualWriteHandler
+    - System roles: Migrated per group using InventoryApiDualWriteGroupHandler
 
     Args:
         replicator: Replicator to use for relation updates. Defaults to OutboxReplicator.
@@ -365,7 +365,7 @@ def migrate_all_role_bindings(
         if tenant.org_id is None:
             raise ValueError("Cannot migrate binding scope for a tenant without an org_id.")
 
-    # We check for instance equality here to mirror RelationApiDualWriteSubjectHandler.replication_enabled.
+    # We check for instance equality here to mirror InventoryApiDualWriteSubjectHandler.replication_enabled.
     if settings.REPLICATION_TO_RELATION_ENABLED is not True:
         raise RuntimeError("Replication must be enabled while migrating binding scope.")
 

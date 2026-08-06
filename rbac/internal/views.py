@@ -2404,7 +2404,7 @@ def check_role(request, role_uuid):
                 # Ensure that we don't accidentally update any models.
                 transaction.set_rollback(True)
         else:
-            # We have to lock the role before passing it to RelationApiDualWriteHandler.
+            # We have to lock the role before passing it to InventoryApiDualWriteHandler.
             with transaction.atomic():
                 role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
 
