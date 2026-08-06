@@ -24,7 +24,7 @@ from tests.identity_request import IdentityRequest
 
 RELATIONS_CHANNEL_PATH = "management.inventory_checker.inventory_api_check.create_client_channel_relation"
 RELATIONS_STUB_PATH = (
-    "management.inventory_checker.inventory_api_check.relation_tuples_pb2_grpc.KesselTupleServiceStub"  # noqa: E501
+    "management.inventory_checker.inventory_api_check.tuple_service_pb2_grpc.KesselTupleServiceStub"  # noqa: E501
 )
 
 
