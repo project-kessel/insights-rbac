@@ -5581,7 +5581,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["error"], "Simulated internal error")
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
     )
     @patch(
         "management.inventory_checker.inventory_api_check"
@@ -5619,7 +5619,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(len(checks["roles"]), 1)
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
     )
     @patch(
         "management.inventory_checker.inventory_api_check"
@@ -5701,7 +5701,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, 404)
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
         side_effect=RpcError("Simulated gRPC error"),
     )
     def test_inventory_check_cross_account_request_grpc_error(self, mock_handler_cls):
@@ -5725,7 +5725,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertIn("gRPC error", response_body["detail"])
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
         side_effect=Exception("Simulated internal error"),
     )
     def test_inventory_check_cross_account_request_unexpected_error(self, mock_handler_cls):

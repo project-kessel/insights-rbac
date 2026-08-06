@@ -69,7 +69,7 @@ class InventoryApiDualWriteCrossAccessHandler(InventoryApiDualWriteSubjectHandle
         replicator: Optional[InventoryReplicator] = None,
         resource_service: Optional[ImplicitResourceService] = None,
     ):
-        """Initialize RelationApiDualWriteCrossAccessHandler."""
+        """Initialize InventoryApiDualWriteCrossAccessHandler."""
         if not self.replication_enabled():
             return
 

@@ -168,7 +168,7 @@ def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: InventoryRepl
     if car.status != "approved":
         return 0
 
-    # We do not need to check for V1-writability here. RelationApiDualWriteCrossAccessHandler will handle V2 tenants.
+    # We do not need to check for V1-writability here. InventoryApiDualWriteCrossAccessHandler will handle V2 tenants.
 
     logger.info(f"Migrating roles for cross-account request: pk={car.pk!r}")
 
