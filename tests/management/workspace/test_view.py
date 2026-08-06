@@ -3304,7 +3304,6 @@ class WorkspaceTestsList(WorkspaceViewTests):
         """Test filtering workspaces by multiple comma-separated ids."""
         url = reverse("v2_management:workspace-list")
         client = APIClient()
-        # Use two standard workspaces since ids filter defaults to type=standard
         ids = f"{self.standard_workspace.id},{self.standard_sub_workspace.id}"
         response = client.get(f"{url}?ids={ids}", None, format="json", **self.headers)
         payload = response.data
@@ -3373,20 +3372,20 @@ class WorkspaceTestsList(WorkspaceViewTests):
         self.assertIn(str(self.default_workspace.id), returned_ids)
         self.assertIn(str(self.root_workspace.id), returned_ids)
 
-    def test_workspace_list_filter_by_ids_defaults_to_standard(self):
-        """Test that ids filter defaults to type=standard when type not specified."""
+    def test_workspace_list_filter_by_ids_returns_all_types(self):
+        """Test that ids filter without type returns all matching workspaces regardless of type."""
         url = reverse("v2_management:workspace-list")
         client = APIClient()
-        # Include workspaces of different types
         ids = f"{self.standard_workspace.id},{self.default_workspace.id},{self.root_workspace.id}"
         response = client.get(f"{url}?ids={ids}", None, format="json", **self.headers)
         payload = response.data
 
         self.assertSuccessfulList(response, payload)
-        # Only the standard workspace should be returned (default type filter)
-        self.assertEqual(payload.get("meta").get("count"), 1)
-        self.assertEqual(payload.get("data")[0]["id"], str(self.standard_workspace.id))
-        self.assertEqual(payload.get("data")[0]["type"], "standard")
+        self.assertEqual(payload.get("meta").get("count"), 3)
+        returned_ids = [ws["id"] for ws in payload.get("data")]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.default_workspace.id), returned_ids)
+        self.assertIn(str(self.root_workspace.id), returned_ids)
 
     def test_workspace_list_filter_by_parent_id(self):
         """Test filtering workspaces by parent_id returns only direct children."""
@@ -3602,8 +3601,8 @@ class WorkspaceTestsQuery(WorkspaceViewTests):
         self.assertIn(str(self.standard_workspace.id), returned_ids)
         self.assertIn(str(self.standard_sub_workspace.id), returned_ids)
 
-    def test_query_ids_defaults_to_standard_type(self):
-        """Query without explicit type defaults to standard workspaces only."""
+    def test_query_ids_returns_all_types(self):
+        """Query by IDs without type returns all matching workspaces regardless of type."""
         client = APIClient()
         response = client.post(
             self._query_url(),
@@ -3620,9 +3619,11 @@ class WorkspaceTestsQuery(WorkspaceViewTests):
         payload = response.data
 
         self.assertSuccessfulList(response, payload)
-        self.assertEqual(payload["meta"]["count"], 1)
-        self.assertEqual(payload["data"][0]["id"], str(self.standard_workspace.id))
-        self.assertEqual(payload["data"][0]["type"], "standard")
+        self.assertEqual(payload["meta"]["count"], 3)
+        returned_ids = [ws["id"] for ws in payload["data"]]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.default_workspace.id), returned_ids)
+        self.assertIn(str(self.root_workspace.id), returned_ids)
 
     def test_query_ids_with_type_all(self):
         """Query with type=all returns workspaces of all types."""
