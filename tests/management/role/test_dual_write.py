@@ -40,7 +40,7 @@ from management.principal.model import Principal
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.inventory_replicator import (
     DualWriteException,
-    RelationReplicator,
+    InventoryReplicator,
     ReplicationEventType,
 )
 from management.role.model import (
@@ -51,7 +51,7 @@ from management.role.model import (
     SourceKey,
 )
 from management.role.platform import platform_v2_role_uuid_for
-from management.role.inventoryn_api_dual_write_handler import (
+from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
@@ -175,12 +175,12 @@ class DualWriteTestCase(TestCase):
         return V2boundresource.for_model(tenant)
 
     def dual_write_handler(
-        self, role: Role, event_type: ReplicationEventType, replicator: Optional[RelationReplicator] = None
+        self, role: Role, event_type: ReplicationEventType, replicator: Optional[InventoryReplicator] = None
     ) -> InventoryApiDualWriteHandler:
         """Create a RelationApiDualWriteHandler for the given role and event type."""
         return InventoryApiDualWriteHandler(role, event_type, replicator=self._get_replicator(replicator))
 
-    def _get_replicator(self, replicator: Optional[RelationReplicator]) -> RelationReplicator:
+    def _get_replicator(self, replicator: Optional[InventoryReplicator]) -> InventoryReplicator:
         return replicator if replicator is not None else InMemoryRelationReplicator(self.tuples)
 
     def given_v1_system_role(
@@ -238,7 +238,11 @@ class DualWriteTestCase(TestCase):
         )
 
     def given_update_to_v1_role(
-        self, role: Role, default: list[str] = [], replicator: Optional[RelationReplicator] = None, **kwargs: list[str]
+        self,
+        role: Role,
+        default: list[str] = [],
+        replicator: Optional[InventoryReplicator] = None,
+        **kwargs: list[str],
     ):
         """Update the given role with the given workspace permissions."""
         dual_write = self.dual_write_handler(role, ReplicationEventType.UPDATE_CUSTOM_ROLE, replicator=replicator)
@@ -263,7 +267,7 @@ class DualWriteTestCase(TestCase):
             role=role, default=default, **self._test_workspace_perms(ws_1=ws_1, ws_2=ws_2, ws_3=ws_3)
         )
 
-    def given_v1_role_removed(self, role: Role, replicator: Optional[RelationReplicator] = None):
+    def given_v1_role_removed(self, role: Role, replicator: Optional[InventoryReplicator] = None):
         """Remove the given custom role."""
         dual_write = self.dual_write_handler(role, ReplicationEventType.DELETE_CUSTOM_ROLE, replicator=replicator)
         dual_write.prepare_for_update()
@@ -288,7 +292,7 @@ class DualWriteTestCase(TestCase):
         dual_write.replicate_new_principals(principals)
         return group, principals
 
-    def given_custom_default_group(self, replicator: Optional[RelationReplicator] = None) -> Group:
+    def given_custom_default_group(self, replicator: Optional[InventoryReplicator] = None) -> Group:
         with patch("management.role.relation_api_dual_write_handler.OutboxReplicator.replicate") as replicate:
             replicate.side_effect = self._get_replicator(replicator).replicate
             return self.fixture.custom_default_group(self.tenant)
@@ -306,7 +310,7 @@ class DualWriteTestCase(TestCase):
         dual_write_handler.replicate()
         return car
 
-    def given_car_expired(self, car: CrossAccountRequest, replicator: Optional[RelationReplicator] = None):
+    def given_car_expired(self, car: CrossAccountRequest, replicator: Optional[InventoryReplicator] = None):
         dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
             car,
             ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
@@ -342,7 +346,7 @@ class DualWriteTestCase(TestCase):
         return principals
 
     def given_roles_assigned_to_group(
-        self, group: Group, roles: list[Role], replicator: Optional[RelationReplicator] = None
+        self, group: Group, roles: list[Role], replicator: Optional[InventoryReplicator] = None
     ) -> Policy:
         """Assign the [roles] to the [group]."""
         assert roles, "Roles must not be empty"
@@ -359,7 +363,7 @@ class DualWriteTestCase(TestCase):
         return policy
 
     def given_roles_unassigned_from_group(
-        self, group: Group, roles: list[Role], replicator: Optional[RelationReplicator] = None
+        self, group: Group, roles: list[Role], replicator: Optional[InventoryReplicator] = None
     ) -> Policy:
         """Unassign the [roles] to the [group]."""
         assert roles, "Roles must not be empty"
@@ -376,7 +380,7 @@ class DualWriteTestCase(TestCase):
         dual_write_handler.replicate()
         return policy
 
-    def given_group_removed(self, group: Group, replicator: Optional[RelationReplicator] = None):
+    def given_group_removed(self, group: Group, replicator: Optional[InventoryReplicator] = None):
         """Remove the given group."""
         dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
@@ -502,7 +506,7 @@ class DualWriteTestCase(TestCase):
         self.assertEqual(
             num_role_bindings,
             num,
-            f"Expected exactly {num} role binding{"s" if num != 1 else ""} against resource {target} "
+            f"Expected exactly {num} role binding{'s' if num != 1 else ''} against resource {target} "
             f"with roles {for_v2_roles} and groups {for_groups}, "
             f"but got {len(role_bindings)}.\n"
             f"Matched role bindings: {role_bindings}.\n"
