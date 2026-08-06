@@ -74,7 +74,7 @@ class BaseInventoryApiDualWriteHandler(ABC):
     _expected_empty_relation_reason = None
 
     def __init__(self, replicator: Optional[InventoryReplicator] = None):
-        """Initialize SeedingRelationApiDualWriteHandler."""
+        """Initialize SeedingInventoryApiDualWriteHandler."""
         if not self.replication_enabled():
             self._replicator = NoopReplicator()
             return
@@ -105,7 +105,7 @@ class SeedingInventoryApiDualWriteHandler(BaseInventoryApiDualWriteHandler):
 
         if not role.system:
             raise ValueError(
-                "SeedingRelationApiDualWriteHandler only supports system roles. "
+                "SeedingInventoryApiDualWriteHandler only supports system roles. "
                 "InventoryApiDualWriteHandler must be used for custom roles. "
                 f"Provided custom role: pk={role.pk!r}."
             )

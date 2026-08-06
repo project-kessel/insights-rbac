@@ -1295,7 +1295,7 @@ class SeedMixedScopeTest(IdentityRequest):
         self.assertEqual(sorted(binding_scopes), sorted([Scope.TENANT, Scope.ROOT]))
 
         # Replicate as new system role via the SeedingHandler
-        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler = SeedingInventoryApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
         handler.replicate_new_system_role()
 
         # The handler should generate platform parent relations for BOTH scopes.
@@ -1349,7 +1349,7 @@ class SeedMixedScopeTest(IdentityRequest):
         )
         Access.objects.create(role=role, permission=sub_perm, tenant=self.public_tenant)
 
-        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler = SeedingInventoryApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
         handler.replicate_new_system_role()
 
         # Only TENANT parent should exist.
@@ -1377,7 +1377,7 @@ class SeedMixedScopeTest(IdentityRequest):
         )
         Access.objects.create(role=role, permission=adv_perm, tenant=self.public_tenant)
 
-        handler2 = SeedingRelationApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
+        handler2 = SeedingInventoryApiDualWriteHandler(role=role, replicator=InMemoryRelationReplicator(tuples))
         handler2.prepare_for_update()
         handler2.replicate_update_system_role()
 

@@ -48,7 +48,7 @@ RBAC maintains role hierarchy in **two places**:
 | Layer | Mechanism | Tuple shape |
 |-------|-----------|-------------|
 | **Postgres** | `RoleV2.children` M2M (`management/role/definer.py` → `_seed_v2_role_from_v1`) | Django only |
-| **SpiceDB/Kessel** | `SeedingRelationApiDualWriteHandler.replicate_new_system_role()` via outbox | `rbac/role:<platform_uuid>#child@rbac/role:<seeded_uuid>` |
+| **SpiceDB/Kessel** | `SeedingInventoryApiDualWriteHandler.replicate_new_system_role()` via outbox | `rbac/role:<platform_uuid>#child@rbac/role:<seeded_uuid>` |
 
 **Critical:** `platform_role.children.add(v2_role)` updates Postgres only. It does **not** write to the outbox or SpiceDB.
 

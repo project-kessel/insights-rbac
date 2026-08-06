@@ -541,7 +541,7 @@ def generate_seeded_role_hierarchy_tuples(
 ) -> list[RelationTuple]:
     """Generate expected parent-child tuples for a seeded role.
 
-    Replicates the logic from SeedingRelationApiDualWriteHandler._check_create_admin_platform_relation()
+    Replicates the logic from SeedingInventorynApiDualWriteHandler._check_create_admin_platform_relation()
     to determine what parent-child relationships should exist in Kessel for a given seeded role.
 
     Args:
