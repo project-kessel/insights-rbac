@@ -293,7 +293,7 @@ class DualWriteTestCase(TestCase):
         return group, principals
 
     def given_custom_default_group(self, replicator: Optional[InventoryReplicator] = None) -> Group:
-        with patch("management.role.relation_api_dual_write_handler.OutboxReplicator.replicate") as replicate:
+        with patch("management.role.inventory_api_dual_write_handler.OutboxReplicator.replicate") as replicate:
             replicate.side_effect = self._get_replicator(replicator).replicate
             return self.fixture.custom_default_group(self.tenant)
 
@@ -2208,7 +2208,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="WARNING") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="WARNING") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 handler.replicate_new_system_role()
@@ -2490,7 +2490,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
             self.assertEqual(0, self.tuples.count_tuples(resource("rbac", "role_binding", role_binding_uuid)))
             self.assertEqual(0, self.tuples.count_tuples(subject("rbac", "role_binding", role_binding_uuid)))
 
-    @patch("management.role.relation_api_dual_write_handler.OutboxReplicator.replicate")
+    @patch("management.role.inventory_api_dual_write_handler.OutboxReplicator.replicate")
     def test_create_role_with_empty_access(self, replicate_mock):
         """Create a role and its bindings when creating a custom role."""
         self.given_v1_role("role_without_access", [])
@@ -2744,7 +2744,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="INFO") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 dual_write.replicate_new_or_updated_role(role)
@@ -2769,7 +2769,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="INFO") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 dual_write.replicate_deleted_role()

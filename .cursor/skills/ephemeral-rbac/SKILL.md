@@ -214,7 +214,7 @@ Use this when reporting findings to the user:
 ## Code references
 
 - Django children M2M: `rbac/management/role/definer.py` (`_seed_v2_role_from_v1`)
-- SpiceDB child tuples: `rbac/management/role/relation_api_dual_write_handler.py` (`_check_create_admin_platform_relation`)
+- SpiceDB child tuples: `rbac/management/role/inventory_api_dual_write_handler.py` (`_check_create_admin_platform_relation`)
 - Tuple shape: `rbac/management/role/relations.py` (`role_child_relationship`)
 - Seeds force flag: `rbac/management/management/commands/seeds.py` (`--force-create-relationships`)
 - Skip replication on unchanged roles: `rbac/management/role/definer.py` (`_make_role`, `No change in system role` branch)
