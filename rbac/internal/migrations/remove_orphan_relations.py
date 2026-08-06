@@ -29,9 +29,9 @@ from internal.utils import (
 )
 from management.atomic_transactions import atomic, atomic_block
 from management.models import Role, Workspace
-from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType, PartitionKey
+from management.inventory_replicator.logging_replicator import stringify_spicedb_relationship
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEvent, ReplicationEventType, PartitionKey
 from management.role.relations import role_owner_relationship
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding

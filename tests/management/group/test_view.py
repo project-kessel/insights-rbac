@@ -49,9 +49,9 @@ from management.models import (
     ExtTenant,
     Workspace,
 )
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.v2_model import CustomRoleV2
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service.v2 import V2TenantBootstrapService
@@ -878,7 +878,7 @@ class GroupViewsetTests(IdentityRequest):
         response = client.put(url, {}, format="json", **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_delete_group_success(self, send_kafka_message, mock_method):
         """Test that we can delete an existing group."""
@@ -1012,7 +1012,7 @@ class GroupViewsetTests(IdentityRequest):
         response = client.delete(url, **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_custom_default_group(self, mock_method):
         """
         Test that custom platform_default groups can be deleted and the public default group
@@ -1469,7 +1469,7 @@ class GroupViewsetTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     @override_settings(V2_BOOTSTRAP_TENANT=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_system_flag_update_on_add(self, send_kafka_message, mock_method):
         """Test that adding a role to a platform_default group flips the system flag."""
@@ -1693,7 +1693,7 @@ class GroupViewsetTests(IdentityRequest):
             self.assertEqual(create_entry["principal_username"], self.user_data["username"])
 
     @override_settings(V2_BOOTSTRAP_TENANT=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_system_flag_update_on_remove_and_keep_one_role_in_group(self, send_kafka_message, mock_method):
         """Test that removing a role from a platform_default group flips the system flag."""
@@ -1848,7 +1848,7 @@ class GroupViewsetTests(IdentityRequest):
             kafka_mock.assert_has_calls(notification_messages, any_order=True)
 
     @override_settings(V2_BOOTSTRAP_TENANT=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_system_flag_update_on_remove(self, send_kafka_message, mock_method):
         """Test that removing a role from a platform_default group flips the system flag."""
@@ -3960,7 +3960,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
             "ADD PRINCIPALS cannot be performed on system groups.",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
@@ -3975,7 +3975,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertIsNone(mock_method.call_args)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={
@@ -4207,7 +4207,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         )
         self.assertEqual(sa.count(), 1)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": [{"username": "test_user"}]},
@@ -5571,7 +5571,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         response = client.put(url, request_body, format="json", **self.headers_org_admin)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_remove_group_without_User_Access_Admin_fail(self, mock_method):
         """Test that non org admin without 'User Access administrator' role cannot remove a group."""
         test_group = Group(name="test group", tenant=self.tenant)
@@ -5840,7 +5840,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("management.principal.it_service.ITService.request_service_accounts")
     def test_add_service_account_principal_in_group_without_User_Access_Admin_fail(self, mock_request, mock_method):
         """
@@ -5898,7 +5898,7 @@ class GroupViewNonAdminTests(IdentityRequest):
             actual_call_arg,
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
@@ -5940,7 +5940,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("management.principal.it_service.requests.get")
     def test_add_service_account_principal_in_group_with_User_Access_Admin_success(self, mock_request, mock_method):
         """
@@ -6247,7 +6247,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         response = client.delete(url, format="json", **self.headers_service_account_principal)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     def test_remove_service_account_principal_from_group_with_User_Access_Admin_success(self, mock_method):
         """
@@ -7228,7 +7228,7 @@ class GroupReplicationTests(IdentityRequest):
 
         self.fixture.new_principals_in_tenant(["2222222"], self.fixture.new_tenant("car_source").tenant)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_remove_role_does_not_remove_binding_if_cross_account_granted(self, replicate):
         replicate.side_effect = self.in_memory_replicator.replicate
 
@@ -7338,7 +7338,7 @@ class GroupReplicationTests(IdentityRequest):
 
         self.assertCountEqual(subjects, ["redhat/2222222"])
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_expire_cross_account_does_not_remove_binding_if_role_granted_to_group(self, replicate):
         replicate.side_effect = self.in_memory_replicator.replicate
 
@@ -7446,7 +7446,7 @@ class GroupReplicationTests(IdentityRequest):
         }
         self.assertCountEqual(subjects, [str(test_group.uuid)])
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_add_role_already_added_is_noop(self, replicate):
         replicate.side_effect = self.in_memory_replicator.replicate
 
@@ -7473,7 +7473,7 @@ class GroupReplicationTests(IdentityRequest):
         # Expect no new tuples
         self.assertEqual(0, self.relations.count_tuples())
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_remove_role_added_twice_removes_role(self, replicate):
         replicate.side_effect = self.in_memory_replicator.replicate
 
@@ -7526,7 +7526,7 @@ class GroupReplicationTests(IdentityRequest):
 
         self.assertEqual(len(sr1_bindings), 0)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_migrate_role_on_assign(self, replicate):
         tuples = InMemoryTuples()
         replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
@@ -7539,7 +7539,9 @@ class GroupReplicationTests(IdentityRequest):
             tenant=self.tenant,
         )
 
-        dual_write_handler = RelationApiDualWriteHandler(role=role, event_type=ReplicationEventType.CREATE_CUSTOM_ROLE)
+        dual_write_handler = InventoryApiDualWriteHandler(
+            role=role, event_type=ReplicationEventType.CREATE_CUSTOM_ROLE
+        )
         dual_write_handler.replicate_new_or_updated_role(role)
 
         # Emulate the role having been created before V2 models were added.

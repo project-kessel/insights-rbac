@@ -100,7 +100,7 @@ class SystemRoleBindingScopeUpdateTests(DualWriteTestCase):
         self.assertCountEqual(test_role.scope_state.computed_scopes, [Scope.TENANT])
         self.assertEqual(test_role.scope_state.migrated, True)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bindings_migrate_from_default_to_tenant_scope_v1_tenant(self, mock_replicate):
         """Test that bindings actually migrate from default workspace to tenant when scope changes in V1 tenant."""
         # Redirect replicator

@@ -23,8 +23,8 @@ from unittest.mock import patch
 from api.models import Tenant
 from django.test import TestCase, override_settings
 from management.principal.model import Principal as PrincipalModel
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import RelationReplicator, ReplicationEventType
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEventType
 from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_write_activated
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
@@ -50,7 +50,7 @@ from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
-class _ReplicationTracker(RelationReplicator):
+class _ReplicationTracker(InventoryReplicator):
     """Records tuples added and removed by replication events for testing.
 
     Instead of merging into a single set (like InMemoryTuples), this tracks
@@ -3445,7 +3445,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
 
     def setUp(self):
         super().setUp()
-        from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+        from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 
         bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
         self.default_workspace = bootstrap_result.default_workspace
@@ -3489,7 +3489,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
         )
         self.tracker.clear()
 
-        self.RelationApiDualWriteGroupHandler = RelationApiDualWriteGroupHandler
+        self.InventoryApiDualWriteGroupHandler = InventoryApiDualWriteGroupHandler
 
     def tearDown(self):
         RoleBindingGroup.objects.all().delete()
@@ -3708,7 +3708,7 @@ class PrepareToDeleteGroupV2Tests(_ReplicationAssertionsMixin, IdentityRequest):
 
     def test_v2_path_platform_default_adds_default_binding(self):
         """Platform-default group triggers relations_to_add instead of member removals."""
-        from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
+        from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 
         sentinel_tuple = RelationTuple(
             resource=ObjectReference(type=ObjectType(namespace="rbac", name="sentinel"), id="default"),

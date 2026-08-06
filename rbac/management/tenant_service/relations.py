@@ -20,8 +20,8 @@ import logging
 from typing import Iterable, Optional
 
 from management.group.platform import GlobalPolicyIdService
+from management.inventory_replicator.types import RelationTuple
 from management.permission.scope_service import Scope, TenantScopeResources
-from management.relation_replicator.types import RelationTuple
 from management.role.platform import platform_v2_role_uuid_for
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from migration_tool.utils import create_relationship

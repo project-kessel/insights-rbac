@@ -735,8 +735,8 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
         dict: Results with roles_checked, resource_definitions_fixed, and changes list.
     """
     logger = logging.getLogger(__name__)
-    from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
-    from management.relation_replicator.relation_replicator import ReplicationEventType
+    from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
+    from management.inventory_replicator.inventory_replicator import ReplicationEventType
 
     roles_checked = 0
     resource_defs_fixed = 0
@@ -767,7 +767,7 @@ def clean_invalid_workspace_resource_definitions(dry_run: bool = False) -> dict:
 
             roles_checked += 1
 
-            dual_write = RelationApiDualWriteHandler(role, ReplicationEventType.FIX_RESOURCE_DEFINITIONS)
+            dual_write = InventoryApiDualWriteHandler(role, ReplicationEventType.FIX_RESOURCE_DEFINITIONS)
             dual_write.prepare_for_update()
 
             for access in role.access.all():

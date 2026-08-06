@@ -181,7 +181,7 @@ class MigrateTests(TestCase):
         replicate_method.assert_not_called()
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, PRINCIPAL_USER_DOMAIN="redhat", READ_ONLY_API_MODE=True)
-    @patch("management.relation_replicator.logging_replicator.logger")
+    @patch("management.inventory_replicator.logging_replicator.logger")
     def test_migration_of_data(self, logger_mock):
         """Test that we get the correct access for a principal."""
         kwargs = {"exclude_apps": ["app1"], "orgs": ["1234567"]}
@@ -321,7 +321,7 @@ class MigrateTests(TestCase):
         logger_mock.info.assert_has_calls(tuples, any_order=True)
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, PRINCIPAL_USER_DOMAIN="redhat", READ_ONLY_API_MODE=True)
-    @patch("management.relation_replicator.logging_replicator.logger")
+    @patch("management.inventory_replicator.logging_replicator.logger")
     def test_migration_of_cross_account_requests(self, logger_mock):
         """Test that we get the correct access for a principal."""
         kwargs = {"exclude_apps": ["app1"], "orgs": ["7654321"]}

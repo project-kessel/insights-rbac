@@ -71,8 +71,8 @@ from kessel.relations.v1beta1 import (
 )
 from management.audit_log.model import AuditLog
 from management.cache import JWTCache, TenantCache
-from management.group.relation_api_dual_write_group_handler import (
-    RelationApiDualWriteGroupHandler,
+from management.group.inventory_api_dual_write_group_handler import (
+    InventoryApiDualWriteGroupHandler,
 )
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,
@@ -81,6 +81,12 @@ from management.inventory_checker.inventory_api_check import (
     RoleRelationInventoryChecker,
     WorkspaceRelationInventoryChecker,
 )
+from management.inventory_replicator.inventory_replicator import (
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import (
     BindingMapping,
     Group,
@@ -98,18 +104,12 @@ from management.principal.proxy import (
     bop_request_time_tracking,
     external_principal_to_user,
 )
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    PartitionKey,
-    ReplicationEvent,
-    ReplicationEventType,
-)
 from management.role.definer import delete_permission
-from management.role.model import Access
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
-    SeedingRelationApiDualWriteHandler,
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
+    SeedingInventoryApiDualWriteHandler,
 )
+from management.role.model import Access
 from management.role.serializer import BindingMappingSerializer
 from management.tasks import (
     bulk_cleanup_orphan_bindings_in_worker,
@@ -149,10 +149,10 @@ from api.common.pagination import (
     StandardResultsSetPagination,
     WSGIRequestResultsSetPagination,
 )
-from api.cross_access.model import RequestsRoles
-from api.cross_access.relation_api_dual_write_cross_access_handler import (
-    RelationApiDualWriteCrossAccessHandler,
+from api.cross_access.inventory_api_dual_write_cross_access_handler import (
+    InventoryApiDualWriteCrossAccessHandler,
 )
+from api.cross_access.model import RequestsRoles
 from api.models import CrossAccountRequest, Tenant, User
 from api.tasks import (
     cross_account_cleanup,
@@ -952,7 +952,7 @@ def role_removal(request):
         role_obj = get_object_or_404(Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public"))
         with transaction.atomic():
             try:
-                dual_write_handler = SeedingRelationApiDualWriteHandler(role_obj)
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(role_obj)
                 dual_write_handler.replicate_deleted_system_role()
                 role_obj.delete()
                 # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
@@ -2171,7 +2171,7 @@ def group_assignments(request, group_uuid):
     """Calculate and check if group-principals are correct on relations api."""
     group = get_object_or_404(Group, uuid=group_uuid)
     principals = list(group.principals.all())
-    relations_dual_write_handler = RelationApiDualWriteGroupHandler(
+    relations_dual_write_handler = InventoryApiDualWriteGroupHandler(
         group, ReplicationEventType.ADD_PRINCIPALS_TO_GROUP, GroupPrincipalChecker
     )
     relations_dual_write_handler.generate_relations_to_add_principals(principals)
@@ -2394,7 +2394,7 @@ def check_role(request, role_uuid):
 
         if role.system:
             with transaction.atomic():
-                relations_dual_write_handler = SeedingRelationApiDualWriteHandler(
+                relations_dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role,
                     replicator=InMemoryRelationReplicator(tuples),
                 )
@@ -2408,7 +2408,7 @@ def check_role(request, role_uuid):
             with transaction.atomic():
                 role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
 
-                relations_dual_write_handler = RelationApiDualWriteHandler(
+                relations_dual_write_handler = InventoryApiDualWriteHandler(
                     role=role,
                     event_type=ReplicationEventType.UPDATE_CUSTOM_ROLE,
                     tenant=role.tenant,
@@ -2489,7 +2489,7 @@ def check_cross_account_request(request, request_id):
         tuples = InMemoryTuples()
 
         with transaction.atomic():
-            handler = RelationApiDualWriteCrossAccessHandler(
+            handler = InventoryApiDualWriteCrossAccessHandler(
                 cross_account_request=car,
                 event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
                 replicator=InMemoryRelationReplicator(tuples),

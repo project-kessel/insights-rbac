@@ -38,7 +38,7 @@ Rules:
 
 ### RelationTuple Domain Type
 
-Use `RelationTuple` from `management/relation_replicator/types.py` instead of raw protobuf messages. It validates fields on construction (non-empty strings, valid patterns, no `*` for resource IDs). Convert to protobuf with `.as_message()` or to dict with `.to_dict()`.
+Use `RelationTuple` from `management/inventory_replicator/types.py` instead of raw protobuf messages. It validates fields on construction (non-empty strings, valid patterns, no `*` for resource IDs). Convert to protobuf with `.as_message()` or to dict with `.to_dict()`.
 
 ### gRPC Channel Creation
 

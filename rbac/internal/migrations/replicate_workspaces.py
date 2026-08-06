@@ -9,9 +9,9 @@ from django.db.models import F, Q, QuerySet
 from django.db.models.lookups import LessThanOrEqual
 from management.atomic_transactions import atomic_with_retry
 from management.audit_log.model import AuditLog
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     ReplicationEventType,
     WorkspaceEventStream,
 )
@@ -32,7 +32,7 @@ _permitted_types = [Workspace.Types.DEFAULT, Workspace.Types.STANDARD, Workspace
 
 @atomic_with_retry(retries=20)
 def _do_replicate_batch(
-    replicator: RelationReplicator, config: _ReplicateConfig, raw_workspaces: list[Workspace]
+    replicator: InventoryReplicator, config: _ReplicateConfig, raw_workspaces: list[Workspace]
 ) -> int:
     """Replicates a batch of workspaces and returns the number actually replicated."""
     if len(raw_workspaces) == 0:
@@ -73,7 +73,7 @@ class _Result:
 
 
 def _do_run_attempt(
-    replicator: RelationReplicator, config: _ReplicateConfig, query: QuerySet, expected_count: int, batch_size: int
+    replicator: InventoryReplicator, config: _ReplicateConfig, query: QuerySet, expected_count: int, batch_size: int
 ) -> _Result:
     actual_count = 0
     failed_ids: set[uuid.UUID] = set()
@@ -90,7 +90,7 @@ def _do_run_attempt(
 
 
 def _do_replicate(
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
     config: _ReplicateConfig,
     base_query: QuerySet,
     limit: Optional[int] = None,
@@ -153,7 +153,7 @@ def _do_replicate(
         raise RuntimeError(f"Failed to replicate the following {description}: {[str(u) for u in failed_ids]}")
 
 
-def replicate_default_workspaces(replicator: Optional[RelationReplicator] = None, limit: Optional[int] = None):
+def replicate_default_workspaces(replicator: Optional[InventoryReplicator] = None, limit: Optional[int] = None):
     if replicator is None:
         replicator = OutboxReplicator()
 
@@ -179,7 +179,7 @@ def replicate_default_workspaces(replicator: Optional[RelationReplicator] = None
 def replicate_updated_workspaces(
     since: datetime.datetime,
     stream: WorkspaceEventStream,
-    replicator: Optional[RelationReplicator] = None,
+    replicator: Optional[InventoryReplicator] = None,
     exclude_unchanged_default_workspaces: bool = False,
 ):
     if replicator is None:
@@ -236,7 +236,7 @@ class _DeletedWorkspaceEntry:
 
 
 @atomic_with_retry(retries=5)
-def _replicate_deleted_batch(replicator: RelationReplicator, entries: list[_DeletedWorkspaceEntry]):
+def _replicate_deleted_batch(replicator: InventoryReplicator, entries: list[_DeletedWorkspaceEntry]):
     existing_workspaces = list(Workspace.objects.filter(id__in=(e.workspace_id for e in entries)))
 
     # Workspace IDs are random UUIDs, so, once a workspace is deleted, its ID should never be reused.
@@ -254,7 +254,7 @@ def _replicate_deleted_batch(replicator: RelationReplicator, entries: list[_Dele
         )
 
 
-def replicate_deleted_workspaces(since: datetime.datetime, replicator: Optional[RelationReplicator] = None):
+def replicate_deleted_workspaces(since: datetime.datetime, replicator: Optional[InventoryReplicator] = None):
     if replicator is None:
         replicator = OutboxReplicator()
 

@@ -19,7 +19,7 @@ def _make_tuple(
     subject_relation: Optional[str] = None,
 ) -> RelationTuple:
     """Build a RelationTuple from flat keyword arguments for test convenience."""
-    from management.relation_replicator.types import (
+    from management.inventory_replicator.types import (
         ObjectReference as ObjRef,
         ObjectType as ObjType,
         SubjectReference as SubRef,

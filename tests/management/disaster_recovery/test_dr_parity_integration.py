@@ -31,8 +31,8 @@ from management.disaster_recovery.service import reconcile
 from management.group.model import Group
 from management.parity_check.checker import ParityAccessChecker, ParityCheckResult
 from management.principal.model import Principal
-from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
@@ -707,8 +707,8 @@ class DRWorkspaceParityIntegrationTest(IdentityRequest):
         of corrective event types fires correctly from realistic Kafka events.
         """
         from core.kafka_dr import KafkaEvent
-        from management.relation_replicator.outbox_replicator import InMemoryLog
-        from management.relation_replicator.relation_replicator import AggregateTypes, ReplicationEventType
+        from management.inventory_replicator.outbox_replicator import InMemoryLog
+        from management.inventory_replicator.inventory_replicator import AggregateTypes, ReplicationEventType
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
         ws_exists_1 = Workspace.objects.create(
@@ -802,8 +802,8 @@ class DRWorkspaceParityIntegrationTest(IdentityRequest):
         not the stale Kafka event data -- ensuring HBI receives the correct current state.
         """
         from core.kafka_dr import KafkaEvent
-        from management.relation_replicator.outbox_replicator import InMemoryLog
-        from management.relation_replicator.relation_replicator import AggregateTypes
+        from management.inventory_replicator.outbox_replicator import InMemoryLog
+        from management.inventory_replicator.inventory_replicator import AggregateTypes
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
         ws = Workspace.objects.create(
@@ -847,7 +847,7 @@ class DRWorkspaceParityIntegrationTest(IdentityRequest):
     def test_workspace_dr_error_in_single_event_does_not_stop_processing(self):
         """If one workspace corrective event write fails, others should still proceed."""
         from core.kafka_dr import KafkaEvent
-        from management.relation_replicator.relation_replicator import AggregateTypes
+        from management.inventory_replicator.inventory_replicator import AggregateTypes
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
         gone_id_1 = str(uuid4())

@@ -25,16 +25,16 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from api.cross_access.model import CrossAccountRequest
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from management.group.definer import seed_group
 from management.group.model import Group
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 from management.models import BindingMapping, Workspace, Access, Permission
 from management.permission.scope_service import Scope
 from management.policy.model import Policy
 from management.principal.model import Principal
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.definer import seed_roles
 from management.role.model import Role, ResourceDefinition
 from management.role.v2_model import RoleV2
@@ -86,7 +86,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
         self.default_ws = bootstrap_result.default_workspace
 
     @override_settings(ROOT_SCOPE_PERMISSIONS="test:resource:read")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_replicate_missing_binding_tuples_for_specific_bindings(self, mock_replicate):
         """Test that function replicates all tuples for specific binding IDs."""
         # Redirect replication to in-memory tuples
@@ -105,7 +105,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
         principal = Principal.objects.create(username="some_user", user_id="some_user", tenant=self.tenant)
 
         # Create binding WITHOUT replication (missing base tuples)
-        RelationApiDualWriteGroupHandler(
+        InventoryApiDualWriteGroupHandler(
             group=group, event_type=ReplicationEventType.ASSIGN_ROLE, replicator=NoopReplicator()
         ).generate_relations_reset_roles([role])
 
@@ -118,7 +118,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
 
             car.roles.set([role])
 
-            RelationApiDualWriteCrossAccessHandler(
+            InventoryApiDualWriteCrossAccessHandler(
                 cross_account_request=car,
                 replicator=NoopReplicator(),
                 event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
@@ -182,7 +182,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
         self.assertEqual(len(principal_subject_tuples), 1, "Should have principal subject tuple")
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_replicate_missing_binding_tuples_idempotent(self, mock_replicate):
         """Test that function is idempotent and safe to run multiple times."""
         # Redirect replication to in-memory tuples
@@ -198,7 +198,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
         group = Group.objects.create(name="a group", tenant=self.tenant)
 
         # Create binding
-        RelationApiDualWriteGroupHandler(
+        InventoryApiDualWriteGroupHandler(
             group=group, event_type=ReplicationEventType.ASSIGN_ROLE, replicator=NoopReplicator()
         ).generate_relations_reset_roles([role])
 
@@ -222,7 +222,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
         # The important thing is no error occurs
         self.assertGreater(len(self.tuples), 0, "Should have tuples after running twice")
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_replicate_v2_binding(self, mock_replicate):
         seed_roles()
 
@@ -316,7 +316,7 @@ class ReplicateMissingBindingTuplesTest(TestCase):
             ),
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_no_replicate_default_access(self, mock_replicate):
         mock_replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
 
@@ -338,7 +338,9 @@ class ReplicateMissingBindingTuplesTest(TestCase):
 
         tenant_mapping: TenantMapping = TenantMapping.objects.get(tenant=self.tenant)
 
-        dual_write_handler = RelationApiDualWriteGroupHandler(group=group, event_type=ReplicationEventType.ASSIGN_ROLE)
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
+            group=group, event_type=ReplicationEventType.ASSIGN_ROLE
+        )
         dual_write_handler.generate_relations_reset_roles([role])
         dual_write_handler.replicate()
 
@@ -1124,7 +1126,7 @@ class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
             result = remove_legacy_root_workspace_tenant_parent_relations()
         self.assertTrue(result["skipped"])
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_enqueues_delete_for_legacy_tuple(self, mock_replicate):
         from internal.utils import remove_legacy_root_workspace_tenant_parent_relations
 

@@ -38,14 +38,14 @@ from management.permission.scope_service import (
     scopes_for_resource_type,
 )
 from management.permission.service import PermissionService
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.role.v2_exceptions import (
     CustomRoleRequiredError,
     InvalidRolePermissionsError,
@@ -80,7 +80,7 @@ class RoleV2Service:
     def __init__(
         self,
         tenant: Tenant | None = None,
-        replicator: RelationReplicator | None = None,
+        replicator: InventoryReplicator | None = None,
     ):
         """Initialize the service."""
         self.tenant = tenant

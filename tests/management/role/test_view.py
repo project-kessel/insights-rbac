@@ -40,7 +40,7 @@ from management.models import (
     Workspace,
     BindingMapping,
 )
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding
 from management.tenant_service.v2 import V2TenantBootstrapService
@@ -468,7 +468,7 @@ class RoleViewsetTests(IdentityRequest):
                 ANY,
             )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_create_role_with_display_success(self, mock_method):
         """Test that we can create a role."""
         role_name = "roleD"
@@ -1623,7 +1623,7 @@ class RoleViewsetTests(IdentityRequest):
         response = client.put(url, test_data, format="json", **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_update_role(self, mock_method):
         """Test that updating a role with an invalid permission returns an error."""
         # Set up
@@ -1689,7 +1689,7 @@ class RoleViewsetTests(IdentityRequest):
         ROOT_SCOPE_PERMISSIONS="inventory:*:*",
         TENANT_SCOPE_PERMISSIONS="",
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_update_role_scoped(self, replicate):
         """Test that updating a role properly updates its scope."""
         tuples = InMemoryTuples()
@@ -1771,7 +1771,7 @@ class RoleViewsetTests(IdentityRequest):
     @override_settings(
         ROLE_CREATE_ALLOW_LIST="inventory", REPLICATION_TO_RELATION_ENABLED=True, REMOVE_NULL_VALUE=True
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_update_role_with_null_value(self, replicate):
         """Test that updating a role with a null value success."""
         tuples = InMemoryTuples()
@@ -1967,7 +1967,7 @@ class RoleViewsetTests(IdentityRequest):
             f"Permission does not exist: {permission}",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_role(self, mock_method):
         """Test that we can delete an existing role."""
         role_name = "roleA"
@@ -2162,7 +2162,7 @@ class RoleViewsetTests(IdentityRequest):
         response = client.delete(url, **self.headers)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_role_child_workspace(self, mock_method):
         """Test that we can delete an existing role bound to a child workspace.
 
@@ -2424,7 +2424,7 @@ class RoleViewsetTests(IdentityRequest):
     @override_settings(
         ROLE_CREATE_ALLOW_LIST="inventory", REPLICATION_TO_RELATION_ENABLED=True, REMOVE_NULL_VALUE=True
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_create_role_with_null_value(self, replicate):
         """Test that create a role with a null value success."""
         tuples = InMemoryTuples()

@@ -22,26 +22,26 @@ from django.conf import settings
 from django.db import transaction
 from internal.pg_notify_wait import NotifyCoordinatedReplicator
 from management.atomic_transactions import atomic as atomic_serializable
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 from management.group.model import Group
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import RelationReplicator, ReplicationEventType
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEventType
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.model import Role
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
 from management.tenant_mapping.v2_activation import (
     TenantVersion,
     lock_tenant_version,
 )
 
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from api.cross_access.model import CrossAccountRequest
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
 from api.models import Tenant
 
 logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
-def migrate_custom_role_bindings(raw_role: Role, replicator: RelationReplicator) -> int:
+def migrate_custom_role_bindings(raw_role: Role, replicator: InventoryReplicator) -> int:
     """
     Migrate all bindings for a custom role to the correct scope.
 
@@ -73,8 +73,8 @@ def migrate_custom_role_bindings(raw_role: Role, replicator: RelationReplicator)
 
     logger.info(f"Migrating role bindings for custom role: pk={role.pk!r}")
 
-    # Use RelationApiDualWriteHandler
-    dual_write = RelationApiDualWriteHandler(role, ReplicationEventType.MIGRATE_BINDING_SCOPE, replicator=replicator)
+    # Use InventoryApiDualWriteHandler
+    dual_write = InventoryApiDualWriteHandler(role, ReplicationEventType.MIGRATE_BINDING_SCOPE, replicator=replicator)
 
     if not dual_write.replication_enabled():
         raise AssertionError("Expected replication to be enabled.")
@@ -90,7 +90,7 @@ def migrate_custom_role_bindings(raw_role: Role, replicator: RelationReplicator)
 
 
 @transaction.atomic
-def migrate_system_role_bindings_for_group(raw_group: Group, replicator: RelationReplicator) -> int:
+def migrate_system_role_bindings_for_group(raw_group: Group, replicator: InventoryReplicator) -> int:
     """
     Migrate system role bindings for a group to correct scope.
 
@@ -132,7 +132,7 @@ def migrate_system_role_bindings_for_group(raw_group: Group, replicator: Relatio
     )
 
     # Use group handler to bind/rebind system roles at correct scope
-    dual_write_handler = RelationApiDualWriteGroupHandler(
+    dual_write_handler = InventoryApiDualWriteGroupHandler(
         group, ReplicationEventType.MIGRATE_BINDING_SCOPE, replicator=replicator
     )
 
@@ -145,7 +145,7 @@ def migrate_system_role_bindings_for_group(raw_group: Group, replicator: Relatio
     dual_write_handler.replicate()
 
     # Rehydrate handler to reset relation buffers before creating correct bindings.
-    dual_write_handler = RelationApiDualWriteGroupHandler(
+    dual_write_handler = InventoryApiDualWriteGroupHandler(
         group, ReplicationEventType.MIGRATE_BINDING_SCOPE, replicator=replicator
     )
     dual_write_handler.generate_relations_reset_roles(system_roles)
@@ -157,7 +157,7 @@ def migrate_system_role_bindings_for_group(raw_group: Group, replicator: Relatio
 
 # This function can operate on V2 tenants, so we need to use a SERIALIZABLE transaction here.
 @atomic_serializable
-def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: RelationReplicator):
+def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: InventoryReplicator):
     """Migrate cross-account request bindings to split mixed scope roles."""
     car: Optional[CrossAccountRequest] = CrossAccountRequest.objects.filter(pk=raw_car.pk).select_for_update().first()
 
@@ -183,7 +183,7 @@ def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: RelationRepli
         + ", ".join(f"{r.pk!r} ({r.name!r})" for r in roles)
     )
 
-    dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+    dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
         cross_account_request=car,
         event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
         replicator=replicator,
@@ -196,7 +196,7 @@ def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: RelationRepli
     bindings_cleaned = len(dual_write_handler.relations_to_remove)
     dual_write_handler.replicate()
 
-    dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+    dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
         cross_account_request=car,
         event_type=ReplicationEventType.MIGRATE_BINDING_SCOPE,
         replicator=replicator,
@@ -210,7 +210,7 @@ def migrate_car_bindings(raw_car: CrossAccountRequest, replicator: RelationRepli
 
 
 def _do_migrate_all_group_custom_roles(
-    replicator: RelationReplicator = OutboxReplicator(),
+    replicator: InventoryReplicator = OutboxReplicator(),
     tenant: Optional[Tenant] = None,
 ) -> tuple[int, int]:
     # Include all custom roles with access (permissions), even if they have no policies (groups) assigned yet.
@@ -250,7 +250,7 @@ def _do_migrate_all_group_custom_roles(
 
 
 def _do_migrate_all_group_system_roles(
-    replicator: RelationReplicator = OutboxReplicator(),
+    replicator: InventoryReplicator = OutboxReplicator(),
     tenant: Optional[Tenant] = None,
 ) -> tuple[int, int]:
     # Get all groups that have system roles
@@ -291,7 +291,7 @@ def _do_migrate_all_group_system_roles(
 
 
 def _do_migrate_all_cars(
-    replicator: RelationReplicator = OutboxReplicator(),
+    replicator: InventoryReplicator = OutboxReplicator(),
     tenant: Optional[Tenant] = None,
 ) -> tuple[int, int]:
     cars = CrossAccountRequest.objects.filter(status="approved")
@@ -335,7 +335,7 @@ _all_sources = {custom_role_source, system_role_source, car_source}
 
 
 def migrate_all_role_bindings(
-    replicator: RelationReplicator | None = None,
+    replicator: InventoryReplicator | None = None,
     tenant: Optional[Tenant] = None,
     sources: Optional[set[str]] = None,
 ):

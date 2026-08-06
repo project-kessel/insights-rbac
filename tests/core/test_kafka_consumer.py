@@ -721,7 +721,7 @@ class RBACKafkaConsumerTests(TestCase):
         self, mock_save_token, mock_delete, mock_write, mock_parse_dict, mock_conn_cursor, mock_coordination
     ):
         """Consumer NOTIFYs after remove_root_parent_tenant_relationships batch replication."""
-        from management.relation_replicator.relation_replicator import ReplicationEventType
+        from management.inventory_replicator.inventory_replicator import ReplicationEventType
 
         mock_coordination.return_value = MigrationNotifyCoordination(
             channel="test_legacy_ch",
@@ -778,7 +778,7 @@ class RBACKafkaConsumerTests(TestCase):
         self, mock_save_token, mock_delete, mock_write, mock_parse_dict, mock_conn_cursor, mock_coordination
     ):
         """Consumer NOTIFYs after migrate_binding_scope batch replication."""
-        from management.relation_replicator.relation_replicator import ReplicationEventType
+        from management.inventory_replicator.inventory_replicator import ReplicationEventType
 
         mock_coordination.return_value = MigrationNotifyCoordination(
             channel="test_migrate_binding_scope_ch",

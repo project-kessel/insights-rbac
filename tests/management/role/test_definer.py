@@ -34,16 +34,16 @@ from management.models import (
     SeededRoleV2,
 )
 from management.permission.scope_service import Scope
-from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType
+from management.inventory_replicator.inventory_replicator import ReplicationEvent, ReplicationEventType
 from management.role.definer import _seed_platform_roles, seed_permissions, seed_roles
 from management.role.platform import (
     ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
     admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
 )
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
-    SeedingRelationApiDualWriteHandler,
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
+    SeedingInventoryApiDualWriteHandler,
 )
 from management.tenant_mapping.model import DefaultAccessType
 from management.tenant_service.v2 import V2TenantBootstrapService
@@ -372,7 +372,7 @@ class RoleDefinerTests(IdentityRequest):
         # Previous string verb still works
         self.assertEqual(Permission.objects.filter(permission="inventory:*:*").count(), 1)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch("management.role.definer.destructive_ok")
     def test_seed_permissions_delete_permission(self, _, replicate):
         """Test permission seeding delete permission."""
@@ -388,7 +388,7 @@ class RoleDefinerTests(IdentityRequest):
         fixture = RbacFixture(V2TenantBootstrapService(replicator))
         fixture.bootstrap_tenant(self.tenant)
         role_system = fixture.new_system_role(name="system_role", permissions=["dummy:permission:delete"])
-        dual_write_handler = SeedingRelationApiDualWriteHandler(role_system, replicator=replicator)
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(role_system, replicator=replicator)
         dual_write_handler.replicate_new_system_role()
 
         role_custom = fixture.new_custom_role(
@@ -396,7 +396,7 @@ class RoleDefinerTests(IdentityRequest):
             tenant=self.tenant,
             resource_access=fixture.workspace_access(["dummy:permission:delete"]),
         )
-        dual_write = RelationApiDualWriteHandler(
+        dual_write = InventoryApiDualWriteHandler(
             role_custom, ReplicationEventType.CREATE_CUSTOM_ROLE, replicator=replicator
         )
         dual_write.replicate_new_or_updated_role(role_custom)
@@ -471,14 +471,14 @@ class RoleDefinerTests(IdentityRequest):
             t.relation == relation for t in evt.add
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_seed_roles_new_role(self, mock_replicate):
         seed_roles()
         self.assertTrue(
             any(self.is_create_event("inventory_hosts_read", args[0]) for args, _ in mock_replicate.call_args_list)
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch("management.role.definer.destructive_ok")
     @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
     @patch("os.listdir")
@@ -512,7 +512,7 @@ class RoleDefinerTests(IdentityRequest):
         # verify role was deleted from the database
         self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(
         "builtins.open",
         new_callable=mock_open,
@@ -540,7 +540,7 @@ class RoleDefinerTests(IdentityRequest):
             any(self.is_update_event("dummy_hosts_read", args[0]) for args, _ in mock_replicate.call_args_list)
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_seed_roles_create_and_delete_role(
         self,
         mock_replicate,
@@ -569,7 +569,7 @@ class RoleDefinerTests(IdentityRequest):
                 any(self.is_remove_event("inventory_hosts_read", args[0]) for args, _ in mock_replicate.call_args_list)
             )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(
         "builtins.open",
         new_callable=mock_open,
@@ -633,7 +633,7 @@ class RoleDefinerTests(IdentityRequest):
 
         self.assertFalse(Role.objects.get(pk=custom.pk).system)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(
         "builtins.open",
         new_callable=mock_open,
@@ -682,7 +682,7 @@ class RoleDefinerTests(IdentityRequest):
         )
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_force_update_relationships(self, replicate):
         """Test that using force_update_relationships results in updating default scopes when they have changed."""
         tuples = InMemoryTuples()
@@ -1256,7 +1256,7 @@ class V2RoleSeedingTests(IdentityRequest):
     SYSTEM_ADMIN_TENANT_ROLE_UUID="a7f3c8b2-1d4e-4f9a-8c6d-2b5e7a9f1c3d",
     SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID="9b4c7e1f-3a5d-4f8c-9e2a-7c1d5b8f3a6e",
 )
-@patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+@patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
 class SeedMixedScopeTest(IdentityRequest):
     """Test that seeding a mixed-scope system role attaches to multiple platform parents."""
 

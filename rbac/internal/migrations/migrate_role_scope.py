@@ -27,8 +27,8 @@ from django.db import OperationalError
 from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import RelationReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import InventoryReplicator
 from management.role.model import Role, RoleScopeState
 from migration_tool.migrate_binding_scope import (
     migrate_car_bindings,
@@ -121,7 +121,7 @@ class _MigrateContext:
     """
 
     role: Role
-    replicator: RelationReplicator
+    replicator: InventoryReplicator
     resource_service: ImplicitResourceService
     expected_state_version: int
 
@@ -147,7 +147,7 @@ class _MigrateContext:
             raise RuntimeError(f"Cannot continue migrating changed role {self.role.name!r}")
 
 
-def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationReplicator] = None):
+def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[InventoryReplicator] = None):
     """
     Log scope change and trigger binding migration if scope has changed.
 

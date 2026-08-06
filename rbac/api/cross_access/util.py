@@ -22,10 +22,10 @@ import logging
 from django.db.models import Q
 from django.utils import timezone
 from management.atomic_transactions import atomic_block
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.models import Principal
-from management.relation_replicator.relation_replicator import ReplicationEventType
 
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from api.models import CrossAccountRequest, Tenant
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -47,7 +47,7 @@ def check_cross_request_expiry():
                 create_cross_principal(car.user_id, car.target_org)
                 cross_account_roles = car.roles.all()
                 if car.status == "approved" and any(True for _ in cross_account_roles):
-                    dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+                    dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                         car, ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST
                     )
                     dual_write_handler.generate_relations_to_remove_roles(cross_account_roles)

@@ -451,7 +451,7 @@ def replicate_default_workspaces_in_worker(limit: Optional[int] = None):
 def replicate_updated_workspaces_in_worker(since: str, stream: str, exclude_unchanged_default_workspaces: bool):
     """Celery task to replicate updated workspaces."""
     from internal.migrations.replicate_workspaces import replicate_updated_workspaces
-    from management.relation_replicator.relation_replicator import WorkspaceEventStream
+    from management.inventory_replicator.inventory_replicator import WorkspaceEventStream
 
     # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
     logger.info(

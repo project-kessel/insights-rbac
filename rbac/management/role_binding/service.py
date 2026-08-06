@@ -36,16 +36,16 @@ from management.permission.scope_service import (
     resolve_workspace_scope,
     scope_for_resource,
 )
-from management.principal.model import Principal
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
-from management.relation_replicator.types import RelationTuple
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.types import RelationTuple
+from management.principal.model import Principal
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
@@ -102,7 +102,7 @@ class RoleBindingService:
     def __init__(
         self,
         tenant: Tenant,
-        replicator: RelationReplicator | None = None,
+        replicator: InventoryReplicator | None = None,
         principal_source: str = API_PRINCIPAL_SOURCE,
         allow_external_subjects: bool = False,
         skip_scope_validation: bool = False,

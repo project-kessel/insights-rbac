@@ -35,7 +35,7 @@ from management.inventory_checker.inventory_api_check import (
     relation_tuple_to_check_request,
 )
 from management.principal.model import Principal
-from management.relation_replicator.types import (
+from management.inventory_replicator.types import (
     ObjectReference,
     ObjectType,
     RelationTuple,

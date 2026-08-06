@@ -23,7 +23,7 @@ from django.test import override_settings
 from management.exceptions import RequiredFieldError
 from management.models import Group, Workspace, Permission
 from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
-from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.role.definer import seed_roles
 from management.role.v2_exceptions import RoleAlreadyExistsError, RolesNotFoundError, CustomRoleRequiredError
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2, PlatformRoleV2
