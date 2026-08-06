@@ -13,7 +13,7 @@ from tests.management.role.test_dual_write import DualWriteTestCase
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class RemoveDeletedWorkspaceBindingsTest(DualWriteTestCase):
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_v2_removal(self, replicate):
         replicator = InMemoryRelationReplicator(self.tuples)
         replicate.side_effect = replicator.replicate

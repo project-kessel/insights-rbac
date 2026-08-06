@@ -49,7 +49,7 @@ from management.mcp_views import (
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
 from management.workspace.model import Workspace
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.role.v2_model import RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.tenant_mapping.model import TenantMapping
@@ -5820,7 +5820,7 @@ class MCPAddPrincipalsToGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_add_principals_by_uuid(self, mock_proxy, mock_replicator):
         """Add principals to a group by UUID."""
@@ -5905,7 +5905,7 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.client = APIClient()
         self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
         self.enterContext(
-            patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
@@ -6052,7 +6052,7 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_add_roles_to_group_success(self, mock_replicator):
         """Add roles to a group successfully."""
         role = Role.objects.create(name="Test Role", tenant=self.tenant, system=False)
@@ -6418,7 +6418,7 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
         self.test_username = self.user_data["username"]
         self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
         self.enterContext(
-            patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
@@ -6598,7 +6598,7 @@ class MCPUpdateGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_update_group_success(self, mock_replicator):
         """Update a group successfully."""
         response = self._call_tool(
@@ -6613,7 +6613,7 @@ class MCPUpdateGroupTests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["name"], "Updated Group")
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_update_group_by_name(self, mock_replicator):
         """Update a group resolved by name."""
         response = self._call_tool(
@@ -6995,7 +6995,7 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_group_success(self, mock_replicator):
         """Delete a group successfully."""
         response = self._call_tool(
@@ -7010,7 +7010,7 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_group_by_name(self, mock_replicator):
         """Delete a group resolved by name."""
         response = self._call_tool(
@@ -7043,7 +7043,7 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         output = self._get_tool_output(response)
         self.assertIn("error", output)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_remove_principals_from_group_success(self, mock_proxy, mock_replicator):
         """Remove principals from a group."""
@@ -7108,7 +7108,7 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_remove_roles_from_group_success(self, mock_replicator):
         """Remove roles from a group successfully."""
         policy = Policy.objects.create(name="test-policy", group=self.group, tenant=self.tenant)
@@ -7126,7 +7126,7 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     def test_delete_role_v1_success(self, mock_replicator):
         """Delete a V1 role successfully."""
         response = self._call_tool(
@@ -7166,7 +7166,7 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.client = APIClient()
         self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
         self.enterContext(
-            patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})

@@ -17,7 +17,7 @@
 """Test role relations utilities."""
 
 from django.test import TestCase
-from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
+from management.inventory_replicator.logging_replicator import stringify_spicedb_relationship
 from management.role.relations import deduplicate_role_permission_relationships
 from migration_tool.utils import create_relationship
 

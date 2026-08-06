@@ -37,10 +37,10 @@ from management.models import AuditLog, Permission
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permissions import RoleAccessPermission
 from management.permissions.v2_edit_api_access import V1WriteBlockedWhenWorkspacesEnabled
+from management.inventory_replicator.inventory_replicator import DualWriteException, ReplicationEventType
 from management.querysets import get_role_queryset, user_has_perm
-from management.relation_replicator.relation_replicator import DualWriteException, ReplicationEventType
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
 )
 from management.role.serializer import AccessSerializer, RoleDynamicSerializer, RolePatchSerializer
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
@@ -512,7 +512,7 @@ class RoleViewSet(
         """
         role = serializer.save()
 
-        dual_write_handler = RelationApiDualWriteHandler(role, ReplicationEventType.CREATE_CUSTOM_ROLE)
+        dual_write_handler = InventoryApiDualWriteHandler(role, ReplicationEventType.CREATE_CUSTOM_ROLE)
         # No need to replicate if creating role with empty access, which won't have any relationships
         if not role.access.all():
             expected_empty_relation_reason = (
@@ -546,7 +546,7 @@ class RoleViewSet(
 
         Assumes concurrent updates are prevented (e.g. with atomic block and locks).
         """
-        dual_write_handler = RelationApiDualWriteHandler(serializer.instance, ReplicationEventType.UPDATE_CUSTOM_ROLE)
+        dual_write_handler = InventoryApiDualWriteHandler(serializer.instance, ReplicationEventType.UPDATE_CUSTOM_ROLE)
         dual_write_handler.prepare_for_update()
 
         role = serializer.save()
@@ -582,7 +582,7 @@ class RoleViewSet(
             error = {key: [_(message)]}
             raise serializers.ValidationError(error)
 
-        dual_write_handler = RelationApiDualWriteHandler(instance, ReplicationEventType.DELETE_CUSTOM_ROLE)
+        dual_write_handler = InventoryApiDualWriteHandler(instance, ReplicationEventType.DELETE_CUSTOM_ROLE)
         # Check emptiness
         if not instance.access.all():
             expected_empty_relation_reason = (

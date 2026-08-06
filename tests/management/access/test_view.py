@@ -30,7 +30,7 @@ from datetime import timedelta
 
 from management.cache import TenantCache
 from management.models import Group, Permission, Principal, ResourceDefinition, Policy, Role, Access, Workspace
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.tenant_service.v2 import V2TenantBootstrapService
 from tests.identity_request import IdentityRequest
 

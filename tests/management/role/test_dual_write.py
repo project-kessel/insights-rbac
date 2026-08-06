@@ -29,18 +29,18 @@ from django.utils import timezone
 from management.group.definer import seed_group, set_system_flag_before_update
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
-from management.group.relation_api_dual_write_group_handler import (
-    RelationApiDualWriteGroupHandler,
+from management.group.inventory_api_dual_write_group_handler import (
+    InventoryApiDualWriteGroupHandler,
 )
 from management.models import Workspace
 from management.permission.model import Permission
 from management.permission.scope_service import Scope
 from management.policy.model import Policy
 from management.principal.model import Principal
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import (
     DualWriteException,
-    RelationReplicator,
+    InventoryReplicator,
     ReplicationEventType,
 )
 from management.role.model import (
@@ -51,9 +51,9 @@ from management.role.model import (
     SourceKey,
 )
 from management.role.platform import platform_v2_role_uuid_for
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
-    SeedingRelationApiDualWriteHandler,
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
+    SeedingInventoryApiDualWriteHandler,
 )
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
@@ -80,8 +80,8 @@ from tests.util import assert_v1_v2_locally_consistent, assert_v1_v2_tuples_full
 from tests.v2_util import bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
 
 from api.cross_access.model import CrossAccountRequest
-from api.cross_access.relation_api_dual_write_cross_access_handler import (
-    RelationApiDualWriteCrossAccessHandler,
+from api.cross_access.inventory_api_dual_write_cross_access_handler import (
+    InventoryApiDualWriteCrossAccessHandler,
 )
 from api.cross_access.util import create_cross_principal
 from api.models import Tenant, User
@@ -175,12 +175,12 @@ class DualWriteTestCase(TestCase):
         return V2boundresource.for_model(tenant)
 
     def dual_write_handler(
-        self, role: Role, event_type: ReplicationEventType, replicator: Optional[RelationReplicator] = None
-    ) -> RelationApiDualWriteHandler:
+        self, role: Role, event_type: ReplicationEventType, replicator: Optional[InventoryReplicator] = None
+    ) -> InventoryApiDualWriteHandler:
         """Create a RelationApiDualWriteHandler for the given role and event type."""
-        return RelationApiDualWriteHandler(role, event_type, replicator=self._get_replicator(replicator))
+        return InventoryApiDualWriteHandler(role, event_type, replicator=self._get_replicator(replicator))
 
-    def _get_replicator(self, replicator: Optional[RelationReplicator]) -> RelationReplicator:
+    def _get_replicator(self, replicator: Optional[InventoryReplicator]) -> InventoryReplicator:
         return replicator if replicator is not None else InMemoryRelationReplicator(self.tuples)
 
     def given_v1_system_role(
@@ -197,7 +197,7 @@ class DualWriteTestCase(TestCase):
             platform_default=platform_default,
             admin_default=admin_default,
         )
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role=role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_new_system_role()
@@ -238,7 +238,11 @@ class DualWriteTestCase(TestCase):
         )
 
     def given_update_to_v1_role(
-        self, role: Role, default: list[str] = [], replicator: Optional[RelationReplicator] = None, **kwargs: list[str]
+        self,
+        role: Role,
+        default: list[str] = [],
+        replicator: Optional[InventoryReplicator] = None,
+        **kwargs: list[str],
     ):
         """Update the given role with the given workspace permissions."""
         dual_write = self.dual_write_handler(role, ReplicationEventType.UPDATE_CUSTOM_ROLE, replicator=replicator)
@@ -263,7 +267,7 @@ class DualWriteTestCase(TestCase):
             role=role, default=default, **self._test_workspace_perms(ws_1=ws_1, ws_2=ws_2, ws_3=ws_3)
         )
 
-    def given_v1_role_removed(self, role: Role, replicator: Optional[RelationReplicator] = None):
+    def given_v1_role_removed(self, role: Role, replicator: Optional[InventoryReplicator] = None):
         """Remove the given custom role."""
         dual_write = self.dual_write_handler(role, ReplicationEventType.DELETE_CUSTOM_ROLE, replicator=replicator)
         dual_write.prepare_for_update()
@@ -280,7 +284,7 @@ class DualWriteTestCase(TestCase):
             service_accounts=service_accounts,
             tenant=self.tenant,
         )
-        dual_write = RelationApiDualWriteGroupHandler(
+        dual_write = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.CREATE_GROUP,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -288,8 +292,8 @@ class DualWriteTestCase(TestCase):
         dual_write.replicate_new_principals(principals)
         return group, principals
 
-    def given_custom_default_group(self, replicator: Optional[RelationReplicator] = None) -> Group:
-        with patch("management.role.relation_api_dual_write_handler.OutboxReplicator.replicate") as replicate:
+    def given_custom_default_group(self, replicator: Optional[InventoryReplicator] = None) -> Group:
+        with patch("management.role.inventory_api_dual_write_handler.OutboxReplicator.replicate") as replicate:
             replicate.side_effect = self._get_replicator(replicator).replicate
             return self.fixture.custom_default_group(self.tenant)
 
@@ -297,7 +301,7 @@ class DualWriteTestCase(TestCase):
         create_cross_principal(user_id, target_org=self.tenant.org_id)
         car = self.fixture.new_car(self.tenant, user_id)
         car.roles.add(*roles)
-        dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+        dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
             car,
             ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -306,8 +310,8 @@ class DualWriteTestCase(TestCase):
         dual_write_handler.replicate()
         return car
 
-    def given_car_expired(self, car: CrossAccountRequest, replicator: Optional[RelationReplicator] = None):
-        dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+    def given_car_expired(self, car: CrossAccountRequest, replicator: Optional[InventoryReplicator] = None):
+        dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
             car,
             ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
             replicator=self._get_replicator(replicator),
@@ -320,7 +324,7 @@ class DualWriteTestCase(TestCase):
     ) -> list[Principal]:
         """Add users to the given group."""
         principals = self.fixture.add_members_to_group(group, users, service_accounts, group.tenant)
-        dual_write = RelationApiDualWriteGroupHandler(
+        dual_write = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.ADD_PRINCIPALS_TO_GROUP,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -333,7 +337,7 @@ class DualWriteTestCase(TestCase):
     ) -> list[Principal]:
         """Remove users from the given group."""
         principals = self.fixture.remove_members_from_group(group, users, service_accounts, group.tenant)
-        dual_write = RelationApiDualWriteGroupHandler(
+        dual_write = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.REMOVE_PRINCIPALS_FROM_GROUP,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -342,11 +346,11 @@ class DualWriteTestCase(TestCase):
         return principals
 
     def given_roles_assigned_to_group(
-        self, group: Group, roles: list[Role], replicator: Optional[RelationReplicator] = None
+        self, group: Group, roles: list[Role], replicator: Optional[InventoryReplicator] = None
     ) -> Policy:
         """Assign the [roles] to the [group]."""
         assert roles, "Roles must not be empty"
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.ASSIGN_ROLE,
             replicator=self._get_replicator(replicator),
@@ -359,12 +363,12 @@ class DualWriteTestCase(TestCase):
         return policy
 
     def given_roles_unassigned_from_group(
-        self, group: Group, roles: list[Role], replicator: Optional[RelationReplicator] = None
+        self, group: Group, roles: list[Role], replicator: Optional[InventoryReplicator] = None
     ) -> Policy:
         """Unassign the [roles] to the [group]."""
         assert roles, "Roles must not be empty"
         policy = self.fixture.remove_role_from_group(roles[0], group)
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.UNASSIGN_ROLE,
             replicator=self._get_replicator(replicator),
@@ -376,9 +380,9 @@ class DualWriteTestCase(TestCase):
         dual_write_handler.replicate()
         return policy
 
-    def given_group_removed(self, group: Group, replicator: Optional[RelationReplicator] = None):
+    def given_group_removed(self, group: Group, replicator: Optional[InventoryReplicator] = None):
         """Remove the given group."""
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.DELETE_GROUP,
             replicator=self._get_replicator(replicator),
@@ -502,7 +506,7 @@ class DualWriteTestCase(TestCase):
         self.assertEqual(
             num_role_bindings,
             num,
-            f"Expected exactly {num} role binding{"s" if num != 1 else ""} against resource {target} "
+            f"Expected exactly {num} role binding{'s' if num != 1 else ''} against resource {target} "
             f"with roles {for_v2_roles} and groups {for_groups}, "
             f"but got {len(role_bindings)}.\n"
             f"Matched role bindings: {role_bindings}.\n"
@@ -627,10 +631,10 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         platform_default, admin_default = seed_group()
 
         with self.assertRaises(DualWriteException):
-            RelationApiDualWriteGroupHandler(platform_default, ReplicationEventType.CREATE_GROUP)
+            InventoryApiDualWriteGroupHandler(platform_default, ReplicationEventType.CREATE_GROUP)
 
         with self.assertRaises(DualWriteException):
-            RelationApiDualWriteGroupHandler(admin_default, ReplicationEventType.CREATE_GROUP)
+            InventoryApiDualWriteGroupHandler(admin_default, ReplicationEventType.CREATE_GROUP)
 
     def test_create_group_tuples(self):
         """Create a group and add users to it."""
@@ -757,7 +761,7 @@ class DualWriteGroupTestCase(DualWriteTestCase):
             )
         )
         self.assertEqual(len(tuples), 1)
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.UNASSIGN_ROLE,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -811,7 +815,7 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         )
         self.assertEqual(len(tuples), 1)
 
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.UNASSIGN_ROLE,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -866,7 +870,7 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         binding_mapping.mappings["groups"] = original_groups + original_groups
         binding_mapping.save()
 
-        dual_write_handler = RelationApiDualWriteGroupHandler(
+        dual_write_handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.UNASSIGN_ROLE,
             replicator=InMemoryRelationReplicator(self.tuples),
@@ -1257,7 +1261,7 @@ class DualWriteGroupTestCase(DualWriteTestCase):
         group, _ = self.given_group("empty group", [])
 
         replicator = InMemoryRelationReplicator(self.tuples)
-        handler = RelationApiDualWriteGroupHandler(
+        handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.ASSIGN_ROLE,
             replicator=replicator,
@@ -1399,7 +1403,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         ]
         self.assertSetEqual(set([admin_default, platform_default]), set(parents))
 
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role=role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.prepare_for_update()
@@ -1419,7 +1423,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         self.assertSetEqual(set([platform_default]), set(parents))
 
         # ensure no relations exist in replicator.
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role=role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.prepare_for_update()
@@ -1453,7 +1457,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         ]
         self.assertSetEqual(set([admin_default, platform_default]), set(parents))
 
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_deleted_system_role()
@@ -1473,7 +1477,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         self.assertSetEqual(set([platform_default]), set(parents))
 
         # Delete system role
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_deleted_system_role()
@@ -1493,7 +1497,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         self.assertSetEqual(set([admin_default]), set(parents))
 
         # Delete system role
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_deleted_system_role()
@@ -1510,7 +1514,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         self.assertEqual(len(tuples), 0)
 
         # delete system role
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_deleted_system_role()
@@ -1550,7 +1554,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to TENANT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1608,7 +1612,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to TENANT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1663,7 +1667,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to ROOT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1722,7 +1726,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to TENANT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1779,7 +1783,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to TENANT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1834,7 +1838,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(initial_tuples), 1)
 
                 # Update to ROOT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1893,7 +1897,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(role_specific_tuples), 2)
 
                 # Update to ROOT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -1950,7 +1954,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(role_specific_tuples), 2)
 
                 # Update to TENANT scope
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.prepare_for_update()
@@ -2007,7 +2011,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
                 self.assertEqual(len(role_specific_tuples), 2)
 
                 # Delete system role
-                dual_write_handler = SeedingRelationApiDualWriteHandler(
+                dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role, replicator=InMemoryRelationReplicator(self.tuples)
                 )
                 dual_write_handler.replicate_deleted_system_role()
@@ -2097,7 +2101,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         self.assertEqual(len(all_tuples_before_delete), 5)  # 3 correct + 2 incorrect
 
         # Delete system role - this should remove ALL parent relationships including incorrect ones
-        dual_write_handler = SeedingRelationApiDualWriteHandler(
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
             role, replicator=InMemoryRelationReplicator(self.tuples)
         )
         dual_write_handler.replicate_deleted_system_role()
@@ -2161,7 +2165,7 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
             TENANT_SCOPE_PERMISSIONS="catalog:*:*",  # app1:*:* not here either, so it falls back to DEFAULT
         ):
             # Prepare for update (but permissions stay the same, only settings changed)
-            dual_write_handler = SeedingRelationApiDualWriteHandler(
+            dual_write_handler = SeedingInventoryApiDualWriteHandler(
                 role=role, replicator=InMemoryRelationReplicator(self.tuples)
             )
             dual_write_handler.prepare_for_update()
@@ -2200,11 +2204,11 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         role = self.fixture.new_system_role(name="empty system role", permissions=[])
 
         replicator = InMemoryRelationReplicator(self.tuples)
-        handler = SeedingRelationApiDualWriteHandler(role=role, replicator=replicator)
+        handler = SeedingInventoryApiDualWriteHandler(role=role, replicator=replicator)
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="WARNING") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="WARNING") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 handler.replicate_new_system_role()
@@ -2486,7 +2490,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
             self.assertEqual(0, self.tuples.count_tuples(resource("rbac", "role_binding", role_binding_uuid)))
             self.assertEqual(0, self.tuples.count_tuples(subject("rbac", "role_binding", role_binding_uuid)))
 
-    @patch("management.role.relation_api_dual_write_handler.OutboxReplicator.replicate")
+    @patch("management.role.inventory_api_dual_write_handler.OutboxReplicator.replicate")
     def test_create_role_with_empty_access(self, replicate_mock):
         """Create a role and its bindings when creating a custom role."""
         self.given_v1_role("role_without_access", [])
@@ -2740,7 +2744,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="INFO") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 dual_write.replicate_new_or_updated_role(role)
@@ -2765,7 +2769,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
 
         with enable_logging():
             with (
-                self.assertLogs("management.role.relation_api_dual_write_handler", level="INFO") as logs,
+                self.assertLogs("management.role.inventory_api_dual_write_handler", level="INFO") as logs,
                 patch.object(replicator, "replicate", wraps=replicator.replicate) as spy,
             ):
                 dual_write.replicate_deleted_role()
@@ -2794,7 +2798,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         group, _ = self.given_group("test group", ["u1"])
 
         with enable_logging():
-            with self.assertLogs("management.group.relation_api_dual_write_subject_handler", level="INFO") as logs:
+            with self.assertLogs("management.group.inventory_api_dual_write_subject_handler", level="INFO") as logs:
                 self.given_roles_assigned_to_group(group, roles=[role])
 
             # Should log info-level skip, NOT the warning about inconsistent relations
@@ -2960,7 +2964,7 @@ class DualWriteCrossAccountReqeustTestCase(DualWriteTestCase):
             )
         )
         self.assertEqual(len(tuples), 1)
-        dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+        dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
             car_1,
             ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
             replicator=InMemoryRelationReplicator(self.tuples),

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from django.db.models import Model, Q
 from management.group.model import Group
+from management.inventory_replicator.types import RelationTuple
 from management.principal.model import Principal
-from management.relation_replicator.types import RelationTuple
 from management.role.model import Role
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import TenantMapping

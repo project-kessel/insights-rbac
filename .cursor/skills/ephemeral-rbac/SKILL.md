@@ -48,7 +48,7 @@ RBAC maintains role hierarchy in **two places**:
 | Layer | Mechanism | Tuple shape |
 |-------|-----------|-------------|
 | **Postgres** | `RoleV2.children` M2M (`management/role/definer.py` → `_seed_v2_role_from_v1`) | Django only |
-| **SpiceDB/Kessel** | `SeedingRelationApiDualWriteHandler.replicate_new_system_role()` via outbox | `rbac/role:<platform_uuid>#child@rbac/role:<seeded_uuid>` |
+| **SpiceDB/Kessel** | `SeedingInventoryApiDualWriteHandler.replicate_new_system_role()` via outbox | `rbac/role:<platform_uuid>#child@rbac/role:<seeded_uuid>` |
 
 **Critical:** `platform_role.children.add(v2_role)` updates Postgres only. It does **not** write to the outbox or SpiceDB.
 
@@ -76,9 +76,9 @@ for p in RoleV2.objects.filter(type='platform').prefetch_related('children'):
 
 ```bash
 oc exec -n ephemeral-<id> "$POD" -c rbac-service -- python rbac/manage.py shell -c "
-from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
+from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
 from management.role.v2_model import RoleV2
-replicator = RelationsApiReplicator()
+replicator = InventoryApiReplicator()
 parent = RoleV2.objects.get(name='User default Platform Role')
 child = RoleV2.objects.filter(type='seeded').first()
 resp = replicator.read_tuples(
@@ -214,7 +214,7 @@ Use this when reporting findings to the user:
 ## Code references
 
 - Django children M2M: `rbac/management/role/definer.py` (`_seed_v2_role_from_v1`)
-- SpiceDB child tuples: `rbac/management/role/relation_api_dual_write_handler.py` (`_check_create_admin_platform_relation`)
+- SpiceDB child tuples: `rbac/management/role/inventory_api_dual_write_handler.py` (`_check_create_admin_platform_relation`)
 - Tuple shape: `rbac/management/role/relations.py` (`role_child_relationship`)
 - Seeds force flag: `rbac/management/management/commands/seeds.py` (`--force-create-relationships`)
 - Skip replication on unchanged roles: `rbac/management/role/definer.py` (`_make_role`, `No change in system role` branch)

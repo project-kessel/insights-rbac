@@ -35,7 +35,7 @@ from management.inventory_checker.inventory_api_check import (
     relation_tuple_to_check_request,
 )
 from management.principal.model import Principal
-from management.relation_replicator.types import (
+from management.inventory_replicator.types import (
     ObjectReference,
     ObjectType,
     RelationTuple,
@@ -592,7 +592,7 @@ class CustomRolePermissionCheckerCheckRequestTest(TestCase):
         permission_tuple = role_permission_tuple(role_uuid, "inventory_groups_read")
 
         with patch(
-            "management.inventory_checker.inventory_api_check.relation_tuples_pb2_grpc.KesselTupleServiceStub",
+            "management.inventory_checker.inventory_api_check.tuple_service_pb2_grpc.KesselTupleServiceStub",
             return_value=mock_stub,
         ):
             self.checker.check_custom_role_permissions([permission_tuple], role_uuid)

@@ -18,7 +18,7 @@
 
 import uuid
 
-from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEventType, WorkspaceEvent
+from management.inventory_replicator.inventory_replicator import PartitionKey, ReplicationEventType, WorkspaceEvent
 from management.utils import as_uuid
 from management.workspace.model import Workspace
 

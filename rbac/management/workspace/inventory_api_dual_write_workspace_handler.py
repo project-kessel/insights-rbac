@@ -21,23 +21,23 @@ import logging
 from typing import Optional
 
 from django.db import OperationalError
-from management.models import Workspace
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     DualWriteException,
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
     WorkspaceEventStream,
 )
-from management.role.relation_api_dual_write_handler import BaseRelationApiDualWriteHandler
+from management.models import Workspace
+from management.role.inventory_api_dual_write_handler import BaseInventoryApiDualWriteHandler
 from management.workspace.utils.event import make_workspace_event
 from migration_tool.utils import create_relationship
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
+class InventoryApiDualWriteWorkspaceHandler(BaseInventoryApiDualWriteHandler):
     """Class to handle Dual Write for group bindings and membership."""
 
     workspace: Workspace
@@ -46,9 +46,9 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
         self,
         workspace: Workspace,
         event_type: ReplicationEventType,
-        replicator: Optional[RelationReplicator] = None,
+        replicator: Optional[InventoryReplicator] = None,
     ):
-        """Initialize RelationApiDualWriteGroupHandler."""
+        """Initialize InventoryApiDualWriteGroupHandler."""
         if not self.replication_enabled():
             return
 

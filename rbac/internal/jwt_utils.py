@@ -63,8 +63,8 @@ class JWTProvider:
 
         payload = (
             f"grant_type={settings.TOKEN_GRANT_TYPE}&"
-            f"client_id={settings.RELATIONS_API_CLIENT_ID}&"
-            f"client_secret={settings.RELATIONS_API_CLIENT_SECRET}&"
+            f"client_id={settings.INVENTORY_API_CLIENT_ID}&"
+            f"client_secret={settings.INVENTORY_API_CLIENT_SECRET}&"
             f"scope={settings.SCOPE}"
         )
 
@@ -146,7 +146,7 @@ class JWTManager:
                 logger.info("No token in cache, requesting new token.")
 
             token = self.jwt_provider.get_jwt_token(
-                settings.RELATIONS_API_CLIENT_ID, settings.RELATIONS_API_CLIENT_SECRET
+                settings.INVENTORY_API_CLIENT_ID, settings.INVENTORY_API_CLIENT_SECRET
             )
             # Token obtained store it in redis
             if token:

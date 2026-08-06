@@ -26,8 +26,8 @@ from collections.abc import Callable
 
 from django.db import connection, transaction
 from internal.migration_coordination import migration_notify_coordination
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     ReplicationEvent,
     ReplicationEventType,
     WorkspaceEvent,
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def replicate_with_notify(
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
     event: ReplicationEvent,
 ) -> None:
     """Enqueue a replication event and LISTEN until the consumer NOTIFYs batch completion.
@@ -204,12 +204,12 @@ def wait_for_pg_notify(
             pass
 
 
-class NotifyCoordinatedReplicator(RelationReplicator):
+class NotifyCoordinatedReplicator(InventoryReplicator):
     """Replicator wrapper that waits for the Kafka consumer to acknowledge each replicated event."""
 
     def __init__(
         self,
-        inner: RelationReplicator,
+        inner: InventoryReplicator,
         *,
         event_type: ReplicationEventType,
     ):

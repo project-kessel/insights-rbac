@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Client for the Kessel Relations API for role binding lookups."""
+"""Client for the Kessel Inventory API for role binding lookups."""
 
 import logging
 import uuid
@@ -23,9 +23,14 @@ from typing import Optional
 from django.conf import settings
 from google.protobuf import json_format
 from internal.jwt_utils import JWTManager, JWTProvider
-from kessel.relations.v1beta1 import common_pb2, lookup_pb2, lookup_pb2_grpc
+from kessel.inventory.v1beta2 import (
+    inventory_service_pb2_grpc,
+    relation_object_reference_pb2,
+    relation_object_type_pb2,
+    streamed_list_subjects_request_pb2,
+)
 from management.cache import JWTCache
-from management.utils import create_client_channel_relation
+from management.utils import create_client_channel_inventory
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +63,7 @@ def lookup_binding_subjects(
     subject_namespace: str = "rbac",
     subject_name: str = "role_binding",
 ) -> Optional[list[str]]:
-    """Look up role_binding subjects related to a resource via the Relations API.
+    """Look up role_binding subjects related to a resource via the Inventory API.
 
     This function finds all role_binding subjects that are related to the
     specified resource through the given relation. Use the recursive "binding"
@@ -75,8 +80,8 @@ def lookup_binding_subjects(
     Returns:
         List of subject IDs found, or None if the lookup fails or is not configured.
     """
-    if not settings.RELATION_API_SERVER:
-        logger.warning("RELATION_API_SERVER is not configured; skipping relations lookup.")
+    if not settings.INVENTORY_API_SERVER:
+        logger.warning("INVENTORY_API_SERVER is not configured; skipping relations lookup.")
         return None
 
     try:
@@ -96,20 +101,22 @@ def lookup_binding_subjects(
         metadata = [("authorization", f"Bearer {token}")] if token else []
         subject_ids: set[str] = set()
 
-        with create_client_channel_relation(settings.RELATION_API_SERVER) as channel:
-            stub = lookup_pb2_grpc.KesselLookupServiceStub(channel)
+        with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
+            stub = inventory_service_pb2_grpc.KesselInventoryServiceStub(channel)
 
-            request = lookup_pb2.LookupSubjectsRequest(
-                resource=common_pb2.ObjectReference(
-                    type=common_pb2.ObjectType(namespace=resource_ns, name=resource_name),
+            request = streamed_list_subjects_request_pb2.StreamedListSubjectsRequest(
+                resource=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace=resource_ns, name=resource_name),
                     id=str(resource_id),
                 ),
                 relation=relation,
-                subject_type=common_pb2.ObjectType(namespace=subject_namespace, name=subject_name),
+                subject_type=relation_object_type_pb2.RelationObjectType(
+                    namespace=subject_namespace, name=subject_name
+                ),
             )
             logger.debug("LookupSubjects request: %s", request)
 
-            responses = stub.LookupSubjects(request, metadata=metadata)
+            responses = stub.StreamedListSubjects(request, metadata=metadata)
             for idx, response in enumerate(responses, start=1):
                 payload = json_format.MessageToDict(response)
                 logger.debug("LookupSubjects response #%d: %s", idx, payload)
@@ -120,12 +127,12 @@ def lookup_binding_subjects(
                 if subject_id:
                     try:
                         # NOTE: This is a temporary fix for an issue where LookupSubjects response from
-                        # Relations API includes IDs used for hierarchy traversal (e.g., tenant_id).
+                        # Inventory API includes IDs used for hierarchy traversal (e.g., tenant_id).
                         # We filter them out by validating each ID is a valid UUID.
                         uuid.UUID(subject_id)
                         subject_ids.add(subject_id)
                     except ValueError:
-                        logger.warning("Skipping non-UUID subject_id from Relations API: %s", subject_id)
+                        logger.warning("Skipping non-UUID subject_id from Inventory API: %s", subject_id)
 
         result = list(subject_ids)
         logger.info(
@@ -140,5 +147,5 @@ def lookup_binding_subjects(
         return result
 
     except Exception:
-        logger.exception("Failed to lookup subjects through Relations API")
+        logger.exception("Failed to lookup subjects through Inventory API")
         return None

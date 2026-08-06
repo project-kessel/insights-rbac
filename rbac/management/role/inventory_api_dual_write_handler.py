@@ -24,18 +24,18 @@ from typing import Any, Iterable, Optional
 from django.conf import settings
 from django.db.models import Model
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
-from management.models import Workspace
-from management.permission.scope_service import ImplicitResourceService, Scope, bound_model_for_scope
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     DualWriteException,
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
-from management.relation_replicator.types import RelationTuple
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.types import RelationTuple
+from management.models import Workspace
+from management.permission.scope_service import ImplicitResourceService, Scope, bound_model_for_scope
 from management.role.model import BindingMapping, Role
 from management.role.platform import (
     admin_platform_parent_scopes_for_seeded_system_role,
@@ -64,17 +64,17 @@ from api.models import Tenant
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class BaseRelationApiDualWriteHandler(ABC):
+class BaseInventoryApiDualWriteHandler(ABC):
     """Base class to handle Dual Write API related operations on roles."""
 
-    _replicator: RelationReplicator
+    _replicator: InventoryReplicator
     # TODO: continue factoring common behavior into this base class, and potentially into a higher base class
     # for the general pattern
 
     _expected_empty_relation_reason = None
 
-    def __init__(self, replicator: Optional[RelationReplicator] = None):
-        """Initialize SeedingRelationApiDualWriteHandler."""
+    def __init__(self, replicator: Optional[InventoryReplicator] = None):
+        """Initialize SeedingInventoryApiDualWriteHandler."""
         if not self.replication_enabled():
             self._replicator = NoopReplicator()
             return
@@ -89,24 +89,24 @@ class BaseRelationApiDualWriteHandler(ABC):
         self._expected_empty_relation_reason = reason
 
 
-class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
+class SeedingInventoryApiDualWriteHandler(BaseInventoryApiDualWriteHandler):
     """Class to handle Dual Write API related operations specific to the seeding process."""
 
-    _replicator: RelationReplicator
+    _replicator: InventoryReplicator
     _current_role_relations: list[RelationTuple]
 
     _public_tenant: Optional[Tenant] = None
 
-    def __init__(self, role: Role, replicator: Optional[RelationReplicator] = None):
-        """Initialize SeedingRelationApiDualWriteHandler."""
+    def __init__(self, role: Role, replicator: Optional[InventoryReplicator] = None):
+        """Initialize SeedingInventoryApiDualWriteHandler."""
         super().__init__(replicator)
         self.implicit_resource_service = ImplicitResourceService.from_settings()
         self.role = role
 
         if not role.system:
             raise ValueError(
-                "SeedingRelationApiDualWriteHandler only supports system roles. "
-                "RelationApiDualWriteHandler must be used for custom roles. "
+                "SeedingInventoryApiDualWriteHandler only supports system roles. "
+                "InventoryApiDualWriteHandler must be used for custom roles. "
                 f"Provided custom role: pk={role.pk!r}."
             )
 
@@ -288,28 +288,28 @@ def _update_by_pk[M: Model](old_by_pk: dict[Any, M], new: Iterable[M]):
         removed.delete()
 
 
-class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
+class InventoryApiDualWriteHandler(BaseInventoryApiDualWriteHandler):
     """Class to handle Dual Write API related operations."""
 
     def __init__(
         self,
         role: Role,
         event_type: ReplicationEventType,
-        replicator: Optional[RelationReplicator] = None,
+        replicator: Optional[InventoryReplicator] = None,
         tenant: Optional[Tenant] = None,
     ):
         """
-        Initialize RelationApiDualWriteHandler.
+        Initialize InventoryApiDualWriteHandler.
 
-        The provided role must be locked with select_for_update() before creating a RelationApiDualWriteHandler
+        The provided role must be locked with select_for_update() before creating a InventoryApiDualWriteHandler
         (except for a role newly created during an uncommitted transaction).
         """
         super().__init__(replicator)
 
         if role.system:
             raise ValueError(
-                "RelationApiDualWriteHandler only supports custom roles. "
-                "SeedingRelationApiDualWriteHandler must be used for system roles. "
+                "InventoryApiDualWriteHandler only supports custom roles. "
+                "SeedingInventoryApiDualWriteHandler must be used for system roles. "
                 f"Provided system role: pk={role.pk!r}."
             )
         if not self.replication_enabled():
@@ -341,7 +341,7 @@ class RelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
 
             assert_v1_write_allowed(self.tenant)
         except Exception as e:
-            logger.error(f"Failed to initialize RelationApiDualWriteHandler with error: {e}")
+            logger.error(f"Failed to initialize InventoryApiDualWriteHandler with error: {e}")
             raise DualWriteException(e)
 
     def prepare_for_update(self):
