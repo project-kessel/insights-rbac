@@ -45,28 +45,28 @@ from migration_tool.in_memory_tuples import RelationTuple
 from migration_tool.models import V2boundresource, role_permission_tuple
 from migration_tool.utils import create_relationship
 from psycopg2.errors import DeadlockDetected, SerializationFailure
-from kessel.relations.v1beta1.common_pb2 import Relationship
+from kessel.inventory.v1beta2 import relationship_pb2
 
 logger = logging.getLogger(__name__)
 
 
-type _CommitRemoval = Callable[[Iterable[Relationship | RelationTuple]], None]
+type _CommitRemoval = Callable[[Iterable[relationship_pb2.Relationship | RelationTuple]], None]
 
 
-def _as_relation_tuple(relation: Relationship | RelationTuple) -> RelationTuple:
+def _as_relation_tuple(relation: relationship_pb2.Relationship | RelationTuple) -> RelationTuple:
     """Convert a Relationship or RelationTuple to a RelationTuple."""
     if isinstance(relation, RelationTuple):
         return relation
 
-    if isinstance(relation, Relationship):
+    if isinstance(relation, relationship_pb2.Relationship):
         return RelationTuple.from_message(relation)
 
     raise TypeError(f"Expected Relationship or RelationTuple, but got: {relation!r}")
 
 
-def _as_relationship(relation: Relationship | RelationTuple) -> Relationship:
+def _as_relationship(relation: relationship_pb2.Relationship | RelationTuple) -> relationship_pb2.Relationship:
     """Convert a Relationship or RelationTuple to a Relationship."""
-    if isinstance(relation, Relationship):
+    if isinstance(relation, relationship_pb2.Relationship):
         return relation
 
     if isinstance(relation, RelationTuple):
@@ -112,7 +112,7 @@ class _RemoteBindingState:
         if not isinstance(value, str):
             raise TypeError(f"Expected ID to be a string, but got: {value!r}")
 
-    def add_relations(self, relations: Iterable[Relationship | RelationTuple]):
+    def add_relations(self, relations: Iterable[relationship_pb2.Relationship | RelationTuple]):
         self._relations.update(_as_relation_tuple(r) for r in relations)
 
     def add_role(self, role_id: str):
@@ -287,7 +287,7 @@ def _remove_orphaned_role_bindings(
         # Unfortunately, we must *also* use select_for_update() for V1 tenants here because we are potentially
         # interacting with concurrent V1 writers (which all use SELECT FOR UPDATE rather than SERIALIZABLE).
         with atomic_block():
-            to_remove: list[RelationTuple | Relationship] = []
+            to_remove: list[RelationTuple | relationship_pb2.Relationship] = []
 
             bootstrap_lock: TenantBootstrapLock = lock_tenant_for_bootstrap(tenant)
             builtin_binding_ids: set[str] = bootstrap_lock.tenant_mapping.role_binding_ids()
@@ -661,7 +661,7 @@ def cleanup_tenant_orphaned_relationships(
     builtin_scope_cleaned_count = 0
     custom_roles_altered_count = 0
 
-    def commit_removal(relations: Iterable[Relationship | RelationTuple]):
+    def commit_removal(relations: Iterable[relationship_pb2.Relationship | RelationTuple]):
         nonlocal removed_count
 
         converted_relations = [_as_relationship(r) for r in relations]

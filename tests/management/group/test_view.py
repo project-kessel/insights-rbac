@@ -1440,7 +1440,7 @@ class GroupViewsetTests(IdentityRequest):
         role = response.data.get("data")[0]
         self.assertEqual(role.get("system"), False)
 
-    @patch("management.group.relation_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
+    @patch("management.group.inventory_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
     def test_add_group_roles_system_policy_create_success(self, mock_method):
         """Test that adding a role to a group without a system policy returns successfully."""
         url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
@@ -2138,7 +2138,7 @@ class GroupViewsetTests(IdentityRequest):
         self.assertCountEqual([self.roleB], list(groupC.roles()))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    @patch("management.group.relation_api_dual_write_subject_handler.OutboxReplicator.replicate")
+    @patch("management.group.inventory_api_dual_write_subject_handler.OutboxReplicator.replicate")
     def test_add_group_role_not_found_will_not_replicate(self, replicate_mock):
         """Test that adding roles to a group skips ids not found, and returns failure."""
         groupC = Group.objects.create(name="groupC", tenant=self.tenant)
@@ -5371,7 +5371,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["name"], new_name_sa)
 
-    @patch("management.group.relation_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
+    @patch("management.group.inventory_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
     def test_add_and_remove_role_to_group(self, mock_method):
         Permission.objects.create(permission="app:inventory:read", tenant=self.tenant)
 
@@ -5454,7 +5454,7 @@ class GroupViewNonAdminTests(IdentityRequest):
         assert_group_tuples(to_remove)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
-    @patch("management.group.relation_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
+    @patch("management.group.inventory_api_dual_write_subject_handler.OutboxReplicator._save_replication_event")
     def test_add_and_remove_system_role_to_group(self, mock_method):
         # Create a group with 'User Access administrator' role and add principals we use in headers
         group_with_admin = self._create_group_with_user_access_administrator_role(self.tenant)

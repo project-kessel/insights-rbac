@@ -29,9 +29,12 @@ from kessel.inventory.v1beta2 import (
     reporter_reference_pb2,
     resource_reference_pb2,
     subject_reference_pb2,
+    relation_subject_filter_pb2,
+    relation_tuple_filter_pb2,
+    read_tuples_request_pb2,
+    tuple_service_pb2_grpc,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
-from kessel.relations.v1beta1 import relation_tuples_pb2, relation_tuples_pb2_grpc
 from management.cache import JWTCache
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.inventory_replicator.types import RelationTuple
@@ -479,16 +482,16 @@ class CustomRolePermissionChecker(InventoryApiBaseChecker):
         all_present = True
 
         with create_client_channel_relation(settings.RELATION_API_SERVER) as channel:
-            stub = relation_tuples_pb2_grpc.KesselTupleServiceStub(channel)
+            stub = tuple_service_pb2_grpc.KesselTupleServiceStub(channel)
 
             for t in tuples:
-                request = relation_tuples_pb2.ReadTuplesRequest(
-                    filter=relation_tuples_pb2.RelationTupleFilter(
+                request = read_tuples_request_pb2.ReadTuplesRequest(
+                    filter=relation_tuple_filter_pb2.RelationTupleFilter(
                         resource_namespace=t.resource.type.namespace,
                         resource_type=t.resource.type.name,
                         resource_id=t.resource.id,
                         relation=t.relation,
-                        subject_filter=relation_tuples_pb2.SubjectFilter(
+                        subject_filter=relation_subject_filter_pb2.RelationSubjectFilter(
                             subject_namespace=t.subject.subject.type.namespace,
                             subject_type=t.subject.subject.type.name,
                             subject_id=t.subject.subject.id,

@@ -2798,7 +2798,7 @@ class DualWriteCustomRolesTestCase(DualWriteTestCase):
         group, _ = self.given_group("test group", ["u1"])
 
         with enable_logging():
-            with self.assertLogs("management.group.relation_api_dual_write_subject_handler", level="INFO") as logs:
+            with self.assertLogs("management.group.inventory_api_dual_write_subject_handler", level="INFO") as logs:
                 self.given_roles_assigned_to_group(group, roles=[role])
 
             # Should log info-level skip, NOT the warning about inconsistent relations

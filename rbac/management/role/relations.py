@@ -20,7 +20,7 @@ import logging
 from typing import Union
 from uuid import UUID
 
-from kessel.relations.v1beta1.common_pb2 import Relationship
+from kessel.inventory.v1beta2 import relationship_pb2
 from management.inventory_replicator.logging_replicator import stringify_spicedb_relationship
 from management.inventory_replicator.types import RelationTuple
 from migration_tool.utils import create_relationship
@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 def deduplicate_role_permission_relationships(
-    relationships: list[Union[RelationTuple, Relationship]],
-) -> list[Union[RelationTuple, Relationship]]:
+    relationships: list[Union[RelationTuple, relationship_pb2.Relationship]],
+) -> list[Union[RelationTuple, relationship_pb2.Relationship]]:
     """
     Deduplicate role-to-principal permission relationships.
 
