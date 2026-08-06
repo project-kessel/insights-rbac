@@ -278,14 +278,14 @@ class WorkspaceListInputSerializerTest(TestCase):
         self.assertFalse(s.is_valid())
         self.assertIn("ids", s.errors)
 
-    # --- cross-field: ids + type ---
+    # --- ids + type combinations ---
 
-    def test_ids_without_type_defaults_to_standard(self):
-        """Test that providing ids without type defaults type to standard."""
+    def test_ids_without_type_leaves_type_unset(self):
+        """Test that providing ids without type does not force a type filter."""
         test_uuid = str(uuid.uuid4())
         s = WorkspaceListInputSerializer(data={"ids": test_uuid})
         self.assertTrue(s.is_valid(), s.errors)
-        self.assertEqual(s.validated_data["type"], [Workspace.Types.STANDARD])
+        self.assertIsNone(s.validated_data.get("type"))
 
     def test_ids_with_explicit_type_keeps_type(self):
         """Test that providing ids with explicit type preserves the type."""
