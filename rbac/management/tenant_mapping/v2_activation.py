@@ -78,6 +78,12 @@ class V1WriteBlockedError(Exception):
     pass
 
 
+class InvalidV2OptOutError(Exception):
+    """Raised when a tenant attempts to opt out of V2, but cannot."""
+
+    pass
+
+
 def ensure_v2_write_activated(tenant: Tenant):
     """Mark the tenant as V2-activated if not already. Must be called inside a transaction.
 
@@ -91,15 +97,23 @@ def ensure_v2_write_activated(tenant: Tenant):
         return
 
     mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
+
     if mapping is None:
         raise TenantNotBootstrappedError(
             f"Tenant {tenant.org_id} has no TenantMapping; V2 writes require tenant bootstrapping."
         )
+
     if mapping.v2_write_activated_at is not None:
         return
 
-    mapping.v2_write_activated_at = timezone.now()
-    mapping.save(update_fields=["v2_write_activated_at"])
+    activated_time = timezone.now()
+
+    mapping.v2_write_activated_at = activated_time
+
+    if mapping.v2_opted_in_at is None:
+        mapping.v2_opted_in_at = activated_time
+
+    mapping.save(update_fields=["v2_write_activated_at", "v2_opted_in_at"])
     logger.info("Tenant %s activated for V2 writes", tenant.org_id)
 
 
@@ -115,6 +129,34 @@ def is_v2_write_activated(tenant: Tenant):
         return mapping.v2_write_activated_at is not None
     except TenantMapping.DoesNotExist:
         return False
+
+
+def set_v2_opt_in_state(tenant: Tenant, opted_in: bool):
+    """
+    Set the V2 opt-in state of a tenant.
+
+    A V1 tenant can be "opted-in" to V2, indicating that they are willing to be converted to V2. (At time of writing,
+    this flag is not yet checked before converting a tenant.)
+
+    Opting-in a V1 tenant is idempotent. A V2 tenant is necessarily opted-in and cannot opt out.
+    """
+    mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
+
+    if mapping is None:
+        raise TenantNotBootstrappedError(
+            f"Tenant {tenant.org_id} has no TenantMapping; opting-in to V2 can only be done for a bootstrapped tenant."
+        )
+
+    if opted_in:
+        if mapping.v2_opted_in_at is None:
+            mapping.v2_opted_in_at = timezone.now()
+    else:
+        if mapping.v2_write_activated_at is not None:
+            raise InvalidV2OptOutError(f"Tenant {tenant.org_id} cannot opt out of V2 after performing a V2 write.")
+
+        mapping.v2_opted_in_at = None
+
+    mapping.save(update_fields=["v2_opted_in_at"])
 
 
 class TenantVersion(enum.IntEnum):
