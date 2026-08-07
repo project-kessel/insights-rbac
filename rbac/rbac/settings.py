@@ -682,6 +682,8 @@ V2_READ_ONLY_API_MODE = ENVIRONMENT.bool("V2_READ_ONLY_API_MODE", default=False)
 WORKSPACE_ACCESS_CHECK_V2_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_CHECK_V2_ENABLED", default=False)
 # When True, use 'role_binding_view' permission; when False, use 'view' permission for role binding access
 USE_ROLE_BINDING_VIEW_PERMISSION = ENVIRONMENT.bool("USE_ROLE_BINDING_VIEW_PERMISSION", default=True)
+# When True, tenant-level role binding access checks use Kessel instead of org-admin middleware
+KESSEL_TENANT_AUTH_ENABLED = ENVIRONMENT.bool("KESSEL_TENANT_AUTH_ENABLED", default=False)
 READ_ONLY_API_MODE = ENVIRONMENT.get_value("READ_ONLY_API_MODE", default=False)
 V2_EDIT_API_ENABLED = ENVIRONMENT.bool("V2_EDIT_API_ENABLED", default=False)
 V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES = [
