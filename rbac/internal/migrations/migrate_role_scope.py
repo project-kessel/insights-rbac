@@ -20,10 +20,10 @@
 import dataclasses
 import itertools
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from django.conf import settings
-
+from django.db import OperationalError
 from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
@@ -243,10 +243,10 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
     migrated_cars = 0
 
     for group_batch in itertools.batched(groups, 10):
-        migrated_groups += _migrate_group_batch(context=context, groups=list(group_batch))
+        migrated_groups += migrate_batch_with_fallback(_migrate_group_batch, context, list(group_batch))
 
     for car_batch in itertools.batched(cars, 10):
-        migrated_cars += _migrate_car_batch(context=context, cars=list(car_batch))
+        migrated_cars += migrate_batch_with_fallback(_migrate_car_batch, context, list(car_batch))
 
     logger.info(
         "Completed binding migration for system role %s: %d groups and %d CARs migrated successfully",
@@ -254,6 +254,24 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
         migrated_groups,
         migrated_cars,
     )
+
+
+def migrate_batch_with_fallback[T](
+    migrate_batch_fn: Callable[[_MigrateContext, list[T]], int], context: _MigrateContext, batch: list[T]
+) -> int:
+    try:
+        # Although migrating each entity is still done individually, it's still worth it to attempt batching because it
+        # saves us having to re-validate the migration for every single entity.
+        return migrate_batch_fn(context, batch)
+    except OperationalError:
+        logger.warning("Falling back to per-model scope migration.", exc_info=True)
+
+        migrated = 0
+
+        for model in batch:
+            migrated += migrate_batch_fn(context, [model])
+
+        return migrated
 
 
 @atomic_with_retry(retries=5)

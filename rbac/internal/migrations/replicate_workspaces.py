@@ -8,6 +8,7 @@ from typing import Optional
 from django.db.models import F, Q, QuerySet
 from django.db.models.lookups import LessThanOrEqual
 from management.atomic_transactions import atomic_with_retry
+from management.audit_log.model import AuditLog
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import (
     RelationReplicator,
@@ -15,7 +16,9 @@ from management.relation_replicator.relation_replicator import (
     WorkspaceEventStream,
 )
 from management.workspace.model import Workspace
-from management.workspace.utils.event import make_workspace_event
+from management.workspace.utils.event import make_workspace_event, make_workspace_id_deleted_event
+
+from api.models import Tenant
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,3 +220,85 @@ def replicate_updated_workspaces(
         base_query=base_query,
         description="updated workspaces",
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class _DeletedWorkspaceEntry:
+    tenant_id: int
+    workspace_id: uuid.UUID
+    workspace_name: str
+
+    def __post_init__(self):
+        if not isinstance(self.tenant_id, int):
+            raise TypeError(f"Expected tenant_id to be an int, but got: {self.tenant_id!r}")
+
+        if not isinstance(self.workspace_id, uuid.UUID):
+            raise TypeError(f"Expected workspace_id to be a UUID, but got: {self.workspace_id!r}")
+
+        if not isinstance(self.workspace_name, str):
+            raise TypeError(f"Expected workspace_name to be a string, but got: {self.workspace_name}")
+
+
+@atomic_with_retry(retries=5)
+def _replicate_deleted_batch(replicator: RelationReplicator, entries: list[_DeletedWorkspaceEntry]):
+    existing_workspaces = list(Workspace.objects.filter(id__in=(e.workspace_id for e in entries)))
+
+    # Workspace IDs are random UUIDs, so, once a workspace is deleted, its ID should never be reused.
+    if len(existing_workspaces) > 0:
+        raise AssertionError(
+            f"Attempted to re-replicate workspace deletes, but the following IDs still exist: {[str(w.id) for w in existing_workspaces]}"
+        )
+
+    tenants_by_id: dict[int, Tenant] = {t.id: t for t in Tenant.objects.filter(id__in=(e.tenant_id for e in entries))}
+
+    for entry in entries:
+        replicator.replicate_workspace(
+            make_workspace_id_deleted_event(
+                tenant=tenants_by_id[entry.tenant_id],
+                workspace_id=entry.workspace_id,
+                workspace_name=entry.workspace_name,
+            ),
+            WorkspaceEventStream.BULK,
+        )
+
+
+_deleted_workspace_prefix = "Deleted workspace: "
+
+
+def _extract_deleted_workspace_name(log: AuditLog) -> str:
+    description: str = log.description
+
+    if description.startswith(_deleted_workspace_prefix):
+        return description[len(_deleted_workspace_prefix) :]
+
+    return f"[deleted workspace {log.resource_uuid}]"
+
+
+def replicate_deleted_workspaces(since: datetime.datetime, replicator: Optional[RelationReplicator] = None):
+    if replicator is None:
+        replicator = OutboxReplicator()
+
+    delete_logs = AuditLog.objects.filter(
+        created__gte=since, resource_type="workspace", action="delete", resource_uuid__isnull=False
+    )
+
+    total_count = delete_logs.count()
+    logger.info(f"About to replicate the deletion of ~{total_count} workspaces.")
+
+    replicated_count = 0
+
+    for batch in itertools.batched(delete_logs.iterator(), 500):
+        _replicate_deleted_batch(
+            replicator,
+            [
+                _DeletedWorkspaceEntry(
+                    tenant_id=log.tenant_id,
+                    workspace_id=log.resource_uuid,
+                    workspace_name=_extract_deleted_workspace_name(log),
+                )
+                for log in batch
+            ],
+        )
+
+        replicated_count += len(batch)
+        logger.info(f"Replicated the deletion of {replicated_count}/~{total_count} workspaces.")

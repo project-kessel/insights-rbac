@@ -5980,7 +5980,8 @@ class GroupViewNonAdminTests(IdentityRequest):
         ]
 
         class MockResponse:
-            def __init__(self, json_response):
+            def __init__(self, url, json_response):
+                self.url = url
                 self.status_code = 200
                 self._json = json_response
                 self.content = json.dumps(json_response)
@@ -5992,8 +5993,8 @@ class GroupViewNonAdminTests(IdentityRequest):
             if url.endswith("/service_accounts/v1") and (
                 not (client_ids := params.get("clientId")) or sa_uuid in client_ids
             ):
-                return MockResponse(mocked_values)
-            return MockResponse([])
+                return MockResponse(url, mocked_values)
+            return MockResponse(url, [])
 
         mock_request.side_effect = mock_get
         mock_request.__name__ = "request_service_accounts"

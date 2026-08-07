@@ -109,6 +109,7 @@ from management.tasks import (
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    replicate_deleted_workspaces_in_worker,
     replicate_updated_workspaces_in_worker,
     run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
@@ -2963,7 +2964,10 @@ def replicate_updated_workspaces(request):
     )
 
     try:
-        datetime.datetime.fromisoformat(since)
+        parsed_since = datetime.datetime.fromisoformat(since)
+
+        if parsed_since.tzinfo is None:
+            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
     except ValueError as e:
         return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
@@ -2989,6 +2993,45 @@ def replicate_updated_workspaces(request):
     except Exception as e:
         logger.exception("Error replicating updated workspaces", exc_info=True)
         return JsonResponse({"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500)
+
+
+@require_http_methods(["POST"])
+def replicate_deleted_workspaces(request):
+    """Replicate the deletion of workspaces deleted since the provided time.
+
+    POST /_private/api/utils/replicate_deleted_workspaces/?since=<timestamp>
+
+    since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    if "since" not in request.GET:
+        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+
+    since = request.GET["since"]
+
+    try:
+        parsed_since = datetime.datetime.fromisoformat(since)
+
+        if parsed_since.tzinfo is None:
+            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+    except ValueError as e:
+        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
+
+    try:
+        replicate_deleted_workspaces_in_worker.delay(since=since)
+
+        return JsonResponse(
+            {
+                "message": "Replication enqueued in background worker.",
+                "since": since,
+            },
+            status=202,
+        )
+    except Exception as e:
+        logger.exception("Error replicating deleted workspaces", exc_info=True)
+        return JsonResponse({"detail": f"Error replicating deleted workspaces: {str(e)}"}, status=500)
 
 
 @require_http_methods(["POST"])

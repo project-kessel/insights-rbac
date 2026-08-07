@@ -30,8 +30,9 @@ from management.principal.proxy import PrincipalProxy
 class MockResponse:  # pylint: disable=too-few-public-methods
     """Mock response object for testing."""
 
-    def __init__(self, json_data, status_code, exception=None):
+    def __init__(self, url, json_data, status_code, *, exception=None):
         """Create object."""
+        self.url = url
         self.json_data = json_data
         self.status_code = status_code
         self.exception = exception
@@ -43,24 +44,24 @@ class MockResponse:  # pylint: disable=too-few-public-methods
         return self.json_data
 
 
-def mocked_requests_get_404_json(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_404_json(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock invalid response that returns json."""
     json_response = {"details": "Invalid path."}
-    return MockResponse(json_response, status.HTTP_404_NOT_FOUND)
+    return MockResponse(url, json_response, status.HTTP_404_NOT_FOUND)
 
 
-def mocked_requests_get_500_json(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_500_json(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock invalid response that returns json."""
     json_response = {"details": "Internal server error."}
-    return MockResponse(json_response, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return MockResponse(url, json_response, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-def mocked_requests_get_500_except(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_500_except(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock invalid response that raises an exception."""
     raise requests.exceptions.ConnectionError()
 
 
-def mocked_requests_get_200_json(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_200_json(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock valid response that returns json."""
     user = {
         "username": "test_user1",
@@ -73,10 +74,10 @@ def mocked_requests_get_200_json(*args, **kwargs):  # pylint: disable=unused-arg
         "org_id": "org_1",
     }
     json_response = [user]
-    return MockResponse(json_response, status.HTTP_200_OK)
+    return MockResponse(url, json_response, status.HTTP_200_OK)
 
 
-def mocked_requests_get_200_json_count(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_200_json_count(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock valid response that returns json with userCount."""
     user1 = {
         "username": "test_user1",
@@ -99,13 +100,13 @@ def mocked_requests_get_200_json_count(*args, **kwargs):  # pylint: disable=unus
         "org_id": "org_2",
     }
     json_response = {"userCount": 2, "users": [user1, user2]}
-    return MockResponse(json_response, status.HTTP_200_OK)
+    return MockResponse(url, json_response, status.HTTP_200_OK)
 
 
-def mocked_requests_get_200_except(*args, **kwargs):  # pylint: disable=unused-argument
+def mocked_requests_get_200_except(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock valid response that returns exception on json."""
     json_response = {}
-    return MockResponse(json_response, status.HTTP_200_OK, ValueError)
+    return MockResponse(url, json_response, status.HTTP_200_OK, exception=ValueError)
 
 
 class PrincipalProxyTest(TestCase):
