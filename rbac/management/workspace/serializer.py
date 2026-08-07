@@ -35,8 +35,8 @@ _VALID_TYPES = [v.lower() for v in Workspace.Types.values] + [_ALL_TYPE]
 class _WorkspaceFilterValidationMixin:
     """Shared validation logic for workspace list and query input serializers.
 
-    Centralizes type/name/NUL-byte validation and cross-field defaults
-    so that WorkspaceListInputSerializer and WorkspaceQueryInputSerializer
+    Centralizes type/name/NUL-byte validation so that
+    WorkspaceListInputSerializer and WorkspaceQueryInputSerializer
     stay in sync without duplicating code.
     """
 
@@ -78,12 +78,6 @@ class _WorkspaceFilterValidationMixin:
         if not cleaned:
             return None
         return cleaned
-
-    def validate(self, data):
-        """Cross-field validation: ids without explicit type defaults to standard."""
-        if data.get("ids") is not None and "type" not in self.initial_data:
-            data["type"] = [Workspace.Types.STANDARD]
-        return data
 
 
 class WorkspaceListInputSerializer(_WorkspaceFilterValidationMixin, serializers.Serializer):
