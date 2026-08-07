@@ -16,9 +16,13 @@
 #
 """Defines the Admin Access Permissions class."""
 
+import logging
+
 from rest_framework import permissions
 
 from rbac.env import ENVIRONMENT
+
+logger = logging.getLogger(__name__)
 
 
 class AdminAccessPermission(permissions.BasePermission):
@@ -28,4 +32,19 @@ class AdminAccessPermission(permissions.BasePermission):
         """Check permission based on Account Admin property."""
         if ENVIRONMENT.get_value("ALLOW_ANY", default=False, cast=bool):
             return True
-        return request.user.admin
+        if not request.user.admin:
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "admin",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "not_admin",
+                    "endpoint": request.path,
+                },
+            )
+            return False
+        return True

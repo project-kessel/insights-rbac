@@ -51,6 +51,8 @@ from core.kafka_consumer import (
     RetryConfig,
     _save_consistency_token_best_effort,
     consistency_token_save_total,
+    last_message_processed_time,
+    last_poll_time,
 )
 from django.db import OperationalError
 from django.test import TestCase
@@ -2079,3 +2081,140 @@ class SaveConsistencyTokenBestEffortTests(TestCase):
         mock_tenant_objects.filter.return_value = mock_qs
 
         _save_consistency_token_best_effort("org-missing", "token-abc", "agg-1")
+
+
+class HeartbeatMetricTests(TestCase):
+    """Tests for consumer heartbeat metrics."""
+
+    @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def setUp(self):
+        """Set up test fixtures."""
+        self.consumer = RBACKafkaConsumer()
+        self.consumer.consumer = Mock()
+        self.consumer.offset_manager = Mock()
+        self.consumer.offset_manager.should_commit.return_value = False
+
+    @patch("core.kafka_consumer.relations_api_replication")
+    @patch("core.kafka_consumer.json_format.ParseDict")
+    def test_last_message_processed_time_updated_on_success(self, mock_parse_dict, mock_replication):
+        """Test that last_message_processed_time Gauge is updated after successful processing."""
+        import time
+
+        mock_response = Mock()
+        mock_response.consistency_token.token = "test-token"
+        mock_replication.write_relationships.return_value = mock_response
+        mock_replication.delete_relationships.return_value = mock_response
+
+        # Set lock token
+        self.consumer.lock_id = "test-group/0"
+        self.consumer.lock_token = "test-lock-token"
+
+        message = Mock()
+        message.partition = 0
+        message.offset = 1
+        message.value = json.dumps(
+            {
+                "schema": {},
+                "payload": json.dumps(
+                    {
+                        "aggregatetype": "relations",
+                        "aggregateid": "test-123",
+                        "type": "test_event",
+                        "relations_to_add": [{"resource": {}, "subject": {}}],
+                        "relations_to_remove": [],
+                        "resource_context": {"org_id": "org1", "event_type": "test"},
+                    }
+                ),
+            }
+        ).encode()
+        message.leader_epoch = 0
+
+        tp = Mock()
+
+        before = time.time()
+        message_value = json.loads(message.value.decode("utf-8"))
+        result = self.consumer._process_and_commit_message(message, message_value, tp, {})
+        after = time.time()
+
+        # Assert processing succeeded
+        self.assertTrue(result)
+
+        # Assert offset was stored
+        self.consumer.offset_manager.store.assert_called_once_with(tp, message.offset, message.leader_epoch)
+
+        metric_value = last_message_processed_time._value.get()
+        self.assertGreaterEqual(metric_value, before)
+        self.assertLessEqual(metric_value, after)
+
+    @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def test_health_check_updates_last_poll_time(self):
+        """Test that a successful health check updates last_poll_time even without messages."""
+        import time
+
+        last_poll_time.set(0)
+        self.consumer.is_consuming = True
+        self.consumer.topic = "test-topic"
+        self.consumer.consumer.partitions_for_topic.return_value = {0}
+        self.consumer.liveness_file = Mock()
+        self.consumer.readiness_file = Mock()
+
+        before = time.time()
+        self.consumer._health_check_loop_iteration()
+        after = time.time()
+
+        metric_value = last_poll_time._value.get()
+        self.assertGreaterEqual(metric_value, before)
+        self.assertLessEqual(metric_value, after)
+
+        # Assert health status files were updated
+        self.consumer.liveness_file.touch.assert_called_once()
+        self.consumer.readiness_file.touch.assert_called_once()
+
+    @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def test_health_check_failure_does_not_update_last_poll_time(self):
+        """Test that a failed health check does not update last_poll_time."""
+        last_poll_time.set(42.0)
+        self.consumer.is_consuming = True
+        self.consumer.topic = "test-topic"
+        self.consumer.consumer.partitions_for_topic.side_effect = Exception("Kafka unreachable")
+        self.consumer.liveness_file = Mock()
+        self.consumer.readiness_file = Mock()
+        self.consumer.readiness_file.exists.return_value = True
+
+        self.consumer._health_check_loop_iteration()
+
+        self.assertEqual(last_poll_time._value.get(), 42.0)
+
+        # Assert liveness kept but readiness removed on failure
+        self.consumer.liveness_file.touch.assert_called_once()
+        self.consumer.readiness_file.exists.assert_called_once()
+        self.consumer.readiness_file.unlink.assert_called_once()
+
+    @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+    def test_tombstone_updates_last_message_processed_time(self):
+        """Test that tombstone messages update last_message_processed_time."""
+        import time
+
+        last_message_processed_time.set(0)
+
+        message = Mock()
+        message.partition = 0
+        message.offset = 5
+        message.value = None
+        message.leader_epoch = 0
+
+        tp = Mock()
+
+        before = time.time()
+        result = self.consumer._handle_tombstone_message(message, tp)
+        after = time.time()
+
+        self.assertTrue(result)
+
+        # Assert offset was stored
+        self.consumer.offset_manager.store.assert_called_once_with(tp, message.offset, message.leader_epoch)
+
+        # Assert heartbeat metric was updated
+        metric_value = last_message_processed_time._value.get()
+        self.assertGreaterEqual(metric_value, before)
+        self.assertLessEqual(metric_value, after)

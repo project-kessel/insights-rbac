@@ -73,6 +73,19 @@ class RoleBindingSystemUserAccessPermission(permissions.BasePermission):
 
         # System users without admin are denied
         if _is_system_user_without_admin(user):
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "role_binding",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "system_user_without_admin",
+                    "endpoint": request.path,
+                },
+            )
             return False
 
         # All other users pass through to next permission class (Kessel check)
@@ -303,7 +316,20 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
         if resource_type == "tenant":
             is_org_admin = getattr(request.user, "admin", False)
             if not is_org_admin:
-                logger.debug("Denied access for tenant resource: only org admins allowed")
+                # Authorization failure - SEC-MON-REQ-1 compliance
+                # (EOI-8 authorization_failure, EOI-4 access_manipulation)
+                logger.warning(
+                    "Authorization denied",
+                    extra={
+                        "action": request.method,
+                        "resource_type": "role_binding",
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "not_org_admin_for_tenant_resource",
+                        "endpoint": request.path,
+                    },
+                )
                 return False
             tenant = getattr(request, "tenant", None)
             if tenant is None:
@@ -325,9 +351,27 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             return False
 
         checker = WorkspaceInventoryAccessChecker()
-        return checker.check_resource_access(
+        has_access = checker.check_resource_access(
             resource_type=resource_type,
             resource_id=resource_id,
             principal_id=principal_id,
             relation=relation,
         )
+        if not has_access:
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "role_binding",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "kessel_permission_denied",
+                    "endpoint": request.path,
+                    "target_resource_type": resource_type,
+                    "target_resource_id": resource_id,
+                    "required_relation": relation,
+                },
+            )
+        return has_access

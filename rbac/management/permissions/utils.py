@@ -16,11 +16,17 @@
 #
 """Defines the Access Permissions Utility Class."""
 
+import logging
+
 from rest_framework import permissions
+
+logger = logging.getLogger(__name__)
 
 SCOPE_KEY = "scope"
 ORG_ID_SCOPE = "org_id"
 PRINCIPAL_SCOPE = "principal"
+
+KESSEL_READ_RELATION = "rbac_roles_read"
 
 
 def is_scope_principal(request):
@@ -30,3 +36,48 @@ def is_scope_principal(request):
 
     scope = request.query_params.get(SCOPE_KEY, ORG_ID_SCOPE)
     return scope == PRINCIPAL_SCOPE
+
+
+def check_v2_kessel_access(request, relation=KESSEL_READ_RELATION):
+    """Check Kessel access for V2-migrated orgs.
+
+    Serves as a fallback when V1 request.user.access check fails. For V2 orgs,
+    checks if the principal has the specified relation on the tenant resource
+    via Kessel Inventory API.
+
+    Returns False for V1 orgs (no fallback needed) or on any error.
+    """
+    from management.permissions.workspace_inventory_access import WorkspaceInventoryAccessChecker
+    from management.principal.proxy import get_kessel_principal_id
+    from management.tenant_mapping.v2_activation import is_v2_write_activated
+
+    tenant = getattr(request, "tenant", None)
+    if not tenant:
+        return False
+
+    try:
+        if not is_v2_write_activated(tenant):
+            return False
+    except (TypeError, ValueError) as e:
+        logger.warning("V2 Kessel fallback: is_v2_write_activated check failed: %s: %s", type(e).__name__, e)
+        return False
+
+    resource_id = tenant.tenant_resource_id()
+    if not resource_id:
+        return False
+
+    principal_id = get_kessel_principal_id(request)
+    if not principal_id:
+        logger.debug("V2 Kessel fallback denied: could not determine principal ID")
+        return False
+
+    try:
+        return WorkspaceInventoryAccessChecker().check_resource_access(
+            resource_type="tenant",
+            resource_id=resource_id,
+            principal_id=principal_id,
+            relation=relation,
+        )
+    except Exception as e:
+        logger.warning("V2 Kessel fallback: resource access check failed: %s: %s", type(e).__name__, e)
+        return False

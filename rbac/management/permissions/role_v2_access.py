@@ -19,6 +19,7 @@
 
 import logging
 
+from management.permissions.utils import KESSEL_READ_RELATION
 from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
 )
@@ -40,7 +41,7 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
     """
 
     RESOURCE_TYPE = "tenant"
-    ROLES_READ_RELATION = "rbac_roles_read"
+    ROLES_READ_RELATION = KESSEL_READ_RELATION
     ROLES_WRITE_RELATION = "rbac_roles_write"
     WRITE_ACTIONS = {"create", "update", "bulk_destroy"}
 
@@ -79,9 +80,25 @@ class RoleV2KesselAccessPermission(permissions.BasePermission):
 
         relation = self._get_relation(view)
         checker = WorkspaceInventoryAccessChecker()
-        return checker.check_resource_access(
+        has_access = checker.check_resource_access(
             resource_type=self.RESOURCE_TYPE,
             resource_id=org_resource_id,
             principal_id=principal_id,
             relation=relation,
         )
+        if not has_access:
+            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "role_v2",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "kessel_permission_denied",
+                    "endpoint": request.path,
+                    "required_relation": relation,
+                },
+            )
+        return has_access

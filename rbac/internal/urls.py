@@ -132,11 +132,13 @@ urlpatterns = [
     ),
     path("api/utils/replicate_default_workspaces/", views.replicate_default_workspaces),
     path("api/utils/replicate_updated_workspaces/", views.replicate_updated_workspaces),
+    path("api/utils/replicate_deleted_workspaces/", views.replicate_deleted_workspaces),
     path("api/utils/recompute_tenant_role_bindings/<str:org_id>/", views.recompute_tenant_role_bindings),
     path("api/utils/migrate_role_scope_if_changed/<str:role_uuid>/", views.migrate_role_scope_if_changed),
     path("api/disaster_recovery/workspaces/", views.recover_workspace_events),
     path("api/disaster_recovery/reconcile/", views.disaster_recovery_reconcile),
     path("api/utils/kessel_parity_check/", views.kessel_parity_check),
+    path("api/utils/bootstrap_users_from_user_ids/", views.bootstrap_users_from_user_ids),
 ]
 
 urlpatterns.extend(integration_urlpatterns)

@@ -40,10 +40,12 @@ from internal.custom_v2_role_tenant_migration import replicate_custom_v2_role_ow
 from internal.errors import SentryDiagnosticError, UserNotFoundError
 from internal.jwt_utils import JWTManager, JWTProvider
 from internal.utils import (
+    UngroupedWorkspaceError,
     delete_bindings,
     fix_admin_default_bindings,
     get_or_create_ungrouped_workspace,
     load_request_body,
+    parse_bootstrap_tenant_request,
     read_tuples_from_kessel,
     rebuild_tenant_workspace_relations as rebuild_workspace_relations_util,
     validate_inventory_input,
@@ -83,6 +85,7 @@ from management.principal.proxy import (
     USER_ENV_HEADER,
     bop_request_status_count,
     bop_request_time_tracking,
+    external_principal_to_user,
 )
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
@@ -106,6 +109,7 @@ from management.tasks import (
     remove_deleted_workspace_bindings_in_worker,
     remove_unassigned_system_binding_mappings_in_worker,
     replicate_default_workspaces_in_worker,
+    replicate_deleted_workspaces_in_worker,
     replicate_updated_workspaces_in_worker,
     run_kessel_parity_checks_in_worker,
     run_migrations_in_worker,
@@ -241,9 +245,20 @@ def tenant_view(request, org_id):
         tenant_obj = get_object_or_404(Tenant, org_id=org_id)
         with transaction.atomic():
             if tenant_is_unmodified(tenant_name=tenant_obj.tenant_name, org_id=org_id):
-                logger.warning(f"Deleting tenant {org_id}. Requested by {request.user.username}")
                 TENANTS.delete_tenant(org_id)
                 tenant_obj.delete()
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+                logger.info(
+                    f"Tenant {org_id} deleted. Requested by {request.user.username}",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "tenant",
+                        "resource_id": org_id,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(status=204)
             else:
                 return HttpResponse("Tenant cannot be deleted.", status=400)
@@ -256,7 +271,17 @@ def run_migrations(request):
     POST /_private/api/migrations/run/
     """
     if request.method == "POST":
-        logger.info(f"Running migrations: {request.method} {request.user.username}")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Internal API: Run migrations triggered",
+            extra={
+                "action": "MIGRATE",
+                "resource_type": "database",
+                "outcome": "in_progress",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
         run_migrations_in_worker.delay()
         return HttpResponse("Migrations are running in a background worker.", status=202)
     return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
@@ -632,7 +657,17 @@ def run_seeds(request):
                 f"{force_create_option} and {force_update_option} cannot both be set to true.", status=400
             )
 
-        logger.info(f"Running seeds: {request.method} {request.user.username}")
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Internal API: Run seeds triggered",
+            extra={
+                "action": "SEED",
+                "resource_type": "permissions_roles_groups",
+                "outcome": "in_progress",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
         run_seeds_in_worker.delay(args)
 
         return HttpResponse("Seeds are running in a background worker.", status=202)
@@ -707,6 +742,18 @@ def set_tenant_ready(request):
                     status=400,
                 )
             tenant_qs.update(ready=True)
+            # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+            logger.info(
+                "Internal API: Tenant ready flag updated",
+                extra={
+                    "action": "UPDATE",
+                    "resource_type": "tenant",
+                    "outcome": "success",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "count": prev_count,
+                },
+            )
             return HttpResponse(
                 f"Total of {prev_count} tenants has been updated. "
                 f"{tenant_qs.count()} tenant with ready flag equal to false.",
@@ -792,7 +839,7 @@ def populate_tenant_org_id_view(request):
         except Exception as e:
             logger.error(f"Error populating tenant org_id: {str(e)}")
             return JsonResponse(
-                {"error": f"Error processing request: {str(e)}"},
+                {"error": "Error processing request"},
                 status=500,
             )
 
@@ -850,12 +897,37 @@ def role_removal(request):
         role_obj = get_object_or_404(Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public"))
         with transaction.atomic():
             try:
-                logger.warning(f"Deleting role '{role_name}'. Requested by '{request.user.username}'")
                 dual_write_handler = SeedingRelationApiDualWriteHandler(role_obj)
                 dual_write_handler.replicate_deleted_system_role()
                 role_obj.delete()
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+                logger.info(
+                    f"System role '{role_name}' deleted. Requested by '{request.user.username}'",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "role",
+                        "resource_id": role_name,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(f"Role '{role_name}' deleted.", status=204)
             except Exception:
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+                logger.error(
+                    "System role deletion failed",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "role",
+                        "resource_id": role_name,
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "deletion_error",
+                    },
+                    exc_info=True,
+                )
                 return HttpResponse("Role cannot be deleted.", status=400)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
@@ -881,11 +953,36 @@ def permission_removal(request):
         permission_obj = get_object_or_404(Permission, permission=permission)
         with transaction.atomic():
             try:
-                logger.warning(f"Deleting permission '{permission}'. Requested by '{request.user.username}'")
                 delete_permission(permission_obj)
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+                logger.info(
+                    f"System permission '{permission}' deleted. Requested by '{request.user.username}'",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "permission",
+                        "resource_id": permission,
+                        "outcome": "success",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                    },
+                )
                 return HttpResponse(f"Permission '{permission}' deleted.", status=204)
-            except Exception as e:
-                return HttpResponse(f"Permission cannot be deleted. {str(e)}", status=400)
+            except Exception:
+                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+                logger.error(
+                    "System permission deletion failed",
+                    extra={
+                        "action": "DELETE",
+                        "resource_type": "permission",
+                        "resource_id": permission,
+                        "outcome": "failure",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "reason": "deletion_error",
+                    },
+                    exc_info=True,
+                )
+                return HttpResponse("Permission cannot be deleted.", status=400)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
 
@@ -930,6 +1027,18 @@ def data_migration(request):
         "write_relationships": request.GET.get("write_relationships", "False"),
         "skip_roles": request.GET.get("skip_roles", "False").lower() == "true",
     }
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Internal API: Data migration triggered",
+        extra={
+            "action": "MIGRATE",
+            "resource_type": "database",
+            "outcome": "in_progress",
+            "org_id": getattr(request.user, "org_id", None),
+            "username": getattr(request.user, "username", None),
+            "target_orgs": args.get("orgs"),
+        },
+    )
     migrate_data_in_worker.delay(args)
     return HttpResponse("Data migration from V1 to V2 are running in a background worker.", status=202)
 
@@ -1008,9 +1117,16 @@ def fetch_replication_data(request):
 def bootstrap_tenant(request):
     """View method for bootstrapping a tenant.
 
-    POST /_private/api/utils/bootstrap_tenant/?force=false&force_admin_only=false
+    POST /_private/api/utils/bootstrap_tenant/?force=false&force_admin_only=false&create_missing=false
 
-    Body: {"org_ids": ["12345", "67890"]}
+    Body (legacy):
+        {"org_ids": ["12345", "67890"]}
+
+    Body (extended):
+        {"tenants": [{"org_id": "12345", "ungrouped_hosts_id": "<uuid>"}]}
+
+    When ungrouped_hosts_id is provided, an ungrouped-hosts workspace is created with
+    that UUID under the default workspace and replicated to Relations.
 
     force:
         Whether or not to force replication to happen, even if the Tenant is already bootstrapped.
@@ -1020,23 +1136,44 @@ def bootstrap_tenant(request):
         Re-replicate only admin default bindings. This is SAFE even when replication is on because
         admin default bindings are NOT customizable (unlike platform default bindings).
         Use this to fix tenants that were bootstrapped before admin default groups were seeded.
+        Ignores ungrouped_hosts_id and create_missing.
+
+    create_missing:
+        When 'true', create a Tenant row if one does not exist for the org_id, then bootstrap it.
+        Default is 'false' (return 404 for missing tenants) to avoid accidental tenant creation.
     """
     if request.method != "POST":
         return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
     logger.info("Running bootstrap tenant.")
 
     if not request.body:
-        return HttpResponse('Invalid request, must supply the "org_ids" in body.', status=400)
+        return HttpResponse('Invalid request, must supply "org_ids" or "tenants" in body.', status=400)
 
-    org_ids_data = json.loads(request.body.decode("utf-8").replace("'", '"'))
+    try:
+        raw_body = request.body.decode("utf-8")
+        try:
+            body = json.loads(raw_body)
+        except json.JSONDecodeError as primary_exc:
+            # Legacy org_ids clients may send single-quoted JSON. Do not apply this
+            # rewrite when the payload uses the tenants format — apostrophes in values
+            # (e.g. org_id "O'Reilly") would be silently corrupted.
+            try:
+                legacy_body = json.loads(raw_body.replace("'", '"'))
+            except json.JSONDecodeError:
+                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+            if isinstance(legacy_body, dict) and "tenants" in legacy_body:
+                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+            body = legacy_body
+        tenants_to_bootstrap = parse_bootstrap_tenant_request(body)
+    except UnicodeDecodeError:
+        return HttpResponse("Invalid request: body must be valid UTF-8.", status=400, content_type="text/plain")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return HttpResponse(str(exc), status=400, content_type="text/plain")
+
     force = request.GET.get("force", "false").lower() == "true"
     force_admin_only = request.GET.get("force_admin_only", "false").lower() == "true"
-
-    if "org_ids" not in org_ids_data or len(org_ids_data["org_ids"]) == 0:
-        return HttpResponse(
-            'Invalid request: the "org_ids" array in the body must contain at least one org_id', status=400
-        )
-    org_ids = org_ids_data["org_ids"]
+    create_missing = request.GET.get("create_missing", "false").lower() == "true"
+    org_ids = [org_id for org_id, _ in tenants_to_bootstrap]
 
     # force=true has race condition risk with custom default group creation
     # force_admin_only=true is safe because admin default bindings are not customizable
@@ -1052,11 +1189,36 @@ def bootstrap_tenant(request):
         results = [fix_admin_default_bindings(org_id) for org_id in org_ids]
         return JsonResponse({"results": results}, status=200)
 
-    with transaction.atomic():
-        bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
-        for org_id in org_ids:
-            tenant = get_object_or_404(Tenant, org_id=org_id)
-            bootstrap_service.bootstrap_tenant(tenant, force=force)
+    try:
+        with transaction.atomic():
+            bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
+            for org_id, ungrouped_hosts_id in tenants_to_bootstrap:
+                if create_missing:
+                    tenant, _ = Tenant.objects.get_or_create(
+                        org_id=org_id,
+                        defaults={"tenant_name": f"org{org_id}", "ready": False},
+                    )
+                else:
+                    tenant = get_object_or_404(Tenant, org_id=org_id)
+                bootstrap_service.bootstrap_tenant(tenant, force=force)
+                if ungrouped_hosts_id is not None:
+                    get_or_create_ungrouped_workspace(tenant, workspace_id=ungrouped_hosts_id)
+    except UngroupedWorkspaceError as exc:
+        return HttpResponse(str(exc), status=400, content_type="text/plain")
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Internal API: Tenant bootstrap completed",
+        extra={
+            "action": "CREATE",
+            "resource_type": "tenant",
+            "outcome": "success",
+            "org_id": getattr(request.user, "org_id", None),
+            "username": getattr(request.user, "username", None),
+            "target_org_ids": org_ids,
+            "force": force,
+            "create_missing": create_missing,
+        },
+    )
     return HttpResponse(f"Bootstrapping tenants with org_ids {org_ids} were finished.", status=200)
 
 
@@ -1284,6 +1446,21 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
             return HttpResponse("Destructive operations disallowed.", status=400)
 
         run_reset_imported_tenants.delay({"query": query, "limit": limit, "excluded": excluded})
+
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+        logger.info(
+            "Bulk tenant deletion initiated",
+            extra={
+                "action": "DELETE",
+                "resource_type": "tenant",
+                "resource_id": f"bulk_deletion_limit_{limit}",
+                "outcome": "in_progress",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "limit": limit,
+                "excluded_count": len(excluded) if excluded else 0,
+            },
+        )
 
         return HttpResponse("Tenants deleting in worker.", status=200)
 
@@ -2448,7 +2625,19 @@ def cleanup_tenant_orphan_bindings(request, org_id):
             status=404,
         )
 
-    logger.info(f"Queuing cleanup task for tenant {org_id} (dry_run={dry_run})")
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
+    logger.info(
+        "Internal API: Cleanup tenant orphan bindings triggered",
+        extra={
+            "action": "CLEANUP",
+            "resource_type": "role_binding",
+            "outcome": "in_progress",
+            "org_id": getattr(request.user, "org_id", None),
+            "username": getattr(request.user, "username", None),
+            "target_org_id": org_id,
+            "dry_run": dry_run,
+        },
+    )
 
     # Queue the task
     cleanup_tenant_orphan_bindings_in_worker.delay(org_id=org_id, dry_run=dry_run)
@@ -2520,7 +2709,19 @@ def rebuild_tenant_workspace_relations(request, org_id):
             status=404,
         )
 
-    logger.info(f"Rebuilding workspace relations for tenant {org_id} (dry_run={dry_run})")
+    # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+    logger.info(
+        "Internal API: Rebuild tenant workspace relations",
+        extra={
+            "action": "REBUILD",
+            "resource_type": "workspace",
+            "outcome": "in_progress",
+            "org_id": getattr(request.user, "org_id", None),
+            "username": getattr(request.user, "username", None),
+            "target_org_id": org_id,
+            "dry_run": dry_run,
+        },
+    )
 
     # Create a read_tuples function that wraps the internal read_tuples_from_kessel
     def read_tuples_fn(resource_type, resource_id, relation, subject_type="", subject_id=""):
@@ -2540,6 +2741,18 @@ def rebuild_tenant_workspace_relations(request, org_id):
             read_tuples_fn=read_tuples_fn,
             replicator=replicator,
             dry_run=dry_run,
+        )
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            "Internal API: Rebuild tenant workspace relations completed",
+            extra={
+                "action": "REBUILD",
+                "resource_type": "workspace",
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+                "target_org_id": org_id,
+            },
         )
         return JsonResponse(result, status=200)
     except Exception as e:
@@ -2727,31 +2940,52 @@ def replicate_default_workspaces(request):
 def replicate_updated_workspaces(request):
     """Replicate workspaces updated since the provided time.
 
-    POST /_private/api/utils/replicate_updated_workspaces/?since=<timestamp>&exclude_unchanged_default_workspaces=<bool>
+    POST /_private/api/utils/replicate_updated_workspaces/
+        ?since=<timestamp>
+        &stream=<stream>
+        &exclude_unchanged_default_workspaces=<bool>
 
     since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
+    stream must be either "standard" or "bulk".
 
     Returns:
         JSON response indicating the task has been queued
     """
+    if "since" not in request.GET:
+        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+
+    if "stream" not in request.GET:
+        return JsonResponse({"field": "stream", "detail": 'missing query parameter "stream"'}, status=400)
+
     since = request.GET["since"]
+    stream = request.GET["stream"]
     exclude_unchanged_default_workspaces = (
         request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
     )
 
     try:
-        datetime.datetime.fromisoformat(since)
+        parsed_since = datetime.datetime.fromisoformat(since)
+
+        if parsed_since.tzinfo is None:
+            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
     except ValueError as e:
         return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
+    if stream not in ("standard", "bulk"):
+        return JsonResponse({"field": "stream", "detail": f"invalid stream name: {stream}"}, status=400)
+
     try:
         replicate_updated_workspaces_in_worker.delay(
-            since=since, exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces
+            since=since,
+            stream=stream,
+            exclude_unchanged_default_workspaces=exclude_unchanged_default_workspaces,
         )
+
         return JsonResponse(
             {
                 "message": "Replication enqueued in background worker.",
                 "since": since,
+                "stream": stream,
                 "exclude_unchanged_default_workspaces": exclude_unchanged_default_workspaces,
             },
             status=202,
@@ -2759,6 +2993,45 @@ def replicate_updated_workspaces(request):
     except Exception as e:
         logger.exception("Error replicating updated workspaces", exc_info=True)
         return JsonResponse({"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500)
+
+
+@require_http_methods(["POST"])
+def replicate_deleted_workspaces(request):
+    """Replicate the deletion of workspaces deleted since the provided time.
+
+    POST /_private/api/utils/replicate_deleted_workspaces/?since=<timestamp>
+
+    since must be an ISO 8601 datetime string (e.g. 2026-01-01T18:00:00Z).
+
+    Returns:
+        JSON response indicating the task has been queued
+    """
+    if "since" not in request.GET:
+        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+
+    since = request.GET["since"]
+
+    try:
+        parsed_since = datetime.datetime.fromisoformat(since)
+
+        if parsed_since.tzinfo is None:
+            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+    except ValueError as e:
+        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
+
+    try:
+        replicate_deleted_workspaces_in_worker.delay(since=since)
+
+        return JsonResponse(
+            {
+                "message": "Replication enqueued in background worker.",
+                "since": since,
+            },
+            status=202,
+        )
+    except Exception as e:
+        logger.exception("Error replicating deleted workspaces", exc_info=True)
+        return JsonResponse({"detail": f"Error replicating deleted workspaces: {str(e)}"}, status=500)
 
 
 @require_http_methods(["POST"])
@@ -2990,3 +3263,150 @@ def kessel_parity_check(request):
         },
         status=202,
     )
+
+
+def bootstrap_users_from_user_ids(request):
+    """Bootstrap users by looking up user IDs in BOP and creating users/tenants.
+
+    POST /_private/api/utils/bootstrap_users_from_user_ids/?dry_run=true
+
+    Body: {"user_ids": ["12345", "67890"]}
+
+    Query params:
+        dry_run: When 'true', queries BOP and reports what would happen without
+                 actually creating users or bootstrapping tenants.
+
+    For each user ID:
+    1. Queries BOP to get user details (username, org_id, is_active, is_org_admin)
+    2. Skips users that are not active
+    3. Creates the user and bootstraps their tenant using the same flow as replicated events
+    """
+    if request.method != "POST":
+        return handle_error('Invalid method, only "POST" is allowed.', 405)
+
+    if not request.body:
+        return handle_error('Invalid request, must supply "user_ids" in body.', 400)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        return handle_error(f"Invalid JSON in request body: {err}", 400)
+
+    user_ids = body.get("user_ids", [])
+    if not user_ids or not isinstance(user_ids, list):
+        return handle_error('Invalid request: "user_ids" must be a non-empty array.', 400)
+
+    dry_run = request.GET.get("dry_run", "false").lower() == "true"
+    user_ids = [str(uid) for uid in user_ids]
+
+    logger.info("Bootstrap users from user_ids requested. count=%d dry_run=%s", len(user_ids), dry_run)
+
+    resp = PROXY.request_filtered_principals(
+        user_ids,
+        org_id=None,
+        options={"query_by": "user_id", "return_id": True, "status": "all"},
+    )
+
+    if isinstance(resp, dict) and "errors" in resp:
+        bop_status = resp.get("status_code", 500)
+        logger.error("BOP error during bootstrap_users_from_user_ids: status=%s errors=%s", bop_status, resp["errors"])
+        return handle_error(f"Error querying BOP for user IDs: {resp['errors']}", 500)
+
+    bop_users = resp.get("data", [])
+    bop_user_by_id = {}
+    if isinstance(bop_users, dict):
+        bop_users = bop_users.get("users", [])
+    for bop_user in bop_users:
+        uid = bop_user.get("user_id") or bop_user.get("external_source_id")
+        if uid:
+            bop_user_by_id[str(uid)] = bop_user
+
+    results = []
+    bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
+
+    for user_id in user_ids:
+        bop_user = bop_user_by_id.get(user_id)
+        if bop_user is None:
+            results.append({"user_id": user_id, "status": "not_found", "detail": "User not found in BOP"})
+            continue
+
+        user = external_principal_to_user(bop_user)
+        if not user.is_active:
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "inactive",
+                    "detail": "User is not active in BOP",
+                    "username": user.username,
+                    "org_id": user.org_id,
+                }
+            )
+            continue
+
+        if not user.org_id:
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "error",
+                    "detail": "User has no org_id in BOP",
+                    "username": user.username,
+                }
+            )
+            continue
+
+        if dry_run:
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "would_bootstrap",
+                    "username": user.username,
+                    "org_id": user.org_id,
+                    "is_org_admin": user.admin,
+                }
+            )
+            continue
+
+        try:
+            with transaction.atomic():
+                bootstrapped = bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
+            if bootstrapped is None:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "inactive",
+                        "detail": "User became inactive during bootstrap",
+                        "username": user.username,
+                        "org_id": user.org_id,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "bootstrapped",
+                        "username": user.username,
+                        "org_id": user.org_id,
+                        "tenant_ready": bootstrapped.tenant.ready,
+                    }
+                )
+        except Exception as err:
+            logger.exception("Error bootstrapping user_id=%s org_id=%s: %s", user_id, user.org_id, err)
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "error",
+                    "detail": str(err),
+                    "username": user.username,
+                    "org_id": user.org_id,
+                }
+            )
+
+    bootstrapped_count = sum(1 for r in results if r["status"] == "bootstrapped")
+    logger.info(
+        "Bootstrap users from user_ids completed. total=%d bootstrapped=%d dry_run=%s",
+        len(user_ids),
+        bootstrapped_count,
+        dry_run,
+    )
+
+    return JsonResponse({"dry_run": dry_run, "results": results}, status=200)

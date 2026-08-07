@@ -18,15 +18,18 @@
 """Custom RBAC Middleware."""
 
 import binascii
+import contextvars
 import json
 import logging
+import time
+import uuid
 from json.decoder import JSONDecodeError
 
 from django.conf import settings
 from django.core.handlers.wsgi import WSGIRequest
 from django.db import IntegrityError, transaction
 from django.http import Http404, HttpResponse, QueryDict
-from django.urls import resolve, reverse
+from django.urls import Resolver404, resolve, reverse
 from feature_flags import FEATURE_FLAGS
 from management.authorization.token_validator import ITSSOTokenValidator, TokenValidator
 from management.cache import TenantCache
@@ -36,13 +39,14 @@ from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import get_tenant_bootstrap_service
 from management.tenant_service.tenant_service import TenantBootstrapService
 from management.utils import APPLICATION_KEY, access_for_principal, build_system_user_from_token, build_user_from_psk
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 from rest_framework import status
 
 from api.common import RH_IDENTITY_HEADER, RH_INSIGHTS_REQUEST_ID
 from api.models import Tenant, User
 from api.serializers import extract_header
 from rbac.a2s import is_a2s_path as _is_a2s_path
+from rbac.request_context import org_id_var, request_id_var, user_id_var, user_type_var
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 req_sys_counter = Counter(
@@ -50,7 +54,65 @@ req_sys_counter = Counter(
     "Tracks a count of requests to RBAC tracking those made on behalf of the system or a principal.",
     ["behalf", "method", "view", "status"],
 )
+api_migration_counter = Counter(
+    "rbac_api_migration_requests_total",
+    "Tracks v1 vs v2 API requests per client_id and user_agent for migration monitoring.",
+    ["api_version", "client_id", "user_agent", "method"],
+)
+
+# V2-specific metrics for alerting on error rate and latency.
+rbac_v2_requests_total = Counter(
+    "rbac_v2_api_requests_total",
+    "Total V2 API requests by endpoint, HTTP method, and status class",
+    ["endpoint", "method", "status"],
+)
+
+rbac_v2_request_duration = Histogram(
+    "rbac_v2_api_request_duration_seconds",
+    "V2 API request duration in seconds by endpoint",
+    ["endpoint", "method"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+
+_V2_APP_NAMES = frozenset(("v2_api", "v2_management"))
 TENANTS = TenantCache()
+
+# Namespace prefix → API version mapping for migration tracking.
+_NAMESPACE_TO_VERSION = {
+    "v1_": "v1",
+    "v2_": "v2",
+}
+
+
+def _get_api_version(app_name):
+    """Map a Django URL resolver app_name to an API version string.
+
+    Returns "v1", "v2", or None for non-versioned endpoints (internal, mcp, metrics).
+    """
+    if not app_name:
+        return None
+    for prefix, version in _NAMESPACE_TO_VERSION.items():
+        if app_name.startswith(prefix):
+            return version
+    return None
+
+
+def _normalize_user_agent(raw):
+    """Extract a short product token from a raw User-Agent string.
+
+    Examples:
+        "python-requests/2.28.0" → "python-requests"
+        "insights-chrome/1.0.0 (Linux; x86_64)" → "insights-chrome"
+        "Mozilla/5.0 (X11; Linux...)" → "mozilla"
+        None / "" → ""
+
+    Keeps cardinality manageable for Prometheus labels.
+    """
+    if not raw:
+        return ""
+    # Take the first token (before '/' or ' '), lowercase, max 64 chars.
+    token = raw.split("/", 1)[0].split(" ", 1)[0].strip().lower()
+    return token[:64]
 
 
 def catch_integrity_error(func):
@@ -73,6 +135,7 @@ def catch_integrity_error(func):
 def is_no_auth(request):
     """Check condition for needing to authenticate the user."""
     no_auth_list = [
+        "/",
         reverse("v1_api:server-ready"),
         reverse("v1_api:server-status"),
         reverse("v1_api:openapi"),
@@ -224,9 +287,29 @@ class IdentityHeaderMiddleware:
 
     @catch_integrity_error
     def __call__(self, request):
+        """Dispatch each request in an isolated contextvars context.
+
+        Running _process_request inside a copied context prevents
+        request_id_var, org_id_var and user_id_var from leaking across
+        requests on the same thread (gunicorn gthread workers).
+        """
+        ctx = contextvars.copy_context()
+        return ctx.run(self._process_request, request)
+
+    def _process_request(self, request):
         """Code to be executed for each request before or after the view is called."""
-        # Get request ID
-        request.req_id = request.META.get(RH_INSIGHTS_REQUEST_ID)
+        # Start timing
+        request._request_start = time.monotonic()
+
+        # Get request ID — sanitize to prevent CRLF log injection,
+        # generate a fallback UUID when the header is absent
+        raw_req_id = request.META.get(RH_INSIGHTS_REQUEST_ID)
+        if raw_req_id:
+            raw_req_id = raw_req_id.replace("\r", "").replace("\n", "")
+        request.req_id = raw_req_id or str(uuid.uuid4())
+
+        # Set request_id context var early so all log lines include it
+        request_id_var.set(request.req_id)
 
         if any(
             [request.path.startswith(prefix) for prefix in settings.INTERNAL_API_PATH_PREFIXES]
@@ -236,6 +319,11 @@ class IdentityHeaderMiddleware:
 
         if is_no_auth(request):
             return self.get_response(request)
+
+        # Start timing after early returns — captures auth, tenant bootstrap,
+        # permission loading, and view processing for accurate latency alerting.
+        request_start = time.monotonic()
+
         user = User()
         try:
             _, json_rh_auth = extract_header(request, self.header)
@@ -273,6 +361,18 @@ class IdentityHeaderMiddleware:
                 if _is_a2s_path(request):
                     return self.get_response(request)
                 logger.debug("x-rh-identity does not contain user_info or service_account keys: %s", json_rh_auth)
+                # Authentication failure - SEC-MON-REQ-1 compliance (EOI-7 invalid_login)
+                logger.warning(
+                    "Authentication failed",
+                    extra={
+                        "action": "AUTHENTICATE",
+                        "resource_type": "session",
+                        "auth_method": "x-rh-identity",
+                        "outcome": "failure",
+                        "reason": "missing_user_info_and_service_account",
+                        "endpoint": request.path,
+                    },
+                )
                 return HttpResponseUnauthorizedRequest()
 
             # The service accounts must provide their client IDs for us to keep processing the request.
@@ -310,7 +410,18 @@ class IdentityHeaderMiddleware:
                 cross_account = internal.get("cross_access", False)
                 if cross_account:
                     if not (user.internal and user_info.get("email").endswith("@redhat.com")):
-                        logger.error("Cross account request permission denied. Requester is not internal user.")
+                        # Authentication failure - SEC-MON-REQ-1 compliance (EOI-7 invalid_login)
+                        logger.warning(
+                            "Authentication failed: cross account request denied, requester is not internal user",
+                            extra={
+                                "action": "AUTHENTICATE",
+                                "resource_type": "session",
+                                "auth_method": "x-rh-identity",
+                                "outcome": "failure",
+                                "reason": "cross_account_not_internal_user",
+                                "endpoint": request.path,
+                            },
+                        )
                         return HttpResponseUnauthorizedRequest()
                     user.username = f"{user.org_id}-{user.user_id}"
         except (KeyError, TypeError, JSONDecodeError):
@@ -320,7 +431,18 @@ class IdentityHeaderMiddleware:
                 request, token_validator=self.token_validator
             )
             if not user:
-                logger.error("Could not obtain identity on request.")
+                # Authentication failure - SEC-MON-REQ-1 compliance (EOI-7 invalid_login)
+                logger.warning(
+                    "Authentication failed: could not obtain identity on request",
+                    extra={
+                        "action": "AUTHENTICATE",
+                        "resource_type": "session",
+                        "auth_method": "x-rh-identity_fallback",
+                        "outcome": "failure",
+                        "reason": "identity_header_parse_failed",
+                        "endpoint": request.path,
+                    },
+                )
                 return HttpResponseUnauthorizedRequest()
         except binascii.Error as error:
             logger.error("Could not decode header: %s.", error)
@@ -329,7 +451,25 @@ class IdentityHeaderMiddleware:
             request.user = user
             request.tenant = self.get_tenant(model=None, hostname=None, request=request)
 
+        # Enrich context vars with identity information for log correlation.
+        # Placed after the try/except so all authentication paths (identity
+        # header, PSK, system token) get context var enrichment.
+        if getattr(user, "org_id", None):
+            org_id_var.set(str(user.org_id))
+        if getattr(user, "is_service_account", False):
+            user_type_var.set("service_account")
+            # Service accounts have user_id=None; log client_id instead
+            # so every authenticated request has a meaningful identifier.
+            client_id = getattr(user, "client_id", None)
+            if client_id:
+                user_id_var.set(str(client_id))
+        else:
+            if getattr(user, "user_id", None):
+                user_id_var.set(str(user.user_id))
+                user_type_var.set("user")
+
         response = self.get_response(request)
+        request_duration = time.monotonic() - request_start
 
         # Code to be executed for each request/response after
         # the view is called.
@@ -343,32 +483,61 @@ class IdentityHeaderMiddleware:
 
         behalf = "system" if is_system else "principal"
 
+        resolved = getattr(request, "resolver_match", None)
+        if resolved is None:
+            try:
+                resolved = resolve(request.path)
+            except Resolver404:
+                resolved = None
+
+        view_name = resolved.url_name if resolved else "unresolved"
+        app_name = resolved.app_name if resolved else None
+
         req_sys_counter.labels(
             behalf=behalf,
             method=request.method,
-            view=resolve(request.path).url_name,
-            status=response.get("status_code"),
+            view=view_name,
+            status=response.status_code,
         ).inc()
 
-        IdentityHeaderMiddleware.log_request(request, response, is_internal_request)
+        # Track v1/v2 migration metrics per client_id and user_agent.
+        api_version = _get_api_version(app_name)
+        if api_version:
+            client_id = ""
+            if hasattr(request, "user") and request.user and getattr(request.user, "is_service_account", False):
+                client_id = getattr(request.user, "client_id", "") or ""
+            user_agent = _normalize_user_agent(request.headers.get("user-agent"))
+            api_migration_counter.labels(
+                api_version=api_version,
+                client_id=client_id,
+                user_agent=user_agent,
+                method=request.method,
+            ).inc()
+
+        # Record V2-specific metrics for error rate and latency alerting.
+        if app_name in _V2_APP_NAMES:
+            status_class = f"{response.status_code // 100}xx"
+            rbac_v2_requests_total.labels(endpoint=view_name, method=request.method, status=status_class).inc()
+            rbac_v2_request_duration.labels(endpoint=view_name, method=request.method).observe(request_duration)
+
+        IdentityHeaderMiddleware.log_request(request, response, is_internal_request, api_version)
         return response
 
     @staticmethod
-    def log_request(request, response, is_internal_request=False):
+    def log_request(request, response, is_internal_request=False, api_version=None):
         """Log requests for identity middleware.
 
         Args:
             request (object): The request object
             response (object): The response object
             is_internal_request (bool): Boolean for if request is internal
+            api_version (str|None): "v1", "v2", or None for non-versioned endpoints
         """
         query_string = ""
         is_admin = False
         is_system = False
-        org_id = None
         username = None
-        user_id = None
-        req_id = getattr(request, "req_id", None)
+        client_id = ""
         if request.META.get("QUERY_STRING"):
             query_string = "?{}".format(request.META.get("QUERY_STRING"))
 
@@ -378,14 +547,13 @@ class IdentityHeaderMiddleware:
             if username:
                 # rbac.api.models.User has these fields
                 is_admin = request.user.admin
-                org_id = request.user.org_id
                 is_system = request.user.system
-                user_id = request.user.user_id
                 is_internal = getattr(request.user, "internal", False)
+                if getattr(request.user, "is_service_account", False):
+                    client_id = getattr(request.user, "client_id", "")
             else:
                 # django.contrib.auth.models.AnonymousUser does not
                 is_admin = is_system = False
-                org_id = None
 
         # Todo: add some info back to logs
         """
@@ -414,20 +582,30 @@ class IdentityHeaderMiddleware:
             }
         """
 
+        # Compute request duration if timing was captured
+        duration_ms = None
+        request_start = getattr(request, "_request_start", None)
+        if request_start is not None:
+            duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+
+        # Fields already emitted by RequestContextFilter → ECS labels
+        # (request_id, org_id, user_id) are intentionally excluded to
+        # avoid duplicate values across different JSON paths.
         log_object = {
             "method": request.method,
             "path": request.path + query_string,
             "status": response.status_code,
-            "request_id": req_id,
-            "org_id": org_id,
             "username": username,
-            "user_id": user_id,
             "is_admin": is_admin,
             "is_system": is_system,
             "is_internal": is_internal,
             "is_internal_request": is_internal_request,
+            "duration_ms": duration_ms,
+            "api_version": api_version,
+            "client_id": client_id,
+            "user_agent": _normalize_user_agent(request.headers.get("user-agent")),
         }
-        logger.info(log_object)
+        logger.info("log_request", extra=log_object)
 
     def should_load_user_permissions(self, request: WSGIRequest, user: User) -> bool:
         """Decide whether RBAC should load the access permissions for the user based on the given request."""

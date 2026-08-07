@@ -311,14 +311,14 @@ class WorkspaceRelationInventoryChecker(InventoryApiBaseChecker):
         for workspace_uuid, workspace_parent_uuid in workspace_pairs:
             check_request = CheckRequest(
                 object=resource_reference_pb2.ResourceReference(
-                    resource_id=workspace_parent_uuid,
+                    resource_id=workspace_uuid,
                     resource_type="workspace",
                     reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
                 ),
                 relation="parent",
                 subject=subject_reference_pb2.SubjectReference(
                     resource=resource_reference_pb2.ResourceReference(
-                        resource_id=workspace_uuid,
+                        resource_id=workspace_parent_uuid,
                         resource_type="workspace",
                         reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
                     )
@@ -341,17 +341,16 @@ class WorkspaceRelationInventoryChecker(InventoryApiBaseChecker):
 
     def check_workspace(self, workspace_id, workspace_parent_id):
         """Core logic to check workspace relation on inventory api."""
-        # Build the check request for checking parent-child workspace relationship
         check_request = CheckRequest(
             object=resource_reference_pb2.ResourceReference(
-                resource_id=workspace_parent_id,
+                resource_id=workspace_id,
                 resource_type="workspace",
                 reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
             ),
             relation="parent",
             subject=subject_reference_pb2.SubjectReference(
                 resource=resource_reference_pb2.ResourceReference(
-                    resource_id=workspace_id,
+                    resource_id=workspace_parent_id,
                     resource_type="workspace",
                     reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
                 )

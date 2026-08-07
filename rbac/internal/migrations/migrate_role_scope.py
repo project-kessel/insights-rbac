@@ -20,10 +20,10 @@
 import dataclasses
 import itertools
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from django.conf import settings
-
+from django.db import OperationalError
 from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
@@ -60,8 +60,8 @@ def _check_migration(
     This should be run in the same SERIALIZABLE transaction as the actual migration (otherwise, the results of the
     check will be out of date).
     """
-    # We do not need to lock to prevent updates from concurrent seeding, since both this and seeding are in
-    # SERIALIZABLE transactions.
+    # Re-fetch the role to operate on its current state. When this function runs inside
+    # the SERIALIZABLE atomic_block(), this refetch is the authoritative concurrency check.
     role = Role.objects.filter(pk=role.pk).first()
 
     if role is None:
@@ -156,6 +156,17 @@ def migrate_role_scope_if_changed(v1_role: Role, replicator: Optional[RelationRe
     if replicator is None:
         replicator = OutboxReplicator()
 
+    # Early exit optimization outside the transaction. The authoritative concurrency
+    # check happens inside atomic_block() below via _check_migration().
+    v1_role = Role.objects.filter(pk=v1_role.pk).first()
+
+    if v1_role is None:
+        logger.info("System role concurrently deleted; not updating binding scopes.")
+        return
+
+    if not v1_role.system:
+        raise ValueError(f"Expected system role, but got pk={v1_role.pk!r}")
+
     resource_service = ImplicitResourceService.from_settings()
 
     with atomic_block():
@@ -231,11 +242,11 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
     migrated_groups = 0
     migrated_cars = 0
 
-    for group_batch in itertools.batched(groups, 20):
-        migrated_groups += _migrate_group_batch(context=context, groups=list(group_batch))
+    for group_batch in itertools.batched(groups, 10):
+        migrated_groups += migrate_batch_with_fallback(_migrate_group_batch, context, list(group_batch))
 
-    for car_batch in itertools.batched(cars, 20):
-        migrated_cars += _migrate_car_batch(context=context, cars=list(car_batch))
+    for car_batch in itertools.batched(cars, 10):
+        migrated_cars += migrate_batch_with_fallback(_migrate_car_batch, context, list(car_batch))
 
     logger.info(
         "Completed binding migration for system role %s: %d groups and %d CARs migrated successfully",
@@ -243,6 +254,24 @@ def _migrate_bindings_for_scope_change(context: _MigrateContext):
         migrated_groups,
         migrated_cars,
     )
+
+
+def migrate_batch_with_fallback[T](
+    migrate_batch_fn: Callable[[_MigrateContext, list[T]], int], context: _MigrateContext, batch: list[T]
+) -> int:
+    try:
+        # Although migrating each entity is still done individually, it's still worth it to attempt batching because it
+        # saves us having to re-validate the migration for every single entity.
+        return migrate_batch_fn(context, batch)
+    except OperationalError:
+        logger.warning("Falling back to per-model scope migration.", exc_info=True)
+
+        migrated = 0
+
+        for model in batch:
+            migrated += migrate_batch_fn(context, [model])
+
+        return migrated
 
 
 @atomic_with_retry(retries=5)

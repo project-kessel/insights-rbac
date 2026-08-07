@@ -43,6 +43,15 @@ objects:
           ignore-check.kube-linter.io/minimum-three-replicas: "dont need 3 replicas - runs background processes from turnpike/weekly tasks"
       podSpec:
         image: ${IMAGE}:${IMAGE_TAG}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
         initContainers:
           - env:
             inheritEnv: true
@@ -88,6 +97,8 @@ objects:
           successThreshold: 1
           timeoutSeconds: 10
         volumeMounts:
+        - mountPath: /tmp
+          name: tmp
         - mountPath: /opt/rbac/rbac/management/role/definitions
           name: default-role-config
         - mountPath: /opt/rbac/rbac/management/role/permissions
@@ -105,6 +116,8 @@ objects:
           secret:
             optional: true
             secretName: it-umb-key-pair
+        - name: tmp
+          emptyDir: {}
         resources:
           limits:
             cpu: ${CELERY_WORKER_CPU_LIMIT}
@@ -321,6 +334,15 @@ objects:
           ignore-check.kube-linter.io/minimum-three-replicas: "dont need 3 replicas - keeps the cron scheduled for the weekly tasks"
       podSpec:
         image: ${IMAGE}:${IMAGE_TAG}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
         command:
           - /bin/bash
           - '-c'
@@ -359,6 +381,12 @@ objects:
           requests:
             cpu: ${CELERY_SCHEDULER_CPU_REQUEST}
             memory: ${CELERY_SCHEDULER_MEMORY_REQUEST}
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+        volumes:
+        - name: tmp
+          emptyDir: {}
         env: *common_env_vars
 
     - name: service
@@ -369,6 +397,15 @@ objects:
           apiPath: rbac
       podSpec:
         image: ${IMAGE}:${IMAGE_TAG}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
         initContainers:
           - env:
             inheritEnv: true
@@ -377,7 +414,7 @@ objects:
               - /opt/rbac/deploy/init-container-setup.sh
         livenessProbe:
           httpGet:
-            path: /api/rbac/v1/status/
+            path: /
             port: 8000
             scheme: HTTP
           initialDelaySeconds: 60
@@ -402,7 +439,11 @@ objects:
         - configMap:
             name: ${MODEL_ACCESS_PERMISSIONS}
           name: model-access-permissions
+        - name: tmp
+          emptyDir: {}
         volumeMounts:
+        - mountPath: /tmp
+          name: tmp
         - mountPath: /opt/rbac/rbac/management/role/definitions
           name: default-role-config
         - mountPath: /opt/rbac/rbac/management/role/permissions
@@ -691,6 +732,8 @@ objects:
             value: ${IT_SERVICE_PORT}
           - name: IT_SERVICE_PROTOCOL_SCHEME
             value: ${IT_SERVICE_PROTOCOL_SCHEME}
+          - name: IT_SERVICE_REALM
+            value: ${IT_SERVICE_REALM}
           - name: IT_SERVICE_TIMEOUT_SECONDS
             value: ${IT_SERVICE_TIMEOUT_SECONDS}
           - name: IT_TOKEN_JKWS_CACHE_LIFETIME
@@ -746,6 +789,15 @@ objects:
           ignore-check.kube-linter.io/minimum-three-replicas: "A single consumer guarantees events are processed in the exact order they happened, maintaining the integrity and consistency."
       podSpec:
         image: ${IMAGE}:${IMAGE_TAG}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
         command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer"]
         env:
           - name: APP_NAMESPACE
@@ -853,6 +905,12 @@ objects:
           requests:
             cpu: ${RBAC_KAFKA_CONSUMER_CPU_REQUEST}
             memory: ${RBAC_KAFKA_CONSUMER_MEMORY_REQUEST}
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+        volumes:
+        - name: tmp
+          emptyDir: {}
 
     - name: rbac-postgres-exporter
       minReplicas: ${{MIN_POSTGRES_EXPORTER_REPLICAS}}
@@ -1751,6 +1809,9 @@ parameters:
 - description: Kafka consumer group ID for DR reconciliation reader
   name: DR_KAFKA_CONSUMER_GROUP_ID
   value: 'rbac-dr-consumer-group'
+- description: Comma-separated replication event types to skip during DR reconciliation (empty to skip none)
+  name: DR_SKIP_EVENT_TYPES
+  value: 'bootstrap_tenant,bulk_bootstrap_tenant,external_user_update,external_user_disable,bulk_external_user_update'
 - name: EXTERNAL_SYNC_TOPIC
   value: 'platform.rbac.sync'
 - name: EXTERNAL_CHROME_TOPIC
@@ -1789,6 +1850,9 @@ parameters:
 - name: IT_SERVICE_PROTOCOL_SCHEME
   description: Protocol scheme of the IT service
   value: 'https'
+- name: IT_SERVICE_REALM
+  description: Realm path of the IT service (used to build the OIDC discovery URL and token issuer)
+  value: '/auth/realms/redhat-external'
 - name: IT_SERVICE_TIMEOUT_SECONDS
   description: Number of seconds to wait for a response from IT before timing out and failing the request
   value: '10'

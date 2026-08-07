@@ -24,9 +24,14 @@ from django.db.utils import OperationalError, ProgrammingError
 from management.seeds import group_seeding, permission_seeding, role_seeding
 
 from rbac.settings import (
+    ENV_NAME,
+    GIT_COMMIT,
     GROUP_SEEDING_ENABLED,
+    KAFKA_ENABLED,
     PERMISSION_SEEDING_ENABLED,
+    REPLICATION_TO_RELATION_ENABLED,
     ROLE_SEEDING_ENABLED,
+    V2_APIS_ENABLED,
 )
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -42,6 +47,23 @@ class ManagementConfig(AppConfig):
         # Don't run on Django tab completion commands
         if "manage.py" in sys.argv[0] and "runserver" not in sys.argv:
             return
+
+        # Startup configuration - SEC-MON-REQ-1 compliance (EOI-3 admin_action)
+        logger.info(
+            "Service started",
+            extra={
+                "action": "START",
+                "resource_type": "service",
+                "outcome": "success",
+                "principal": "system:django:app_ready",
+                "version": GIT_COMMIT,
+                "v2_apis_enabled": V2_APIS_ENABLED,
+                "replication_to_relation_enabled": REPLICATION_TO_RELATION_ENABLED,
+                "env_name": ENV_NAME,
+                "kafka_enabled": KAFKA_ENABLED,
+            },
+        )
+
         try:
             if PERMISSION_SEEDING_ENABLED:
                 permission_seeding()

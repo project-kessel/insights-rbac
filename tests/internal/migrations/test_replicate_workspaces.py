@@ -1,9 +1,15 @@
 import datetime
+import uuid
 from collections.abc import Iterable
-from datetime import timezone
+from unittest.mock import MagicMock
 
 from django.test import TestCase, override_settings
-from internal.migrations.replicate_workspaces import replicate_default_workspaces, replicate_updated_workspaces
+from internal.migrations.replicate_workspaces import (
+    replicate_default_workspaces,
+    replicate_deleted_workspaces,
+    replicate_updated_workspaces,
+)
+from management.audit_log.model import AuditLog
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.relation_replicator import (
     PartitionKey,
@@ -14,6 +20,7 @@ from management.relation_replicator.relation_replicator import (
 from management.tenant_service import V2TenantBootstrapService
 from management.workspace.model import Workspace
 from management.workspace.service import WorkspaceService
+from tests.management.role.test_dual_write import DualWriteTestCase
 from tests.v2_util import WorkspaceCacheReplicator, bootstrap_tenant_for_v2_test
 
 from api.models import Tenant
@@ -103,12 +110,15 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.workspace.modified = "2026-06-25T00:00:00Z"
         self.workspace.save()
 
-    def _do_replicate(self, **kwargs) -> list[WorkspaceEvent]:
+    def _do_replicate(self, stream: WorkspaceEventStream, **kwargs) -> list[WorkspaceEvent]:
         replicator = WorkspaceCacheReplicator(NoopReplicator())
-        replicate_updated_workspaces(replicator=replicator, **kwargs)
+        replicate_updated_workspaces(replicator=replicator, stream=stream, **kwargs)
 
-        self.assertEqual(len(replicator.workspace_events_for(WorkspaceEventStream.BULK)), 0)
-        return replicator.workspace_events_for(WorkspaceEventStream.STANDARD)
+        for possible_stream in WorkspaceEventStream:
+            if possible_stream != stream:
+                self.assertCountEqual([], replicator.workspace_events_for(possible_stream))
+
+        return replicator.workspace_events_for(stream)
 
     def _assert_event_ids(self, events: list[WorkspaceEvent], ids: Iterable[str]):
         ids = set(ids)
@@ -137,16 +147,34 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.assertEqual(ids_created, ids)
 
     def test_replication(self):
-        events = self._do_replicate(since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"))
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+        )
+
+        self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
+
+    def test_replication_bulk(self):
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.BULK,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+        )
+
         self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
 
     def test_exclude_past_modified(self):
-        events = self._do_replicate(since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"))
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"),
+        )
+
         self._assert_event_ids(events, [str(self.workspace.id)])
 
     def test_exclude_unmodified_default_workspace(self):
         events = self._do_replicate(
-            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"), exclude_unchanged_default_workspaces=True
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-23T00:00:00Z"),
+            exclude_unchanged_default_workspaces=True,
         )
 
         self._assert_event_ids(events, [str(self.workspace.id)])
@@ -156,7 +184,71 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.default_workspace.save()
 
         events = self._do_replicate(
-            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"), exclude_unchanged_default_workspaces=True
+            stream=WorkspaceEventStream.STANDARD,
+            since=datetime.datetime.fromisoformat("2026-06-24T12:00:00Z"),
+            exclude_unchanged_default_workspaces=True,
         )
 
         self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
+class ReplicateDeletedWorkspacesTest(DualWriteTestCase):
+    def setUp(self):
+        super().setUp()
+
+        AuditLog.objects.all().delete()
+        self.service = WorkspaceService(NoopReplicator())
+
+    def _make_delete_log(self, name: str) -> AuditLog:
+        workspace = self.service.create({"name": name}, self.tenant)
+
+        mock_request = MagicMock()
+        mock_request.user.username = "test_user"
+        mock_request._user.org_id = self.tenant.org_id
+
+        create_log = AuditLog()
+        create_log.log_v2(mock_request, "workspace", AuditLog.CREATE, workspace.id, f"Created workspace: {name}")
+
+        delete_log = AuditLog()
+        delete_log.log_v2(mock_request, "workspace", AuditLog.DELETE, workspace.id, f"Deleted workspace: {name}")
+
+        self.service.destroy(workspace)
+        return delete_log
+
+    def test_remove(self):
+        log_a = self._make_delete_log("a")
+        log_b = self._make_delete_log("b")
+
+        self.assertGreater(log_b.created, log_a.created)
+
+        def test_replicate_from(since: datetime.datetime, entries: list[tuple[uuid.UUID, str]]):
+            replicator = WorkspaceCacheReplicator(NoopReplicator())
+            replicate_deleted_workspaces(since=since, replicator=replicator)
+
+            events = replicator.workspace_events_for(WorkspaceEventStream.BULK)
+
+            self.assertCountEqual([{"id": str(e[0]), "name": e[1]} for e in entries], [e.workspace for e in events])
+
+            self.assertTrue(all(e.org_id == self.tenant.org_id for e in events))
+            self.assertTrue(all(e.account_number == self.tenant.account_id for e in events))
+            self.assertTrue(all(e.event_type == ReplicationEventType.DELETE_WORKSPACE for e in events))
+
+            self.assertCountEqual([], replicator.workspace_events_for(WorkspaceEventStream.STANDARD))
+
+        test_replicate_from(log_a.created, [(log_a.resource_uuid, "a"), (log_b.resource_uuid, "b")])
+        test_replicate_from(log_b.created, [(log_b.resource_uuid, "b")])
+        test_replicate_from(log_b.created + datetime.timedelta(minutes=1), [])
+
+    def test_error_on_reused_id(self):
+        log = self._make_delete_log("workspace")
+
+        Workspace.objects.create(
+            tenant=self.tenant,
+            id=log.resource_uuid,
+            name="test workspace",
+            parent=Workspace.objects.default(tenant=self.tenant),
+        )
+
+        with self.assertRaises(AssertionError):
+            replicate_deleted_workspaces(since=log.created, replicator=NoopReplicator())

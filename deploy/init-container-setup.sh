@@ -21,14 +21,9 @@ then
         # In ephemeral, the connect instance is the same as the namespace
         KAFKA_CONNECT_URL="http://kessel-kafka-connect-connect-api:8083"
         while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-            RESPONSE=$(curl -sf "${KAFKA_CONNECT_URL}/connectors/rbac-debezium/status") || true
-            if [[ -n "$RESPONSE" ]]; then
-                STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['connector']['state'])")
-                TASK_STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['state'] if d.get('tasks') else '')")
-                if [[ "$STATUS" == "RUNNING" && "$TASK_STATUS" == "RUNNING" ]]; then
-                    echo "rbac-debezium connector and task are RUNNING."
-                    break
-                fi
+            if python3 /opt/rbac/deploy/check_debezium.py "$KAFKA_CONNECT_URL"; then
+                echo "rbac-debezium connector and task are RUNNING."
+                break
             fi
             sleep 2
             ELAPSED=$((ELAPSED + 2))
@@ -39,12 +34,7 @@ then
     fi
 
     echo "Running seeds <-------"
-    # TODO: Remove this once we have the above waiting deployed to prod
-    if [[ "${EPH_ENV}" == "True" ]]; then
-        python /opt/rbac/rbac/manage.py seeds --force-create-relationships
-    else
-        python /opt/rbac/rbac/manage.py seeds
-    fi
+    python /opt/rbac/rbac/manage.py seeds
 else
     echo "Migrations should not be run <----"
 fi

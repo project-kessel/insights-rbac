@@ -1749,8 +1749,8 @@
           "Tenant",
           "Utils"
         ],
-        "summary": "Bootstrap a tenants by org ids",
-        "description": "Bootstrap a tenants by org ids",
+        "summary": "Bootstrap tenants by org ids",
+        "description": "Bootstrap tenants by org ids. By default returns 404 if the Tenant row does not exist; pass create_missing=true to create it. Optionally accepts a tenants array with ungrouped_hosts_id to create the ungrouped-hosts workspace with a caller-supplied UUID.",
         "operationId": "TenantBootstrap",
         "requestBody": {
           "required": true,
@@ -1764,12 +1764,52 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "A list of organization IDs to bootstrap."
+                    "description": "Legacy: list of organization IDs to bootstrap. Mutually exclusive with tenants."
+                  },
+                  "tenants": {
+                    "type": "array",
+                    "description": "List of tenants to bootstrap. Mutually exclusive with org_ids.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "org_id"
+                      ],
+                      "properties": {
+                        "org_id": {
+                          "type": "string",
+                          "description": "Organization ID to bootstrap."
+                        },
+                        "ungrouped_hosts_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Optional UUID for the ungrouped-hosts workspace. When set, creates that workspace under the default workspace."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "examples": {
+                "org_ids": {
+                  "summary": "Legacy org_ids body",
+                  "value": {
+                    "org_ids": [
+                      "12345",
+                      "67890"
+                    ]
                   }
                 },
-                "required": [
-                  "org_ids"
-                ]
+                "tenants_with_ungrouped": {
+                  "summary": "Create tenant with supplied ungrouped-hosts id",
+                  "value": {
+                    "tenants": [
+                      {
+                        "org_id": "12345",
+                        "ungrouped_hosts_id": "0194a1b2-c3d4-7890-abcd-ef1234567890"
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -1790,6 +1830,16 @@
             "in": "query",
             "required": false,
             "description": "Re-replicate only admin default bindings. This is SAFE even when replication is on because admin default bindings are NOT customizable (unlike platform default bindings). Use this to fix tenants that were bootstrapped before admin default groups were seeded.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "create_missing",
+            "in": "query",
+            "required": false,
+            "description": "When true, create a Tenant row if one does not exist for the org_id, then bootstrap it. Default false returns 404 for missing tenants to avoid accidental creation.",
             "schema": {
               "default": false,
               "type": "boolean"
@@ -1838,7 +1888,17 @@
             }
           },
           "400": {
-            "description": "Invalid request, must supply the 'org_id' query parameter.",
+            "description": "Invalid request body, invalid ungrouped_hosts_id, workspace ID conflict, or force=true while replication is enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found for the given org_id when create_missing is false (default).",
             "content": {
               "application/json": {
                 "schema": {

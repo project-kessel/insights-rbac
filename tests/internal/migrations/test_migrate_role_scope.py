@@ -101,3 +101,22 @@ class MigrateRoleScopeTest(DualWriteTestCase):
     def test_no_migrate_without_replication(self):
         self._do_migrate()
         self.assertFalse(RoleScopeState.objects.filter(role=self.role).exists())
+
+    def test_no_migrate_deleted_role(self):
+        """Early exit when role is concurrently deleted."""
+        role_pk = self.role.pk
+        self.role.delete()
+
+        from management.role.model import Role
+
+        deleted_role = Role(pk=role_pk)
+        migrate_role_scope_if_changed(deleted_role, InMemoryRelationReplicator(self.tuples))
+        self.assertFalse(RoleScopeState.objects.filter(role_id=role_pk).exists())
+
+    def test_raises_for_non_system_role(self):
+        """ValueError when a non-system role is passed."""
+        self.role.system = False
+        self.role.save()
+
+        with self.assertRaises(ValueError):
+            self._do_migrate()

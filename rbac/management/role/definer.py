@@ -105,7 +105,20 @@ def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_ser
         platform_default=data.get("platform_default", False),
         admin_default=data.get("admin_default", False),
     )
-    role, created = Role.objects.get_or_create(name=name, defaults=defaults, tenant=public_tenant)
+
+    # Taking a lock on the role prevents it from being assigned during seeding (since the dual-write handlers lock it
+    # FOR SHARE). Doing this ensures that, once seeding the role has finished, all further assignments will see the
+    # new permissions (and thus use them to compute the relevant scopes).
+    #
+    # This doesn't technically ensure that other processes will use the new scopes in all situations; if the scopes have
+    # changed due to a change in the *settings*, rather than the permissions, then a process with the old settings
+    # will continue using the old scope. We don't have a good way to fix that here. (The obvious ideas for how to fix
+    # it would be using scopes stored in the database during assignment and storing the latest scope settings
+    # themselves in the database. Alternatively, we could just be sure to manually migrate the relevant roles every
+    # time the settings change.)
+    #
+    # TODO: fix the above
+    role, created = Role.objects.select_for_update().get_or_create(name=name, defaults=defaults, tenant=public_tenant)
     updated = False
 
     dual_write_handler = SeedingRelationApiDualWriteHandler(role)
@@ -169,15 +182,15 @@ def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None
     exist without their corresponding V2 SeededRoleV2 records.
     """
     current_roles: list[Role] = list()
-    # Sort roles by name to ensure consistent lock ordering and prevent deadlocks
-    sorted_roles = sorted(roles, key=lambda r: r.get("name", ""))
-    for role_json in sorted_roles:
+
+    for role_json in roles:
         try:
             role = _make_role(role_json, config, platform_roles, resource_service)
             current_roles.append(role)
         except Exception as e:
             logger.error(f'Failed to update or create system role: {role_json.get("name")} with error: {e}')
             raise
+
     return current_roles
 
 

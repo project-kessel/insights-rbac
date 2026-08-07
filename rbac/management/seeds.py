@@ -61,14 +61,43 @@ def _run_seeds(seed_type, skip_notifications: bool = False, **kwargs):
 
     token = skip_rh_notifications.set(skip_notifications)
     try:
-        logger.info(f"Seeding {seed_type} changes.")
+        # System object manipulation - SEC-MON-REQ-1 compliance (EOI-2 system_object_manipulation, EOI-3 admin_action)
+        logger.info(
+            f"Seeding {seed_type} changes.",
+            extra={
+                "action": "CREATE",
+                "resource_type": seed_type,
+                "outcome": "in_progress",
+                "principal": "system:django:seed",
+            },
+        )
         seed_functions[seed_type](**kwargs)
         if seed_type in ("permission", "role"):
             permission_scope_cache.invalidate()
             v2_role_excluded_application_permission_ids_cache.invalidate()
-        logger.info(f"Finished seeding {seed_type}.")
-    except Exception as exc:
-        logger.error(f"Error encountered during {seed_type} seeding {exc}.")
+        # System object manipulation - SEC-MON-REQ-1 compliance (EOI-2 system_object_manipulation, EOI-3 admin_action)
+        logger.info(
+            f"Finished seeding {seed_type}.",
+            extra={
+                "action": "CREATE",
+                "resource_type": seed_type,
+                "outcome": "success",
+                "principal": "system:django:seed",
+            },
+        )
+    except Exception:
+        # System object manipulation - SEC-MON-REQ-1 compliance
+        # (EOI-2 system_object_manipulation, EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            f"{seed_type.capitalize()} seeding failed",
+            extra={
+                "action": "CREATE",
+                "resource_type": seed_type,
+                "outcome": "failure",
+                "principal": "system:django:seed",
+                "reason": "seeding_error",
+            },
+        )
     finally:
         skip_rh_notifications.reset(token)
 

@@ -527,6 +527,18 @@ class RoleViewSet(
 
         auditlog = AuditLog()
         auditlog.log_create(self.request, AuditLog.ROLE)
+        # CREATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Role created",
+            extra={
+                "action": "CREATE",
+                "resource_type": "role",
+                "resource_id": str(role.uuid),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def perform_update(self, serializer):
         """
@@ -545,6 +557,18 @@ class RoleViewSet(
 
         auditlog = AuditLog()
         auditlog.log_edit(self.request, AuditLog.ROLE, role)
+        # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Role updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "role",
+                "resource_id": str(role.uuid),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def perform_destroy(self, instance: Role):
         """
@@ -579,6 +603,18 @@ class RoleViewSet(
         # Audit in perform_destroy because it needs access to deleted instance
         auditlog = AuditLog()
         auditlog.log_delete(self.request, AuditLog.ROLE, instance)
+        # DELETE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "Role deleted",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role",
+                "resource_id": str(instance.uuid),
+                "outcome": "success",
+                "org_id": getattr(self.request.user, "org_id", None),
+                "username": getattr(self.request.user, "username", None),
+            },
+        )
 
     def dual_write_exception_response(self, e):
         """Dual write exception response."""

@@ -103,7 +103,7 @@ class RoleBindingFieldSelection(FieldSelection):
     VALID_ROOT_FIELDS = {"last_modified"}
     VALID_NESTED_FIELDS = {
         "subject": {"id", "type", "group.name", "group.description", "group.user_count", "user.username"},
-        "role": {"id", "name"},
+        "role": {"id", "name", "created", "modified"},
         "resource": {"id", "name", "type"},
         "sources": {"id", "name", "type"},
     }
@@ -115,7 +115,7 @@ class RoleBindingBySubjectFieldSelection(FieldSelection):
     VALID_ROOT_FIELDS = {"last_modified"}
     VALID_NESTED_FIELDS = {
         "subject": {"id", "type", "group.name", "group.description", "group.user_count", "user.username"},
-        "roles": {"id", "name"},
+        "roles": {"id", "name", "created", "modified"},
         "resource": {"id", "name", "type"},
         "sources": {"id", "name", "type"},
     }
@@ -132,6 +132,44 @@ def _normalize_uuid_or_none(value: str | None) -> uuid.UUID | None:
         return uuid.UUID(value.strip())
     except ValueError as e:
         raise serializers.ValidationError("Enter a valid UUID.") from e
+
+
+def _build_role_response(role: RoleV2, field_selection: Optional[FieldSelection]) -> dict:
+    """Build role data dict with consistent field selection semantics.
+
+    Shared helper used by all role binding serializers to ensure predictable
+    field selection behaviour across list, by-subject, batch-create and update
+    endpoints.
+
+    Default (no *field_selection*): returns ``{id, created, modified}``.
+    With *field_selection* that mentions ``role`` or ``roles``: returns
+    ``id`` (always) plus the explicitly requested sub-fields.  This is
+    consistent with subject (always ``id`` + ``type``) and resource
+    (always ``id``).
+    With *field_selection* that does **not** mention ``role``/``roles``: falls
+    back to the default set so sections that are always rendered (e.g. the
+    list endpoint) still carry identity information.
+
+    Supports both ``role`` (list endpoint) and ``roles`` (by-subject / update
+    endpoint) nested-field keys.
+    """
+    role_fields: set | None = None
+    if field_selection is not None:
+        role_fields = field_selection.get_nested("role") or field_selection.get_nested("roles")
+
+    if role_fields is None:
+        # No field selection, or role/roles not mentioned → defaults
+        return {"id": role.uuid, "created": role.created, "modified": role.modified}
+
+    # Always include id for consistency with other sections (subject, resource)
+    role_data: dict = {"id": role.uuid}
+    for field_name in role_fields:
+        if field_name == "id":
+            continue  # already included above
+        value = getattr(role, field_name, None)
+        if value is not None:
+            role_data[field_name] = value
+    return role_data
 
 
 def _validate_resource_identifiers(attrs: dict) -> None:
@@ -472,31 +510,16 @@ class RoleBindingOutputSerializer(serializers.Serializer):
     def _build_role_data(self, role: RoleV2, field_selection: Optional[FieldSelection]) -> dict:
         """Build role data dictionary from a role object.
 
-        Args:
-            role: The role to build data for
-            field_selection: Optional field selection to determine which fields to include
-
-        Returns:
-            Dictionary with role data (always includes 'id')
+        Delegates to the shared ``_build_role_response`` helper for consistent
+        field selection semantics across all endpoints.
         """
-        role_data = {"id": role.uuid}
-
-        if field_selection is not None:
-            # By-subject uses "roles", list endpoint uses "role" - support both
-            role_fields = field_selection.get_nested("role") or field_selection.get_nested("roles")
-            for field_name in role_fields:
-                if field_name != "id":
-                    value = getattr(role, field_name, None)
-                    if value is not None:
-                        role_data[field_name] = value
-
-        return role_data
+        return _build_role_response(role, field_selection)
 
     def get_roles(self, obj):
         """Extract roles from the prefetched role bindings.
 
-        Default (no fields param): Returns only role id.
-        With fields param: id is always included, plus explicitly requested fields.
+        Default (no fields param): Returns role id, created, modified.
+        With fields param: only explicitly requested fields are included.
 
         For platform roles, returns their children instead of the platform role itself.
         """
@@ -679,24 +702,10 @@ class RoleBindingOutputSerializerMixin:
     def _build_role_data(self, role: RoleV2, field_selection: Optional[FieldSelection]) -> dict:
         """Build role data dictionary from a role object.
 
-        Args:
-            role: The role to build data for
-            field_selection: Optional field selection to determine which fields to include
-
-        Returns:
-            Dictionary with role data (always includes 'id')
+        Delegates to the shared ``_build_role_response`` helper for consistent
+        field selection semantics across all endpoints.
         """
-        role_data = {"id": role.uuid}
-
-        if field_selection is not None:
-            # Add explicitly requested fields
-            for field_name in field_selection.get_nested("role"):
-                if field_name != "id":
-                    value = getattr(role, field_name, None)
-                    if value is not None:
-                        role_data[field_name] = value
-
-        return role_data
+        return _build_role_response(role, field_selection)
 
 
 class RoleBindingListOutputSerializer(RoleBindingOutputSerializerMixin, serializers.Serializer):
@@ -863,7 +872,7 @@ class BatchCreateRoleBindingRequestSerializer(serializers.Serializer):
 
     service_class = RoleBindingService
 
-    DEFAULT_FIELDS = "resource(id,type),role(id),subject(id,type)"
+    DEFAULT_FIELDS = "resource(id,type),role(id,created,modified),subject(id,type)"
 
     requests = CreateRoleBindingItemSerializer(many=True, min_length=1, max_length=100)
     fields = serializers.CharField(
@@ -955,23 +964,12 @@ class RoleBindingFieldMaskingMixin:
         )
 
     def _build_role_data(self, role):
-        """Build a role dict with field masking applied."""
-        field_selection = self._get_field_selection()
+        """Build a role dict with field masking applied.
 
-        if field_selection is None:
-            return {"id": role.uuid}
-
-        role_data = {}
-        role_fields = field_selection.get_nested("role") or field_selection.get_nested("roles")
-        for field_name in role_fields:
-            if field_name == "id":
-                role_data["id"] = role.uuid
-            else:
-                value = getattr(role, field_name, None)
-                if value is not None:
-                    role_data[field_name] = value
-
-        return role_data
+        Delegates to the shared ``_build_role_response`` helper for consistent
+        field selection semantics across all endpoints.
+        """
+        return _build_role_response(role, self._get_field_selection())
 
     def _build_resource_data(self, resource_id, resource_name=None, resource_type=None):
         """Build a resource dict with field masking applied."""
@@ -1022,7 +1020,7 @@ class UpdateRoleBindingRequestSerializer(RoleBindingInputSerializerMixin, serial
         "resource.tenant.org_id": "resource_tenant_org_id",
     }
 
-    DEFAULT_FIELDS = "resource(id),subject(id,type),roles(id)"
+    DEFAULT_FIELDS = "resource(id),subject(id,type),roles(id,created,modified)"
 
     # Query parameters
     resource_id = serializers.CharField(

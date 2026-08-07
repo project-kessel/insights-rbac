@@ -73,35 +73,98 @@ class CorrectiveEventStats(TypedDict):
     error_details: list[dict[str, str]]
 
 
+def _extract_workspace_payload(value: dict) -> dict | None:
+    """Extract the workspace event payload from a Kafka message value.
+
+    Handles three Debezium message formats:
+
+    1. Pre-SMT (full outbox row)::
+
+        {"aggregatetype": "workspace", "payload": {…workspace payload…}}
+
+    2. EventRouter + JsonConverter (schema/payload envelope)::
+
+        {"schema": {…}, "payload": {…workspace payload…}}
+
+    3. EventRouter + flat (payload IS the value)::
+
+        {"org_id": "…", "workspace": {…}, "operation": "create"}
+
+    Returns the inner workspace payload dict, or None if unparseable.
+    """
+    import json as _json
+
+    # Format 1: pre-SMT — full outbox row with aggregatetype at top level
+    if value.get("aggregatetype") == AggregateTypes.WORKSPACE.value:
+        payload = value.get("payload")
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            try:
+                return _json.loads(payload)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    # Format 2: Kafka Connect JsonConverter envelope — {"schema": …, "payload": …}
+    if "schema" in value and "payload" in value:
+        payload = value["payload"]
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            try:
+                return _json.loads(payload)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    # Format 3: EventRouter flat — the value IS the payload
+    return value
+
+
 def parse_workspace_kafka_events(kafka_events: list[KafkaEvent]) -> list[WorkspaceKafkaEvent]:
     """Parse raw Kafka events into WorkspaceKafkaEvent dicts.
 
-    Filters to only workspace aggregate type events and deduplicates by workspace ID,
-    keeping only the latest event per workspace (chronological order by Kafka timestamp).
+    Supports all Debezium outbox message formats (pre-SMT, EventRouter with
+    JsonConverter envelope, and EventRouter flat).  See ``_extract_workspace_payload``
+    for format details.
+
+    Deduplicates by workspace ID, keeping only the latest event per workspace.
     """
     workspace_events: dict[str, WorkspaceKafkaEvent] = {}
 
+    if kafka_events:
+        first = kafka_events[0].value
+        logger.info("First Kafka event keys: %s", list(first.keys())[:10])
+
     for event in kafka_events:
         value = event.value
-        aggregate_type = value.get("aggregatetype", "")
-        if aggregate_type != AggregateTypes.WORKSPACE.value:
-            continue
 
-        payload = value.get("payload")
-        if not isinstance(payload, dict):
+        payload = _extract_workspace_payload(value)
+        if payload is None:
+            logger.debug("Skipping Kafka event at offset %d: could not extract payload", event.offset)
             continue
 
         workspace_data = payload.get("workspace", {})
         workspace_id = workspace_data.get("id", "")
         if not workspace_id:
+            logger.debug(
+                "Skipping Kafka event at offset %d: missing workspace id, payload keys: %s",
+                event.offset,
+                list(payload.keys())[:10],
+            )
             continue
 
         operation = payload.get("operation", "")
         if operation not in ("create", "update", "delete"):
+            logger.debug("Skipping Kafka event at offset %d: unsupported operation '%s'", event.offset, operation)
             continue
 
         ws_type = workspace_data.get("type", "")
         if ws_type not in _PROCESSABLE_TYPE_VALUES:
+            logger.debug(
+                "Skipping Kafka event at offset %d: workspace type '%s' not processable", event.offset, ws_type
+            )
             continue
 
         parsed = WorkspaceKafkaEvent(

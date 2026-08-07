@@ -338,3 +338,53 @@ class AuditLogViewTests(IdentityRequest):
         # Should have role logs ordered by created desc
         self.assertEqual(response.data.get("data")[0]["action"], "edit")
         self.assertEqual(response.data.get("data")[1]["action"], "create")
+
+    def test_sequence_field_present(self):
+        """Test that each audit log entry includes a sequence number."""
+        url = reverse("v1_management:auditlog-list")
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for entry in response.data.get("data"):
+            self.assertIn("sequence", entry)
+            self.assertIsInstance(entry["sequence"], int)
+            self.assertGreater(entry["sequence"], 0)
+
+    def test_sequence_monotonically_increasing(self):
+        """Test that sequence numbers are monotonically increasing for entries created in order."""
+        url = reverse("v1_management:auditlog-list")
+        url = f"{url}?order_by=sequence"
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sequences = [entry["sequence"] for entry in response.data.get("data")]
+        # Sequences should be strictly increasing when ordered ascending
+        for i in range(1, len(sequences)):
+            self.assertGreater(sequences[i], sequences[i - 1])
+
+    def test_ordering_by_sequence_desc(self):
+        """Test ordering audit logs by sequence descending."""
+        url = reverse("v1_management:auditlog-list")
+        url = f"{url}?order_by=-sequence"
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sequences = [entry["sequence"] for entry in response.data.get("data")]
+        self.assertEqual(sequences, sorted(sequences, reverse=True))
+        # Newest entry (admin/add) should be first (highest sequence)
+        self.assertEqual(response.data.get("data")[0]["principal_username"], "admin")
+
+    def test_default_ordering_is_deterministic(self):
+        """Test that default ordering uses sequence (id) for deterministic results."""
+        url = reverse("v1_management:auditlog-list")
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data.get("data")
+        # Default ordering is -id (newest first), same as -sequence
+        sequences = [entry["sequence"] for entry in data]
+        self.assertEqual(sequences, sorted(sequences, reverse=True))

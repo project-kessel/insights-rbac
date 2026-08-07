@@ -19,6 +19,7 @@
 import collections
 from functools import partial
 import json
+import logging
 import os
 from typing import Tuple
 from unittest.mock import Mock, patch
@@ -53,8 +54,17 @@ from migration_tool.in_memory_tuples import (
     subject,
 )
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 from rbac import urls
-from rbac.middleware import HttpResponseUnauthorizedRequest, IdentityHeaderMiddleware, ReadOnlyApiMiddleware
+from rbac.middleware import (
+    HttpResponseUnauthorizedRequest,
+    IdentityHeaderMiddleware,
+    ReadOnlyApiMiddleware,
+    _get_api_version,
+    _normalize_user_agent,
+    api_migration_counter,
+)
+from rbac.request_context import org_id_var, request_id_var, user_id_var
 from management.models import Access, Group, Permission, Principal, Policy, ResourceDefinition, Role
 
 
@@ -1366,3 +1376,544 @@ class RBACReadOnlyApiMiddlewareV2(RBACReadOnlyApiMiddleware):
             middleware = ReadOnlyApiMiddleware(get_response=Mock(return_value="OK"))
             resp = middleware(self.request)
             self.assertEqual(resp, "OK")
+
+
+class NormalizeUserAgentTest(TestCase):
+    """Tests for _normalize_user_agent helper."""
+
+    def test_none_returns_empty(self):
+        self.assertEqual(_normalize_user_agent(None), "")
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(_normalize_user_agent(""), "")
+
+    def test_simple_product_version(self):
+        self.assertEqual(_normalize_user_agent("python-requests/2.28.0"), "python-requests")
+
+    def test_product_with_comment(self):
+        self.assertEqual(_normalize_user_agent("insights-chrome/1.0.0 (Linux; x86_64)"), "insights-chrome")
+
+    def test_mozilla_browser(self):
+        self.assertEqual(
+            _normalize_user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"),
+            "mozilla",
+        )
+
+    def test_single_word(self):
+        self.assertEqual(_normalize_user_agent("curl"), "curl")
+
+    def test_long_agent_truncated(self):
+        long_name = "a" * 200
+        result = _normalize_user_agent(long_name)
+        self.assertEqual(len(result), 64)
+
+    def test_case_normalized(self):
+        self.assertEqual(_normalize_user_agent("MyCustomClient/3.0"), "mycustomclient")
+
+
+class GetApiVersionTest(TestCase):
+    """Tests for _get_api_version helper."""
+
+    def test_v1_management(self):
+        self.assertEqual(_get_api_version("v1_management"), "v1")
+
+    def test_v1_api(self):
+        self.assertEqual(_get_api_version("v1_api"), "v1")
+
+    def test_v2_management(self):
+        self.assertEqual(_get_api_version("v2_management"), "v2")
+
+    def test_v2_api(self):
+        self.assertEqual(_get_api_version("v2_api"), "v2")
+
+    def test_internal_returns_none(self):
+        self.assertIsNone(_get_api_version("internal"))
+
+    def test_mcp_returns_none(self):
+        self.assertIsNone(_get_api_version("mcp"))
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(_get_api_version(""))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(_get_api_version(None))
+
+
+class ApiMigrationCounterTest(IdentityRequest):
+    """Tests for the api_migration_counter Prometheus metric in IdentityHeaderMiddleware."""
+
+    def setUp(self):
+        """Set up migration counter tests."""
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.META["QUERY_STRING"] = ""
+
+    def test_v1_request_increments_counter(self):
+        """Test that a v1 API request increments the migration counter with api_version=v1."""
+        self.request.resolver_match = Mock(url_name="role-list", app_name="v1_management")
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "python-requests/2.28.0"
+        self.request.headers["user-agent"] = "python-requests/2.28.0"
+
+        before = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="python-requests", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        response = middleware(self.request)
+
+        self.assertEqual(response.status_code, 200)
+        after = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="python-requests", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    def test_v2_request_increments_counter(self):
+        """Test that a v2 API request increments the migration counter with api_version=v2."""
+        self.request.resolver_match = Mock(url_name="role-list", app_name="v2_management")
+        self.request.path = "/api/rbac/v2/roles/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "insights-chrome/1.0"
+        self.request.headers["user-agent"] = "insights-chrome/1.0"
+
+        before = api_migration_counter.labels(
+            api_version="v2", client_id="", user_agent="insights-chrome", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        response = middleware(self.request)
+
+        self.assertEqual(response.status_code, 200)
+        after = api_migration_counter.labels(
+            api_version="v2", client_id="", user_agent="insights-chrome", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    def test_service_account_includes_client_id(self):
+        """Test that service account requests record client_id in the counter."""
+        sa_data = self._create_service_account_data()
+        customer = self._create_customer_data()
+        request_context = self._create_request_context(customer, None, service_account_data=sa_data)
+        request = request_context["request"]
+        request.resolver_match = Mock(url_name="role-list", app_name="v1_management")
+        request.path = "/api/rbac/v1/roles/"
+        request.method = "GET"
+        request.META["QUERY_STRING"] = ""
+        request.META["HTTP_USER_AGENT"] = "my-service/1.0"
+        request.headers["user-agent"] = "my-service/1.0"
+
+        expected_client_id = sa_data.get("client_id", "")
+        before = api_migration_counter.labels(
+            api_version="v1", client_id=expected_client_id, user_agent="my-service", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 200)
+        after = api_migration_counter.labels(
+            api_version="v1", client_id=expected_client_id, user_agent="my-service", method="GET"
+        )._value.get()
+        self.assertEqual(after - before, 1)
+
+    def test_internal_request_does_not_increment(self):
+        """Test that internal endpoint requests do not increment the migration counter."""
+        self.request.resolver_match = Mock(url_name="status", app_name="internal")
+        self.request.path = "/_private/api/status/"
+        self.request.method = "GET"
+        self.request.META["HTTP_USER_AGENT"] = "curl/7.80"
+        self.request.headers["user-agent"] = "curl/7.80"
+
+        # Internal endpoints should not increment; _get_api_version returns None.
+        before = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="curl", method="GET"
+        )._value.get()
+
+        middleware = IdentityHeaderMiddleware(get_response=Mock(return_value=HttpResponse(status=200)))
+        response = middleware(self.request)
+
+        self.assertEqual(response.status_code, 200)
+        after = api_migration_counter.labels(
+            api_version="v1", client_id="", user_agent="curl", method="GET"
+        )._value.get()
+        self.assertEqual(after, before)
+
+
+class RequestContextMiddlewareTest(IdentityRequest):
+    """Tests for context variable integration in IdentityHeaderMiddleware."""
+
+    def setUp(self):
+        """Set up middleware tests."""
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+        self.request.META["QUERY_STRING"] = ""
+
+    def test_fallback_uuid_generated_when_header_missing(self):
+        """When X-RH-INSIGHTS-REQUEST-ID header is absent, a UUID is generated."""
+        import contextvars
+        import uuid
+
+        from rbac.request_context import request_id_var
+
+        # Ensure the header is not set
+        self.request.META.pop("HTTP_X_RH_INSIGHTS_REQUEST_ID", None)
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        # Capture context var inside middleware's isolated context
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
+            # req_id should be a valid UUID
+            req_id = self.request.req_id
+            self.assertIsNotNone(req_id)
+            self.assertNotEqual(req_id, "-")
+            # Should be a valid UUID string
+            uuid.UUID(req_id)  # raises ValueError if invalid
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], req_id)
+
+        ctx.run(_run)
+
+    def test_request_id_from_header(self):
+        """When X-RH-INSIGHTS-REQUEST-ID header is present, it is used as-is."""
+        import contextvars
+
+        from rbac.request_context import request_id_var
+
+        self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "my-custom-id-123"
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
+            self.assertEqual(self.request.req_id, "my-custom-id-123")
+            # Context var must be populated inside the middleware's context
+            self.assertEqual(captured["request_id"], "my-custom-id-123")
+
+        ctx.run(_run)
+
+    def test_request_id_crlf_sanitized(self):
+        """CRLF characters in X-RH-INSIGHTS-REQUEST-ID header are stripped to prevent log injection."""
+        import contextvars
+
+        from rbac.request_context import request_id_var
+
+        self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "legit-id\r\nINFO Injected log line"
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["request_id"] = request_id_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
+            self.assertEqual(self.request.req_id, "legit-idINFO Injected log line")
+            self.assertEqual(captured["request_id"], "legit-idINFO Injected log line")
+
+        ctx.run(_run)
+
+    def test_org_id_and_user_id_context_vars_enriched(self):
+        """org_id_var and user_id_var are populated from the identity header."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            returned = middleware(self.request)
+            self.assertIs(returned, response)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # user_id is hardcoded as "1111111" in _build_identity
+            self.assertEqual(captured["user_id"], "1111111")
+            self.assertEqual(captured["user_type"], "user")
+
+        ctx.run(_run)
+
+    def test_service_account_context_vars_use_client_id(self):
+        """Service accounts populate user_id_var with client_id and user_type_var with 'service_account'."""
+        import contextvars
+
+        from rbac.request_context import org_id_var, user_id_var, user_type_var
+
+        sa_data = self._create_service_account_data()
+        request_context = self._create_request_context(self.customer, None, service_account_data=sa_data)
+        sa_request = request_context["request"]
+        sa_request.path = "/api/rbac/v1/roles/"
+        sa_request.method = "GET"
+        sa_request.META["QUERY_STRING"] = ""
+
+        response = Mock(status_code=200)
+        response.get = Mock(return_value=None)
+
+        captured = {}
+
+        def get_response(r):
+            captured["org_id"] = org_id_var.get()
+            captured["user_id"] = user_id_var.get()
+            captured["user_type"] = user_type_var.get()
+            return response
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            middleware = IdentityHeaderMiddleware(get_response=get_response)
+            returned = middleware(sa_request)
+            self.assertIs(returned, response)
+            self.assertEqual(captured["org_id"], self.customer["org_id"])
+            # Service accounts have user_id=None; client_id is used instead
+            self.assertEqual(captured["user_id"], sa_data["client_id"])
+            self.assertEqual(captured["user_type"], "service_account")
+
+        ctx.run(_run)
+
+    def test_duration_ms_in_log_request(self):
+        """log_request includes duration_ms when _request_start is set."""
+        import time
+
+        response = Mock(status_code=200)
+        self.request._request_start = time.monotonic() - 0.05  # 50ms ago
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+
+        with patch.object(logger := logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            self.assertEqual(mock_info.call_count, 1)
+            # First positional arg is the message string
+            self.assertEqual(mock_info.call_args[0][0], "log_request")
+            log_object = mock_info.call_args.kwargs["extra"]
+            self.assertIn("duration_ms", log_object)
+            self.assertIsNotNone(log_object["duration_ms"])
+            self.assertGreater(log_object["duration_ms"], 0)
+
+    def test_duration_ms_none_without_request_start(self):
+        """log_request sets duration_ms to None when _request_start is absent."""
+        response = Mock(status_code=200)
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+        # Ensure _request_start is not set
+        if hasattr(self.request, "_request_start"):
+            delattr(self.request, "_request_start")
+
+        with patch.object(logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            log_object = mock_info.call_args.kwargs["extra"]
+            self.assertIn("duration_ms", log_object)
+            self.assertIsNone(log_object["duration_ms"])
+
+    def test_log_request_uses_extra_fields(self):
+        """log_request passes fields via extra kwarg for structured logging."""
+        response = Mock(status_code=200)
+        self.request.req_id = "test-req-id"
+        self.request.META["QUERY_STRING"] = ""
+        self.request.method = "GET"
+        self.request.path = "/api/rbac/v1/access/"
+        # Ensure _request_start is not set so duration_ms is None
+        if hasattr(self.request, "_request_start"):
+            delattr(self.request, "_request_start")
+
+        with patch.object(logging.getLogger("rbac.middleware"), "info") as mock_info:
+            IdentityHeaderMiddleware.log_request(self.request, response, is_internal_request=False)
+
+            self.assertEqual(mock_info.call_count, 1)
+            self.assertEqual(mock_info.call_args[0][0], "log_request")
+            log_object = mock_info.call_args.kwargs["extra"]
+            # Fields that should be present as individual keys
+            self.assertEqual(log_object["method"], "GET")
+            self.assertEqual(log_object["path"], "/api/rbac/v1/access/")
+            self.assertEqual(log_object["status"], 200)
+            # Fields handled by RequestContextFilter must NOT be in extra
+            self.assertNotIn("request_id", log_object)
+            self.assertNotIn("org_id", log_object)
+            self.assertNotIn("user_id", log_object)
+
+
+@override_settings(V2_APIS_ENABLED=True)
+class V2MetricsTest(IdentityRequest):
+    """Tests for V2-specific Prometheus metrics (Counter and Histogram)."""
+
+    def setUp(self):
+        """Set up V2 metrics tests."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.user_data = self._create_user_data()
+        self.customer = self._create_customer_data()
+        self.request_context = self._create_request_context(self.customer, self.user_data)
+        self.request = self.request_context["request"]
+        self.request.META["QUERY_STRING"] = ""
+        # Ensure resolver_match is None so middleware falls through to resolve().
+        self.request.resolver_match = None
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+    def tearDown(self):
+        """Clean up V2 configuration and URL caches to prevent test pollution."""
+        super().tearDown()
+        clear_url_caches()
+        reload(urls)
+
+    def test_v2_request_increments_counter(self):
+        """Test that V2 requests increment rbac_v2_api_requests_total with endpoint label."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+        self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 200)
+
+    def test_v2_request_records_duration(self):
+        """Test that V2 requests observe rbac_v2_api_request_duration_seconds with endpoint label."""
+        from rbac.middleware import rbac_v2_request_duration
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "POST"
+
+        before = rbac_v2_request_duration.labels(endpoint="workspace-list", method="POST")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=201))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_request_duration.labels(endpoint="workspace-list", method="POST")._sum.get()
+        self.assertGreater(after, before)
+        self.assertEqual(response.status_code, 201)
+
+    def test_v2_error_increments_5xx_counter(self):
+        """Test that V2 5xx responses are recorded with status='5xx' and correct endpoint."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="5xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=500))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="5xx")._value.get()
+        self.assertEqual(after - before, 1)
+        self.assertEqual(response.status_code, 500)
+
+    def test_v1_request_does_not_increment_v2_counter(self):
+        """Test that V1 requests do not increment V2 metrics."""
+        from rbac.middleware import rbac_v2_request_duration, rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v1/roles/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(endpoint="role-list", method="GET")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(endpoint="role-list", method="GET")._sum.get()
+        self.assertEqual(after - before, 0)
+        self.assertEqual(duration_after, duration_before)
+        self.assertEqual(response.status_code, 200)
+
+    def test_unresolved_path_does_not_increment_v2_counter_or_500(self):
+        """Test that an unresolvable path does not increment V2 metrics and does not crash."""
+        from rbac.middleware import rbac_v2_request_duration, rbac_v2_requests_total
+
+        self.request.path = "/api/rbac/v2/nonexistent-endpoint/"
+        self.request.method = "GET"
+
+        before = rbac_v2_requests_total.labels(endpoint="unresolved", method="GET", status="4xx")._value.get()
+        duration_before = rbac_v2_request_duration.labels(endpoint="unresolved", method="GET")._sum.get()
+
+        get_response = Mock(return_value=HttpResponse(status=404))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        after = rbac_v2_requests_total.labels(endpoint="unresolved", method="GET", status="4xx")._value.get()
+        duration_after = rbac_v2_request_duration.labels(endpoint="unresolved", method="GET")._sum.get()
+        self.assertEqual(after - before, 0)
+        self.assertEqual(duration_after, duration_before)
+        self.assertNotEqual(response.status_code, 500)
+
+    def test_v2_different_endpoints_tracked_separately(self):
+        """Test that different V2 endpoints are tracked with distinct endpoint labels."""
+        from rbac.middleware import rbac_v2_requests_total
+
+        # Request to workspaces endpoint
+        self.request.path = "/api/rbac/v2/workspaces/"
+        self.request.method = "GET"
+
+        ws_before = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+        role_before = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+        response = middleware(self.request)
+
+        ws_after = rbac_v2_requests_total.labels(endpoint="workspace-list", method="GET", status="2xx")._value.get()
+        role_after = rbac_v2_requests_total.labels(endpoint="role-list", method="GET", status="2xx")._value.get()
+
+        self.assertEqual(ws_after - ws_before, 1)
+        self.assertEqual(role_after - role_before, 0)
+        self.assertEqual(response.status_code, 200)

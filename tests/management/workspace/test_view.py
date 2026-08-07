@@ -3552,6 +3552,475 @@ class WorkspaceTestsList(WorkspaceViewTests):
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
+class WorkspaceTestsQuery(WorkspaceViewTests):
+    """Tests for POST /v2/workspaces/query/ endpoint."""
+
+    def _query_url(self):
+        return reverse("v2_management:workspace-query")
+
+    def assertSuccessfulList(self, response, payload):
+        """Common list success assertions."""
+        self.assertIsInstance(payload.get("data"), list)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.get("content-type"), "application/json")
+        for keyname in ["meta", "links", "data"]:
+            self.assertIn(keyname, payload)
+        data = payload.get("data")
+        if data:
+            for keyname in ["name", "id", "parent_id", "description", "type"]:
+                self.assertIn(keyname, data[0])
+
+    def test_query_by_single_id(self):
+        """Query workspaces with a single ID in the body."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 1)
+        self.assertEqual(payload["data"][0]["id"], str(self.standard_workspace.id))
+
+    def test_query_by_multiple_ids(self):
+        """Query workspaces with multiple IDs in the body."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 2)
+        returned_ids = [ws["id"] for ws in payload["data"]]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.standard_sub_workspace.id), returned_ids)
+
+    def test_query_ids_defaults_to_standard_type(self):
+        """Query without explicit type defaults to standard workspaces only."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [
+                    str(self.standard_workspace.id),
+                    str(self.default_workspace.id),
+                    str(self.root_workspace.id),
+                ]
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 1)
+        self.assertEqual(payload["data"][0]["id"], str(self.standard_workspace.id))
+        self.assertEqual(payload["data"][0]["type"], "standard")
+
+    def test_query_ids_with_type_all(self):
+        """Query with type=all returns workspaces of all types."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [
+                    str(self.standard_workspace.id),
+                    str(self.default_workspace.id),
+                    str(self.root_workspace.id),
+                ],
+                "type": "all",
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 3)
+
+    def test_query_ids_with_specific_type(self):
+        """Query with specific type filter narrows results."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [
+                    str(self.standard_workspace.id),
+                    str(self.ungrouped_workspace.id),
+                    str(self.root_workspace.id),
+                ],
+                "type": "standard,ungrouped-hosts",
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 2)
+        returned_ids = [ws["id"] for ws in payload["data"]]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        self.assertIn(str(self.ungrouped_workspace.id), returned_ids)
+        self.assertNotIn(str(self.root_workspace.id), returned_ids)
+
+    def test_query_with_parent_id_filter(self):
+        """Query with parent_id narrows to direct children of that parent."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)],
+                "parent_id": str(self.default_workspace.id),
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # standard_sub_workspace is child of standard_workspace, not default_workspace
+        self.assertEqual(payload["meta"]["count"], 1)
+        self.assertEqual(payload["data"][0]["id"], str(self.standard_workspace.id))
+
+    def test_query_with_name_filter(self):
+        """Query with name filter narrows results."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)],
+                "name": "Sub-workspace",
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 1)
+        self.assertEqual(payload["data"][0]["id"], str(self.standard_sub_workspace.id))
+
+    def test_query_nonexistent_ids(self):
+        """Query with valid UUIDs that don't exist returns empty results."""
+        client = APIClient()
+        non_existent_uuid = "00000000-0000-0000-0000-000000000000"
+        response = client.post(
+            self._query_url(),
+            data={"ids": [non_existent_uuid]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload["meta"]["count"], 0)
+
+    def test_query_missing_ids_returns_400(self):
+        """Query without ids field returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_empty_ids_returns_400(self):
+        """Query with empty ids list returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": []},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_invalid_uuid_returns_400(self):
+        """Query with invalid UUID in ids returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": ["not-a-uuid"]},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_invalid_type_returns_400(self):
+        """Query with invalid type returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)], "type": "invalid"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_deduplicates_ids(self):
+        """Query with duplicate IDs deduplicates them."""
+        client = APIClient()
+        ws_id = str(self.standard_workspace.id)
+        response = client.post(
+            self._query_url(),
+            data={"ids": [ws_id, ws_id, ws_id]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 1)
+
+    def test_query_get_method_not_allowed(self):
+        """GET on the query endpoint returns 405."""
+        client = APIClient()
+        response = client.get(self._query_url(), format="json", **self.headers)
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_query_respects_pagination(self):
+        """Query endpoint respects limit/offset pagination from query params."""
+        client = APIClient()
+        response = client.post(
+            f"{self._query_url()}?limit=1&offset=0",
+            data={"ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload["meta"]["count"], 2)
+        self.assertEqual(len(payload["data"]), 1)
+
+    def test_query_unauthorized_non_admin(self):
+        """Non-admin user without workspace permissions gets 403 on query endpoint."""
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)]},
+            format="json",
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_query_authorized_with_read_permission(self, send_kafka_message):
+        """Non-admin user with read permission can query workspaces."""
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        self._setup_access_for_principal(self.user_data["username"], "inventory:groups:read")
+
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)], "type": "all"},
+            format="json",
+            **headers,
+        )
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(payload.get("data"), list)
+        self.assertEqual(payload["meta"]["count"], 1)
+
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_query_uses_read_not_write_permission(self, send_kafka_message):
+        """Query endpoint uses read permission despite being POST.
+
+        A user with only read permission (not write) should be able to query,
+        confirming the endpoint correctly maps POST to 'read' operation.
+        """
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        # Only grant read permission, no write
+        self._setup_access_for_principal(self.user_data["username"], "inventory:groups:read")
+
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)], "type": "all"},
+            format="json",
+            **headers,
+        )
+        # Should succeed with read-only permission
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_query_scoped_access_filters_results(self, send_kafka_message):
+        """Non-admin user with scoped read permission only sees accessible workspaces."""
+        another_ws = Workspace.objects.create(
+            name="Another Standard Workspace",
+            tenant=self.tenant,
+            type="standard",
+            parent_id=self.default_workspace.id,
+        )
+
+        request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        headers = request_context["request"].META
+
+        # Grant read access scoped only to standard_workspace
+        self._setup_access_for_principal(
+            self.user_data["username"], "inventory:groups:read", workspace_id=str(self.standard_workspace.id)
+        )
+
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id), str(another_ws.id)], "type": "all"},
+            format="json",
+            **headers,
+        )
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = [ws["id"] for ws in payload.get("data", [])]
+        # User can see the workspace they have access to and its descendants
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+        # User cannot see the workspace they do NOT have access to
+        self.assertNotIn(str(another_ws.id), returned_ids)
+
+    def test_query_nul_byte_in_type_returns_400(self):
+        """Query with NUL byte in type field returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)], "type": "standard\x00evil"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_nul_byte_in_name_returns_400(self):
+        """Query with NUL byte in name field returns 400."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [str(self.standard_workspace.id)], "name": "test\x00evil"},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_case_insensitive_uuid_matching(self):
+        """Query with uppercase UUIDs matches correctly."""
+        client = APIClient()
+        upper_uuid = str(self.standard_workspace.id).upper()
+        response = client.post(
+            self._query_url(),
+            data={"ids": [upper_uuid]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 1)
+        self.assertEqual(payload["data"][0]["id"], str(self.standard_workspace.id))
+
+    def test_query_exceeding_max_ids_returns_400(self):
+        """Query with more than 3000 IDs returns 400."""
+        client = APIClient()
+        ids = [str(uuid4()) for _ in range(3001)]
+        response = client.post(
+            self._query_url(),
+            data={"ids": ids},
+            format="json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_query_pagination_links(self):
+        """Query endpoint returns correct pagination links."""
+        client = APIClient()
+        response = client.post(
+            f"{self._query_url()}?limit=1&offset=0",
+            data={"ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("links", payload)
+        links = payload["links"]
+        self.assertIn("first", links)
+        self.assertIn("next", links)
+        self.assertIn("last", links)
+
+    def test_query_with_ancestry(self):
+        """Query with with_ancestry=true includes ancestor/fallback workspaces."""
+        client = APIClient()
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [str(self.standard_workspace.id)],
+                "with_ancestry": True,
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # with_ancestry expands access filter to include ancestors and fallback
+        # workspaces; for admin users with full access the parameter is accepted
+        # and the response still contains the requested workspace
+        returned_ids = [ws["id"] for ws in payload["data"]]
+        self.assertIn(str(self.standard_workspace.id), returned_ids)
+
+    def test_query_order_by_name_descending(self):
+        """Query endpoint respects order_by query parameter."""
+        client = APIClient()
+        response = client.post(
+            f"{self._query_url()}?order_by=-name",
+            data={"ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)]},
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        self.assertEqual(payload["meta"]["count"], 2)
+        names = [ws["name"] for ws in payload["data"]]
+        self.assertEqual(names, sorted(names, reverse=True))
+
+    def test_query_empty_and_whitespace_optional_fields(self):
+        """Query with empty or whitespace-only name/type treats them as unset."""
+        client = APIClient()
+        # Empty string name and whitespace-only type should be normalized to None
+        response = client.post(
+            self._query_url(),
+            data={
+                "ids": [str(self.standard_workspace.id), str(self.standard_sub_workspace.id)],
+                "name": "",
+                "type": "   ",
+            },
+            format="json",
+            **self.headers,
+        )
+        payload = response.data
+
+        self.assertSuccessfulList(response, payload)
+        # Both workspaces returned because empty filters are ignored
+        self.assertEqual(payload["meta"]["count"], 2)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True, V2_APIS_ENABLED=True)
 class WorkspaceTestsDetail(WorkspaceViewTests):
     """Tests for get workspace detail."""
 

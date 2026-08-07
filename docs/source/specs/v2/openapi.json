@@ -404,7 +404,7 @@
                   "$ref": "#/components/schemas/FieldMask"
                 }
               ],
-              "default": "resource(id),role(id),subject(id,type),sources(id)"
+              "default": "resource(id),role(id,created,modified),subject(id,type),sources(id)"
             },
             "explode": false
           },
@@ -874,7 +874,7 @@
                   "$ref": "#/components/schemas/FieldMask"
                 }
               ],
-              "default": "resource(id),subject(id,type),roles(id)"
+              "default": "resource(id),subject(id,type),roles(id,created,modified)"
             },
             "explode": false
           }
@@ -1964,8 +1964,8 @@
                       "type": "standard",
                       "name": "My first workspace",
                       "description": "This is a basic workspace.",
-                      "created": "2024-05-06T12:20-12-0700",
-                      "modified": "2024-05-06T12:20-12-0700"
+                      "created": "2024-05-06T12:20:00-07:00",
+                      "modified": "2024-05-06T12:20:00-07:00"
                     }
                   ]
                 }
@@ -2104,6 +2104,151 @@
               "example": {
                 "name": "Alpha Workspace",
                 "description": "Create a standard workspace."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/query/": {
+      "post": {
+        "operationId": "Workspaces_query",
+        "summary": "Query workspaces by a list of IDs",
+        "description": "Query workspaces by a list of IDs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Limit"
+                }
+              ],
+              "default": 10
+            },
+            "explode": false
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Offset for offset-based pagination.",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Offset"
+                }
+              ],
+              "default": 0
+            },
+            "explode": false
+          },
+          {
+            "name": "order_by",
+            "in": "query",
+            "required": false,
+            "description": "Sort by specified field(s), prefix with '-' for descending order. Allowed fields: name, created, modified, type.",
+            "schema": {
+              "type": "string",
+              "default": "name"
+            },
+            "explode": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspaces.WorkspaceListResponse"
+                },
+                "example": {
+                  "meta": {
+                    "count": 2,
+                    "limit": 10,
+                    "offset": 0
+                  },
+                  "links": {
+                    "first": "/api/rbac/v2/workspaces/query/?limit=10&offset=0",
+                    "next": null,
+                    "previous": null,
+                    "last": "/api/rbac/v2/workspaces/query/?limit=10&offset=0"
+                  },
+                  "data": [
+                    {
+                      "id": "e4277742-b91c-43f1-a185-b827e8574345",
+                      "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
+                      "type": "standard",
+                      "name": "My first workspace",
+                      "description": "This is a basic workspace.",
+                      "created": "2024-05-06T12:20:00-07:00",
+                      "modified": "2024-05-06T12:20:00-07:00"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The server could not understand the request due to invalid syntax.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem400"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access is unauthorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem401"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access is forbidden.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem403"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem500"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Workspaces"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Workspaces.WorkspaceQueryRequest"
+              },
+              "example": {
+                "ids": [
+                  "e4277742-b91c-43f1-a185-b827e8574345",
+                  "c1f729e2-3e2b-4f9e-b247-a4b568393e11"
+                ],
+                "type": "standard"
               }
             }
           }
@@ -3253,10 +3398,20 @@
             "format": "int32",
             "description": "Number of permissions assigned to this role"
           },
-          "last_modified": {
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of when the role was created"
+          },
+          "modified": {
             "type": "string",
             "format": "date-time",
             "description": "Timestamp of when the role was last modified"
+          },
+          "last_modified": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of when the role was last modified (deprecated, use modified)"
           },
           "org_id": {
             "type": "string",
@@ -4249,6 +4404,51 @@
               "created": "2024-08-04T12:00:00Z",
               "modified": "2024-08-04T12:00:00Z"
             }
+          ]
+        }
+      },
+      "Workspaces.WorkspaceQueryRequest": {
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "minItems": 1,
+            "maxItems": 3000,
+            "description": "List of workspace UUIDs to filter by."
+          },
+          "type": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Filter by workspace type. Supports comma-separated values (e.g. standard,ungrouped-hosts). Defaults to standard when ids are provided without explicit type."
+          },
+          "name": {
+            "type": "string",
+            "description": "Filter by workspace name. Case-insensitive substring match by default; use * for glob patterns."
+          },
+          "parent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              }
+            ],
+            "description": "Filter by parent workspace UUID."
+          },
+          "with_ancestry": {
+            "type": "boolean",
+            "description": "Include ancestor and fallback workspaces in the response.",
+            "default": false
+          }
+        },
+        "example": {
+          "ids": [
+            "e4277742-b91c-43f1-a185-b827e8574345",
+            "c1f729e2-3e2b-4f9e-b247-a4b568393e11"
           ]
         }
       },

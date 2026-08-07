@@ -1178,7 +1178,243 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertIsNotNone(Workspace.objects.root(tenant=tenant))
         self.assertIsNotNone(Workspace.objects.default(tenant=tenant))
         self.assertTrue(getattr(tenant, "tenant_mapping"))
+        self.assertFalse(Workspace.objects.filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).exists())
         self.assertEqual(len(tuples), 21)
+
+    def test_bootstrapping_tenant_missing_without_create_missing_returns_404(self):
+        """Default create_missing=false returns 404 for non-existent tenants."""
+        payload = {"org_ids": ["nonexistent-org"]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Tenant.objects.filter(org_id="nonexistent-org").exists())
+
+    def test_bootstrapping_tenant_rejects_single_quoted_tenants_body(self):
+        """tenants payloads must be valid JSON; apostrophe rewrite is not applied."""
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/?create_missing=true",
+            data="{'tenants':[{'org_id':'12345'}]}",
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Tenant.objects.filter(org_id="12345").exists())
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_bootstrapping_tenant_create_missing(self, replicate):
+        """create_missing=true creates a Tenant row when none exists."""
+        org_id = "create-missing-org"
+
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        replicate.side_effect = replicator.replicate
+        RbacFixture(V2TenantBootstrapService(replicator))
+        tuples.clear()
+
+        self.assertFalse(Tenant.objects.filter(org_id=org_id).exists())
+        payload = {"org_ids": [org_id]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/?create_missing=true",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tenant = Tenant.objects.get(org_id=org_id)
+        self.assertIsNotNone(Workspace.objects.root(tenant=tenant))
+        self.assertIsNotNone(Workspace.objects.default(tenant=tenant))
+        self.assertEqual(len(tuples), 21)
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_bootstrapping_tenant_with_ungrouped_hosts_id(self, replicate):
+        """Bootstrap creates ungrouped-hosts workspace with supplied UUID when create_missing=true."""
+        org_id = "ungrouped-bootstrap-org"
+        ungrouped_id = str(uuid.uuid4())
+
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        replicate.side_effect = replicator.replicate
+        RbacFixture(V2TenantBootstrapService(replicator))
+        tuples.clear()
+
+        payload = {"tenants": [{"org_id": org_id, "ungrouped_hosts_id": ungrouped_id}]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/?create_missing=true",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        tenant = Tenant.objects.get(org_id=org_id)
+        ungrouped = Workspace.objects.get(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS)
+        self.assertEqual(str(ungrouped.id), ungrouped_id)
+        self.assertEqual(ungrouped.parent, Workspace.objects.default(tenant=tenant))
+        self.assertGreater(len(tuples), 21)
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_bootstrapping_tenant_ungrouped_hosts_id_conflict(self, replicate):
+        """Conflicting ungrouped_hosts_id returns 400."""
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        replicate.side_effect = replicator.replicate
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        existing = fixture.new_tenant("existing-org")
+        existing_ungrouped = Workspace.objects.create(
+            tenant=existing.tenant,
+            type=Workspace.Types.UNGROUPED_HOSTS,
+            name=Workspace.SpecialNames.UNGROUPED_HOSTS,
+            parent=existing.default_workspace,
+        )
+
+        payload = {
+            "tenants": [
+                {
+                    "org_id": "another-org",
+                    "ungrouped_hosts_id": str(existing_ungrouped.id),
+                }
+            ]
+        }
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/?create_missing=true",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already exists", response.content.decode("utf-8"))
+        self.assertFalse(Tenant.objects.filter(org_id="another-org").exists())
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_bootstrapping_tenant_ungrouped_hosts_id_mismatch(self, replicate):
+        """Same tenant with a different ungrouped_hosts_id returns 400."""
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        replicate.side_effect = replicator.replicate
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.new_tenant("mismatch-org")
+        existing_ungrouped = Workspace.objects.create(
+            tenant=bootstrapped.tenant,
+            type=Workspace.Types.UNGROUPED_HOSTS,
+            name=Workspace.SpecialNames.UNGROUPED_HOSTS,
+            parent=bootstrapped.default_workspace,
+        )
+
+        payload = {
+            "tenants": [
+                {
+                    "org_id": bootstrapped.tenant.org_id,
+                    "ungrouped_hosts_id": str(uuid.uuid4()),
+                }
+            ]
+        }
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("does not match requested id", response.content.decode("utf-8"))
+        self.assertEqual(
+            Workspace.objects.get(tenant=bootstrapped.tenant, type=Workspace.Types.UNGROUPED_HOSTS).id,
+            existing_ungrouped.id,
+        )
+
+    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_bootstrapping_existing_tenant_with_ungrouped_hosts_id(self, replicate):
+        """ungrouped_hosts_id works on an existing tenant without create_missing."""
+        org_id = "existing-ungrouped-org"
+        ungrouped_id = str(uuid.uuid4())
+
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        replicate.side_effect = replicator.replicate
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.new_tenant(org_id)
+        tuples.clear()
+
+        payload = {"tenants": [{"org_id": org_id, "ungrouped_hosts_id": ungrouped_id}]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ungrouped = Workspace.objects.get(tenant=bootstrapped.tenant, type=Workspace.Types.UNGROUPED_HOSTS)
+        self.assertEqual(str(ungrouped.id), ungrouped_id)
+        self.assertEqual(ungrouped.parent, Workspace.objects.default(tenant=bootstrapped.tenant))
+        self.assertGreater(len(tuples), 0)
+
+        # Idempotent re-call with the same ungrouped_hosts_id succeeds and does not recreate.
+        tuples.clear()
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            Workspace.objects.filter(tenant=bootstrapped.tenant, type=Workspace.Types.UNGROUPED_HOSTS).count(),
+            1,
+        )
+        self.assertEqual(len(tuples), 0)
+
+    def test_bootstrapping_tenant_invalid_ungrouped_hosts_id(self):
+        """Invalid ungrouped_hosts_id UUID returns 400."""
+        payload = {"tenants": [{"org_id": "12345", "ungrouped_hosts_id": "not-a-uuid"}]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid ungrouped_hosts_id", response.content.decode("utf-8"))
+
+    def test_bootstrapping_tenant_rejects_both_body_formats(self):
+        """Supplying both org_ids and tenants returns 400."""
+        payload = {"org_ids": ["12345"], "tenants": [{"org_id": "12345"}]}
+        response = self.client.post(
+            "/_private/api/utils/bootstrap_tenant/",
+            data=payload,
+            **self.request.META,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not both", response.content.decode("utf-8"))
+
+    def test_bootstrapping_tenant_rejects_non_object_json_body(self):
+        """Scalar JSON bodies return 400 instead of 500."""
+        for payload in ("123", "true", "null", '["12345"]'):
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    "/_private/api/utils/bootstrap_tenant/",
+                    data=payload,
+                    **self.request.META,
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("JSON object", response.content.decode("utf-8"))
+
+    def test_bootstrapping_tenant_rejects_invalid_utf8_body(self):
+        """Invalid UTF-8 request bodies return 400 instead of 500."""
+        response = self.client.generic(
+            "POST",
+            "/_private/api/utils/bootstrap_tenant/",
+            data=b'\xff\xfe{"org_ids":["12345"]}',
+            content_type="application/json",
+            **self.request.META,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("UTF-8", response.content.decode("utf-8"))
 
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_multiple_tenants(self, replicate):

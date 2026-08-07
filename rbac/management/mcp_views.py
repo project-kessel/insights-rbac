@@ -6274,22 +6274,76 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
                 {"type": "text", "text": f"IMPORTANT — INCLUDE THESE CAVEATS IN YOUR ANSWER:\n{config.caveats}"}
             )
 
+        # MCP write tool execution - SEC-MON-REQ-1 compliance (EOI-3 admin_action)
+        if config.write:
+            username = getattr(getattr(request, "user", None), "username", None)
+            logger.info(
+                "MCP write tool executed",
+                extra={
+                    "action": "EXECUTE",
+                    "resource_type": "mcp_tool",
+                    "resource_id": tool_name,
+                    "outcome": "success",
+                    "org_id": org_id,
+                    "username": username,
+                    "tool_arguments": list(arguments.keys()),
+                },
+            )
+
         return _success_response(request_id, {"content": content, "isError": False})
     except ToolTimeoutError:
         duration = time.monotonic() - start if track else timeout
         if track:
             _record_metric(tool_name, "timeout", duration)
-        logger.error("mcp: tools/call tool='%s' timed out after %ds", tool_name, timeout)
+        # SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.error(
+            "mcp: tools/call tool='%s' timed out after %ds",
+            tool_name,
+            timeout,
+            extra={
+                "action": "EXECUTE",
+                "resource_type": "mcp_tool",
+                "resource_id": tool_name,
+                "outcome": "failure",
+                "org_id": org_id,
+                "reason": "timeout",
+            },
+        )
         return _error_response(request_id, -32603, f"Tool execution timed out after {timeout}s")
     except TypeError as exc:
         if track:
             _record_metric(tool_name, "invalid_params", time.monotonic() - start)
-        logger.warning("mcp: tools/call tool='%s' TypeError: %s", tool_name, exc)
+        # SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.warning(
+            "mcp: tools/call tool='%s' TypeError: %s",
+            tool_name,
+            exc,
+            extra={
+                "action": "EXECUTE",
+                "resource_type": "mcp_tool",
+                "resource_id": tool_name,
+                "outcome": "failure",
+                "org_id": org_id,
+                "reason": "invalid_params",
+            },
+        )
         return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}'")
     except Exception:
         if track:
             _record_metric(tool_name, "error", time.monotonic() - start)
-        logger.exception("mcp: tools/call tool='%s' failed", tool_name)
+        # SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+        logger.exception(
+            "mcp: tools/call tool='%s' failed",
+            tool_name,
+            extra={
+                "action": "EXECUTE",
+                "resource_type": "mcp_tool",
+                "resource_id": tool_name,
+                "outcome": "failure",
+                "org_id": org_id,
+                "reason": "internal_error",
+            },
+        )
         return _error_response(request_id, -32603, "Internal error executing tool")
 
 

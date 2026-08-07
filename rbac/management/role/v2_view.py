@@ -43,6 +43,8 @@ from rest_framework.response import Response
 
 from api.common.pagination import V2CursorPagination
 
+logger = logging.getLogger(__name__)
+
 
 class RoleV2CursorPagination(V2CursorPagination):
     """Cursor pagination for roles."""
@@ -145,12 +147,25 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             audit_log = AuditLog()
             audit_log.log_create(request=request, resource=AuditLog.ROLE_V2)
 
+        # CREATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "V2 Role created",
+            extra={
+                "action": "CREATE",
+                "resource_type": "role_v2",
+                "resource_id": str(role.uuid),
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
+
         try:
             custom_v2_role_obj_change_notification_handler(role, "created", request.user)
         except ValueError:
             raise
         except Exception:
-            logging.error(
+            logger.error(
                 f"Failed to send notification for created role: role pk={role.pk!r}, name={role.name!r}",
                 exc_info=True,
             )
@@ -177,12 +192,25 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             serializer.is_valid(raise_exception=True)
             role = serializer.save()
 
+        # UPDATE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+        logger.info(
+            "V2 Role updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "role_v2",
+                "resource_id": str(role.uuid),
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
+
         try:
             custom_v2_role_obj_change_notification_handler(role, "updated", request.user)
         except ValueError:
             raise
         except Exception:
-            logging.error(
+            logger.error(
                 f"Failed to send notification for updated role: role pk={role.pk!r}, name={role.name!r}",
                 exc_info=True,
             )
@@ -234,6 +262,20 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             for role in removed_roles:
                 audit_log = AuditLog()
                 audit_log.log_delete(request=request, resource=AuditLog.ROLE_V2, object=role)
+
+            # DELETE operation - SEC-MON-REQ-1 compliance (EOI-1 pii_manipulation)
+            logger.info(
+                "V2 Roles bulk deleted",
+                extra={
+                    "action": "DELETE",
+                    "resource_type": "role_v2",
+                    "resource_id": f"{len(removed_roles)}_roles",
+                    "outcome": "success",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "deleted_count": len(removed_roles),
+                },
+            )
         except RolesNotFoundError as e:
             return Response(
                 v2response_error_from_errors(
@@ -262,7 +304,7 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             try:
                 custom_v2_role_obj_change_notification_handler(role, "deleted", request.user)
             except Exception:
-                logging.error(
+                logger.error(
                     f"Failed to send notification for deleted role: role pk={role.pk!r}, name={role.name!r}",
                     exc_info=True,
                 )

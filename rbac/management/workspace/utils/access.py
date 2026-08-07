@@ -204,7 +204,10 @@ def is_user_allowed_v1(request, required_operation, target_workspace):
         bool: True if the user has permission, False otherwise
     """
     root_workspace_id = str(Workspace.objects.root(tenant_id=request.tenant).id)
-    is_get_action = request.method == "GET"
+    # Use the operation to determine read vs write behavior rather than HTTP method.
+    # This ensures POST-based read actions (e.g., 'query') are treated as reads,
+    # setting permission_tuples for the filter backend and including ancestor workspaces.
+    is_read_operation = required_operation == "read"
     if target_workspace is None:
         # If the target workspace is not provided, check if the user has the required permission
         # on any workspace.
@@ -217,10 +220,10 @@ def is_user_allowed_v1(request, required_operation, target_workspace):
     for valid_resource in ["groups", "*"]:
         for valid_operation in allowed_operations:
             valid_perm_tuples.add((f"inventory:{valid_resource}:{valid_operation}", target_workspace))
-    tuple_set = workspace_permission_tuple_set(request, root_workspace_id, is_get_action)
+    tuple_set = workspace_permission_tuple_set(request, root_workspace_id, is_read_operation)
 
-    if is_get_action:
-        # Get the set of permission tuples for later filter
+    if is_read_operation:
+        # Get the set of permission tuples for later filter by WorkspaceAccessFilterBackend
         request.permission_tuples = tuple_set
     return any(valid_perm_tuple in tuple_set for valid_perm_tuple in valid_perm_tuples)
 
@@ -388,8 +391,11 @@ def is_user_allowed_v2(request, required_operation, target_workspace, with_ances
                             top_level_workspaces = filter_top_level_workspaces(accessible_workspaces)
 
                         with record_timing(timings, "add_ancestor_ids"):
-                            for workspace in top_level_workspaces:
-                                ancestor_ids = {str(ancestor.id) for ancestor in workspace.ancestors()}
+                            top_level_ids = list(top_level_workspaces.values_list("id", flat=True))
+                            if top_level_ids:
+                                ancestor_ids = Workspace.objects.ancestor_ids_for_workspaces(
+                                    top_level_ids, request.tenant.id
+                                )
                                 accessible_workspace_ids.update(ancestor_ids)
             elif with_ancestry:
                 with record_timing(timings, "get_fallback_workspace_ids"):
