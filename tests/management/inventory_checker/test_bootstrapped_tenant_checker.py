@@ -25,6 +25,7 @@ from management.inventory_checker.inventory_api_check import BootstrappedTenantI
 from management.permission.scope_service import Scope
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 INVENTORY_STUB_PATH = "management.inventory_checker.inventory_api_check.inventory_service_pb2_grpc.KesselInventoryServiceStub"  # noqa: E501
 PLATFORM_ROLE_UUID_PATH = "management.inventory_checker.inventory_api_check.platform_v2_role_uuid_for"

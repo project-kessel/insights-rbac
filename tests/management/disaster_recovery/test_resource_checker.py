@@ -16,6 +16,7 @@ from management.role.model import Role
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.management.disaster_recovery.helpers import _make_tuple
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 class StripDomainPrefixTest(TestCase):
@@ -168,18 +169,12 @@ class TenantMappingFallbackTest(TestCase):
             org_id="test-mapping-org",
             ready=True,
         )
-        cls.root_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT,
-            type=Workspace.Types.ROOT,
-            tenant=cls.tenant,
-        )
-        cls.default_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT,
-            type=Workspace.Types.DEFAULT,
-            tenant=cls.tenant,
-            parent=cls.root_ws,
-        )
-        cls.mapping = TenantMapping.objects.create(tenant=cls.tenant)
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(cls.tenant)
+        cls.root_ws = bootstrap_result.root_workspace
+        cls.default_ws = bootstrap_result.default_workspace
+
+        cls.mapping = cls.tenant.tenant_mapping
 
     @classmethod
     def tearDownClass(cls):

@@ -22,6 +22,7 @@ import uuid
 from typing import Callable, ClassVar, Optional
 
 from django.db import models
+from django.db.models import CheckConstraint, Q
 from management.permission.scope_service import Scope
 from management.utils import as_uuid
 
@@ -45,6 +46,11 @@ class TenantMapping(models.Model):
         return models.UUIDField(default=uuid.uuid4, editable=False, null=False, unique=True)
 
     tenant = models.OneToOneField(Tenant, on_delete=models.CASCADE, related_name="tenant_mapping")
+
+    # If set, the tenant has opted-in to being converted to V2 (by setting v2_write_activated_at). However,
+    # it has not necessarily actually done the conversion yet; if v2_write_activated_at is still null, this field can
+    # be set to null to opt out of V2.
+    v2_opted_in_at = models.DateTimeField(null=True, blank=True, default=None)
 
     # Once set, this tenant has performed V2 write operations and must never
     # be allowed to write via V1 again, regardless of feature flag state.
@@ -79,6 +85,14 @@ class TenantMapping(models.Model):
             Scope.TENANT: lambda m: m.tenant_scope_default_admin_role_binding_uuid,
         },
     }
+
+    class Meta:
+        constraints = [
+            CheckConstraint(
+                name="V2 write activated only if opted in",
+                condition=Q(v2_write_activated_at__isnull=True) | Q(v2_opted_in_at__isnull=False),
+            )
+        ]
 
     def group_uuid_for(self, access_type: DefaultAccessType) -> uuid.UUID:
         """Get the UUID for the tenant's default group for the appropriate access type."""
