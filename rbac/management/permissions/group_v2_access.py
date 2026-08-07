@@ -1,0 +1,106 @@
+#
+# Copyright 2026 Red Hat, Inc.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+"""Group V2 access permissions using Kessel Inventory API."""
+
+import logging
+
+from management.permissions.workspace_inventory_access import (
+    WorkspaceInventoryAccessChecker,
+)
+from management.principal.proxy import get_kessel_principal_id
+from rest_framework import permissions
+
+logger = logging.getLogger(__name__)
+
+
+class GroupV2KesselAccessPermission(permissions.BasePermission):
+    """
+    Permission class for Group V2 API access using Kessel Inventory API.
+
+    Checks if the principal has rbac_groups_read or rbac_groups_write permission
+    on the org resource via the Inventory API's CheckForUpdate gRPC call.
+
+    Read actions (list, retrieve, list_principals) require rbac_groups_read.
+    Write actions (create, update, destroy, add_principals, remove_principals) require rbac_groups_write.
+    """
+
+    RESOURCE_TYPE = "tenant"
+    GROUPS_READ_RELATION = "rbac_groups_read"
+    GROUPS_WRITE_RELATION = "rbac_groups_write"
+    WRITE_ACTIONS = {"create", "update", "destroy", "remove_principal"}
+
+    def _get_relation(self, view) -> str:
+        """Get the relation to check based on the view action."""
+        action = getattr(view, "action", None)
+        if action in self.WRITE_ACTIONS:
+            return self.GROUPS_WRITE_RELATION
+        if action == "add_principals":
+            request = getattr(view, "request", None)
+            if request and request.method != "GET":
+                return self.GROUPS_WRITE_RELATION
+        return self.GROUPS_READ_RELATION
+
+    def has_permission(self, request, view):
+        """
+        Check if the user has permission to access Group V2 APIs.
+
+        Args:
+            request: The HTTP request object
+            view: The view being accessed
+
+        Returns:
+            bool: True if the user has permission, False otherwise
+        """
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            logger.debug("Denied group access: no tenant on request")
+            return False
+
+        org_resource_id = tenant.tenant_resource_id()
+        if not org_resource_id:
+            logger.debug("Denied group access: tenant has no resource ID")
+            return False
+
+        principal_id = get_kessel_principal_id(request)
+        if not principal_id:
+            logger.debug("Denied group access: could not determine principal ID")
+            return False
+
+        relation = self._get_relation(view)
+        checker = WorkspaceInventoryAccessChecker()
+        has_access = checker.check_resource_access(
+            resource_type=self.RESOURCE_TYPE,
+            resource_id=org_resource_id,
+            principal_id=principal_id,
+            relation=relation,
+        )
+        if not has_access:
+            logger.warning(
+                "Authorization denied",
+                extra={
+                    "action": request.method,
+                    "resource_type": "group_v2",
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "kessel_permission_denied",
+                    "endpoint": request.path,
+                    "required_relation": relation,
+                },
+            )
+        return has_access
