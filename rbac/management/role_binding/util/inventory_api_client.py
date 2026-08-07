@@ -25,8 +25,9 @@ from google.protobuf import json_format
 from internal.jwt_utils import JWTManager, JWTProvider
 from kessel.inventory.v1beta2 import (
     inventory_service_pb2_grpc,
-    relation_object_reference_pb2,
-    relation_object_type_pb2,
+    reporter_reference_pb2,
+    representation_type_pb2,
+    resource_reference_pb2,
     streamed_list_subjects_request_pb2,
 )
 from management.cache import JWTCache
@@ -105,13 +106,14 @@ def lookup_binding_subjects(
             stub = inventory_service_pb2_grpc.KesselInventoryServiceStub(channel)
 
             request = streamed_list_subjects_request_pb2.StreamedListSubjectsRequest(
-                resource=relation_object_reference_pb2.RelationObjectReference(
-                    type=relation_object_type_pb2.RelationObjectType(namespace=resource_ns, name=resource_name),
-                    id=str(resource_id),
+                resource=resource_reference_pb2.ResourceReference(
+                    resource_type=resource_name,
+                    resource_id=str(resource_id),
+                    reporter=reporter_reference_pb2.ReporterReference(type=resource_ns),
                 ),
                 relation=relation,
-                subject_type=relation_object_type_pb2.RelationObjectType(
-                    namespace=subject_namespace, name=subject_name
+                subject_type=representation_type_pb2.RepresentationType(
+                    resource_type=subject_name, reporter_type=subject_namespace
                 ),
             )
             logger.debug("LookupSubjects request: %s", request)
@@ -121,9 +123,7 @@ def lookup_binding_subjects(
                 payload = json_format.MessageToDict(response)
                 logger.debug("LookupSubjects response #%d: %s", idx, payload)
 
-                # Handle different response formats
-                subject = payload.get("subject", {})
-                subject_id = subject.get("id") or subject.get("subject", {}).get("id")
+                subject_id = payload.get("subject", {}).get("resource", {}).get("resourceId")
                 if subject_id:
                     try:
                         # NOTE: This is a temporary fix for an issue where LookupSubjects response from
