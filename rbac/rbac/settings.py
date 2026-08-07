@@ -73,17 +73,25 @@ GIT_COMMIT = ENVIRONMENT.get_value("GIT_COMMIT", default="local-dev")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# The SECRET_KEY is provided via an environment variable in OpenShift
-SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY",
-    # safe value used for development when DJANGO_SECRET_KEY might not be set
-    "asvuhxowz)zjbo4%7pc$ek1nbfh_-#%$bq_x8tkh=#e24825=5",
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 # Default value: False
 DEBUG = False if os.getenv("DJANGO_DEBUG", "False") == "False" else True  # pylint: disable=R1719
+
+# SECURITY WARNING: keep the secret key used in production secret!
+# The SECRET_KEY is provided via an environment variable in OpenShift.
+# In non-DEBUG mode the key MUST be set explicitly; in DEBUG mode a random
+# key is generated so that local dev / test harnesses work without config.
+_secret_key = os.getenv("DJANGO_SECRET_KEY")
+if _secret_key:
+    SECRET_KEY = _secret_key
+elif DEBUG:
+    from django.core.management.utils import get_random_secret_key
+
+    SECRET_KEY = get_random_secret_key()
+else:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY environment variable is required when DEBUG is False.")
 
 ALLOWED_HOSTS = ["*"]
 
