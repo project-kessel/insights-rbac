@@ -17,6 +17,7 @@
 
 """View for Principal V2 management."""
 
+from django.db.models import Count, F, Q
 from management.base_viewsets import BaseV2ViewSet
 from management.permissions.principal_v2_access import PrincipalV2AccessPermission
 from management.principal.model import Principal
@@ -35,7 +36,11 @@ class PrincipalV2ViewSet(BaseV2ViewSet):
 
     def get_queryset(self):
         """Return non-cross-account principals for the requesting tenant."""
-        return Principal.objects.filter(tenant=self.request.tenant, cross_account=False).order_by("username")
+        return (
+            Principal.objects.filter(tenant=self.request.tenant, cross_account=False)
+            .annotate(group_count=Count("group", filter=Q(group__tenant=F("tenant")), distinct=True))
+            .order_by("username")
+        )
 
     def list(self, request, *args, **kwargs):
         """List principals with optional filtering."""

@@ -27,9 +27,18 @@ VALID_ORDER_BY_FIELDS = {"username", "-username"}
 class PrincipalV2OutputSerializer(serializers.ModelSerializer):
     """Output serializer for the Principal V2 API."""
 
+    group_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Principal
-        fields = ("uuid", "username", "type", "user_id", "service_account_id")
+        fields = ("uuid", "username", "type", "user_id", "service_account_id", "group_count")
+
+    def get_group_count(self, obj):
+        """Return group count, using annotation if available."""
+        count = getattr(obj, "group_count", None)
+        if count is not None:
+            return count
+        return obj.group.filter(tenant=obj.tenant).count()
 
 
 class PrincipalV2ListInputSerializer(serializers.Serializer):

@@ -1676,7 +1676,8 @@ enum PrincipalType {
     username: "jdoe",
     type: PrincipalType.user,
     user_id: "12345",
-    service_account_id: null
+    service_account_id: null,
+    group_count: 3
 })
 model Principal {
     @doc("UUID that uniquely identifies the principal")
@@ -1689,6 +1690,9 @@ model Principal {
     user_id: string | null;
     @doc("Service account client ID. Null for users.")
     service_account_id: string | null;
+    @doc("Number of groups the principal belongs to")
+    @minValue(0)
+    group_count: int32;
 }
 
 model PrincipalListResponse {
@@ -1728,14 +1732,16 @@ namespace Principals {
                     username: "jdoe",
                     type: PrincipalType.user,
                     user_id: "12345",
-                    service_account_id: null
+                    service_account_id: null,
+                    group_count: 3
                 },
                 #{
                     uuid: "660e8400-e29b-41d4-a716-446655440003",
                     username: "service-account-abc123",
                     type: PrincipalType.`service-account`,
                     user_id: null,
-                    service_account_id: "abc123"
+                    service_account_id: "abc123",
+                    group_count: 1
                 }
             ]
         }
@@ -1769,7 +1775,8 @@ namespace Principals {
             username: "jdoe",
             type: PrincipalType.user,
             user_id: "12345",
-            service_account_id: null
+            service_account_id: null,
+            group_count: 3
         }
     })
     @get op read(
