@@ -38,6 +38,7 @@ from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 class DRParityHappyPathTest(IdentityRequest):
@@ -53,21 +54,13 @@ class DRParityHappyPathTest(IdentityRequest):
             org_id="parity-org",
             ready=True,
         )
-        cls.mapping = TenantMapping.objects.create(
-            tenant=cls.tenant,
-            v2_write_activated_at=timezone.now(),
-        )
-        cls.root_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT,
-            type=Workspace.Types.ROOT,
-            tenant=cls.tenant,
-        )
-        cls.default_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT,
-            type=Workspace.Types.DEFAULT,
-            tenant=cls.tenant,
-            parent=cls.root_ws,
-        )
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(cls.tenant)
+
+        cls.root_ws = bootstrap_result.root_workspace
+        cls.default_ws = bootstrap_result.default_workspace
+
+        cls.mapping = cls.tenant.tenant_mapping
 
     @classmethod
     def tearDownClass(cls):
@@ -385,16 +378,12 @@ class DRParityUnhappyPathTest(IdentityRequest):
             org_id="unhappy-org",
             ready=True,
         )
-        cls.mapping = TenantMapping.objects.create(
-            tenant=cls.tenant,
-            v2_write_activated_at=timezone.now(),
-        )
-        cls.root_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT, type=Workspace.Types.ROOT, tenant=cls.tenant
-        )
-        cls.default_ws = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT, type=Workspace.Types.DEFAULT, tenant=cls.tenant, parent=cls.root_ws
-        )
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(cls.tenant)
+        cls.root_ws = bootstrap_result.root_workspace
+        cls.default_ws = bootstrap_result.default_workspace
+
+        cls.mapping = cls.tenant.tenant_mapping
 
     @classmethod
     def tearDownClass(cls):
