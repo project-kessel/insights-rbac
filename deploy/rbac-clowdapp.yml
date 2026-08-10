@@ -272,6 +272,8 @@ objects:
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
+          - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
+            value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
           - name: V2_BOOTSTRAP_TENANT
             value: ${V2_BOOTSTRAP_TENANT}
           - name: WORKSPACE_APPLICATION_NAME
@@ -616,6 +618,8 @@ objects:
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
+          - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
+            value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
           - name: V2_BOOTSTRAP_TENANT
             value: ${V2_BOOTSTRAP_TENANT}
           - name: WORKSPACE_APPLICATION_NAME
@@ -1097,6 +1101,8 @@ objects:
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
+            - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
+              value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
             - name: V2_BOOTSTRAP_TENANT
               value: ${V2_BOOTSTRAP_TENANT}
             - name: WORKSPACE_APPLICATION_NAME
@@ -1318,6 +1324,8 @@ objects:
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
+            - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
+              value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
             - name: V2_BOOTSTRAP_TENANT
               value: ${V2_BOOTSTRAP_TENANT}
             - name: WORKSPACE_APPLICATION_NAME
@@ -1672,6 +1680,9 @@ parameters:
 - description: Comma-separated apps excluded from v2 migration; same list filters the v2 roles list API only
   name: V2_MIGRATION_APP_EXCLUDE_LIST
   value: ansible,automation-analytics,cost-management,hybrid-committed-spend,idmsvc,ocm,ocp-advisor,policies,sources
+- description: Comma-separated list of apps required to use V2 access checks when the strict access checks flag is enabled.
+  name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
+  value: inventory
 - description: Whether or not to bootstrap tenants using V2 logic (i.e. creating workspaces and relations).
   name: V2_BOOTSTRAP_TENANT
   value: 'True'

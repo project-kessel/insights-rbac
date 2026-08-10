@@ -46,14 +46,16 @@ def make_workspace_event(workspace: Workspace, event_type: ReplicationEventType)
     )
 
 
-def make_workspace_id_deleted_event(tenant: Tenant, workspace_id: uuid.UUID | str) -> WorkspaceEvent:
+def make_workspace_id_deleted_event(
+    tenant: Tenant, workspace_id: uuid.UUID | str, workspace_name: str
+) -> WorkspaceEvent:
     """Create a WorkspaceEvent for deleting a workspace with the provided ID and tenant."""
     workspace_id = str(as_uuid(workspace_id))
 
     return WorkspaceEvent(
         account_number=tenant.account_id,
         org_id=str(tenant.org_id),
-        workspace={"id": workspace_id},
+        workspace={"id": workspace_id, "name": workspace_name},
         event_type=ReplicationEventType.DELETE_WORKSPACE,
         partition_key=PartitionKey.byEnvironment(),
     )

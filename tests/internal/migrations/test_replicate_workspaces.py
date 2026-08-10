@@ -200,35 +200,35 @@ class ReplicateDeletedWorkspacesTest(DualWriteTestCase):
         AuditLog.objects.all().delete()
         self.service = WorkspaceService(NoopReplicator())
 
-    def _make_delete_log(self) -> AuditLog:
-        workspace = self.service.create({"name": "a workspace"}, self.tenant)
+    def _make_delete_log(self, name: str) -> AuditLog:
+        workspace = self.service.create({"name": name}, self.tenant)
 
         mock_request = MagicMock()
         mock_request.user.username = "test_user"
         mock_request._user.org_id = self.tenant.org_id
 
         create_log = AuditLog()
-        create_log.log_v2(mock_request, "workspace", AuditLog.CREATE, workspace.id, "")
+        create_log.log_v2(mock_request, "workspace", AuditLog.CREATE, workspace.id, f"Created workspace: {name}")
 
         delete_log = AuditLog()
-        delete_log.log_v2(mock_request, "workspace", AuditLog.DELETE, workspace.id, "")
+        delete_log.log_v2(mock_request, "workspace", AuditLog.DELETE, workspace.id, f"Deleted workspace: {name}")
 
         self.service.destroy(workspace)
         return delete_log
 
     def test_remove(self):
-        log_a = self._make_delete_log()
-        log_b = self._make_delete_log()
+        log_a = self._make_delete_log("a")
+        log_b = self._make_delete_log("b")
 
         self.assertGreater(log_b.created, log_a.created)
 
-        def test_replicate_from(since: datetime.datetime, ids: list[uuid.UUID]):
+        def test_replicate_from(since: datetime.datetime, entries: list[tuple[uuid.UUID, str]]):
             replicator = WorkspaceCacheReplicator(NoopReplicator())
             replicate_deleted_workspaces(since=since, replicator=replicator)
 
             events = replicator.workspace_events_for(WorkspaceEventStream.BULK)
 
-            self.assertCountEqual([{"id": str(u)} for u in ids], [e.workspace for e in events])
+            self.assertCountEqual([{"id": str(e[0]), "name": e[1]} for e in entries], [e.workspace for e in events])
 
             self.assertTrue(all(e.org_id == self.tenant.org_id for e in events))
             self.assertTrue(all(e.account_number == self.tenant.account_id for e in events))
@@ -236,12 +236,12 @@ class ReplicateDeletedWorkspacesTest(DualWriteTestCase):
 
             self.assertCountEqual([], replicator.workspace_events_for(WorkspaceEventStream.STANDARD))
 
-        test_replicate_from(log_a.created, [log_a.resource_uuid, log_b.resource_uuid])
-        test_replicate_from(log_b.created, [log_b.resource_uuid])
+        test_replicate_from(log_a.created, [(log_a.resource_uuid, "a"), (log_b.resource_uuid, "b")])
+        test_replicate_from(log_b.created, [(log_b.resource_uuid, "b")])
         test_replicate_from(log_b.created + datetime.timedelta(minutes=1), [])
 
     def test_error_on_reused_id(self):
-        log = self._make_delete_log()
+        log = self._make_delete_log("workspace")
 
         Workspace.objects.create(
             tenant=self.tenant,

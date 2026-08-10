@@ -43,6 +43,8 @@ class FeatureFlags:
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
     # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # Per-org flag: when enabled, the org uses only V2 access checks for HBI (and V1 access checks are blocked).
+    TOGGLE_V2_ADDITIONAL_MANDATORY_ACCESS_CHECK_REQUIRED = "hbi.rbac-v2"
 
     def __init__(self):
         """Add attributes."""
@@ -89,7 +91,7 @@ class FeatureFlags:
         self,
         feature_name: str,
         context: Optional[dict] = None,
-        fallback_function: Optional[Callable[[str, Optional[dict]], None]] = None,
+        fallback_function: Optional[Callable[[str, Optional[dict]], bool]] = None,
     ):
         """Override of is_enabled for checking flag values."""
         if self.client is None:
@@ -178,6 +180,22 @@ class FeatureFlags:
         """
         return self.is_enabled(
             feature_name=self.TOGGLE_V2_EDIT_API_ENABLED,
+            context={"orgId": str(org_id)},
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
+        )
+
+    def is_v2_strict_access_check_enabled(self, org_id: str) -> bool:
+        """Check whether strict V2 access checks are required in the given org.
+
+        When enabled, apps that have opted-in to strict V2 access checks must only use V2 access checks for the org,
+        and V1 access checks are blocked (even if the org has not yet migrated to V2).
+
+        It is expected that this is set for a superset of the orgs that TOGGLE_V2_EDIT_API_ENABLED is set for.
+        """
+        # Note that we use the same fallback_function as is_v2_edit_api_enabled above in order to maintain the
+        # invariant that this flag is set for a superset of the other flag.
+        return self.is_enabled(
+            feature_name=self.TOGGLE_V2_ADDITIONAL_MANDATORY_ACCESS_CHECK_REQUIRED,
             context={"orgId": str(org_id)},
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
         )

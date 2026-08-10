@@ -22,7 +22,7 @@ import logging
 from django.db.models import Prefetch
 from management.cache import AccessCache
 from management.models import Access, ResourceDefinition
-from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
+from management.permissions.v2_edit_api_access import is_v2_access_check_required_for_request
 from management.querysets import get_access_queryset
 from management.role.serializer import AccessSerializer
 from management.role.v2_role_scope import v2_role_excluded_applications
@@ -80,10 +80,12 @@ def validate_v2_application_param(request):
 
     Returns None when the request is allowed, or a 400 Response when it must be rejected.
     """
-    if not is_v2_edit_enabled_for_request(request):
+    app_param = request.query_params.get(APPLICATION_KEY, "")
+    requested_apps = {a.strip() for a in app_param.split(",") if a.strip()}
+
+    if not is_v2_access_check_required_for_request(request, requested_apps=requested_apps):
         return None
 
-    app_param = request.query_params.get(APPLICATION_KEY, "")
     if not app_param:
         return Response(
             status=status.HTTP_400_BAD_REQUEST,
@@ -91,8 +93,8 @@ def validate_v2_application_param(request):
         )
 
     allowed_apps = v2_role_excluded_applications()
-    requested_apps = {a.strip() for a in app_param.split(",") if a.strip()}
     disallowed = requested_apps - allowed_apps
+
     if disallowed:
         return Response(
             status=status.HTTP_400_BAD_REQUEST,
