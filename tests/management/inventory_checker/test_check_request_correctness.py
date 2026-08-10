@@ -577,7 +577,7 @@ class CustomRolePermissionCheckerCheckRequestTest(TestCase):
         self.checker = CustomRolePermissionChecker()
 
     @patch("management.inventory_checker.inventory_api_check.jwt_manager")
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_relation")
+    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
     def test_read_tuples_filter_resource_is_role_subject_is_principal(self, mock_create_channel, mock_jwt_manager):
         mock_jwt_manager.get_jwt_from_redis.return_value = "fake-jwt"
 

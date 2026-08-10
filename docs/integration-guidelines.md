@@ -43,7 +43,6 @@ Use `RelationTuple` from `management/inventory_replicator/types.py` instead of r
 ### gRPC Channel Creation
 
 Three channel factories in `management/utils.py`:
-- `create_client_channel_relation(addr)` -- Relations API (JWT auth via metadata)
 - `create_client_channel_inventory(addr)` -- Inventory API (OAuth2 credentials)
 - `create_client_channel(addr)` -- Legacy, same as relation
 
