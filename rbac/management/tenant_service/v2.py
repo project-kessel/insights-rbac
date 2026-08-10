@@ -7,7 +7,6 @@ from django.conf import settings
 from django.db.models import Prefetch, Q, QuerySet
 from management.group.model import Group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
-from management.permission.scope_service import TenantScopeResources
 from management.inventory_replicator.inventory_replicator import (
     InventoryReplicator,
     PartitionKey,
@@ -16,6 +15,7 @@ from management.inventory_replicator.inventory_replicator import (
     WorkspaceEventStream,
 )
 from management.inventory_replicator.types import RelationTuple
+from management.permission.scope_service import TenantScopeResources
 from management.principal.model import Principal
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping, logger
 from management.tenant_service.relations import default_role_binding_tuples

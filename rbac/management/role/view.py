@@ -33,11 +33,11 @@ from django.utils.translation import gettext as _
 from django_filters import rest_framework as filters
 from internal.utils import get_workspace_ids_from_resource_definition
 from management.filters import CommonFilters
+from management.inventory_replicator.inventory_replicator import DualWriteException, ReplicationEventType
 from management.models import AuditLog, Permission
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permissions import RoleAccessPermission
 from management.permissions.v2_edit_api_access import V1WriteBlockedWhenWorkspacesEnabled
-from management.inventory_replicator.inventory_replicator import DualWriteException, ReplicationEventType
 from management.querysets import get_role_queryset, user_has_perm
 from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,

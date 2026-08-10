@@ -26,12 +26,12 @@ from google.protobuf import json_format
 from internal.jwt_utils import JWTManager, JWTProvider
 from kessel.inventory.v1beta2 import (
     inventory_service_pb2_grpc,
+    read_tuples_request_pb2,
+    relation_subject_filter_pb2,
+    relation_tuple_filter_pb2,
     reporter_reference_pb2,
     resource_reference_pb2,
     subject_reference_pb2,
-    relation_subject_filter_pb2,
-    relation_tuple_filter_pb2,
-    read_tuples_request_pb2,
     tuple_service_pb2_grpc,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest

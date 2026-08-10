@@ -28,14 +28,6 @@ from management.atomic_transactions import atomic
 from management.exceptions import InvalidFieldError, NotFoundError, RequiredFieldError
 from management.group.model import Group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
-from management.permission.scope_service import (
-    SCOPE_DISPLAY_NAME,
-    Scope,
-    default_implicit_resource_service,
-    permission_scope_cache,
-    resolve_workspace_scope,
-    scope_for_resource,
-)
 from management.inventory_replicator.inventory_replicator import (
     InventoryReplicator,
     PartitionKey,
@@ -45,6 +37,14 @@ from management.inventory_replicator.inventory_replicator import (
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.inventory_replicator.types import RelationTuple
+from management.permission.scope_service import (
+    SCOPE_DISPLAY_NAME,
+    Scope,
+    default_implicit_resource_service,
+    permission_scope_cache,
+    resolve_workspace_scope,
+    scope_for_resource,
+)
 from management.principal.model import Principal
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2

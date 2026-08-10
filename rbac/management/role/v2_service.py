@@ -27,6 +27,14 @@ from django.db import IntegrityError
 from django.db.models import QuerySet
 from management.atomic_transactions import atomic
 from management.exceptions import NotFoundError, RequiredFieldError
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.permission.exceptions import InvalidPermissionDataError
 from management.permission.model import PermissionValue
 from management.permission.scope_service import (
@@ -38,14 +46,6 @@ from management.permission.scope_service import (
     scopes_for_resource_type,
 )
 from management.permission.service import PermissionService
-from management.inventory_replicator.inventory_replicator import (
-    InventoryReplicator,
-    PartitionKey,
-    ReplicationEvent,
-    ReplicationEventType,
-)
-from management.inventory_replicator.noop_replicator import NoopReplicator
-from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.role.v2_exceptions import (
     CustomRoleRequiredError,
     InvalidRolePermissionsError,

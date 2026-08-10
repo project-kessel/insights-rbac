@@ -49,6 +49,7 @@ from management.group.serializer import (
     GroupSerializer,
     RoleMinimumSerializer,
 )
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.models import AuditLog, Group, Role
 from management.notifications.notification_handlers import (
     group_obj_change_notification_handler,
@@ -61,7 +62,6 @@ from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy
 from management.principal.serializer import ServiceAccountSerializer
 from management.principal.view import ADMIN_ONLY_KEY, USERNAME_ONLY_KEY, VALID_BOOLEAN_VALUE
-from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.querysets import (
     get_group_queryset,
     get_role_queryset,
