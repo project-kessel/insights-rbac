@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [MockKessel] %(messa
 logger = logging.getLogger(__name__)
 
 
-class MockKesselTupleServicer(tuple_service_pb2_grpc.KesselTupleServiceStub):
+class MockKesselTupleServicer(tuple_service_pb2_grpc.KesselTupleServiceServicer):
     """Mock implementation that logs calls and returns success."""
 
     def __init__(self):
@@ -86,7 +86,7 @@ def serve(port=50051):
     """Start the mock gRPC server."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     servicer = MockKesselTupleServicer()
-    relation_tuples_pb2_grpc.add_KesselTupleServiceServicer_to_server(servicer, server)
+    tuple_service_pb2_grpc.add_KesselTupleServiceServicer_to_server(servicer, server)
     addr = f"[::]:{port}"
     server.add_insecure_port(addr)
     server.start()

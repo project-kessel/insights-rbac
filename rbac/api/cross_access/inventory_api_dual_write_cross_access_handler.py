@@ -133,7 +133,7 @@ class InventoryApiDualWriteCrossAccessHandler(InventoryApiDualWriteSubjectHandle
                 ),
             )
         except Exception as e:
-            logger.error("Error occurred in cross account replicate event", e)
+            logger.error("Error occurred in cross account replicate event %s", e)
             raise DualWriteException(e)
 
     def replicate(self):

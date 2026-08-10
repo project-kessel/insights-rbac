@@ -42,7 +42,7 @@ from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.platform import admin_platform_parent_scopes_for_seeded_system_role, platform_v2_role_uuid_for
 from management.role.relations import role_child_relationship
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
-from management.utils import create_client_channel_inventory, create_client_channel_relation
+from management.utils import create_client_channel_inventory
 from migration_tool.utils import create_relationship
 
 from api.models import Tenant
@@ -481,7 +481,7 @@ class CustomRolePermissionChecker(InventoryApiBaseChecker):
         metadata = [("authorization", f"Bearer {token}")] if token else []
         all_present = True
 
-        with create_client_channel_relation(settings.RELATION_API_SERVER) as channel:
+        with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
             stub = tuple_service_pb2_grpc.KesselTupleServiceStub(channel)
 
             for t in tuples:
@@ -541,7 +541,7 @@ def generate_seeded_role_hierarchy_tuples(
 ) -> list[RelationTuple]:
     """Generate expected parent-child tuples for a seeded role.
 
-    Replicates the logic from SeedingInventorynApiDualWriteHandler._check_create_admin_platform_relation()
+    Replicates the logic from SeedingInventoryApiDualWriteHandler._check_create_admin_platform_relation()
     to determine what parent-child relationships should exist in Kessel for a given seeded role.
 
     Args:
