@@ -18,6 +18,7 @@
 """Proxy for principal management."""
 
 import logging
+from json import JSONDecodeError
 
 import requests
 from django.conf import settings
@@ -325,7 +326,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 LOGGER.error(f"BOP returned status {response.status_code}: {response.text}")
                 bop_request_status_count.labels(method="POST", status=response.status_code).inc()
                 return None
-        except Exception as e:
+        except (requests.exceptions.RequestException, JSONDecodeError) as e:
             LOGGER.error(f"Error fetching account-org mapping from BOP: {str(e)}")
             bop_request_status_count.labels(method="POST", status=500).inc()
             return None

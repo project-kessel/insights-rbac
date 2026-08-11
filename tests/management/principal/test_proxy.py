@@ -18,6 +18,7 @@
 
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import TestCase
 from rest_framework import status
 import requests
@@ -194,7 +195,7 @@ class PrincipalProxyTest(TestCase):
 
         proxy._request_principals(url="http://localhost:8080/v1/users", method=capture_method)
         self.assertIn("timeout", captured_kwargs)
-        self.assertEqual(captured_kwargs["timeout"], 10)
+        self.assertEqual(captured_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
 
     @patch("management.principal.proxy.requests.post")
     def test_fetch_account_org_mapping_passes_timeout(self, mock_post):
@@ -205,7 +206,7 @@ class PrincipalProxyTest(TestCase):
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args[1]
         self.assertIn("timeout", call_kwargs)
-        self.assertEqual(call_kwargs["timeout"], 10)
+        self.assertEqual(call_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
 
     def test__request_principals_200_success(self):
         """Test request with expected 200 and good data."""
