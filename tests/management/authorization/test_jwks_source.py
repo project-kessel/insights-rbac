@@ -20,13 +20,13 @@ from unittest import mock
 
 import requests
 from django.conf import settings
-from django.test import TestCase
+from tests.identity_request import IdentityRequest
 
 from management.authorization.jwks_source import _request_json
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 
 
-class RequestJsonTests(TestCase):
+class RequestJsonTests(IdentityRequest):
     """Tests for the _request_json helper function."""
 
     @mock.patch("management.authorization.jwks_source.requests.get")
@@ -37,10 +37,11 @@ class RequestJsonTests(TestCase):
         mock_response.json.return_value = {"keys": []}
         mock_get.return_value = mock_response
 
-        _request_json("https://example.com/.well-known/openid-configuration")
+        result = _request_json("https://example.com/.well-known/openid-configuration")
 
         mock_get.assert_called_once()
         self.assertEqual(mock_get.call_args.kwargs.get("timeout"), settings.OUTBOUND_HTTP_TIMEOUT)
+        self.assertEqual(result, {"keys": []})
 
     @mock.patch("management.authorization.jwks_source.requests.get")
     def test_request_json_timeout_raises_unable_meet_prerequisites(self, mock_get):
