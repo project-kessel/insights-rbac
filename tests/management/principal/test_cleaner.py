@@ -38,12 +38,12 @@ from management.principal.cleaner import (
     METRIC_STOMP_MESSAGES_NACK_TOTAL,
 )
 from management.principal.proxy import external_principal_to_user
-from management.relation_replicator.relation_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
+from management.inventory_replicator.inventory_replicator import PartitionKey, ReplicationEvent, ReplicationEventType
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service import get_tenant_bootstrap_service
 from management.workspace.model import Workspace
 from api.models import Tenant, User
-from management.relation_replicator.types import ObjectReference, ObjectType, SubjectReference
+from management.inventory_replicator.types import ObjectReference, ObjectType, SubjectReference
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
@@ -829,7 +829,7 @@ class PrincipalUMBTestsWithV2TenantBootstrap(PrincipalUMBTests):
         },
     )
     @patch("management.principal.cleaner.UMB_CLIENT")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
         self, replicate, client_mock, proxy_mock
     ):
@@ -959,7 +959,7 @@ class PrincipalUMBTestsWithV2TenantBootstrap(PrincipalUMBTests):
     )
     @patch("management.group.model.AccessCache")
     @patch("management.principal.cleaner.UMB_CLIENT")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_disable_principal_which_is_in_or_not_in_group(self, replicate, client_mock, cache_class, proxy_mock):
         """Process a umb message to disable a principal which is either in or not in a group."""
         principal_name = "principal-test"

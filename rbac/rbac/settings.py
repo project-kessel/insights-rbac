@@ -648,13 +648,6 @@ if ENVIRONMENT.bool("CLOWDER_ENABLED", default=False):
             f"Falling back to default RELATION_API_SERVER value: {RELATION_API_SERVER}"
         )
 
-RELATIONS_API_CLIENT_ID = ENVIRONMENT.get_value("RELATION_API_CLIENT_ID", default="")
-RELATIONS_API_CLIENT_SECRET = ENVIRONMENT.get_value("RELATION_API_CLIENT_SECRET", default="")
-RELATIONS_API_TOKEN_URL = ENVIRONMENT.get_value(
-    "RELATIONS_API_TOKEN_URL",
-    default="https://sso.stage.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token",
-)
-
 INVENTORY_API_CLIENT_ID = ENVIRONMENT.get_value("INVENTORY_API_CLIENT_ID", default="")
 INVENTORY_API_CLIENT_SECRET = ENVIRONMENT.get_value("INVENTORY_API_CLIENT_SECRET", default="")
 INVENTORY_API_TOKEN_URL = ENVIRONMENT.get_value(

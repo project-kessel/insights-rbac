@@ -26,20 +26,23 @@ from google.protobuf import json_format
 from internal.jwt_utils import JWTManager, JWTProvider
 from kessel.inventory.v1beta2 import (
     inventory_service_pb2_grpc,
+    read_tuples_request_pb2,
+    relation_subject_filter_pb2,
+    relation_tuple_filter_pb2,
     reporter_reference_pb2,
     resource_reference_pb2,
     subject_reference_pb2,
+    tuple_service_pb2_grpc,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
-from kessel.relations.v1beta1 import relation_tuples_pb2, relation_tuples_pb2_grpc
 from management.cache import JWTCache
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.inventory_replicator.types import RelationTuple
 from management.permission.scope_service import ImplicitResourceService, Scope
-from management.relation_replicator.types import RelationTuple
 from management.role.platform import admin_platform_parent_scopes_for_seeded_system_role, platform_v2_role_uuid_for
 from management.role.relations import role_child_relationship
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
-from management.utils import create_client_channel_inventory, create_client_channel_relation
+from management.utils import create_client_channel_inventory
 from migration_tool.utils import create_relationship
 
 from api.models import Tenant
@@ -478,17 +481,17 @@ class CustomRolePermissionChecker(InventoryApiBaseChecker):
         metadata = [("authorization", f"Bearer {token}")] if token else []
         all_present = True
 
-        with create_client_channel_relation(settings.RELATION_API_SERVER) as channel:
-            stub = relation_tuples_pb2_grpc.KesselTupleServiceStub(channel)
+        with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
+            stub = tuple_service_pb2_grpc.KesselTupleServiceStub(channel)
 
             for t in tuples:
-                request = relation_tuples_pb2.ReadTuplesRequest(
-                    filter=relation_tuples_pb2.RelationTupleFilter(
+                request = read_tuples_request_pb2.ReadTuplesRequest(
+                    filter=relation_tuple_filter_pb2.RelationTupleFilter(
                         resource_namespace=t.resource.type.namespace,
                         resource_type=t.resource.type.name,
                         resource_id=t.resource.id,
                         relation=t.relation,
-                        subject_filter=relation_tuples_pb2.SubjectFilter(
+                        subject_filter=relation_subject_filter_pb2.RelationSubjectFilter(
                             subject_namespace=t.subject.subject.type.namespace,
                             subject_type=t.subject.subject.type.name,
                             subject_id=t.subject.subject.id,
@@ -538,7 +541,7 @@ def generate_seeded_role_hierarchy_tuples(
 ) -> list[RelationTuple]:
     """Generate expected parent-child tuples for a seeded role.
 
-    Replicates the logic from SeedingRelationApiDualWriteHandler._check_create_admin_platform_relation()
+    Replicates the logic from SeedingInventoryApiDualWriteHandler._check_create_admin_platform_relation()
     to determine what parent-child relationships should exist in Kessel for a given seeded role.
 
     Args:

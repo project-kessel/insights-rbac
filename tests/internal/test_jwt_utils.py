@@ -220,8 +220,8 @@ class JWTProviderTest(TestCase):
         # Configure mock settings
         mock_settings.REDHAT_SSO = "sso.example.com"
         mock_settings.TOKEN_GRANT_TYPE = "client_credentials"
-        mock_settings.RELATIONS_API_CLIENT_ID = "test-client-id"
-        mock_settings.RELATIONS_API_CLIENT_SECRET = "test-secret"
+        mock_settings.INVENTORY_API_CLIENT_ID = "test-client-id"
+        mock_settings.INVENTORY_API_CLIENT_SECRET = "test-secret"
         mock_settings.SCOPE = "test-scope"
         mock_settings.OPENID_URL = "/auth/token"
 
@@ -274,8 +274,8 @@ class JWTProviderTest(TestCase):
         # Configure mock settings
         mock_settings.REDHAT_SSO = "sso.example.com"
         mock_settings.TOKEN_GRANT_TYPE = "client_credentials"
-        mock_settings.RELATIONS_API_CLIENT_ID = "test-client-id"
-        mock_settings.RELATIONS_API_CLIENT_SECRET = "test-secret"
+        mock_settings.INVENTORY_API_CLIENT_ID = "test-client-id"
+        mock_settings.INVENTORY_API_CLIENT_SECRET = "test-secret"
         mock_settings.SCOPE = "test-scope"
         mock_settings.OPENID_URL = "/auth/token"
 

@@ -20,9 +20,17 @@
 import logging
 from typing import Iterable, Optional
 
+from management.group.inventory_api_dual_write_subject_handler import InventoryApiDualWriteSubjectHandler
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
-from management.group.relation_api_dual_write_subject_handler import RelationApiDualWriteSubjectHandler
+from management.inventory_replicator.inventory_replicator import (
+    DualWriteException,
+    InventoryReplicator,
+    PartitionKey,
+    ReplicationEvent,
+    ReplicationEventType,
+)
+from management.inventory_replicator.types import RelationTuple
 from management.models import Workspace
 from management.permission.scope_service import (
     ImplicitResourceService,
@@ -30,14 +38,6 @@ from management.permission.scope_service import (
     TenantScopeResources,
 )
 from management.principal.model import Principal
-from management.relation_replicator.relation_replicator import (
-    DualWriteException,
-    PartitionKey,
-    RelationReplicator,
-    ReplicationEvent,
-    ReplicationEventType,
-)
-from management.relation_replicator.types import RelationTuple
 from management.role.model import BindingMapping, Role
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
@@ -49,7 +49,7 @@ from api.models import Tenant
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
+class InventoryApiDualWriteGroupHandler(InventoryApiDualWriteSubjectHandler):
     """Class to handle Dual Write for group bindings and membership."""
 
     group: Group
@@ -61,10 +61,10 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
         self,
         group,
         event_type: ReplicationEventType,
-        replicator: Optional[RelationReplicator] = None,
+        replicator: Optional[InventoryReplicator] = None,
         resource_service: Optional[ImplicitResourceService] = None,
     ):
-        """Initialize RelationApiDualWriteGroupHandler."""
+        """Initialize InventoryApiDualWriteGroupHandler."""
         if not self.replication_enabled():
             return
 
@@ -93,7 +93,7 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
                 replicator=replicator,
             )
         except Exception as e:
-            logger.error(f"Initialization of RelationApiDualWriteGroupHandler failed: {e}")
+            logger.error(f"Initialization of InventoryApiDualWriteGroupHandler failed: {e}")
             raise DualWriteException(e)
 
     def _generate_member_relations(self):

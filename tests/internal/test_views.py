@@ -42,15 +42,15 @@ from api.models import User, Tenant
 from api.utils import reset_imported_tenants
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 from management.models import BindingMapping, Group, Permission, Policy, Role, Workspace
 from management.principal.model import Principal
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.model import Access, ResourceDefinition
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
-    SeedingRelationApiDualWriteHandler,
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
+    SeedingInventoryApiDualWriteHandler,
 )
 from management.role.user_source import SourceKey
 from management.tenant_mapping.model import TenantMapping
@@ -135,7 +135,7 @@ class BaseInternalViewsetTests(IdentityRequest):
         "version": 1,
         "disable_existing_loggers": False,
         "loggers": {
-            "management.relation_replicator.outbox_replicator": {
+            "management.inventory_replicator.outbox_replicator": {
                 "level": "INFO",
             },
         },
@@ -730,7 +730,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
     @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_delete_role_clears_relations(self, replicate):
         """Test that deleting a system role clears its relations."""
         replicator = InMemoryRelationReplicator(self._tuples)
@@ -739,7 +739,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         fixture = RbacFixture(V2TenantBootstrapService(replicator))
         fixture.bootstrap_tenant(self.tenant)
         role_system = fixture.new_system_role(name="test_system_role", permissions=permissions)
-        dual_write_handler = SeedingRelationApiDualWriteHandler(role_system, replicator=replicator)
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(role_system, replicator=replicator)
         dual_write_handler.replicate_new_system_role()
 
         # Before removing the role, verify relations exist
@@ -819,7 +819,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
     @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_delete_permission_clears_relations(self, replicate):
         """Test that we can delete selective permission when allowed and no permissions."""
         replicator = InMemoryRelationReplicator(self._tuples)
@@ -828,7 +828,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         fixture = RbacFixture(V2TenantBootstrapService(replicator))
         fixture.bootstrap_tenant(self.tenant)
         role_system = fixture.new_system_role(name="system_role", permissions=permissions)
-        dual_write_handler = SeedingRelationApiDualWriteHandler(role_system, replicator=replicator)
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(role_system, replicator=replicator)
         dual_write_handler.replicate_new_system_role()
 
         ws_2 = Workspace.objects.create(
@@ -843,7 +843,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
                 **{str(ws_2.id): ["app1:hosts:read", "inventory:hosts:write"]},
             ),
         )
-        dual_write = RelationApiDualWriteHandler(
+        dual_write = InventoryApiDualWriteHandler(
             role_custom, ReplicationEventType.CREATE_CUSTOM_ROLE, replicator=replicator
         )
         dual_write.replicate_new_or_updated_role(role_custom)
@@ -1003,7 +1003,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         binding_attrs.update({"id": binding_mapping.id, "role": self.role.id, "v2_role": None})
         self.assertEqual(json.loads(response.content.decode()), [binding_attrs])
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_delete_bindings_by_role(self, replicate):
         """Test that we can delete bindingmapping by role."""
         replicator = InMemoryRelationReplicator(self._tuples)
@@ -1060,7 +1060,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(self._tuples.count_tuples(), 0)
 
     @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_clean_bindings(self, replicate):
         """Test that we can clean bindingmapping."""
         replicator = InMemoryRelationReplicator(self._tuples)
@@ -1139,7 +1139,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(binding_mapping.mappings["users"], {})
         self.assertEqual(binding_mapping.mappings["groups"], [str(self.group.uuid)])
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_tenant(self, replicate):
         """Test that we can bootstrap a tenant."""
         org_id = "12345"
@@ -1204,7 +1204,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Tenant.objects.filter(org_id="12345").exists())
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_tenant_create_missing(self, replicate):
         """create_missing=true creates a Tenant row when none exists."""
         org_id = "create-missing-org"
@@ -1229,7 +1229,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertIsNotNone(Workspace.objects.default(tenant=tenant))
         self.assertEqual(len(tuples), 21)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_tenant_with_ungrouped_hosts_id(self, replicate):
         """Bootstrap creates ungrouped-hosts workspace with supplied UUID when create_missing=true."""
         org_id = "ungrouped-bootstrap-org"
@@ -1256,7 +1256,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(ungrouped.parent, Workspace.objects.default(tenant=tenant))
         self.assertGreater(len(tuples), 21)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_tenant_ungrouped_hosts_id_conflict(self, replicate):
         """Conflicting ungrouped_hosts_id returns 400."""
         tuples = InMemoryTuples()
@@ -1289,7 +1289,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertIn("already exists", response.content.decode("utf-8"))
         self.assertFalse(Tenant.objects.filter(org_id="another-org").exists())
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_tenant_ungrouped_hosts_id_mismatch(self, replicate):
         """Same tenant with a different ungrouped_hosts_id returns 400."""
         tuples = InMemoryTuples()
@@ -1325,7 +1325,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             existing_ungrouped.id,
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_existing_tenant_with_ungrouped_hosts_id(self, replicate):
         """ungrouped_hosts_id works on an existing tenant without create_missing."""
         org_id = "existing-ungrouped-org"
@@ -1416,7 +1416,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("UTF-8", response.content.decode("utf-8"))
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_multiple_tenants(self, replicate):
         """Test that we can bootstrap a tenant."""
         org_ids = ["12345", "123456", "6789"]
@@ -1456,7 +1456,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             21 + 21 + 21,
         )  # orgs: 3 for workspaces, (3 for default and 3 for admin default access) for each of 3 scopes
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bootstrapping_existing_tenant_without_force_does_nothing(self, replicate):
         tuples = InMemoryTuples()
         replicator = InMemoryRelationReplicator(tuples)
@@ -1488,7 +1488,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(tuples), 0)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @override_settings(REPLICATION_TO_RELATION_ENABLED=False)
     def test_force_bootstrapping_tenant(self, replicate):
         tuples = InMemoryTuples()
@@ -1523,7 +1523,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
     def test_force_admin_only_bootstrap(self, replicate):
         """Test force_admin_only=true for bootstrap_tenant endpoint.
@@ -3186,7 +3186,7 @@ class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, ROOT_SCOPE_PERMISSIONS="test:resource:read")
     @patch("management.tasks.fix_missing_binding_base_tuples_in_worker.delay")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_fix_missing_base_tuples(self, mock_replicate, mock_worker):
         """
         Test that API adds missing t_role and t_binding tuples for bindings.
@@ -3216,7 +3216,7 @@ class FixMissingBindingBaseTuplesTests(BaseInternalViewsetTests):
         bootstrap_tenant_for_v2_test(self.tenant)
 
         # Create binding WITHOUT replication (simulating pre-V2 state - missing base tuples)
-        RelationApiDualWriteGroupHandler(
+        InventoryApiDualWriteGroupHandler(
             group=self.group, event_type=ReplicationEventType.ASSIGN_ROLE, replicator=NoopReplicator()
         ).generate_relations_reset_roles([role])
 
@@ -3293,7 +3293,7 @@ class CleanInvalidWorkspaceResourceDefinitionsTests(BaseInternalViewsetTests):
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
     @patch("management.tasks.clean_invalid_workspace_resource_definitions_in_worker.delay")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_clean_removes_invalid_workspace_ids_and_deletes_bindings(self, mock_replicate, mock_worker):
         """
         Test that API removes invalid workspace IDs from resource definitions and deletes bad bindings.
@@ -4064,8 +4064,8 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
 class InternalS2SViewsetTests(IdentityRequest):
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, SERVICE_PSKS={"hbi": {"secret": "abc123"}})
     def test_create_ungrouped_workspace(self, replicate, replicate_workspace):
         tuples = InMemoryTuples()
@@ -4120,8 +4120,8 @@ class InternalS2SViewsetTests(IdentityRequest):
         payload_get.pop("modified")
         self.assertEqual(ungrouped_hosts, payload_get)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True, SERVICE_PSKS={"hbi": {"secret": "abc123"}})
     def test_create_ungrouped_workspace_with_new_tenant(self, replicate, replicate_workspace):
         """Test creating ungrouped workspace when tenant doesn't exist yet."""
@@ -5443,7 +5443,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         }
 
         # Create this so that we can check that BindingMappings aren't accidentally created. (A previous implementation
-        # incorrectly used RelationApiDualWriteHandler for system roles.)
+        # incorrectly used InventoryApiDualWriteHandler for system roles.)
         Access.objects.create(
             tenant=self.public_tenant,
             role=self.role,
@@ -5581,7 +5581,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response_body["error"], "Simulated internal error")
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
     )
     @patch(
         "management.inventory_checker.inventory_api_check"
@@ -5619,7 +5619,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(len(checks["roles"]), 1)
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
     )
     @patch(
         "management.inventory_checker.inventory_api_check"
@@ -5701,7 +5701,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, 404)
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
         side_effect=RpcError("Simulated gRPC error"),
     )
     def test_inventory_check_cross_account_request_grpc_error(self, mock_handler_cls):
@@ -5725,7 +5725,7 @@ class InternalInventoryViewsetTests(BaseInternalViewsetTests):
         self.assertIn("gRPC error", response_body["detail"])
 
     @patch(
-        "internal.views.RelationApiDualWriteCrossAccessHandler",
+        "internal.views.InventoryApiDualWriteCrossAccessHandler",
         side_effect=Exception("Simulated internal error"),
     )
     def test_inventory_check_cross_account_request_unexpected_error(self, mock_handler_cls):

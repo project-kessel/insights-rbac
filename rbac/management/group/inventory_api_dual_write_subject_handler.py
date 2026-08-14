@@ -22,16 +22,16 @@ from typing import Callable, Iterable, Optional
 from uuid import uuid4
 
 from django.conf import settings
-from management.models import BindingMapping, Role, RoleBinding, Workspace
-from management.permission.scope_service import Scope, bound_model_for_scope
-from management.relation_replicator.logging_replicator import stringify_spicedb_relationship
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     DualWriteException,
-    RelationReplicator,
+    InventoryReplicator,
     ReplicationEventType,
 )
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.inventory_replicator.logging_replicator import stringify_spicedb_relationship
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.models import BindingMapping, Role, RoleBinding, Workspace
+from management.permission.scope_service import Scope, bound_model_for_scope
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.v2_model import SeededRoleV2
 from management.role.v2_role_scope import v2_role_excluded_applications
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
@@ -112,7 +112,7 @@ def _get_or_migrate_binding_for_system_role(tenant: Tenant, binding_mapping: Bin
     return role_binding
 
 
-class RelationApiDualWriteSubjectHandler:
+class InventoryApiDualWriteSubjectHandler:
     """Base class to handle dual write algorithm for bindings to subjects."""
 
     def __init__(
@@ -121,9 +121,9 @@ class RelationApiDualWriteSubjectHandler:
         root_workspace: Workspace,
         default_workspace: Workspace,
         event_type: ReplicationEventType,
-        replicator: Optional[RelationReplicator] = None,
+        replicator: Optional[InventoryReplicator] = None,
     ):
-        """Initialize RelationApiDualWriteSubjectHandler."""
+        """Initialize InventoryApiDualWriteSubjectHandler."""
         if not self.replication_enabled():
             return
 
@@ -150,7 +150,7 @@ class RelationApiDualWriteSubjectHandler:
 
             self._tenant_version = lock_tenant_version(self.tenant)
         except Exception as e:
-            logger.error(f"Initialization of RelationApiDualWriteSubjectHandler failed: {e}")
+            logger.error(f"Initialization of InventoryApiDualWriteSubjectHandler failed: {e}")
             raise DualWriteException(e)
 
     def replication_enabled(self):
@@ -469,7 +469,7 @@ class RelationApiDualWriteSubjectHandler:
         if role.system:
             raise ValueError("Expected a custom role.")
 
-        role_handler = RelationApiDualWriteHandler(
+        role_handler = InventoryApiDualWriteHandler(
             role=role,
             event_type=ReplicationEventType.MIGRATE_CUSTOM_ROLE,
             replicator=self._replicator,

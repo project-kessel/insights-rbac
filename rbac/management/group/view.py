@@ -38,8 +38,8 @@ from management.group.definer import (
     remove_roles,
     set_system_flag_before_update,
 )
-from management.group.relation_api_dual_write_group_handler import (
-    RelationApiDualWriteGroupHandler,
+from management.group.inventory_api_dual_write_group_handler import (
+    InventoryApiDualWriteGroupHandler,
 )
 from management.group.serializer import (
     GroupInputSerializer,
@@ -49,6 +49,7 @@ from management.group.serializer import (
     GroupSerializer,
     RoleMinimumSerializer,
 )
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.models import AuditLog, Group, Role
 from management.notifications.notification_handlers import (
     group_obj_change_notification_handler,
@@ -65,7 +66,6 @@ from management.querysets import (
     get_group_queryset,
     get_role_queryset,
 )
-from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.view import RoleViewSet
 from management.role_binding.service import RoleBindingService
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
@@ -461,7 +461,7 @@ class GroupViewSet(
             is_custom_default_group = group.platform_default
             group_tenant = group.tenant
 
-            dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.DELETE_GROUP)
+            dual_write_handler = InventoryApiDualWriteGroupHandler(group, ReplicationEventType.DELETE_GROUP)
             roles = Role.objects.filter(policies__group=group)
             if not group.platform_default and not group.principals.exists() and not roles.exists():
                 expected_empty_relation_reason = (
@@ -948,7 +948,7 @@ class GroupViewSet(
                         Principal.Types.USER,
                     )
 
-            dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.ADD_PRINCIPALS_TO_GROUP)
+            dual_write_handler = InventoryApiDualWriteGroupHandler(group, ReplicationEventType.ADD_PRINCIPALS_TO_GROUP)
             dual_write_handler.replicate_new_principals(new_users + new_service_accounts)
         # Serialize the group...
         output = GroupSerializer(group)
@@ -1040,7 +1040,7 @@ class GroupViewSet(
                     )
                 response = Response(status=status.HTTP_204_NO_CONTENT)
 
-            dual_write_handler = RelationApiDualWriteGroupHandler(
+            dual_write_handler = InventoryApiDualWriteGroupHandler(
                 group,
                 ReplicationEventType.REMOVE_PRINCIPALS_FROM_GROUP,
             )

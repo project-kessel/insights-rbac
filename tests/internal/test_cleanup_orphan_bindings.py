@@ -20,7 +20,7 @@ from unittest.mock import patch
 from django.test import override_settings
 from management.models import BindingMapping, Workspace
 from management.principal.model import Principal
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, SeededRoleV2
 from management.role_binding.model import RoleBinding
@@ -80,7 +80,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_orphaned_group_relationships(self, mock_replicate):
         """
         Test cleanup of orphaned group relationships after a group is deleted.
@@ -162,7 +162,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_orphaned_principal_relationships(self, mock_replicate):
         """Test that an orphaned role binding to principal subject relation is removed."""
         self._enable_replicate_mock(mock_replicate)
@@ -208,7 +208,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_orphaned_custom_role_relationships(self, mock_replicate):
         """
         Test cleanup of orphaned custom V2 role relationships after a role is deleted.
@@ -304,7 +304,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_custom_role_removed_permission(self, mock_replicate):
         self._enable_replicate_mock(mock_replicate)
 
@@ -372,7 +372,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_orphaned_scope_binding_relationships(self, mock_replicate):
         """
         Test that cleanup removes orphaned scope binding relationships.
@@ -438,7 +438,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_orphaned_workspace_and_stale_parent(self, mock_replicate):
         """
         Test cleanup of orphaned workspace and stale parent relationships.
@@ -561,7 +561,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_skips_builtin_bindings_without_custom_default_group(self, mock_replicate):
         """
         Test that cleanup skips built-in bindings when tenant has no custom default group.
@@ -607,7 +607,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_does_not_remove_system_role_permissions(self, mock_replicate):
         """
         Test that cleanup does NOT remove permission tuples for system roles.
@@ -650,7 +650,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_cleanup_and_migration_fixes_orphans(self, mock_replicate):
         """
         End-to-end test: cleanup orphans then run migration to restore correct state.
@@ -777,7 +777,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_dry_run_does_not_modify_tuples(self, mock_replicate):
         """
         Test that dry_run=True only reports what would be deleted without making changes.
@@ -823,7 +823,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_preserve_system(self, replicate):
         """Test that the full migration does not break system role bindings with multiple groups."""
         replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
@@ -846,7 +846,7 @@ class CleanupOrphanBindingsTest(DualWriteTestCase):
 
         assert_v1_v2_tuples_fully_consistent(test=self, tuples=self.tuples)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_miscellaneous_unchanged(self, replicate):
         """Test that a state with several interesting cases (all properly replicated) is left unchanged."""
         self._enable_replicate_mock(replicate)
@@ -960,7 +960,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_rebuild_creates_missing_workspace_parent_relations(self, mock_replicate):
         """
         Test that rebuild_tenant_workspace_relations creates missing parent relations.
@@ -1038,7 +1038,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_rebuild_detects_orphaned_workspaces_with_bindings(self, mock_replicate):
         """
         Test that rebuild identifies workspaces that have bindings but no parent.
@@ -1110,7 +1110,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_rebuild_dry_run_does_not_create_tuples(self, mock_replicate):
         """
         Test that dry_run=True only reports what would be added without making changes.
@@ -1164,7 +1164,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_rebuild_skips_existing_parent_relations(self, mock_replicate):
         """
         Test that rebuild does not recreate parent relations that already exist.
@@ -1243,7 +1243,7 @@ class RebuildTenantWorkspaceRelationsTest(DualWriteTestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_rebuild_then_cleanup_finds_all_workspaces(self, mock_replicate):
         """
         Integration test: rebuild workspace relations, then cleanup can discover all workspaces.
