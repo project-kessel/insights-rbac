@@ -109,6 +109,25 @@ class RoleBindingAccessTestMixin:
         mock_inventory_client.return_value.__enter__.return_value = mock_stub
         return mock_stub, mock_response
 
+    def _make_mock_request(self, admin=False, system=False, resource_id=None, resource_type=None):
+        """Create a mock request with common defaults for permission unit tests."""
+        mock_request = Mock()
+        mock_request.user.system = system
+        mock_request.user.admin = admin
+        query_params = {}
+        if resource_id is not None:
+            query_params["resource_id"] = str(resource_id)
+        if resource_type is not None:
+            query_params["resource_type"] = resource_type
+        mock_request.query_params = query_params
+        return mock_request
+
+    def _make_mock_view(self, action="by_subject"):
+        """Create a mock view with the specified action."""
+        mock_view = Mock()
+        mock_view.action = action
+        return mock_view
+
 
 @override_settings(V2_APIS_ENABLED=True)
 class RoleBindingAccessIntegrationTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
@@ -760,6 +779,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
         mock_get_principal_id.assert_not_called()
         mock_checker_class.assert_not_called()
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
     def test_kessel_permission_allows_tenant_resource_type_when_org_admin(self, mock_checker_class):
         """Tenant resource type: org admin allowed without Kessel check."""
@@ -786,6 +806,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
         self.assertTrue(result)
         mock_checker.check_resource_access.assert_not_called()
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_kessel_permission_denies_tenant_when_not_org_admin(self):
         """Tenant resource type: non-org-admin denied."""
         permission = RoleBindingKesselAccessPermission()
@@ -941,35 +962,6 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
 
         self.assertFalse(result)
 
-    def _make_mock_request(self, admin=False, system=False, resource_id=None, resource_type=None):
-        """Create a mock request with common defaults for permission unit tests.
-
-        Args:
-            admin: Whether user is org admin (default: False).
-            system: Whether user is a system user (default: False).
-            resource_id: Optional resource_id query param.
-            resource_type: Optional resource_type query param.
-
-        Returns:
-            Mock request object. Set .tenant separately when needed.
-        """
-        mock_request = Mock()
-        mock_request.user.system = system
-        mock_request.user.admin = admin
-        query_params = {}
-        if resource_id is not None:
-            query_params["resource_id"] = str(resource_id)
-        if resource_type is not None:
-            query_params["resource_type"] = resource_type
-        mock_request.query_params = query_params
-        return mock_request
-
-    def _make_mock_view(self, action="by_subject"):
-        """Create a mock view with the specified action."""
-        mock_view = Mock()
-        mock_view.action = action
-        return mock_view
-
     def test_kessel_permission_rejects_invalid_uuid_resource_id(self):
         """Workspace resource_id must be a valid UUID; invalid values return 400."""
         from rest_framework.exceptions import ParseError
@@ -1028,6 +1020,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
         result = permission.has_permission(mock_request, self._make_mock_view())
         self.assertTrue(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_list_without_resource_params_denied_for_non_admin(self):
         """List endpoint without resource params should deny non-admin users."""
         permission = RoleBindingKesselAccessPermission()
@@ -1038,6 +1031,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
 
         self.assertFalse(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_list_without_resource_params_allowed_for_org_admin(self):
         """List endpoint without resource params should allow org admin."""
         permission = RoleBindingKesselAccessPermission()
@@ -1048,6 +1042,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
 
         self.assertTrue(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_by_subject_without_resource_params_denied_for_non_admin(self):
         """by_subject GET without resource params should deny non-admin users."""
         permission = RoleBindingKesselAccessPermission()
@@ -1058,6 +1053,7 @@ class RoleBindingKesselPermissionTests(RoleBindingAccessTestMixin, TransactionId
 
         self.assertFalse(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_by_subject_without_resource_params_allowed_for_org_admin(self):
         """by_subject GET without resource params should allow org admin."""
         permission = RoleBindingKesselAccessPermission()
@@ -1749,6 +1745,7 @@ class RoleBindingBatchCreatePermissionTests(RoleBindingAccessTestMixin, Transact
         self.assertIn("workspace", str(ctx.exception.detail))
         mock_checker_class.return_value.check_resource_access.assert_not_called()
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_batch_create_tenant_resource_requires_org_admin(self):
         """batch_create with tenant resource should require org admin."""
         permission = RoleBindingKesselAccessPermission()
@@ -1773,6 +1770,7 @@ class RoleBindingBatchCreatePermissionTests(RoleBindingAccessTestMixin, Transact
 
         self.assertFalse(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_batch_create_tenant_resource_allowed_for_org_admin(self):
         """batch_create with tenant resource should allow org admin."""
         permission = RoleBindingKesselAccessPermission()
@@ -1797,6 +1795,7 @@ class RoleBindingBatchCreatePermissionTests(RoleBindingAccessTestMixin, Transact
 
         self.assertTrue(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     @patch("management.permissions.role_binding_access.get_kessel_principal_id")
     @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
     def test_batch_create_tenant_only_does_not_call_kessel(self, mock_checker_class, mock_get_principal_id):
@@ -1985,6 +1984,7 @@ class RoleBindingBySubjectWritePermissionTests(RoleBindingAccessTestMixin, Trans
         self.assertIn("workspace", str(ctx.exception.detail))
         mock_checker_class.assert_not_called()
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
     @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
     def test_put_by_subject_tenant_flag_enabled_denies_non_admin(self, mock_feature_flags, mock_checker_class):
@@ -2001,6 +2001,7 @@ class RoleBindingBySubjectWritePermissionTests(RoleBindingAccessTestMixin, Trans
         self.assertFalse(result)
         mock_checker_class.assert_not_called()
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
     @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
     def test_put_by_subject_tenant_flag_enabled_allows_admin(self, mock_feature_flags, mock_checker_class):
@@ -2055,6 +2056,7 @@ class RoleBindingBySubjectWritePermissionTests(RoleBindingAccessTestMixin, Trans
         call_kwargs = mock_checker.check_resource_access.call_args[1]
         self.assertEqual(call_kwargs["relation"], "edit")
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     def test_put_by_subject_tenant_resource_requires_org_admin(self):
         """PUT by_subject with tenant resource should require org admin."""
         permission = RoleBindingKesselAccessPermission()
@@ -2074,6 +2076,7 @@ class RoleBindingBySubjectWritePermissionTests(RoleBindingAccessTestMixin, Trans
 
         self.assertFalse(result)
 
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
     @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
     def test_put_by_subject_tenant_resource_allowed_for_org_admin(self, mock_feature_flags):
         """PUT by_subject with tenant resource should allow org admin."""
@@ -2094,3 +2097,289 @@ class RoleBindingBySubjectWritePermissionTests(RoleBindingAccessTestMixin, Trans
         result = permission.has_permission(mock_request, self._make_by_subject_put_view())
 
         self.assertTrue(result)
+
+
+@override_settings(V2_APIS_ENABLED=True)
+class RoleBindingKesselTenantAuthTests(RoleBindingAccessTestMixin, TransactionIdentityRequest):
+    """Tests for KESSEL_TENANT_AUTH_ENABLED feature flag.
+
+    When the flag is enabled, tenant-level access checks go through Kessel
+    (WorkspaceInventoryAccessChecker) instead of the org-admin middleware shortcut.
+    """
+
+    # -- Flag OFF: existing behavior unchanged --
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
+    def test_flag_off_tenant_allows_org_admin(self):
+        """With flag off, tenant access still uses org-admin check (existing behavior)."""
+        permission = RoleBindingKesselAccessPermission()
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=True, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
+    def test_flag_off_tenant_denies_non_admin(self):
+        """With flag off, tenant access denies non-admin users (existing behavior)."""
+        permission = RoleBindingKesselAccessPermission()
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=False, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=False)
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_off_tenant_does_not_call_kessel(self, mock_checker_class):
+        """With flag off, tenant checks never invoke Kessel."""
+        permission = RoleBindingKesselAccessPermission()
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=True, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        permission.has_permission(mock_request, self._make_mock_view())
+
+        mock_checker_class.assert_not_called()
+
+    # -- Flag ON: tenant checks go through Kessel --
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_uses_kessel_check(self, mock_checker_class, mock_get_principal_id, mock_feature_flags):
+        """With flag on, tenant access uses Kessel CheckForUpdate."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_feature_flags.is_use_role_binding_view_permission_enabled.return_value = True
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=False, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+        mock_checker.check_resource_access.assert_called_once()
+        call_kwargs = mock_checker.check_resource_access.call_args[1]
+        self.assertEqual(call_kwargs["resource_type"], "tenant")
+        self.assertEqual(call_kwargs["resource_id"], tenant_resource_id)
+        self.assertEqual(call_kwargs["relation"], "role_binding_view")
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_denied_by_kessel(self, mock_checker_class, mock_get_principal_id):
+        """With flag on, tenant access denied when Kessel returns False."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = False
+        mock_checker_class.return_value = mock_checker
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=True, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+        mock_checker.check_resource_access.assert_called_once()
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_non_admin_allowed_by_kessel(self, mock_checker_class, mock_get_principal_id):
+        """With flag on, non-admin users CAN access tenant if Kessel allows (delegation)."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/delegated-user-456"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=False, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_denied_when_resource_id_mismatch(self, mock_checker_class):
+        """With flag on, mismatched resource_id still denied before Kessel call."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(
+            admin=True, resource_id="localhost/other-org-99999", resource_type="tenant"
+        )
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+        mock_checker_class.assert_not_called()
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_denied_when_no_tenant(self, mock_checker_class):
+        """With flag on, denied when no tenant on request."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_request = self._make_mock_request(admin=True, resource_id="some-id", resource_type="tenant")
+        mock_request.tenant = None
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+        mock_checker_class.assert_not_called()
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_denied_when_no_principal_id(self, mock_checker_class, mock_get_principal_id):
+        """With flag on, denied when principal_id cannot be resolved."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = None
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = self._make_mock_request(admin=True, resource_id=tenant_resource_id, resource_type="tenant")
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertFalse(result)
+        mock_checker_class.assert_not_called()
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_tenant_write_uses_grant_relation(
+        self, mock_checker_class, mock_get_principal_id, mock_feature_flags
+    ):
+        """With flag on, batch_create on tenant uses role_binding_grant relation."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_feature_flags.is_use_role_binding_view_permission_enabled.return_value = True
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = Mock()
+        mock_request.user.system = False
+        mock_request.user.admin = False
+        mock_request.query_params = {}
+        mock_request.data = {
+            "requests": [
+                {
+                    "resource": {"id": tenant_resource_id, "type": "tenant"},
+                    "subject": {"id": "some-group-id", "type": "group"},
+                    "role": {"id": "some-role-id"},
+                }
+            ]
+        }
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="batch_create"))
+
+        self.assertTrue(result)
+        mock_checker.check_resource_access.assert_called_once()
+        call_kwargs = mock_checker.check_resource_access.call_args[1]
+        self.assertEqual(call_kwargs["relation"], "role_binding_grant")
+        self.assertEqual(call_kwargs["resource_type"], "tenant")
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.FEATURE_FLAGS")
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_put_by_subject_tenant_checks_grant_and_revoke(
+        self, mock_checker_class, mock_get_principal_id, mock_feature_flags
+    ):
+        """With flag on, PUT by_subject on tenant checks both grant and revoke."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_feature_flags.is_use_role_binding_view_permission_enabled.return_value = True
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        tenant_resource_id = self.tenant.tenant_resource_id()
+        mock_request = Mock()
+        mock_request.method = "PUT"
+        mock_request.user.system = False
+        mock_request.user.admin = False
+        mock_request.query_params = {
+            "resource_id": tenant_resource_id,
+            "resource_type": "tenant",
+        }
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+        self.assertEqual(mock_checker.check_resource_access.call_count, 2)
+        relations_checked = [call[1]["relation"] for call in mock_checker.check_resource_access.call_args_list]
+        self.assertIn("role_binding_grant", relations_checked)
+        self.assertIn("role_binding_revoke", relations_checked)
+
+    # -- Flag ON: workspace checks are unaffected --
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_workspace_check_unchanged(self, mock_checker_class, mock_get_principal_id):
+        """With flag on, workspace checks still go through Kessel as before."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        mock_request = self._make_mock_request(
+            admin=False, resource_id=str(self.workspace.id), resource_type="workspace"
+        )
+
+        result = permission.has_permission(mock_request, self._make_mock_view())
+
+        self.assertTrue(result)
+        call_kwargs = mock_checker.check_resource_access.call_args[1]
+        self.assertEqual(call_kwargs["resource_type"], "workspace")
+
+    # -- Flag ON: unscoped reads (no resource params) go through Kessel on tenant --
+
+    @override_settings(KESSEL_TENANT_AUTH_ENABLED=True)
+    @patch("management.permissions.role_binding_access.get_kessel_principal_id")
+    @patch("management.permissions.role_binding_access.WorkspaceInventoryAccessChecker")
+    def test_flag_on_unscoped_list_uses_kessel(self, mock_checker_class, mock_get_principal_id):
+        """With flag on, list without resource params goes through Kessel on tenant."""
+        permission = RoleBindingKesselAccessPermission()
+        mock_get_principal_id.return_value = "localhost/test-user-123"
+
+        mock_checker = MagicMock()
+        mock_checker.check_resource_access.return_value = True
+        mock_checker_class.return_value = mock_checker
+
+        mock_request = self._make_mock_request(admin=False)
+        mock_request.tenant = self.tenant
+
+        result = permission.has_permission(mock_request, self._make_mock_view(action="list"))
+
+        self.assertTrue(result)
+        mock_checker.check_resource_access.assert_called_once()
+        call_kwargs = mock_checker.check_resource_access.call_args[1]
+        self.assertEqual(call_kwargs["resource_type"], "tenant")

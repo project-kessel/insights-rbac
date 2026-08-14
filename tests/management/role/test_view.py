@@ -2395,7 +2395,7 @@ class RoleViewsetTests(IdentityRequest):
             }
         ]
         response = self.create_role(role_name, in_access_data=access_data)
-        self.assertEqual(response.data["errors"][0]["source"], "resourceDefinitions.attributeFilter.format")
+        self.assertEqual(response.data["errors"][0]["source"], "resourceDefinitions.0.attributeFilter.format")
         self.assertEqual(
             response.data["errors"][0]["detail"], "attributeFilter operation 'equal' expects a String value or None"
         )
@@ -2418,7 +2418,7 @@ class RoleViewsetTests(IdentityRequest):
             }
         ]
         response = self.create_role(role_name, in_access_data=access_data)
-        self.assertEqual(response.data["errors"][0]["source"], "resourceDefinitions.attributeFilter.format")
+        self.assertEqual(response.data["errors"][0]["source"], "resourceDefinitions.0.attributeFilter.format")
         self.assertEqual(response.data["errors"][0]["detail"], "attributeFilter operation 'in' expects a List value")
 
     @override_settings(

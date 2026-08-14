@@ -140,6 +140,7 @@ rbac/management/principal/umb_certs/
 
 # ai
 .claude
+.sova
 
 # git worktrees
 .worktrees/

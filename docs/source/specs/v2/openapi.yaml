@@ -74,11 +74,13 @@ paths:
                     type: user
                     user_id: '12345'
                     service_account_id: null
+                    group_count: 3
                   - uuid: 660e8400-e29b-41d4-a716-446655440003
                     username: service-account-abc123
                     type: service-account
                     user_id: null
                     service_account_id: abc123
+                    group_count: 1
         '400':
           description: The server could not understand the request due to invalid syntax.
           content:
@@ -129,6 +131,7 @@ paths:
                 type: user
                 user_id: '12345'
                 service_account_id: null
+                group_count: 3
         '400':
           description: The server could not understand the request due to invalid syntax.
           content:
@@ -1901,6 +1904,7 @@ components:
         - type
         - user_id
         - service_account_id
+        - group_count
       properties:
         uuid:
           allOf:
@@ -1921,12 +1925,18 @@ components:
           type: string
           nullable: true
           description: Service account client ID. Null for users.
+        group_count:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Number of groups the principal belongs to
       example:
         uuid: 550e8400-e29b-41d4-a716-446655440002
         username: jdoe
         type: user
         user_id: '12345'
         service_account_id: null
+        group_count: 3
     PrincipalListResponse:
       type: object
       required:

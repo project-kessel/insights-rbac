@@ -48,6 +48,7 @@ from management.mcp_views import (
     mcp_shutdown,
 )
 from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
+from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.workspace.model import Workspace
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.role.v2_model import RoleV2
@@ -60,6 +61,7 @@ from tests.identity_request import IdentityRequest
 
 from api.models import CrossAccountRequest, Tenant
 from rbac import urls
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 class MCPToolTestMixin:
@@ -2423,7 +2425,8 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Activate V2 for this tenant
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
         # Create V2 role with a permission
         self.v2_perm = Permission.objects.create(
@@ -2586,7 +2589,8 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
                 return_value=True,
             )
         )
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
     def tearDown(self):
         """Tear down V2 search_roles tests."""
@@ -2714,7 +2718,8 @@ class MCPUnifiedGetRoleTests(MCPToolTestMixin, IdentityRequest):
 
     def test_get_role_v2_returns_role_with_permissions(self):
         """Positive: get_role on V2 org returns role details with permissions and org_version=v2."""
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
         perm = Permission.objects.create(
             application="vulnerability",
@@ -3338,7 +3343,8 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Activate V2 for this tenant
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
         # Create a group and add the principal
         self.group = Group.objects.create(name="V2 Test Group", tenant=self.tenant)
@@ -4352,7 +4358,8 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Activate V2 for this tenant
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
         # Create permissions for testing
         self.patch_read_perm = Permission.objects.create(
@@ -5434,7 +5441,8 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Activate V2 for this tenant
-        TenantMapping.objects.create(tenant=self.tenant, v2_write_activated_at=timezone.now())
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
 
         # Create groups
         self.auditors_group = Group.objects.create(
@@ -5908,7 +5916,7 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
             patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
-        TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
+        ensure_v2_write_activated(self.tenant)
         Permission.objects.create(
             application="rbac",
             resource_type="group",
@@ -6421,7 +6429,7 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
             patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
-        TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
+        ensure_v2_write_activated(self.tenant)
         self.enterContext(
             patch(
                 "management.permissions.role_v2_access.get_kessel_principal_id",
@@ -6758,7 +6766,7 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
             )
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
-        TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
+        ensure_v2_write_activated(self.tenant)
         self.permission_obj = Permission.objects.create(
             application="rbac",
             resource_type="group",
@@ -7169,7 +7177,7 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
             patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
-        TenantMapping.objects.update_or_create(tenant=self.tenant, defaults={"v2_write_activated_at": timezone.now()})
+        ensure_v2_write_activated(self.tenant)
         self.enterContext(
             patch(
                 "management.permissions.role_v2_access.get_kessel_principal_id",

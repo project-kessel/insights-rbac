@@ -27,6 +27,7 @@ from management.tasks import run_kessel_parity_checks_in_worker
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 BOOTSTRAP_CHECKER_PATH = (
     "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
@@ -56,19 +57,12 @@ class ParityCheckTasksTest(IdentityRequest):
         """Set up the parity check task tests."""
         super().setUp()
 
-        # Create workspace hierarchy: root -> default -> child1
-        self.root_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.ROOT,
-            type=Workspace.Types.ROOT,
-            tenant=self.tenant,
-            parent=None,
-        )
-        self.default_workspace = Workspace.objects.create(
-            name=Workspace.SpecialNames.DEFAULT,
-            type=Workspace.Types.DEFAULT,
-            tenant=self.tenant,
-            parent=self.root_workspace,
-        )
+        self.tenant.refresh_from_db()
+        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
+
+        self.root_workspace = bootstrap_result.root_workspace
+        self.default_workspace = bootstrap_result.default_workspace
+
         self.child_workspace = Workspace.objects.create(
             name="Child Workspace",
             type=Workspace.Types.STANDARD,
@@ -76,17 +70,10 @@ class ParityCheckTasksTest(IdentityRequest):
             parent=self.default_workspace,
         )
 
-        # Create tenant mapping so bootstrap checker path is reachable
-        self.tenant_mapping = TenantMapping.objects.create(tenant=self.tenant)
+        self.tenant_mapping = self.tenant.tenant_mapping
 
         # Mock bootstrap checker by default so existing tests aren't affected
-        self._bootstrap_patcher = patch(BOOTSTRAP_CHECKER_PATH, return_value=(True, []))
-        self.mock_bootstrap_checker = self._bootstrap_patcher.start()
-
-    def tearDown(self):
-        """Clean up mocks."""
-        self._bootstrap_patcher.stop()
-        super().tearDown()
+        self.mock_bootstrap_checker = self.enterContext(patch(BOOTSTRAP_CHECKER_PATH, return_value=(True, [])))
 
     @override_settings(PARITY_CHECK_ENABLED=True, PARITY_CHECK_ORG_IDS="")
     def test_parity_check_task_no_org_ids_configured(self):
@@ -638,8 +625,11 @@ class ParityCheckTasksTest(IdentityRequest):
         """Missing TenantMapping should skip bootstrap check and fail the tenant."""
         self.tenant.org_id = "test_org_id"
         self.tenant.save()
-        mock_check_workspace.return_value = (True, [])
+
         self.tenant_mapping.delete()
+        self.tenant.refresh_from_db()
+
+        mock_check_workspace.return_value = (True, [])
 
         result = run_kessel_parity_checks_in_worker()
 
