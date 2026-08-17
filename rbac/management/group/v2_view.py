@@ -158,7 +158,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                 )
             except PermissionError as e:
                 raise PermissionDenied(str(e))
-            except ValueError as e:
+            except (ValueError, IntegrityError) as e:
                 raise ValidationError({"name": str(e)})
 
         self._log_success(request, "V2 Group updated", "UPDATE", group.uuid)

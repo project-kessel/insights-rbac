@@ -23,6 +23,7 @@ from unittest.mock import patch
 from django.test.utils import override_settings
 from django.urls import clear_url_caches
 from management.models import Group, Principal, RoleBinding, RoleBindingGroup
+from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.v2_model import CustomRoleV2
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -390,8 +391,15 @@ class GroupV2ViewTests(IdentityRequest):
         self.group2.refresh_from_db()
         self.assertIn(self.user_principal_2, self.group2.principals.all())
 
+        self.mock_dual_write_handler_cls.assert_called_once_with(
+            group=self.group2,
+            event_type=ReplicationEventType.ADD_PRINCIPALS_TO_GROUP,
+        )
         mock_handler = self.mock_dual_write_handler_cls.return_value
         mock_handler.replicate_new_principals.assert_called_once()
+        replicated = mock_handler.replicate_new_principals.call_args[0][0]
+        self.assertEqual(len(replicated), 1)
+        self.assertEqual(replicated[0].uuid, self.user_principal_2.uuid)
 
     def test_add_multiple_principals_to_group(self):
         """Add multiple principals to a group."""
@@ -485,8 +493,15 @@ class GroupV2ViewTests(IdentityRequest):
         self.group1.refresh_from_db()
         self.assertNotIn(self.user_principal_1, self.group1.principals.all())
 
+        self.mock_dual_write_handler_cls.assert_called_once_with(
+            group=self.group1,
+            event_type=ReplicationEventType.REMOVE_PRINCIPALS_FROM_GROUP,
+        )
         mock_handler = self.mock_dual_write_handler_cls.return_value
         mock_handler.replicate_removed_principals.assert_called_once()
+        replicated = mock_handler.replicate_removed_principals.call_args[0][0]
+        self.assertEqual(len(replicated), 1)
+        self.assertEqual(replicated[0].uuid, self.user_principal_1.uuid)
 
     def test_remove_principal_not_in_group(self):
         """Removing a principal that's not in the group returns 404."""
