@@ -45,8 +45,6 @@ class FeatureFlags:
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
     # When enabled, use Kafka for principal cleanup; when disabled, use UMB.
     TOGGLE_USE_KAFKA_CLEANUP = "rbac.principal-cleanup.use-kafka.enabled"
-    # Per-org flag: when enabled, the org uses only V2 access checks for HBI (and V1 access checks are blocked).
-    TOGGLE_V2_ADDITIONAL_MANDATORY_ACCESS_CHECK_REQUIRED = "hbi.rbac-v2"
 
     def __init__(self):
         """Add attributes."""
@@ -93,7 +91,7 @@ class FeatureFlags:
         self,
         feature_name: str,
         context: Optional[dict] = None,
-        fallback_function: Optional[Callable[[str, Optional[dict]], bool]] = None,
+        fallback_function: Optional[Callable[[str, Optional[dict]], None]] = None,
     ):
         """Override of is_enabled for checking flag values."""
         if self.client is None:
@@ -266,22 +264,6 @@ class FeatureFlags:
     def is_kafka_shadow_mode_enabled(self) -> bool:
         """Check if Kafka is in shadow/dry-run mode."""
         return self.get_principal_cleanup_mode() == "kafka_shadow"
-
-    def is_v2_strict_access_check_enabled(self, org_id: str) -> bool:
-        """Check whether strict V2 access checks are required in the given org.
-
-        When enabled, apps that have opted-in to strict V2 access checks must only use V2 access checks for the org,
-        and V1 access checks are blocked (even if the org has not yet migrated to V2).
-
-        It is expected that this is set for a superset of the orgs that TOGGLE_V2_EDIT_API_ENABLED is set for.
-        """
-        # Note that we use the same fallback_function as is_v2_edit_api_enabled above in order to maintain the
-        # invariant that this flag is set for a superset of the other flag.
-        return self.is_enabled(
-            feature_name=self.TOGGLE_V2_ADDITIONAL_MANDATORY_ACCESS_CHECK_REQUIRED,
-            context={"orgId": str(org_id)},
-            fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
-        )
 
 
 FEATURE_FLAGS = FeatureFlags()
