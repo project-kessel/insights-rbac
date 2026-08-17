@@ -6,10 +6,18 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("management", "0093_charfield_and_indexes"),
+        ("management", "0094_tenantmapping_v2_opted_in_at_and_more"),
     ]
 
     operations = [
+        migrations.RemoveConstraint(
+            model_name="tenantmapping",
+            name="V2 write activated only if opted in",
+        ),
+        migrations.RemoveField(
+            model_name="tenantmapping",
+            name="v2_opted_in_at",
+        ),
         migrations.AlterField(
             model_name="auditlog",
             name="resource_type",
