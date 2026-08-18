@@ -1,7 +1,7 @@
 from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.role.definer import seed_roles
 from management.role.model import BindingMapping
 from management.role.platform import platform_v2_role_uuid_for
@@ -99,7 +99,7 @@ class RecomputeRoleBindingsTest(DualWriteTestCase):
             builtin_binding_ids = {
                 tenant_mapping.default_role_binding_uuid_for(access_type, scope)
                 for access_type in DefaultAccessType
-                for scope in Scope
+                for scope in CONCRETE_SCOPES
                 if not (custom_default_group and access_type == DefaultAccessType.USER)
             }
 
@@ -112,7 +112,7 @@ class RecomputeRoleBindingsTest(DualWriteTestCase):
             policy_service = GlobalPolicyIdService()
 
             for access_type in DefaultAccessType:
-                for scope in Scope:
+                for scope in CONCRETE_SCOPES:
                     binding_id = str(tenant_mapping.default_role_binding_uuid_for(access_type, scope))
                     role_id = str(platform_v2_role_uuid_for(access_type, scope, policy_service))
 

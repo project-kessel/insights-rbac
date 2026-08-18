@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 from django.test import override_settings
 from kessel.inventory.v1beta2.check_response_pb2 import CheckResponse
 from management.inventory_checker.inventory_api_check import BootstrappedTenantInventoryChecker
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from tests.identity_request import IdentityRequest
 
@@ -48,7 +48,7 @@ class BootstrappedTenantCheckerTest(IdentityRequest):
 
         self.role_uuids: dict[tuple[DefaultAccessType, Scope], uuid.UUID] = {}
         for access_type in DefaultAccessType:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 self.role_uuids[(access_type, scope)] = uuid.uuid4()
 
         self.checker = BootstrappedTenantInventoryChecker()
@@ -280,7 +280,7 @@ class BootstrappedTenantCheckerTest(IdentityRequest):
         check_names = {c["name"] for c in checks}
         expected_names = {"default_workspace_parent", "root_workspace_tenant", "tenant_platform"}
         for access_type in DefaultAccessType:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 prefix = f"{access_type.value}_{scope.name.lower()}"
                 expected_names.update({f"{prefix}_binding", f"{prefix}_role", f"{prefix}_subject"})
 
