@@ -17,6 +17,7 @@
 """Helper for determining workspace/tenant binding levels for permissions."""
 
 import dataclasses
+import logging
 from enum import IntEnum
 from typing import Iterable, Self
 
@@ -28,6 +29,8 @@ from migration_tool.models import V2boundresource
 
 from api.models import Tenant
 
+logger = logging.getLogger(__name__)
+
 
 class Scope(IntEnum):
     """
@@ -37,6 +40,7 @@ class Scope(IntEnum):
     * DEFAULT, for the default workspace of a tenant.
     * ROOT, for the root workspace of a tenant.
     * TENANT, for the tenant itself.
+    * ALL, for permissions that are scope-agnostic (can coexist with any scope).
 
     Later scopes are said to be "higher" than earlier scopes, as they encompass more resources.
     """
@@ -44,6 +48,11 @@ class Scope(IntEnum):
     DEFAULT = 1
     ROOT = 2
     TENANT = 3
+    ALL = 4
+
+
+CONCRETE_SCOPES: frozenset[Scope] = frozenset({Scope.DEFAULT, Scope.ROOT, Scope.TENANT})
+"""Scopes that correspond to real resources (tenant, root workspace, default workspace)."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -165,13 +174,15 @@ class ImplicitResourceService:
         root_scope_permissions: list[str],
         tenant_scope_permissions: list[str],
         default_scope_permissions: list[str] | None = None,
+        all_scope_permissions: list[str] | None = None,
     ):
         """
-        Create an ImplicitResourceService with specific root, tenant, and default workspace scope permissions.
+        Create an ImplicitResourceService with specific root, tenant, default workspace, and all scope permissions.
 
         root_scope_permissions is a set of permissions assigned to the root workspace scope.
         tenant_scope_permissions is a set of permissions assigned to tenant scope.
         default_scope_permissions is a set of permissions assigned to the default workspace scope.
+        all_scope_permissions is a set of permissions that are scope-agnostic (can coexist with any scope).
 
         All sets are represented as V1 permission strings (valid for _PermissionDescriptor.parse_v1).
         All sets may contain wildcards.
@@ -183,6 +194,8 @@ class ImplicitResourceService:
         """
         if default_scope_permissions is None:
             default_scope_permissions = []
+        if all_scope_permissions is None:
+            all_scope_permissions = []
 
         self._permissions_map = {}
 
@@ -206,6 +219,9 @@ class ImplicitResourceService:
         for permission_str in default_scope_permissions:
             add_permission(PermissionValue.parse_v1(permission_str), Scope.DEFAULT)
 
+        for permission_str in all_scope_permissions:
+            add_permission(PermissionValue.parse_v1(permission_str), Scope.ALL)
+
     @classmethod
     def from_settings(cls) -> "ImplicitResourceService":
         """
@@ -213,7 +229,7 @@ class ImplicitResourceService:
 
         Root workspace permissions are determined from the ROOT_SCOPE_PERMISSIONS setting. Tenant permissions are
         determined from the TENANT_SCOPE_PERMISSIONS setting. Default workspace permissions are determined from the
-        DEFAULT_SCOPE_PERMISSIONS setting.
+        DEFAULT_SCOPE_PERMISSIONS setting. All-scope permissions are determined from the ALL_SCOPE_PERMISSIONS setting.
 
         Each setting must be a comma-separated list of V1 permissions strings (as if for
         _PermissionDescriptor.parse_v1); spaces are trimmed from the start and each of each permission. An empty (or
@@ -230,6 +246,7 @@ class ImplicitResourceService:
             root_scope_permissions=parse_setting(settings.ROOT_SCOPE_PERMISSIONS),
             tenant_scope_permissions=parse_setting(settings.TENANT_SCOPE_PERMISSIONS),
             default_scope_permissions=parse_setting(settings.DEFAULT_SCOPE_PERMISSIONS),
+            all_scope_permissions=parse_setting(settings.ALL_SCOPE_PERMISSIONS),
         )
 
     @staticmethod
@@ -254,8 +271,8 @@ class ImplicitResourceService:
         """Return True if the permission matches any configured scope entry.
 
         A permission is explicitly scoped when it (or a wildcard that covers it)
-        appears in root_scope_permissions, tenant_scope_permissions, or
-        default_scope_permissions.  Permissions that fall through to the
+        appears in root_scope_permissions, tenant_scope_permissions,
+        default_scope_permissions, or all_scope_permissions.  Permissions that fall through to the
         ``Scope.DEFAULT`` fallback in ``scope_for_permission`` are NOT
         explicitly scoped -- they are "workspace-granular".
         """
@@ -317,14 +334,22 @@ class ImplicitResourceService:
 
     def highest_scope_for_permissions(self, permissions: Iterable[str]) -> Scope:
         """
-        Return the highest scope to which any permission in permissions is assigned.
+        Return the highest concrete scope to which any permission in permissions is assigned.
 
+        Scope.ALL is excluded since it does not correspond to a real resource.
+        When all permissions resolve to ALL, falls back to DEFAULT and logs a
+        warning so misconfiguration is visible.
         Permission scopes are determined as if by using scope_for_permission.
         """
-        return max(
-            (self.scope_for_permission(permission) for permission in permissions),
-            default=Scope.DEFAULT,
-        )
+        permissions = list(permissions)
+        concrete = [s for s in (self.scope_for_permission(p) for p in permissions) if s != Scope.ALL]
+        if permissions and not concrete:
+            logger.warning(
+                "All %d permission(s) resolved to Scope.ALL; falling back to DEFAULT. "
+                "Check ALL_SCOPE_PERMISSIONS configuration.",
+                len(permissions),
+            )
+        return max(concrete, default=Scope.DEFAULT)
 
     def binding_scopes_for_role(self, role: Role) -> list["Scope"]:
         """Return the scopes at which bindings should be created for this role.
@@ -373,6 +398,7 @@ SCOPE_DISPLAY_NAME: dict[Scope, str] = {
     Scope.DEFAULT: "Default Workspace",
     Scope.ROOT: "Root Workspace",
     Scope.TENANT: "Organization",
+    Scope.ALL: "Scope-Agnostic",
 }
 """User-facing label for each Scope (avoids exposing internal 'tenant' terminology)."""
 
@@ -444,6 +470,7 @@ class PermissionScopeCache:
     def _build(self) -> dict[Scope, frozenset[int]]:
         from management.permission.model import Permission
 
+        # Includes Scope.ALL so ALL-scoped permissions are bucketed separately from concrete scopes
         result: dict[Scope, set[int]] = {scope: set() for scope in Scope}
         explicit_default: set[int] = set()
         for row in Permission.objects.values_list("id", "permission", named=True):
@@ -499,6 +526,9 @@ def split_permissions_by_binding_scope(
 
     Wildcard permissions that span both TENANT and workspace scopes are placed
     in **both** groups so that the permission is effective at every level.
+
+    ``Scope.ALL`` permissions are distributed into every concrete scope present
+    in the split (or into DEFAULT when no other scopes exist).
     """
     if resource_service is None:
         resource_service = default_implicit_resource_service
@@ -514,6 +544,12 @@ def split_permissions_by_binding_scope(
 
     if not permissions_by_scope:
         return {Scope.DEFAULT: permissions}
+
+    all_perms = permissions_by_scope.pop(Scope.ALL, None)
+    if all_perms:
+        target_scopes = list(permissions_by_scope) if permissions_by_scope else [Scope.DEFAULT]
+        for s in target_scopes:
+            permissions_by_scope.setdefault(s, set()).update(all_perms)
 
     if Scope.DEFAULT in permissions_by_scope and Scope.ROOT in permissions_by_scope:
         permissions_by_scope[Scope.ROOT].update(permissions_by_scope[Scope.DEFAULT])
