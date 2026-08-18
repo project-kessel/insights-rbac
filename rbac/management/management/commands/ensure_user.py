@@ -109,7 +109,8 @@ class Command(BaseCommand):
                 defaults={"type": Principal.Types.USER},
             )
             logger.info(
-                f"{'Created' if principal_created else 'Existing'} principal {username!r} in tenant {tenant.tenant_name}"
+                f"{'Created' if principal_created else 'Existing'} principal {username!r} "
+                f"in tenant {tenant.tenant_name}"
             )
 
             if grant_admin:
