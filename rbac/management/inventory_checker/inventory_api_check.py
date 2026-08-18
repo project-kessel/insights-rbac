@@ -34,7 +34,7 @@ from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
 from kessel.relations.v1beta1 import relation_tuples_pb2, relation_tuples_pb2_grpc
 from management.cache import JWTCache
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
-from management.permission.scope_service import ImplicitResourceService, Scope
+from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, Scope
 from management.relation_replicator.types import RelationTuple
 from management.role.platform import admin_platform_parent_scopes_for_seeded_system_role, platform_v2_role_uuid_for
 from management.role.relations import role_child_relationship
@@ -187,7 +187,7 @@ class BootstrappedTenantInventoryChecker(InventoryApiBaseChecker):
             group_uuid = str(tenant_mapping.group_uuid_for(access_type))
             access_label = access_type.value
 
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 scope_label = scope.name.lower()
                 rb_uuid = str(tenant_mapping.default_role_binding_uuid_for(access_type, scope))
                 resource_type = self._SCOPE_RESOURCE_TYPE[scope]
