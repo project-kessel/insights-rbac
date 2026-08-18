@@ -746,6 +746,7 @@ WORKSPACE_ACCESS_TIMING_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_TIMING_ENAB
 ROOT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("ROOT_SCOPE_PERMISSIONS", default="")
 TENANT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("TENANT_SCOPE_PERMISSIONS", default="")
 DEFAULT_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("DEFAULT_SCOPE_PERMISSIONS", default="")
+ALL_SCOPE_PERMISSIONS = ENVIRONMENT.get_value("ALL_SCOPE_PERMISSIONS", default="")
 
 # Whether to enable automatic scope migration during seeding. (This is intended to allow the migrations to be run
 # manually before enabling the automatic runs, thus preventing the migration running sequentially for all roles on the
