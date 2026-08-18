@@ -36,7 +36,12 @@ _DEFAULT_ADMIN_POLICY_NAME = "Default admin access policy"
 
 
 class Command(BaseCommand):
-    """Create or update an org tenant, principal, and optional admin group membership."""
+    """Create or update an org tenant, principal, and optional admin group membership.
+
+    Intended for on-prem single-org bootstrap. ``cache.clear()`` flushes the entire
+    Redis cache. With ``--admin``, ``policy.roles.set()`` replaces policy roles to
+    match the current ``--application`` filter (not additive across invocations).
+    """
 
     help = (
         "Create an org tenant and principal. With --admin, add the principal to the "
@@ -94,7 +99,12 @@ class Command(BaseCommand):
             logger.info("No --application specified; using all admin_default roles")
 
         with transaction.atomic():
-            public_tenant = Tenant.objects.get(tenant_name="public")
+            try:
+                public_tenant = Tenant.objects.get(tenant_name="public")
+            except Tenant.DoesNotExist as exc:
+                raise CommandError(
+                    "Public tenant not found — run migrations and seeds first: manage.py migrate && manage.py seeds"
+                ) from exc
             tenant, created = Tenant.objects.get_or_create(
                 org_id=org_id,
                 defaults={"tenant_name": "acct" + account_number, "ready": True},

@@ -65,6 +65,16 @@ class TestEnsureUser(IdentityRequest):
         with self.assertRaises(CommandError):
             self._invoke("--username=alice")
 
+    def test_missing_public_tenant(self):
+        """Fails with a clear error when migrations/seeds have not run."""
+        Tenant.objects.filter(tenant_name="public").delete()
+        with self.assertRaisesMessage(CommandError, "Public tenant not found"):
+            self._invoke(
+                "--username=alice",
+                "--org-id=org1",
+                "--account-number=123",
+            )
+
     def test_admin_requires_application(self):
         """--admin without --application uses all admin_default roles."""
         self._create_role("Cost Administrator", "cost-management", admin_default=True)
