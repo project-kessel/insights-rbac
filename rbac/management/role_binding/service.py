@@ -29,6 +29,7 @@ from management.exceptions import InvalidFieldError, NotFoundError, RequiredFiel
 from management.group.model import Group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.permission.scope_service import (
+    CONCRETE_SCOPES,
     SCOPE_DISPLAY_NAME,
     Scope,
     default_implicit_resource_service,
@@ -714,10 +715,12 @@ class RoleBindingService:
 
         # Fast path: check if ADMIN bindings exist (always created regardless of custom group)
         # If all ADMIN bindings exist, default bindings have been processed for this tenant
-        admin_binding_uuids = [mapping.default_role_binding_uuid_for(DefaultAccessType.ADMIN, s) for s in Scope]
+        admin_binding_uuids = [
+            mapping.default_role_binding_uuid_for(DefaultAccessType.ADMIN, s) for s in CONCRETE_SCOPES
+        ]
         existing_admin_count = RoleBinding.objects.filter(uuid__in=admin_binding_uuids).count()
 
-        if existing_admin_count == len(Scope):
+        if existing_admin_count == len(CONCRETE_SCOPES):
             # All ADMIN bindings exist - default bindings already processed
             return
 
@@ -763,7 +766,7 @@ class RoleBindingService:
         policy_service = GlobalPolicyIdService.shared()
         created_count = 0
 
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             # Get resource info for this scope
             resource_type, resource_id = self._get_resource_for_scope(scope)
             if resource_id is None:
@@ -894,7 +897,9 @@ class RoleBindingService:
             return
 
         # Get all USER binding UUIDs
-        user_binding_uuids = [mapping.default_role_binding_uuid_for(DefaultAccessType.USER, scope) for scope in Scope]
+        user_binding_uuids = [
+            mapping.default_role_binding_uuid_for(DefaultAccessType.USER, scope) for scope in CONCRETE_SCOPES
+        ]
 
         # Delete all in one query (RoleBindingGroup entries cascade)
         deleted_count, _ = RoleBinding.objects.filter(uuid__in=user_binding_uuids).delete()
@@ -923,7 +928,7 @@ class RoleBindingService:
         try:
             policy_service = GlobalPolicyIdService.shared()
 
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 # Check if binding already exists
                 binding_uuid = mapping.default_role_binding_uuid_for(DefaultAccessType.USER, scope)
                 if RoleBinding.objects.filter(uuid=binding_uuid).exists():

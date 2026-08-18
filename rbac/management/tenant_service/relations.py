@@ -20,7 +20,7 @@ import logging
 from typing import Iterable, Optional
 
 from management.group.platform import GlobalPolicyIdService
-from management.permission.scope_service import Scope, TenantScopeResources
+from management.permission.scope_service import CONCRETE_SCOPES, Scope, TenantScopeResources
 from management.relation_replicator.types import RelationTuple
 from management.role.platform import platform_v2_role_uuid_for
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
@@ -46,7 +46,7 @@ def default_role_binding_tuples(
 
     The optional policy_cache argument can be used to prevent redundant policy UUID lookups across calls.
     """
-    target_scopes = set(target_scopes if target_scopes is not None else Scope)
+    target_scopes = set(target_scopes if target_scopes is not None else CONCRETE_SCOPES)
 
     default_group_uuid = str(tenant_mapping.group_uuid_for(access_type))
 
