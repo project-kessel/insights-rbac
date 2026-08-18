@@ -18,7 +18,7 @@ from typing import Optional
 from unittest import TestCase
 
 from management.group.platform import GlobalPolicyIdService, DefaultGroupNotAvailableError
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2, PlatformRoleV2
 from management.role_binding.model import RoleBinding
@@ -139,7 +139,7 @@ def _assert_no_phantom_roles(test: TestCase, tuples: InMemoryTuples):
 
     platform_role_uuids = {
         r
-        for r in (_uuid_for(access_type, scope) for access_type in DefaultAccessType for scope in Scope)
+        for r in (_uuid_for(access_type, scope) for access_type in DefaultAccessType for scope in CONCRETE_SCOPES)
         if r is not None
     }
 
