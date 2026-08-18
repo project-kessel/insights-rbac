@@ -1067,7 +1067,7 @@ class PrincipalUMBTestsWithV2TenantBootstrap(PrincipalUMBTests):
         cache_mock.delete_policy.assert_called_once_with(principal.uuid)
         self.assertTrue(before + 1 == after)
 
-    @patch("management.principal.cleaner.retrieve_user_info")
+    @patch("management.principal.cleaner.retrieve_user_info_umb")
     @patch("management.principal.cleaner.UMB_CLIENT")
     def test_failure_processing_message(self, client_mock, retrieve_user_mock):
         """Test."""

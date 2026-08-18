@@ -530,6 +530,9 @@ RBAC_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("RBAC_KAFKA_CONSUMER_GROUP_
 
 RBAC_KAFKA_CUSTOM_CONSUMER_BROKER = ENVIRONMENT.get_value("RBAC_KAFKA_CUSTOM_CONSUMER_BROKER", default="")
 
+KAFKA_PRINCIPAL_CLEANUP_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_TOPIC", default="")
+KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", default="")
+
 # if we don't enable KAFKA we can't use the notifications
 if not KAFKA_ENABLED:
     NOTIFICATIONS_ENABLED = False
@@ -595,6 +598,14 @@ if KAFKA_ENABLED:
     if clowder_rbac_consumer_topic:
         RBAC_KAFKA_CONSUMER_TOPIC = clowder_rbac_consumer_topic.name
 
+    clowder_principal_cleanup_topic = KafkaTopics.get(KAFKA_PRINCIPAL_CLEANUP_TOPIC)
+    if clowder_principal_cleanup_topic:
+        KAFKA_PRINCIPAL_CLEANUP_TOPIC = clowder_principal_cleanup_topic.name
+
+    clowder_principal_cleanup_dlq_topic = KafkaTopics.get(KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC)
+    if clowder_principal_cleanup_dlq_topic:
+        KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC = clowder_principal_cleanup_dlq_topic.name
+
 # BOP TLS settings
 if ENVIRONMENT.bool("CLOWDER_ENABLED", default=False) and ENVIRONMENT.bool("USE_CLOWDER_CA_FOR_BOP", default=False):
     BOP_CLIENT_CERT_PATH = LoadedConfig.tlsCAPath
@@ -631,6 +642,20 @@ UMB_JOB_ENABLED = ENVIRONMENT.bool("UMB_JOB_ENABLED", default=True)
 
 UMB_HOST = ENVIRONMENT.get_value("UMB_HOST", default="localhost")
 UMB_PORT = ENVIRONMENT.get_value("UMB_PORT", default="61612")
+
+# Settings for enabling/disabling deletion in principal cleanup job via Kafka
+PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA", default=False)
+PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA", default=False)
+KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED = ENVIRONMENT.bool("KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED", default=True)
+
+# Validate Kafka principal cleanup configuration at startup
+# Fail fast if Kafka cleanup is enabled but topic is not configured
+if PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA and not KAFKA_PRINCIPAL_CLEANUP_TOPIC:
+    raise ValueError(
+        "PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is True but KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
+        "Set KAFKA_PRINCIPAL_CLEANUP_TOPIC to a valid Kafka topic name or disable Kafka cleanup."
+    )
+
 # Service account name
 SA_NAME = ENVIRONMENT.get_value("SA_NAME", default="nonprod-hcc-rbac")
 
