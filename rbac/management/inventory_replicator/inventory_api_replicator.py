@@ -150,7 +150,7 @@ class InventoryApiReplicator(InventoryReplicator):
             # Build request with optional fencing check
             request_kwargs = {
                 "upsert": True,
-                "tuples": relationships,
+                "tuples": [relationship.as_message() for relationship in relationships],
             }
 
             if fencing_check is not None:
