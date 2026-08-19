@@ -530,6 +530,9 @@ RBAC_KAFKA_CONSUMER_GROUP_ID = ENVIRONMENT.get_value("RBAC_KAFKA_CONSUMER_GROUP_
 
 RBAC_KAFKA_CUSTOM_CONSUMER_BROKER = ENVIRONMENT.get_value("RBAC_KAFKA_CUSTOM_CONSUMER_BROKER", default="")
 
+KAFKA_PRINCIPAL_CLEANUP_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_TOPIC", default="")
+KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", default="")
+
 # if we don't enable KAFKA we can't use the notifications
 if not KAFKA_ENABLED:
     NOTIFICATIONS_ENABLED = False
@@ -595,6 +598,14 @@ if KAFKA_ENABLED:
     if clowder_rbac_consumer_topic:
         RBAC_KAFKA_CONSUMER_TOPIC = clowder_rbac_consumer_topic.name
 
+    clowder_principal_cleanup_topic = KafkaTopics.get(KAFKA_PRINCIPAL_CLEANUP_TOPIC)
+    if clowder_principal_cleanup_topic:
+        KAFKA_PRINCIPAL_CLEANUP_TOPIC = clowder_principal_cleanup_topic.name
+
+    clowder_principal_cleanup_dlq_topic = KafkaTopics.get(KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC)
+    if clowder_principal_cleanup_dlq_topic:
+        KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC = clowder_principal_cleanup_dlq_topic.name
+
 # BOP TLS settings
 if ENVIRONMENT.bool("CLOWDER_ENABLED", default=False) and ENVIRONMENT.bool("USE_CLOWDER_CA_FOR_BOP", default=False):
     BOP_CLIENT_CERT_PATH = LoadedConfig.tlsCAPath
@@ -627,6 +638,20 @@ UMB_JOB_ENABLED = ENVIRONMENT.bool("UMB_JOB_ENABLED", default=True)
 
 UMB_HOST = ENVIRONMENT.get_value("UMB_HOST", default="localhost")
 UMB_PORT = ENVIRONMENT.get_value("UMB_PORT", default="61612")
+
+# Settings for enabling/disabling deletion in principal cleanup job via Kafka
+PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA", default=False)
+PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA", default=False)
+KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED = ENVIRONMENT.bool("KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED", default=True)
+
+# Validate Kafka principal cleanup configuration at startup
+# Fail fast if Kafka cleanup is enabled but topic is not configured
+if PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA and not KAFKA_PRINCIPAL_CLEANUP_TOPIC:
+    raise ValueError(
+        "PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is True but KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
+        "Set KAFKA_PRINCIPAL_CLEANUP_TOPIC to a valid Kafka topic name or disable Kafka cleanup."
+    )
+
 # Service account name
 SA_NAME = ENVIRONMENT.get_value("SA_NAME", default="nonprod-hcc-rbac")
 
@@ -682,8 +707,15 @@ V2_READ_ONLY_API_MODE = ENVIRONMENT.bool("V2_READ_ONLY_API_MODE", default=False)
 WORKSPACE_ACCESS_CHECK_V2_ENABLED = ENVIRONMENT.bool("WORKSPACE_ACCESS_CHECK_V2_ENABLED", default=False)
 # When True, use 'role_binding_view' permission; when False, use 'view' permission for role binding access
 USE_ROLE_BINDING_VIEW_PERMISSION = ENVIRONMENT.bool("USE_ROLE_BINDING_VIEW_PERMISSION", default=True)
+# When True, tenant-level role binding access checks use Kessel instead of org-admin middleware
+KESSEL_TENANT_AUTH_ENABLED = ENVIRONMENT.bool("KESSEL_TENANT_AUTH_ENABLED", default=False)
 READ_ONLY_API_MODE = ENVIRONMENT.get_value("READ_ONLY_API_MODE", default=False)
 V2_EDIT_API_ENABLED = ENVIRONMENT.bool("V2_EDIT_API_ENABLED", default=False)
+V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES = [
+    app.strip()
+    for app in ENVIRONMENT.get_value("V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES", default="").split(",")
+    if app.strip()
+]
 V1_ROLE_PERMISSION_BLOCK_LIST = [
     permission.strip()
     for permission in ENVIRONMENT.get_value("V1_ROLE_PERMISSION_BLOCK_LIST", default="").split(",")

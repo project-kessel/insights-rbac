@@ -16,23 +16,21 @@
 #
 """Test the access view."""
 
-from unittest.mock import patch, Mock
+from datetime import timedelta
+from unittest.mock import Mock, patch
 
-from api.models import CrossAccountRequest
+from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
-from django.test.utils import override_settings
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from api.models import Tenant, User
-from datetime import timedelta
-
 from management.cache import TenantCache
-from management.models import Group, Permission, Principal, ResourceDefinition, Policy, Role, Access, Workspace
+from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.tenant_service.v2 import V2TenantBootstrapService
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
+
+from api.models import CrossAccountRequest, Tenant, User
 
 
 class AccessViewTests(IdentityRequest):
@@ -188,7 +186,7 @@ class AccessViewTests(IdentityRequest):
         return role
 
     @override_settings(ROLE_CREATE_ALLOW_LIST="app")
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=False)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=False)
     def test_get_access_success(self, _mock_v2):
         """Test that we can obtain the expected access without pagination."""
         from management.access.view import v1_access_by_v2_org_total
@@ -1295,7 +1293,7 @@ class AccessViewTests(IdentityRequest):
 
     @override_settings(ROLE_CREATE_ALLOW_LIST="legacy_app,other_app")
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_tenant_allowed_app_returns_data(self, _mock_v2):
         """V2 orgs can query /access for applications in V2_MIGRATION_APP_EXCLUDE_LIST."""
         perm_legacy = Permission.objects.create(permission="legacy_app:*:*", tenant=self.tenant)
@@ -1324,7 +1322,7 @@ class AccessViewTests(IdentityRequest):
 
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
     @patch("management.access.view.logger")
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_tenant_disallowed_app_rejected(self, _mock_v2, mock_log):
         """V2 orgs are rejected when querying an app not in V2_MIGRATION_APP_EXCLUDE_LIST."""
         from management.access.view import v1_access_by_v2_org_total
@@ -1348,7 +1346,7 @@ class AccessViewTests(IdentityRequest):
         self.assertEqual(after, before + 1)
 
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_tenant_empty_application_rejected(self, _mock_v2):
         """V2 orgs are rejected when application= is empty."""
         from management.access.view import v1_access_by_v2_org_total
@@ -1367,7 +1365,7 @@ class AccessViewTests(IdentityRequest):
         self.assertEqual(after, before + 1)
 
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_tenant_mixed_apps_rejected(self, _mock_v2):
         """V2 orgs are rejected when application param contains any disallowed app."""
         client = APIClient()
@@ -1378,7 +1376,7 @@ class AccessViewTests(IdentityRequest):
 
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
     @patch("management.access.view.logger")
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_org_metric_logs_context(self, _mock_v2, mock_logger):
         """Test that a structured log line is emitted when a v2 org is rejected from v1 /access."""
         client = APIClient()
@@ -1396,7 +1394,7 @@ class AccessViewTests(IdentityRequest):
         self.assertIn("user_agent=insights-chrome/1.0", log_msg)
 
     @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["legacy_app"])
-    @patch("management.access.view.is_v2_edit_enabled_for_request", return_value=True)
+    @patch("management.access.view.is_v2_access_check_required_for_request", return_value=True)
     def test_access_v2_org_metric_service_account_caller_type(self, _mock_v2):
         """Test that the metric labels caller_type as service_account for service account requests."""
         from management.access.view import v1_access_by_v2_org_total

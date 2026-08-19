@@ -40,7 +40,7 @@ Usage:
 import enum
 import logging
 
-from django.db import connection
+from django.db import transaction
 from django.utils import timezone
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service.v2 import TenantNotBootstrappedError
@@ -49,27 +49,25 @@ from api.models import Tenant
 
 logger = logging.getLogger(__name__)
 
-# Static SQL literals — no interpolation, tenant_id is always a %s parameter.
-# FOR SHARE is intentional: concurrent V1 writes can proceed in parallel;
-# only a V2 activation (FOR UPDATE) is blocked. Django ORM has no FOR SHARE
-# equivalent, so raw SQL is necessary here.
+# We unfortunately need raw SQL due to Django not having a built-in way to do locks FOR SHARE.
 _LOCK_FOR_SHARE_SQL = (  # sourcery: disable=sql-injection-risk
-    "SELECT id, v2_write_activated_at" " FROM management_tenantmapping" " WHERE tenant_id = %s" " FOR SHARE"
+    "SELECT * FROM management_tenantmapping WHERE tenant_id = %s FOR SHARE"
 )
 
 
-def _lock_for_share(tenant: Tenant) -> tuple:
-    """Lock the TenantMapping row FOR SHARE. Returns (id, v2_write_activated_at) or None."""
-    with connection.cursor() as cursor:
-        cursor.execute(_LOCK_FOR_SHARE_SQL, [tenant.id])  # sourcery: disable=sql-injection-risk
-        row = cursor.fetchone()
+def _lock_mapping_for_share(tenant: Tenant) -> TenantMapping:
+    """Return the TenantMapping for the provided tenant locked FOR SHARE."""
+    mappings = list(TenantMapping.objects.raw(_LOCK_FOR_SHARE_SQL, [tenant.id]))
 
-        if row is None:
-            raise TenantNotBootstrappedError(
-                f"Tenant {tenant.org_id} has no TenantMapping; writes require tenant bootstrapping."
-            )
+    if len(mappings) > 1:
+        raise AssertionError(f"Found multiple tenant mappings for tenant {tenant.org_id}?")
 
-        return row
+    if len(mappings) == 0:
+        raise TenantNotBootstrappedError(
+            f"Tenant {tenant.org_id} has no TenantMapping; writes require tenant bootstrapping."
+        )
+
+    return mappings[0]
 
 
 class V1WriteBlockedError(Exception):
@@ -85,21 +83,26 @@ def ensure_v2_write_activated(tenant: Tenant):
     reads). If not yet V2, escalates to an exclusive lock and writes. This minimises
     contention compared to always using FOR UPDATE.
     """
-    _pk, v2_activated = _lock_for_share(tenant)
+    mapping = _lock_mapping_for_share(tenant)
 
-    if v2_activated is not None:
-        return
-
-    mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
-    if mapping is None:
-        raise TenantNotBootstrappedError(
-            f"Tenant {tenant.org_id} has no TenantMapping; V2 writes require tenant bootstrapping."
-        )
     if mapping.v2_write_activated_at is not None:
         return
 
-    mapping.v2_write_activated_at = timezone.now()
-    mapping.save(update_fields=["v2_write_activated_at"])
+    # Upgrade the TenantMapping to a FOR UPDATE lock. This must exist, since we previously locked the mapping for
+    # this tenant FOR SHARE (preventing it from being concurrently deleted).
+    mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).get()
+
+    if mapping.v2_write_activated_at is not None:
+        return
+
+    activated_time = timezone.now()
+
+    mapping.v2_write_activated_at = activated_time
+
+    if mapping.v2_opted_in_at is None:
+        mapping.v2_opted_in_at = activated_time
+
+    mapping.save(update_fields=["v2_write_activated_at", "v2_opted_in_at"])
     logger.info("Tenant %s activated for V2 writes", tenant.org_id)
 
 
@@ -126,9 +129,9 @@ class TenantVersion(enum.IntEnum):
 
 def lock_tenant_version(tenant: Tenant):
     """Lock a tenant to its current version for the duration of the transaction. Returns the version of the tenant."""
-    _, v2_activated = _lock_for_share(tenant)
+    mapping = _lock_mapping_for_share(tenant)
 
-    if v2_activated is None:
+    if mapping.v2_write_activated_at is None:
         return TenantVersion.VERSION_1
 
     return TenantVersion.VERSION_2
@@ -144,10 +147,65 @@ def assert_v1_write_allowed(tenant: Tenant):
     # We could just use lock_tenant_version here, but we instead do the check directly in order to give a better error
     # message.
 
-    _pk, v2_activated = _lock_for_share(tenant)
+    mapping = _lock_mapping_for_share(tenant)
 
-    if v2_activated is not None:
+    if mapping.v2_write_activated_at is not None:
         raise V1WriteBlockedError(
             f"Tenant {tenant.org_id} has been activated for V2 writes "
-            f"(since {v2_activated}). V1 writes are no longer permitted."
+            f"(since {mapping.v2_write_activated_at}). V1 writes are no longer permitted."
         )
+
+
+class InvalidV2OptOutError(Exception):
+    """Raised when a tenant attempts to opt out of V2, but cannot."""
+
+    pass
+
+
+@transaction.atomic
+def set_v2_opt_in_state(tenant: Tenant, opted_in: bool):
+    """
+    Set the V2 opt-in state of a tenant.
+
+    A V1 tenant can be "opted-in" to V2, indicating that they are willing to be converted to V2. (At time of writing,
+    this flag is not yet checked before converting a tenant.)
+
+    Opting-in a V1 tenant is idempotent. A V2 tenant is necessarily opted-in and cannot opt out.
+    """
+    mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
+
+    if mapping is None:
+        raise TenantNotBootstrappedError(
+            f"Tenant {tenant.org_id} has no TenantMapping; opting-in to V2 can only be done for a bootstrapped tenant."
+        )
+
+    if opted_in:
+        if mapping.v2_opted_in_at is None:
+            mapping.v2_opted_in_at = timezone.now()
+    else:
+        if mapping.v2_write_activated_at is not None:
+            raise InvalidV2OptOutError(f"Tenant {tenant.org_id} cannot opt out of V2 after performing a V2 write.")
+
+        mapping.v2_opted_in_at = None
+
+    mapping.save(update_fields=["v2_opted_in_at"])
+
+
+def is_v2_opted_in(tenant: Tenant) -> bool:
+    """Return whether the provided tenant has opted-in to V2 without establishing a lock on that state."""
+    try:
+        mapping = TenantMapping.objects.get(tenant=tenant)
+        return mapping.v2_opted_in_at is not None
+    except TenantMapping.DoesNotExist:
+        return False
+
+
+def lock_v2_opt_in_state(tenant: Tenant) -> bool:
+    """
+    Return whether the provided tenant has opted-in to V2 and establish a lock on that state.
+
+    This is only meaningful to use within a database transaction. (Otherwise, if a lock is not needed,
+    use is_v2_opted_in.)
+    """
+    mapping = _lock_mapping_for_share(tenant)
+    return mapping.v2_opted_in_at is not None

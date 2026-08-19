@@ -3727,7 +3727,7 @@ class BatchCreateViewTests(IdentityRequest):
             ]
         }
         response = self.client.post(url, payload, format="json", **self.headers)
-        self._assert_problem_details(response, 400, "This field is required.", "requests.role")
+        self._assert_problem_details(response, 400, "This field is required.", "requests.0.role")
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -3745,7 +3745,7 @@ class BatchCreateViewTests(IdentityRequest):
             ]
         }
         response = self.client.post(url, payload, format="json", **self.headers)
-        self._assert_problem_details(response, 400, "This field is required.", "requests.resource")
+        self._assert_problem_details(response, 400, "This field is required.", "requests.0.resource")
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -3763,7 +3763,7 @@ class BatchCreateViewTests(IdentityRequest):
             ]
         }
         response = self.client.post(url, payload, format="json", **self.headers)
-        self._assert_problem_details(response, 400, "This field is required.", "requests.subject")
+        self._assert_problem_details(response, 400, "This field is required.", "requests.0.subject")
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -3782,7 +3782,7 @@ class BatchCreateViewTests(IdentityRequest):
             ]
         }
         response = self.client.post(url, payload, format="json", **self.headers)
-        self._assert_problem_details(response, 400, "Must be a valid UUID.", "requests.role.id")
+        self._assert_problem_details(response, 400, "Must be a valid UUID.", "requests.0.role.id")
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -3801,7 +3801,9 @@ class BatchCreateViewTests(IdentityRequest):
             ]
         }
         response = self.client.post(url, payload, format="json", **self.headers)
-        self._assert_problem_details(response, 400, '"serviceaccount" is not a valid choice.', "requests.subject.type")
+        self._assert_problem_details(
+            response, 400, '"serviceaccount" is not a valid choice.', "requests.0.subject.type"
+        )
 
     @patch(
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
@@ -4168,7 +4170,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
             # Invalid UUID in role id
             (
                 {"roles": [{"id": "not-a-uuid"}]},
-                "roles.id",
+                "roles.0.id",
                 "Must be a valid UUID.",
             ),
         ]

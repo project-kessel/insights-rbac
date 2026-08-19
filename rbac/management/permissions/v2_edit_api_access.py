@@ -22,7 +22,9 @@ The authoritative check with row-level locking happens inside the transaction
 """
 
 import logging
+from typing import Iterable
 
+from django.conf import settings
 from feature_flags import FEATURE_FLAGS
 from management.tenant_mapping.v2_activation import is_v2_write_activated
 from rest_framework import permissions
@@ -31,11 +33,24 @@ logger = logging.getLogger(__name__)
 
 
 def is_v2_edit_enabled_for_request(request) -> bool:
-    """Check if V2 edit API is enabled via feature flag OR DB activation state."""
-    if FEATURE_FLAGS.is_v2_edit_api_enabled(request.user.org_id):
-        return True
+    """Check if V2 edit API is enabled via feature flag or local activation state."""
+    return is_v2_write_activated(request.tenant) or FEATURE_FLAGS.is_v2_edit_api_enabled(request.user.org_id)
 
-    return is_v2_write_activated(request.tenant)
+
+def is_v2_access_check_required_for_request(request, requested_apps: Iterable[str]) -> bool:
+    """Check if V2 access check is required for the provided request."""
+    # If any requested application has opted in to strict V2 access checks, then we need to check whether the org has
+    # strict V2 access checks enabled. Otherwise, we only need to check whether the org has opted in to the V2 write
+    # APIs (in which case V2 access checks are *always* required).
+
+    requested_apps = set(requested_apps)
+
+    if not requested_apps.isdisjoint(settings.V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES):
+        return is_v2_write_activated(request.tenant) or FEATURE_FLAGS.is_v2_strict_access_check_enabled(
+            request.user.org_id
+        )
+
+    return is_v2_edit_enabled_for_request(request)
 
 
 class V1WriteBlockedWhenWorkspacesEnabled(permissions.BasePermission):

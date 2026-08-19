@@ -20,6 +20,7 @@
 import logging
 import uuid
 
+from django.conf import settings
 from feature_flags import FEATURE_FLAGS
 from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
@@ -186,7 +187,8 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
 
         When a read request (list, by_subject, etc.) omits resource_id/resource_type
         query parameters, this method falls back to a tenant-level permission check.
-        Only users with org admin access on the tenant resource are allowed.
+        When KESSEL_TENANT_AUTH_ENABLED is off, only org admins are allowed.
+        When on, the check is delegated to Kessel.
         """
         tenant = getattr(request, "tenant", None)
         if tenant is None:
@@ -258,7 +260,9 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             return self._check_single_resource(request, resource_type, resource_id, self.EDIT_RELATION)
 
     def _resolve_principal_id(self, request, unique_resources):
-        """Resolve principal_id once if any non-tenant resources need Kessel checks."""
+        """Resolve principal_id once if any resources need Kessel checks."""
+        if settings.KESSEL_TENANT_AUTH_ENABLED:
+            return get_kessel_principal_id(request)
         needs_kessel = any(rt != "tenant" for rt, _ in unique_resources)
         if needs_kessel:
             return get_kessel_principal_id(request)
@@ -314,23 +318,6 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             self._validate_workspace_exists(request, resource_id)
 
         if resource_type == "tenant":
-            is_org_admin = getattr(request.user, "admin", False)
-            if not is_org_admin:
-                # Authorization failure - SEC-MON-REQ-1 compliance
-                # (EOI-8 authorization_failure, EOI-4 access_manipulation)
-                logger.warning(
-                    "Authorization denied",
-                    extra={
-                        "action": request.method,
-                        "resource_type": "role_binding",
-                        "outcome": "failure",
-                        "org_id": getattr(request.user, "org_id", None),
-                        "username": getattr(request.user, "username", None),
-                        "reason": "not_org_admin_for_tenant_resource",
-                        "endpoint": request.path,
-                    },
-                )
-                return False
             tenant = getattr(request, "tenant", None)
             if tenant is None:
                 logger.debug("Denied access for tenant resource: no tenant on request")
@@ -343,7 +330,24 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
                     expected_resource_id,
                 )
                 return False
-            return True
+
+            if not settings.KESSEL_TENANT_AUTH_ENABLED:
+                is_org_admin = getattr(request.user, "admin", False)
+                if not is_org_admin:
+                    logger.warning(
+                        "Authorization denied",
+                        extra={
+                            "action": request.method,
+                            "resource_type": "role_binding",
+                            "outcome": "failure",
+                            "org_id": getattr(request.user, "org_id", None),
+                            "username": getattr(request.user, "username", None),
+                            "reason": "not_org_admin_for_tenant_resource",
+                            "endpoint": request.path,
+                        },
+                    )
+                    return False
+                return True
 
         if principal_id is None:
             principal_id = get_kessel_principal_id(request)
@@ -357,8 +361,8 @@ class RoleBindingKesselAccessPermission(permissions.BasePermission):
             principal_id=principal_id,
             relation=relation,
         )
+        # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
         if not has_access:
-            # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-4 access_manipulation)
             logger.warning(
                 "Authorization denied",
                 extra={
