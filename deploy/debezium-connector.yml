@@ -9,7 +9,6 @@ objects:
     name: ${CONNECTOR_NAME}
     annotations:
       strimzi.io/use-connector-resources: "true"
-      strimzi.io/connector-offsets: "${CONNECTOR_OFFSETS_RESET}"
     labels:
       strimzi.io/cluster: ${KAFKA_CONNECT_INSTANCE}
   spec:
@@ -86,6 +85,3 @@ parameters:
 - name: SNAPSHOT_MODE
   value: "initial"
   description: The snapshot mode for the connector
-- name: CONNECTOR_OFFSETS_RESET
-  value: ""
-  description: "Set to 'reset' to clear connector offsets via Strimzi annotation (connector must be stopped first)"
