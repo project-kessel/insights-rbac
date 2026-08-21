@@ -5885,3 +5885,36 @@ class KesselParityCheckEndpointTests(BaseInternalViewsetTests):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("non-empty strings", response.content.decode())
+
+
+@override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+class SendKafkaTestMessageTests(IdentityRequest):
+    """Tests for the send_kafka_test_message internal endpoint."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.internal_request_context = self._create_request_context(
+            self.customer_data, self.user_data, is_internal=True
+        )
+        self.request = self.internal_request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        self.request.user = user
+
+    @patch("core.kafka.RBACProducer")
+    def test_send_kafka_test_message_returns_500_on_failure(self, mock_producer_class):
+        mock_producer_class.return_value.send_kafka_message.return_value = False
+        response = self.client.get("/_private/api/utils/kafka_test_message/", **self.request.META)
+        self.assertEqual(response.status_code, 500)
+        data = json.loads(response.content)
+        self.assertEqual(data["error"], "Failed to send Kafka message")
+
+    @patch("core.kafka.RBACProducer")
+    def test_send_kafka_test_message_returns_200_on_success(self, mock_producer_class):
+        mock_producer_class.return_value.send_kafka_message.return_value = True
+        response = self.client.get("/_private/api/utils/kafka_test_message/", **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data["message"], "Test message sent successfully")
