@@ -99,6 +99,54 @@ class ConstructTest(TestCase):
             default_scope_permissions=["app:resource:verb"],
         )
 
+    def test_construct_all_scope_invalid_permission(self):
+        """Test that ImplicitResourceService rejects invalid all_scope_permissions."""
+        for permission in INVALID_PERMISSIONS_V1:
+            with self.subTest(permission=permission):
+                self.assertRaises(
+                    ValueError,
+                    ImplicitResourceService,
+                    root_scope_permissions=[],
+                    tenant_scope_permissions=[],
+                    all_scope_permissions=["valid_app:resource:verb", permission],
+                )
+
+    def test_construct_all_scope_conflict_with_other_scopes(self):
+        """Test that a permission in ALL scope conflicts with the same permission in other scopes."""
+        self.assertRaises(
+            ValueError,
+            ImplicitResourceService,
+            root_scope_permissions=["app:resource:verb"],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["app:resource:verb"],
+        )
+
+        self.assertRaises(
+            ValueError,
+            ImplicitResourceService,
+            root_scope_permissions=[],
+            tenant_scope_permissions=["app:resource:verb"],
+            all_scope_permissions=["app:resource:verb"],
+        )
+
+        self.assertRaises(
+            ValueError,
+            ImplicitResourceService,
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            default_scope_permissions=["app:resource:verb"],
+            all_scope_permissions=["app:resource:verb"],
+        )
+
+    def test_construct_all_scope_duplicate_same_scope(self):
+        """Test that duplicate permissions within ALL scope are silently accepted."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["app:resource:verb", "app:resource:verb"],
+        )
+        self.assertEqual(Scope.ALL, service.scope_for_permission("app:resource:verb"))
+
 
 class SinglePermissionTest(TestCase):
     def _assert_scope(self, scope: Scope, service: ImplicitResourceService, permission: str):
@@ -1052,3 +1100,325 @@ class SplitPermissionsTest(TestCase):
 
         result = binding_scopes_for_permissions(["subscriptions:organization:read"], self.service)
         self.assertEqual(result, [Scope.TENANT])
+
+
+class AllScopeTest(TestCase):
+    """Tests for the ALL scope classification."""
+
+    def test_all_scope_permission_resolves(self):
+        """Permissions in ALL scope resolve to Scope.ALL."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:read"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:write"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:*"))
+
+    def test_all_scope_with_other_scopes(self):
+        """ALL scope permissions coexist with other scope classifications."""
+        service = ImplicitResourceService(
+            root_scope_permissions=["advisor:*:*"],
+            tenant_scope_permissions=["rbac:*:*"],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:read"))
+        self.assertEqual(Scope.TENANT, service.scope_for_permission("rbac:group:read"))
+        self.assertEqual(Scope.ROOT, service.scope_for_permission("advisor:recommendation:read"))
+        self.assertEqual(Scope.DEFAULT, service.scope_for_permission("inventory:hosts:read"))
+
+    def test_all_scope_wildcard(self):
+        """ALL scope supports wildcard patterns."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["myapp:*:*"],
+        )
+        self.assertEqual(Scope.ALL, service.scope_for_permission("myapp:resource:verb"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("myapp:other:read"))
+
+    def test_all_scope_is_explicitly_scoped(self):
+        """Permissions matching ALL scope entries are explicitly scoped."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertTrue(service.is_explicitly_scoped("rbac:role_binding:read"))
+        self.assertFalse(service.is_explicitly_scoped("rbac:group:read"))
+
+    def test_all_scope_excluded_from_highest_scope(self):
+        """highest_scope_for_permissions excludes ALL since it has no resource."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:*:*"],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertEqual(
+            Scope.TENANT,
+            service.highest_scope_for_permissions(["rbac:role_binding:read", "rbac:group:read"]),
+        )
+
+    def test_all_scope_only_defaults_to_default(self):
+        """highest_scope_for_permissions with only ALL-scoped perms falls back to DEFAULT."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        self.assertEqual(
+            Scope.DEFAULT,
+            service.highest_scope_for_permissions(["rbac:role_binding:read"]),
+        )
+
+    def test_all_scope_empty_list(self):
+        """Empty all_scope_permissions has no effect."""
+        service = ImplicitResourceService(
+            root_scope_permissions=["root:*:*"],
+            tenant_scope_permissions=["tenant:*:*"],
+            all_scope_permissions=[],
+        )
+        self.assertEqual(Scope.ROOT, service.scope_for_permission("root:resource:verb"))
+        self.assertEqual(Scope.TENANT, service.scope_for_permission("tenant:resource:verb"))
+        self.assertEqual(Scope.DEFAULT, service.scope_for_permission("other:resource:verb"))
+
+    def test_all_scope_none_parameter(self):
+        """Omitting all_scope_permissions (None default) works like empty."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+        )
+        self.assertEqual(Scope.DEFAULT, service.scope_for_permission("any:resource:verb"))
+
+
+class AllScopeSplitTest(TestCase):
+    """Tests for split_permissions_by_binding_scope and binding_scopes_for_permissions with ALL scope."""
+
+    def setUp(self):
+        self.service = ImplicitResourceService(
+            root_scope_permissions=["advisor:*:*"],
+            tenant_scope_permissions=["rbac:*:*"],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+
+    def test_all_only_defaults_to_default_scope(self):
+        """ALL-only permissions fall back to DEFAULT binding scope.
+
+        Verifies the 'or [Scope.DEFAULT]' branch in split_permissions_by_binding_scope:
+        after popping Scope.ALL, permissions_by_scope becomes {}, so the fallback
+        distributes ALL permissions to Scope.DEFAULT.
+        """
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        svc = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        result = split_permissions_by_binding_scope(["rbac:role_binding:read"], svc)
+        self.assertEqual(set(result.keys()), {Scope.DEFAULT})
+        self.assertIn("rbac:role_binding:read", result[Scope.DEFAULT])
+
+    def test_all_distributed_to_tenant(self):
+        """ALL permissions distributed to TENANT when TENANT-scoped perms exist."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["rbac:group:read", "rbac:role_binding:read"], self.service)
+        self.assertIn(Scope.TENANT, result)
+        self.assertIn("rbac:role_binding:read", result[Scope.TENANT])
+        self.assertIn("rbac:group:read", result[Scope.TENANT])
+
+    def test_all_distributed_to_root(self):
+        """ALL permissions distributed to ROOT when ROOT-scoped perms exist."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["advisor:recommendation:read", "rbac:role_binding:read"], self.service
+        )
+        self.assertIn(Scope.ROOT, result)
+        self.assertIn("rbac:role_binding:read", result[Scope.ROOT])
+
+    def test_all_distributed_to_multiple_scopes(self):
+        """ALL permissions duplicated to all concrete scopes present."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(
+            ["rbac:group:read", "inventory:hosts:read", "rbac:role_binding:read"], self.service
+        )
+        self.assertIn(Scope.TENANT, result)
+        self.assertIn("rbac:role_binding:read", result[Scope.TENANT])
+        workspace_key = Scope.ROOT if Scope.ROOT in result else Scope.DEFAULT
+        self.assertIn("rbac:role_binding:read", result[workspace_key])
+
+    def test_all_binding_scopes_with_tenant(self):
+        """binding_scopes_for_permissions includes TENANT when mixed with ALL."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        result = binding_scopes_for_permissions(["rbac:group:read", "rbac:role_binding:read"], self.service)
+        self.assertIn(Scope.TENANT, result)
+
+    def test_all_binding_scopes_only_all(self):
+        """binding_scopes_for_permissions with ALL-only perms returns DEFAULT."""
+        from management.permission.scope_service import binding_scopes_for_permissions
+
+        svc = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        result = binding_scopes_for_permissions(["rbac:role_binding:read"], svc)
+        self.assertEqual(result, [Scope.DEFAULT])
+
+    def test_all_scope_not_in_split_keys(self):
+        """Scope.ALL never appears as a key in split result."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        result = split_permissions_by_binding_scope(["rbac:role_binding:read", "rbac:group:read"], self.service)
+        self.assertNotIn(Scope.ALL, result)
+
+
+class AllScopeSettingsTest(TestCase):
+    """Tests for ALL_SCOPE_PERMISSIONS Django setting."""
+
+    def test_all_scope_from_settings(self):
+        """ALL_SCOPE_PERMISSIONS is parsed from settings."""
+        with override_settings(
+            ROOT_SCOPE_PERMISSIONS="",
+            TENANT_SCOPE_PERMISSIONS="rbac:*:*",
+            DEFAULT_SCOPE_PERMISSIONS="",
+            ALL_SCOPE_PERMISSIONS="rbac:role_binding:*",
+        ):
+            service = ImplicitResourceService.from_settings()
+            self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:read"))
+            self.assertEqual(Scope.TENANT, service.scope_for_permission("rbac:group:read"))
+
+    def test_all_scope_empty_setting(self):
+        """Empty ALL_SCOPE_PERMISSIONS results in no ALL-scoped permissions."""
+        empty_settings = ["", " ", "\t", "\n"]
+        for setting in empty_settings:
+            with self.subTest(setting=repr(setting)):
+                with override_settings(
+                    ROOT_SCOPE_PERMISSIONS="",
+                    TENANT_SCOPE_PERMISSIONS="",
+                    DEFAULT_SCOPE_PERMISSIONS="",
+                    ALL_SCOPE_PERMISSIONS=setting,
+                ):
+                    service = ImplicitResourceService.from_settings()
+                    self.assertEqual(Scope.DEFAULT, service.scope_for_permission("any:resource:verb"))
+
+    def test_all_scope_whitespace_trimmed(self):
+        """Whitespace is trimmed from ALL_SCOPE_PERMISSIONS entries."""
+        with override_settings(
+            ROOT_SCOPE_PERMISSIONS="",
+            TENANT_SCOPE_PERMISSIONS="",
+            DEFAULT_SCOPE_PERMISSIONS="",
+            ALL_SCOPE_PERMISSIONS="  rbac:role_binding:* , app:resource:verb  ",
+        ):
+            service = ImplicitResourceService.from_settings()
+            self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role_binding:read"))
+            self.assertEqual(Scope.ALL, service.scope_for_permission("app:resource:verb"))
+
+    def test_all_scope_invalid_setting(self):
+        """Invalid permission strings in ALL_SCOPE_PERMISSIONS raise ValueError."""
+        invalid_settings = set(INVALID_PERMISSIONS_V1) - {""}
+        for setting in invalid_settings:
+            with self.subTest(setting=setting):
+                with override_settings(ALL_SCOPE_PERMISSIONS=setting):
+                    self.assertRaises(ValueError, ImplicitResourceService.from_settings)
+
+
+class OverlappingWildcardPrecedenceTest(TestCase):
+    """Tests for overlapping wildcard patterns across different scopes.
+
+    When a specific wildcard exists in one scope and a broader wildcard exists
+    in another, matching precedence is determined by the _wildcard_candidates
+    order: exact match > app:resource_type:* > app:*:verb > app:*:*.
+    The first match in the permissions map wins (last-processed does NOT win;
+    more-specific wildcards take precedence because they're checked first).
+    """
+
+    def test_specific_tenant_vs_broad_all(self):
+        """Specific TENANT wildcard takes precedence over broad ALL wildcard."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:group:*"],
+            all_scope_permissions=["rbac:*:*"],
+        )
+        self.assertEqual(Scope.TENANT, service.scope_for_permission("rbac:group:read"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:role:read"))
+
+    def test_specific_root_vs_broad_all(self):
+        """Specific ROOT wildcard takes precedence over broad ALL wildcard."""
+        service = ImplicitResourceService(
+            root_scope_permissions=["advisor:recommendation:*"],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["advisor:*:*"],
+        )
+        self.assertEqual(Scope.ROOT, service.scope_for_permission("advisor:recommendation:read"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("advisor:system:read"))
+
+    def test_specific_default_vs_broad_all(self):
+        """Specific DEFAULT wildcard takes precedence over broad ALL wildcard."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            default_scope_permissions=["rbac:role_binding:*"],
+            all_scope_permissions=["rbac:*:*"],
+        )
+        self.assertEqual(Scope.DEFAULT, service.scope_for_permission("rbac:role_binding:read"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("rbac:group:read"))
+
+    def test_broad_all_with_multiple_specific_scopes(self):
+        """Multiple specific scope patterns all take precedence over broad ALL."""
+        service = ImplicitResourceService(
+            root_scope_permissions=["app:root_res:*"],
+            tenant_scope_permissions=["app:tenant_res:*"],
+            default_scope_permissions=["app:default_res:*"],
+            all_scope_permissions=["app:*:*"],
+        )
+        self.assertEqual(Scope.ROOT, service.scope_for_permission("app:root_res:read"))
+        self.assertEqual(Scope.TENANT, service.scope_for_permission("app:tenant_res:read"))
+        self.assertEqual(Scope.DEFAULT, service.scope_for_permission("app:default_res:read"))
+        self.assertEqual(Scope.ALL, service.scope_for_permission("app:other_res:read"))
+
+    def test_highest_scope_ignores_all_from_broad_wildcard(self):
+        """highest_scope_for_permissions excludes ALL even from broad wildcard matches."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:group:*"],
+            all_scope_permissions=["rbac:*:*"],
+        )
+        self.assertEqual(
+            Scope.TENANT,
+            service.highest_scope_for_permissions(["rbac:group:read", "rbac:role:read"]),
+        )
+        self.assertEqual(
+            Scope.DEFAULT,
+            service.highest_scope_for_permissions(["rbac:role:read"]),
+        )
+
+    def test_all_scopes_for_broad_all_wildcard(self):
+        """all_scopes_for_permission on broad ALL wildcard includes subsumed scopes."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:group:*"],
+            all_scope_permissions=["rbac:*:*"],
+        )
+        scopes = service.all_scopes_for_permission("rbac:*:*")
+        self.assertIn(Scope.ALL, scopes)
+        self.assertIn(Scope.TENANT, scopes)
+
+    def test_split_with_overlapping_all_and_tenant(self):
+        """split_permissions_by_binding_scope handles overlapping ALL + TENANT patterns."""
+        from management.permission.scope_service import split_permissions_by_binding_scope
+
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=["rbac:group:*"],
+            all_scope_permissions=["rbac:*:*"],
+        )
+        result = split_permissions_by_binding_scope(["rbac:group:read", "rbac:role:read"], service)
+        self.assertIn(Scope.TENANT, result)
+        self.assertIn("rbac:group:read", result[Scope.TENANT])
+        self.assertIn("rbac:role:read", result[Scope.TENANT])

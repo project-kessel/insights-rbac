@@ -25,8 +25,8 @@ from management.group.platform import GlobalPolicyIdService
 from management.group.relation_api_dual_write_subject_handler import RelationApiDualWriteSubjectHandler
 from management.models import Workspace
 from management.permission.scope_service import (
+    CONCRETE_SCOPES,
     ImplicitResourceService,
-    Scope,
     TenantScopeResources,
 )
 from management.principal.model import Principal
@@ -264,7 +264,7 @@ class RelationApiDualWriteGroupHandler(RelationApiDualWriteSubjectHandler):
         #
         # As a consequence of this, we also do not have to lock any system roles here: we don't actually look at
         # the role's permissions in determining where to remove it.
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             self._update_mapping_for_role(
                 role,
                 scope=scope,

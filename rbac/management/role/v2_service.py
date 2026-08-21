@@ -30,6 +30,7 @@ from management.exceptions import NotFoundError, RequiredFieldError
 from management.permission.exceptions import InvalidPermissionDataError
 from management.permission.model import PermissionValue
 from management.permission.scope_service import (
+    CONCRETE_SCOPES,
     SCOPE_DISPLAY_NAME,
     Scope,
     default_implicit_resource_service,
@@ -124,10 +125,12 @@ class RoleV2Service:
         for p in permissions:
             scope = default_implicit_resource_service.scope_for_permission(p.permission)
             perms_by_scope.setdefault(scope, []).append(p.permission)
-        if len(perms_by_scope) > 1:
+        concrete_scopes = {s for s in perms_by_scope if s != Scope.ALL}
+        if len(concrete_scopes) > 1:
             details = "; ".join(
                 f"{SCOPE_DISPLAY_NAME[scope]}: {', '.join(sorted(perms))}"
                 for scope, perms in sorted(perms_by_scope.items())
+                if scope != Scope.ALL
             )
             raise InvalidRolePermissionsError(
                 f"All permissions in a role must belong to the same scope. Found: {details}"
@@ -320,7 +323,7 @@ class RoleV2Service:
             else:
                 matching_scopes = {Scope.DEFAULT}
 
-        higher_non_matching = {s for s in (set(Scope) - matching_scopes) if s > max(matching_scopes)}
+        higher_non_matching = {s for s in (CONCRETE_SCOPES - matching_scopes) if s > max(matching_scopes)}
 
         if Scope.DEFAULT not in matching_scopes:
             matching_ids = permission_scope_cache.ids_for_scopes(matching_scopes)

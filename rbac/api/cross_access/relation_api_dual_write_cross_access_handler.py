@@ -23,7 +23,7 @@ from typing import Iterable, Optional
 from management.atomic_transactions import atomic
 from management.group.relation_api_dual_write_subject_handler import RelationApiDualWriteSubjectHandler
 from management.models import Workspace
-from management.permission.scope_service import ImplicitResourceService, Scope, TenantScopeResources
+from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, Scope, TenantScopeResources
 from management.principal.model import Principal
 from management.relation_replicator.relation_replicator import (
     DualWriteException,
@@ -251,7 +251,7 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
         # We don't need to lock the roles, since we will handle any possible scope (without actually looking at the
         # roles).
         for role in roles:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 self._update_mapping_for_system_role(
                     role,
                     scope=scope,
@@ -270,7 +270,7 @@ class RelationApiDualWriteCrossAccessHandler(RelationApiDualWriteSubjectHandler)
 
         # We don't need to lock the roles, since we will handle any possible scope (without actually looking at the
         # roles).
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             resource = scope_resources.resource_for(scope)
 
             if resource.resource_type[0] != "rbac":

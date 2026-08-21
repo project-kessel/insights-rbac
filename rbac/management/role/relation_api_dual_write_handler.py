@@ -25,7 +25,7 @@ from django.conf import settings
 from django.db.models import Model
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.models import Workspace
-from management.permission.scope_service import ImplicitResourceService, Scope, bound_model_for_scope
+from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, bound_model_for_scope
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.relation_replicator.relation_replicator import (
@@ -160,7 +160,7 @@ class SeedingRelationApiDualWriteHandler(BaseRelationApiDualWriteHandler):
         scopes are removed (regardless of the role's current scopes).
         """
         if for_removal:
-            binding_scopes = set(Scope)
+            binding_scopes = set(CONCRETE_SCOPES)
             admin_scopes = binding_scopes
         else:
             binding_scopes = set(self.implicit_resource_service.binding_scopes_for_role(role))
