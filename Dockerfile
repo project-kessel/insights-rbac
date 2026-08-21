@@ -42,7 +42,7 @@ LABEL summary="$SUMMARY" \
 # gcc to compile some python packages (e.g. ciso8601)
 # postgresql-devel for psycopg2, libffi-devel for cffi
 RUN INSTALL_PKGS="glibc-langpack-en postgresql-server-devel postgresql gcc libffi-devel python3.12-devel curl" && \
-    microdnf --nodocs -y upgrade && \
+    microdnf --nodocs -y --allowerasing upgrade && \
     microdnf -y --setopt=tsflags=nodocs --setopt=install_weak_deps=0 install $INSTALL_PKGS && \
     rpm -V $INSTALL_PKGS && \
     microdnf -y clean all --enablerepo='*'
