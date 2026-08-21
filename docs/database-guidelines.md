@@ -8,7 +8,7 @@ Every business model inherits `TenantAwareModel` (defined in `rbac/api/models.py
 
 - `BaseV2ViewSet.get_queryset()` automatically filters by `request.tenant`. All v2 querysets must include tenant filtering.
 - v1 models use `FilterQuerySet` with `.public_tenant_only()` to distinguish system-wide (public tenant) records from tenant-specific ones.
-- The `Tenant` model stores `org_id` (unique, indexed), `account_id`, and a `ready` boolean. A singleton "public" tenant (`tenant_name="public"`) holds system/platform roles and permissions.
+- The `Tenant` model stores `org_id` (unique, indexed), `account_id`, and a `ready` boolean. A singleton "public" tenant (`tenant_name="public"`) holds system/platform roles and permissions. `org_config` is a JSON object for per-org overrides (`workspace_creation_limit`); empty `{}` means use global defaults such as `WORKSPACE_ORG_CREATION_LIMIT`.
 - Custom querysets that cross tenant boundaries (e.g., `RoleV2QuerySet.for_tenant`) explicitly include the public tenant: `Q(tenant=tenant) | Q(tenant__tenant_name="public")`.
 
 When writing new queries, never rely on implicit tenant scoping. Always filter explicitly.

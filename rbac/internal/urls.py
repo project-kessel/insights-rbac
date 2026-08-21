@@ -79,6 +79,7 @@ urlpatterns = [
     path("api/sentry_debug/", views.trigger_error),
     path("api/utils/sync_schemas/", views.sync_schemas),
     path("api/utils/set_tenant_ready/", views.set_tenant_ready),
+    path("api/utils/tenant_org_config/<str:org_id>/", views.tenant_org_config),
     path("api/utils/populate_tenant_account_id/", views.populate_tenant_account_id),
     path("api/utils/populate_tenant_org_id/", views.populate_tenant_org_id_view),
     path("api/utils/invalid_default_admin_groups/", views.invalid_default_admin_groups),

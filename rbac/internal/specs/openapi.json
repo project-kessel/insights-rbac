@@ -2595,6 +2595,165 @@
         }
       }
     },
+    "/api/utils/tenant_org_config/{org_id}/": {
+      "get": {
+        "tags": [
+          "Tenant",
+          "Utils",
+          "Workspace"
+        ],
+        "summary": "Get per-org configuration",
+        "description": "Returns stored org_config overrides and the effective workspace creation limit. An empty org_config means all global defaults are used (WORKSPACE_ORG_CREATION_LIMIT).",
+        "operationId": "GetTenantOrgConfig",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID of the tenant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-org configuration and effective workspace creation limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantOrgConfig"
+                },
+                "example": {
+                  "org_id": "12345678",
+                  "org_config": {
+                    "workspace_creation_limit": 500
+                  },
+                  "workspace_creation_limit": 500
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Tenant",
+          "Utils",
+          "Workspace"
+        ],
+        "summary": "Update per-org configuration",
+        "description": "Merges a partial org_config update. Only workspace_creation_limit is allowed. A null value removes the override so the global WORKSPACE_ORG_CREATION_LIMIT is used. Unknown keys are rejected. Does not require destructive_ok.",
+        "operationId": "PatchTenantOrgConfig",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "description": "Organization ID of the tenant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantOrgConfigPatch"
+              },
+              "examples": {
+                "setLimit": {
+                  "summary": "Set a per-org workspace creation limit",
+                  "value": {
+                    "workspace_creation_limit": 500
+                  }
+                },
+                "unsetLimit": {
+                  "summary": "Remove the override and use the global default",
+                  "value": {
+                    "workspace_creation_limit": null
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated per-org configuration and effective workspace creation limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantOrgConfig"
+                },
+                "example": {
+                  "org_id": "12345678",
+                  "org_config": {
+                    "workspace_creation_limit": 500
+                  },
+                  "workspace_creation_limit": 500
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON, unknown keys, or invalid workspace_creation_limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorSingle"
+                },
+                "example": {
+                  "error": "workspace_creation_limit must be an integer >= 1, or null to unset."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Invalid method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/utils/populate_tenant_org_id/": {
       "post": {
         "tags": [
@@ -6176,6 +6335,52 @@
             }
           }
         ]
+      },
+      "TenantOrgConfig": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "org_config",
+          "workspace_creation_limit"
+        ],
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "description": "Organization ID of the tenant",
+            "example": "12345678"
+          },
+          "org_config": {
+            "type": "object",
+            "description": "Stored per-org overrides. Empty object means all global defaults are used.",
+            "additionalProperties": true,
+            "example": {
+              "workspace_creation_limit": 500
+            }
+          },
+          "workspace_creation_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Effective workspace creation limit after applying org_config and the global WORKSPACE_ORG_CREATION_LIMIT default.",
+            "example": 500
+          }
+        }
+      },
+      "TenantOrgConfigPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "Partial org_config update. Only workspace_creation_limit is allowed. Null unsets the override.",
+        "additionalProperties": false,
+        "properties": {
+          "workspace_creation_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Per-org workspace creation limit. Null removes the override so the global WORKSPACE_ORG_CREATION_LIMIT is used.",
+            "example": 500
+          }
+        }
       },
       "OrgAdmin": {
         "allOf": [

@@ -580,6 +580,61 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["name"], test_data["name"])
 
+    @override_settings(WORKSPACE_ORG_CREATION_LIMIT=4)
+    def test_create_workspaces_org_config_override_allows_over_global(self):
+        """A per-org org_config limit higher than the global setting allows create."""
+        self.tenant.org_config = {"workspace_creation_limit": 10}
+        self.tenant.save(update_fields=["org_config"])
+        try:
+            workspace_names = ["Workspace A", "Workspace B", "Workspace C", "Workspace D"]
+            for name in workspace_names:
+                Workspace.objects.create(
+                    name=name,
+                    description="New Workspace - description",
+                    tenant_id=self.tenant.id,
+                    parent_id=self.standard_workspace.id,
+                )
+
+            test_data = {"name": "New Workspace", "parent_id": self.standard_workspace.id}
+            url = reverse("v2_management:workspace-list")
+            client = APIClient()
+            response = client.post(url, test_data, format="json", **self.headers)
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(response.data["name"], test_data["name"])
+        finally:
+            self.tenant.org_config = {}
+            self.tenant.save(update_fields=["org_config"])
+
+    @override_settings(WORKSPACE_ORG_CREATION_LIMIT=100)
+    def test_create_workspaces_org_config_override_lower_than_global(self):
+        """A per-org org_config limit lower than the global setting blocks create."""
+        self.tenant.org_config = {"workspace_creation_limit": 4}
+        self.tenant.save(update_fields=["org_config"])
+        try:
+            workspace_names = ["Workspace A", "Workspace B", "Workspace C", "Workspace D"]
+            for name in workspace_names:
+                Workspace.objects.create(
+                    name=name,
+                    description="New Workspace - description",
+                    tenant_id=self.tenant.id,
+                    parent_id=self.standard_workspace.id,
+                )
+
+            test_data = {"name": "New Workspace", "parent_id": self.standard_workspace.id}
+            url = reverse("v2_management:workspace-list")
+            client = APIClient()
+            response = client.post(url, test_data, format="json", **self.headers)
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            resp_body = json.loads(response.content.decode())
+            self.assertEqual(
+                resp_body.get("detail"),
+                "Workspace limit reached (6/4); please free up capacity by deleting empty workspaces"
+                " or consolidating those with similar users and role bindings.",
+            )
+        finally:
+            self.tenant.org_config = {}
+            self.tenant.save(update_fields=["org_config"])
+
     @override_settings(WORKSPACE_HIERARCHY_DEPTH_LIMIT=5)
     def test_create_workspaces_exceed_hierarchy_depth_limit(self):
         """

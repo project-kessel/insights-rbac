@@ -515,7 +515,7 @@ class WorkspaceService:
 
         Returns (exceeded, current_count, max_limit).
         """
-        max_limit = settings.WORKSPACE_ORG_CREATION_LIMIT
+        max_limit = tenant.workspace_creation_limit()
 
         workspace_count = Workspace.objects.filter(tenant=tenant, type="standard").count()
         return workspace_count >= max_limit, workspace_count, max_limit

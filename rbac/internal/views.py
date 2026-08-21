@@ -26,6 +26,7 @@ from typing import Optional
 import requests
 from core.utils import destructive_ok
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connection, transaction
 from django.db.migrations.recorder import MigrationRecorder
@@ -263,6 +264,64 @@ def tenant_view(request, org_id):
             else:
                 return HttpResponse("Tenant cannot be deleted.", status=400)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
+
+
+def _tenant_org_config_payload(tenant: Tenant) -> dict:
+    """Build the GET/PATCH response body for tenant org_config."""
+    return {
+        "org_id": tenant.org_id,
+        "org_config": tenant.org_config or {},
+        "workspace_creation_limit": tenant.workspace_creation_limit(),
+    }
+
+
+def tenant_org_config(request, org_id):
+    """Get or update per-org configuration.
+
+    GET /_private/api/utils/tenant_org_config/<org_id>/
+    PATCH /_private/api/utils/tenant_org_config/<org_id>/
+    """
+    tenant = get_object_or_404(Tenant, org_id=org_id)
+
+    if request.method == "GET":
+        return JsonResponse(_tenant_org_config_payload(tenant))
+
+    if request.method == "PATCH":
+        try:
+            patch = load_request_body(request)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({"error": "Invalid JSON body."}, status=400)
+        try:
+            new_config = Tenant.merge_org_config(tenant.org_config, patch)
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+        old_limit = tenant.workspace_creation_limit()
+        tenant.org_config = new_config
+        try:
+            tenant.save(update_fields=["org_config"])
+        except ValidationError as e:
+            return JsonResponse({"error": Tenant.org_config_error_message(e)}, status=400)
+        TENANTS.delete_tenant(org_id)
+
+        logger.info(
+            "Internal API: Tenant org_config updated",
+            extra={
+                "action": "UPDATE",
+                "resource_type": "tenant_org_config",
+                "outcome": "success",
+                "org_id": org_id,
+                "username": getattr(request.user, "username", None),
+                "old_workspace_creation_limit": old_limit,
+                "workspace_creation_limit": tenant.workspace_creation_limit(),
+            },
+        )
+        return JsonResponse(_tenant_org_config_payload(tenant))
+
+    return JsonResponse(
+        {"errors": [{"detail": 'Invalid method, only "GET" and "PATCH" are allowed.', "status": "405"}]},
+        status=405,
+    )
 
 
 def run_migrations(request):

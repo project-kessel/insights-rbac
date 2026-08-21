@@ -19,6 +19,7 @@
 from typing import Any, Optional
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -42,6 +43,8 @@ class Tenant(models.Model):
     """The model used to create a tenant schema."""
 
     PUBLIC_TENANT_NAME = "public"
+    ORG_CONFIG_WORKSPACE_CREATION_LIMIT = "workspace_creation_limit"
+    _ORG_CONFIG_ALLOWED_KEYS = frozenset({ORG_CONFIG_WORKSPACE_CREATION_LIMIT})
 
     _public_tenant = None
 
@@ -50,11 +53,85 @@ class Tenant(models.Model):
     account_id = models.CharField(max_length=36, default=None, null=True)
     org_id = models.CharField(max_length=36, unique=True, default=None, db_index=True, null=True)
     relations_consistency_token = models.CharField(max_length=1024, default=None, null=True)
+    org_config = models.JSONField(default=dict)
     objects = TenantModifiedQuerySet.as_manager()
 
     def __str__(self):
         """Get string representation of Tenant."""
         return f"Tenant ({self.org_id})"
+
+    def workspace_creation_limit(self) -> int:
+        """Return the effective workspace creation limit for this tenant.
+
+        Missing org_config values fall back to WORKSPACE_ORG_CREATION_LIMIT.
+        """
+        default = int(settings.WORKSPACE_ORG_CREATION_LIMIT)
+        org_config = getattr(self, "org_config", None)
+        if not isinstance(org_config, dict):
+            return default
+        raw = org_config.get(self.ORG_CONFIG_WORKSPACE_CREATION_LIMIT)
+        if raw is None:
+            return default
+        return raw
+
+    @classmethod
+    def _validate_workspace_creation_limit_value(cls, value) -> None:
+        """Raise ValueError when value is not a positive integer."""
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("workspace_creation_limit must be an integer >= 1, or null to unset.")
+
+    def clean(self):
+        """Validate org_config overrides."""
+        super().clean()
+        org_config = self.org_config
+        if org_config is None:
+            return
+        if not isinstance(org_config, dict):
+            raise ValidationError({"org_config": "org_config must be a JSON object."})
+        if self.ORG_CONFIG_WORKSPACE_CREATION_LIMIT in org_config:
+            value = org_config[self.ORG_CONFIG_WORKSPACE_CREATION_LIMIT]
+            if value is not None:
+                try:
+                    self._validate_workspace_creation_limit_value(value)
+                except ValueError as exc:
+                    raise ValidationError({"org_config": str(exc)}) from exc
+
+    def save(self, *args, **kwargs):
+        """Persist tenant after validating org_config."""
+        self.clean()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def merge_org_config(cls, current: Optional[dict], patch: dict) -> dict:
+        """Merge a partial org_config patch and return a new dict.
+
+        Validates patch shape and allowed keys only. Stored values are validated in clean().
+        Raises ValueError with a client-facing message when the patch is invalid.
+        """
+        if not isinstance(patch, dict):
+            raise ValueError("Request body must be a JSON object.")
+        if not patch:
+            raise ValueError("No org_config keys provided.")
+        unknown = set(patch) - cls._ORG_CONFIG_ALLOWED_KEYS
+        if unknown:
+            raise ValueError(f"Unknown org_config keys: {', '.join(sorted(unknown))}.")
+
+        merged = dict(current or {})
+        for key, value in patch.items():
+            if key == cls.ORG_CONFIG_WORKSPACE_CREATION_LIMIT:
+                if value is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = value
+        return merged
+
+    @classmethod
+    def org_config_error_message(cls, exc: ValidationError) -> str:
+        """Return a client-facing message from an org_config ValidationError."""
+        org_config_errors = exc.message_dict.get("org_config") if exc.message_dict else None
+        if org_config_errors:
+            return org_config_errors[0]
+        return str(exc)
 
     @classmethod
     def _get_public_tenant(cls):
