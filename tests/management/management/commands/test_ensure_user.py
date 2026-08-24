@@ -83,13 +83,14 @@ class TestEnsureUser(IdentityRequest):
         self._create_role("Cost Administrator", "cost-management", admin_default=True)
         self._create_role("Sources administrator", "sources", admin_default=True)
 
-        with patch("management.management.commands.ensure_user.call_command"):
+        with patch("management.management.commands.ensure_user.call_command") as mock_call:
             self._invoke(
                 "--username=alice",
                 "--org-id=org1",
                 "--account-number=123",
                 "--admin",
             )
+        mock_call.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
 
         tenant = Tenant.objects.get(org_id="org1")
         policy = Policy.objects.get(tenant=tenant)
