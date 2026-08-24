@@ -33,7 +33,6 @@ class TestEnsureUser(IdentityRequest):
     def setUp(self):
         super().setUp()
         self.public_tenant = Tenant.objects.get(tenant_name="public")
-        Tenant.objects.exclude(tenant_name="public").delete()
         cache_patcher = patch("management.management.commands.ensure_user.AccessCache")
         self.mock_access_cache_cls = cache_patcher.start()
         self.addCleanup(cache_patcher.stop)
