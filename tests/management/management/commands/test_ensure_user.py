@@ -151,7 +151,7 @@ class TestEnsureUser(IdentityRequest):
         self.assertEqual(role_names, {"Cost Administrator", "Sources administrator"})
         self.assertNotIn("Other Admin", role_names)
         self.assertIn(cost_role, policy.roles.all())
-        mock_bootstrap.assert_called_once()
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
 
     @patch("management.management.commands.ensure_user.call_command")
     def test_idempotent_rerun(self, mock_bootstrap):
@@ -195,7 +195,7 @@ class TestEnsureUser(IdentityRequest):
         self.assertTrue(group.admin_default)
         policy = Policy.objects.get(tenant=tenant, group=group, name="Cost Admin Default Policy")
         self.assertEqual(policy.roles.count(), 1)
-        mock_bootstrap.assert_called_once()
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
 
     @patch("management.management.commands.ensure_user.call_command")
     def test_reuses_existing_cost_admin_default_group(self, mock_bootstrap):
@@ -224,7 +224,7 @@ class TestEnsureUser(IdentityRequest):
         self.assertEqual(group.name, "Cost Admin Default")
         principal = Principal.objects.get(username="alice", tenant=tenant)
         self.assertIn(principal, group.principals.all())
-        mock_bootstrap.assert_called_once()
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
 
     @patch("management.management.commands.ensure_user.call_command")
     def test_invalidates_tenant_policy_cache_after_commit(self, mock_bootstrap):
@@ -240,7 +240,7 @@ class TestEnsureUser(IdentityRequest):
 
         self.mock_access_cache_cls.assert_called_once_with("org1")
         cache.delete_all_policies_for_tenant.assert_called_once_with()
-        mock_bootstrap.assert_called_once()
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
 
     @patch("management.management.commands.ensure_user.call_command")
     def test_cache_invalidation_failure_does_not_skip_bootstrap(self, mock_bootstrap):
