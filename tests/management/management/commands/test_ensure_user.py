@@ -221,3 +221,37 @@ class TestEnsureUser(IdentityRequest):
         principal = Principal.objects.get(username="alice", tenant=tenant)
         self.assertIn(principal, group.principals.all())
         mock_bootstrap.assert_called_once()
+
+    @patch("management.management.commands.ensure_user.AccessCache")
+    @patch("management.management.commands.ensure_user.call_command")
+    def test_invalidates_tenant_policy_cache_after_commit(self, mock_bootstrap, mock_cache_cls):
+        """After commit, only this tenant's policy cache is purged."""
+        cache = mock_cache_cls.return_value
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._invoke(
+                "--username=alice",
+                "--org-id=org1",
+                "--account-number=123",
+            )
+
+        mock_cache_cls.assert_called_once_with("org1")
+        cache.delete_all_policies_for_tenant.assert_called_once_with()
+        mock_bootstrap.assert_called_once()
+
+    @patch("management.management.commands.ensure_user.AccessCache")
+    @patch("management.management.commands.ensure_user.call_command")
+    def test_cache_invalidation_failure_does_not_skip_bootstrap(self, mock_bootstrap, mock_cache_cls):
+        """Redis failures after commit must not prevent bootstrap_tenants."""
+        mock_cache_cls.return_value.delete_all_policies_for_tenant.side_effect = Exception("redis down")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._invoke(
+                "--username=alice",
+                "--org-id=org1",
+                "--account-number=123",
+            )
+
+        tenant = Tenant.objects.get(org_id="org1")
+        self.assertTrue(Principal.objects.filter(username="alice", tenant=tenant).exists())
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)

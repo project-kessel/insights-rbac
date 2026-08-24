@@ -18,11 +18,12 @@
 
 import logging
 
-from django.core.cache import cache
+from django.conf import settings
 from django.core.management import BaseCommand, CommandError, call_command
 from django.db import transaction
 
 from api.models import Tenant
+from management.cache import AccessCache
 from management.models import Group, Policy, Principal, Role
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -35,12 +36,29 @@ _DEFAULT_ADMIN_GROUP_DESCRIPTION = (
 _DEFAULT_ADMIN_POLICY_NAME = "Default admin access policy"
 
 
+def _invalidate_tenant_access_cache(org_id):
+    """Return an on_commit callback that purges one tenant's policy cache."""
+
+    def _invalidate():
+        try:
+            AccessCache(org_id).delete_all_policies_for_tenant()
+        except Exception:
+            logger.warning(
+                f"Cache invalidation failed for org_id={org_id}; permissions may be stale for up to "
+                f"{settings.ACCESS_CACHE_LIFETIME // 60} min",
+                exc_info=True,
+            )
+
+    return _invalidate
+
+
 class Command(BaseCommand):
     """Create or update an org tenant, principal, and optional admin group membership.
 
-    Intended for on-prem single-org bootstrap. ``cache.clear()`` flushes the entire
-    Redis cache. With ``--admin``, ``policy.roles.set()`` replaces policy roles to
-    match the current ``--application`` filter (not additive across invocations).
+    Intended for on-prem single-org bootstrap. After commit, only this tenant's
+    policy cache is invalidated. With ``--admin``, ``policy.roles.set()`` replaces
+    policy roles to match the current ``--application`` filter (not additive
+    across invocations).
     """
 
     help = (
@@ -168,7 +186,6 @@ class Command(BaseCommand):
                 role_names = list(admin_roles.values_list("name", flat=True))
                 logger.info(f"Granted admin roles {role_names} to {username!r} in org {org_id}")
 
-        cache.clear()
-        logger.info(f"Purged access cache after ensure_user for org_id={org_id}")
+            transaction.on_commit(_invalidate_tenant_access_cache(tenant.org_id))
 
         call_command("bootstrap_tenants", "--org-id", org_id, "--force", verbosity=options.get("verbosity", 1))
