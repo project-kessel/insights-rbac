@@ -186,10 +186,11 @@ class Command(BaseCommand):
                     group=group,
                     defaults={"system": True},
                 )
-                policy.roles.set(admin_roles)
+                admin_roles_list = list(admin_roles)
+                policy.roles.set(admin_roles_list)
                 group.principals.add(principal)
 
-                role_names = list(admin_roles.values_list("name", flat=True))
+                role_names = [r.name for r in admin_roles_list]
                 logger.info(f"Granted admin roles {role_names} to {username!r} in org {org_id}")
 
             transaction.on_commit(_invalidate_tenant_access_cache(tenant.org_id))
