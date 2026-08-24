@@ -69,6 +69,7 @@ def _create_consumer(group_id: str = DR_CONSUMER_GROUP) -> KafkaConsumer:
         "enable_auto_commit": False,
         "auto_offset_reset": "earliest",
         "consumer_timeout_ms": getattr(settings, "DR_KAFKA_CONSUMER_TIMEOUT_MS", 30000),
+        "session_timeout_ms": 45000,  # Explicit: kafka-python v3 default (was 10000 in v2)
         "value_deserializer": lambda m: json.loads(m.decode("utf-8")),
     }
 

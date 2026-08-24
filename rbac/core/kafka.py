@@ -49,13 +49,21 @@ class RBACProducer:
                 while retries <= max_retries:
                     try:
                         if settings.KAFKA_AUTH:
-                            self.producer = KafkaProducer(**settings.KAFKA_AUTH)
+                            self.producer = KafkaProducer(
+                                **settings.KAFKA_AUTH,
+                                enable_idempotence=True,  # Deduplicate producer retries (v3 default)
+                                acks="all",  # Wait for all in-sync replicas (v3 default)
+                            )
                             logger.info("Kafka producer initialized successfully")
                             return self.producer
                         elif not settings.KAFKA_SERVERS:
                             raise AttributeError("Empty servers list")
                         else:
-                            self.producer = KafkaProducer(bootstrap_servers=settings.KAFKA_SERVERS)
+                            self.producer = KafkaProducer(
+                                bootstrap_servers=settings.KAFKA_SERVERS,
+                                enable_idempotence=True,  # Deduplicate producer retries (v3 default)
+                                acks="all",  # Wait for all in-sync replicas (v3 default)
+                            )
                             return self.producer
                     except KafkaError as e:
                         logger.error(f"Kafka error during initialization of Kafka producer: {e}")

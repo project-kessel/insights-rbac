@@ -116,6 +116,7 @@ def read_events_in_window(
         "enable_auto_commit": False,
         "auto_offset_reset": "earliest",
         "consumer_timeout_ms": 10000,
+        "session_timeout_ms": 45000,  # Explicit: kafka-python v3 default (was 10000 in v2)
         "value_deserializer": None,
     }
 

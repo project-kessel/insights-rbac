@@ -879,6 +879,7 @@ class RBACKafkaConsumer:
                     auto_offset_reset="earliest",  # Process all messages from beginning if no offset exists
                     enable_auto_commit=False,  # Manual commit for at-least-once processing
                     group_id=settings.RBAC_KAFKA_CONSUMER_GROUP_ID,
+                    session_timeout_ms=45000,  # Explicit: kafka-python v3 default (was 10000 in v2)
                     **consumer_auth,
                 )
                 logger.info(f"Kafka consumer created with auth for topic: {self.topic}")
@@ -889,6 +890,7 @@ class RBACKafkaConsumer:
                     auto_offset_reset="earliest",  # Process all messages from beginning if no offset exists
                     enable_auto_commit=False,  # Manual commit for at-least-once processing
                     group_id=settings.RBAC_KAFKA_CONSUMER_GROUP_ID,
+                    session_timeout_ms=45000,  # Explicit: kafka-python v3 default (was 10000 in v2)
                 )
                 logger.info(f"Kafka consumer created with servers {kafka_servers} for topic: {self.topic}")
 
