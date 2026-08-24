@@ -255,3 +255,33 @@ class TestEnsureUser(IdentityRequest):
         tenant = Tenant.objects.get(org_id="org1")
         self.assertTrue(Principal.objects.filter(username="alice", tenant=tenant).exists())
         mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
+
+    @patch("management.management.commands.ensure_user.call_command")
+    def test_bootstrap_failure_raises_command_error(self, mock_bootstrap):
+        """bootstrap_tenants failure after commit is reported without rolling back the user."""
+        mock_bootstrap.side_effect = RuntimeError("kessel unavailable")
+
+        with self.assertRaises(CommandError):
+            self._invoke(
+                "--username=alice",
+                "--org-id=org1",
+                "--account-number=123",
+            )
+
+        tenant = Tenant.objects.get(org_id="org1")
+        self.assertTrue(Principal.objects.filter(username="alice", tenant=tenant).exists())
+        mock_bootstrap.assert_called_once_with("bootstrap_tenants", "--org-id", "org1", "--force", verbosity=1)
+
+    def test_skip_bootstrap_does_not_call_bootstrap_tenants(self):
+        """--skip-bootstrap creates the user without invoking bootstrap_tenants."""
+        with patch("management.management.commands.ensure_user.call_command") as mock_bootstrap:
+            self._invoke(
+                "--username=alice",
+                "--org-id=org1",
+                "--account-number=123",
+                "--skip-bootstrap",
+            )
+
+        tenant = Tenant.objects.get(org_id="org1")
+        self.assertTrue(Principal.objects.filter(username="alice", tenant=tenant).exists())
+        mock_bootstrap.assert_not_called()

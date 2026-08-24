@@ -63,7 +63,8 @@ class Command(BaseCommand):
 
     help = (
         "Create an org tenant and principal. With --admin, add the principal to the "
-        "tenant admin-default group for the given --application values."
+        "tenant admin-default group for the given --application values. "
+        "Runs bootstrap_tenants after commit unless --skip-bootstrap is set."
     )
 
     def add_arguments(self, parser):
@@ -100,6 +101,11 @@ class Command(BaseCommand):
             "--admin-policy-name",
             default=_DEFAULT_ADMIN_POLICY_NAME,
             help="Name of the policy linking admin roles to the admin group",
+        )
+        parser.add_argument(
+            "--skip-bootstrap",
+            action="store_true",
+            help="Skip bootstrap_tenants after commit (run it separately if needed)",
         )
 
     def handle(self, *args, **options):
@@ -188,4 +194,15 @@ class Command(BaseCommand):
 
             transaction.on_commit(_invalidate_tenant_access_cache(tenant.org_id))
 
-        call_command("bootstrap_tenants", "--org-id", org_id, "--force", verbosity=options.get("verbosity", 1))
+        if options["skip_bootstrap"]:
+            logger.info(f"Skipping bootstrap_tenants for org_id={org_id} (--skip-bootstrap)")
+            return
+
+        logger.info(f"Running bootstrap_tenants for org_id={org_id}...")
+        try:
+            call_command("bootstrap_tenants", "--org-id", org_id, "--force", verbosity=options.get("verbosity", 1))
+        except Exception as exc:
+            raise CommandError(
+                f"User created but bootstrap_tenants failed for org_id={org_id}: {exc}. "
+                f"Re-run 'manage.py bootstrap_tenants --org-id {org_id} --force' to complete setup."
+            ) from exc
