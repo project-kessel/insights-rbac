@@ -183,8 +183,7 @@ class Command(BaseCommand):
                 policy, _ = Policy.objects.get_or_create(
                     name=admin_policy_name,
                     tenant=tenant,
-                    group=group,
-                    defaults={"system": True},
+                    defaults={"system": True, "group": group},
                 )
                 admin_roles_list = list(admin_roles)
                 policy.roles.set(admin_roles_list)
