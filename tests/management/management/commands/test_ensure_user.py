@@ -34,6 +34,9 @@ class TestEnsureUser(IdentityRequest):
         super().setUp()
         self.public_tenant = Tenant.objects.get(tenant_name="public")
         Tenant.objects.exclude(tenant_name="public").delete()
+        cache_patcher = patch("management.management.commands.ensure_user.AccessCache")
+        self.mock_access_cache_cls = cache_patcher.start()
+        self.addCleanup(cache_patcher.stop)
 
     def _create_role(self, name, application, admin_default=False):
         permission, _ = Permission.objects.get_or_create(
@@ -222,11 +225,10 @@ class TestEnsureUser(IdentityRequest):
         self.assertIn(principal, group.principals.all())
         mock_bootstrap.assert_called_once()
 
-    @patch("management.management.commands.ensure_user.AccessCache")
     @patch("management.management.commands.ensure_user.call_command")
-    def test_invalidates_tenant_policy_cache_after_commit(self, mock_bootstrap, mock_cache_cls):
+    def test_invalidates_tenant_policy_cache_after_commit(self, mock_bootstrap):
         """After commit, only this tenant's policy cache is purged."""
-        cache = mock_cache_cls.return_value
+        cache = self.mock_access_cache_cls.return_value
 
         with self.captureOnCommitCallbacks(execute=True):
             self._invoke(
@@ -235,15 +237,14 @@ class TestEnsureUser(IdentityRequest):
                 "--account-number=123",
             )
 
-        mock_cache_cls.assert_called_once_with("org1")
+        self.mock_access_cache_cls.assert_called_once_with("org1")
         cache.delete_all_policies_for_tenant.assert_called_once_with()
         mock_bootstrap.assert_called_once()
 
-    @patch("management.management.commands.ensure_user.AccessCache")
     @patch("management.management.commands.ensure_user.call_command")
-    def test_cache_invalidation_failure_does_not_skip_bootstrap(self, mock_bootstrap, mock_cache_cls):
+    def test_cache_invalidation_failure_does_not_skip_bootstrap(self, mock_bootstrap):
         """Redis failures after commit must not prevent bootstrap_tenants."""
-        mock_cache_cls.return_value.delete_all_policies_for_tenant.side_effect = Exception("redis down")
+        self.mock_access_cache_cls.return_value.delete_all_policies_for_tenant.side_effect = Exception("redis down")
 
         with self.captureOnCommitCallbacks(execute=True):
             self._invoke(
