@@ -86,7 +86,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Handle command execution."""
-        username = options["username"]
+        username = options["username"].lower()
         org_id = options["org_id"]
         account_number = options["account_number"]
         applications = options.get("applications") or []
