@@ -208,11 +208,6 @@ class WorkspaceInventoryAccessChecker:
         """
 
         def rpc(stub):
-            logger.info(
-                "lookup_accessible_workspaces called with consistency_token=%s",
-                consistency_token,
-            )
-
             subject_ref = make_subject_ref(principal_id)
             consistency = None
             if consistency_token:
