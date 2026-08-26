@@ -350,8 +350,10 @@ def is_user_allowed_v2(request, required_operation, target_workspace, with_ances
                 request.tenant.refresh_from_db(fields=["relations_consistency_token"])
                 consistency_token = request.tenant.relations_consistency_token
                 logger.info(
-                    "lookup_accessible_workspaces: org_id=%s, consistency_token=%s",
+                    "lookup_accessible_workspaces: org_id=%s, principal_id=%s, relation=%s, consistency_token=%s",
                     org_id,
+                    principal_id,
+                    relation,
                     consistency_token,
                 )
                 accessible_workspace_ids = checker.lookup_accessible_workspaces(
