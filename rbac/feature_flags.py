@@ -18,12 +18,26 @@
 
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 from UnleashClient import UnleashClient
+from UnleashClient.events import BaseEvent, UnleashEventType
 from django.conf import settings
+from prometheus_client import Counter, Gauge
 
 logger = logging.getLogger(__name__)
+
+rbac_unleash_fetch_total = Counter(
+    "rbac_unleash_fetch_total",
+    "Total successful Unleash feature flag fetches (excludes HTTP 304 Not Modified)",
+    ["status"],
+)
+
+rbac_unleash_last_fetch_timestamp = Gauge(
+    "rbac_unleash_last_fetch_timestamp",
+    "Unix timestamp of the last successful Unleash feature flag fetch",
+)
 
 
 class FeatureFlags:
@@ -70,18 +84,37 @@ class FeatureFlags:
                 logger.exception("Error initializing FeatureFlags client")
                 self.client = None
 
+    @staticmethod
+    def _on_unleash_event(event: BaseEvent):
+        """Handle Unleash SDK events for monitoring."""
+        if event.event_type == UnleashEventType.FETCHED:
+            rbac_unleash_fetch_total.labels(status="success").inc()
+            rbac_unleash_last_fetch_timestamp.set(time.time())
+            logger.debug("Unleash feature flags fetched successfully")
+
     def _init_unleash_client(self):
         """Initialize the client."""
+        refresh_interval = getattr(settings, "UNLEASH_REFRESH_INTERVAL", 30)
+        request_timeout = getattr(settings, "UNLEASH_REQUEST_TIMEOUT", 30)
+
         client = UnleashClient(
             url=settings.FEATURE_FLAGS_URL,
             app_name=settings.APP_NAME,
             custom_headers={"Authorization": settings.FEATURE_FLAGS_TOKEN},
             cache_directory=settings.FEATURE_FLAGS_CACHE_DIR,
+            refresh_interval=refresh_interval,
+            request_timeout=request_timeout,
+            event_callback=self._on_unleash_event,
         )
 
         if settings.FEATURE_FLAGS_URL and settings.FEATURE_FLAGS_TOKEN:
             client.initialize_client()
-            logger.info(f"FeatureFlags initialized using Unleash on {settings.FEATURE_FLAGS_URL}")
+            logger.info(
+                "FeatureFlags initialized using Unleash on %s (refresh_interval=%ds, request_timeout=%ds)",
+                settings.FEATURE_FLAGS_URL,
+                refresh_interval,
+                request_timeout,
+            )
         else:
             logger.info(
                 "FEATURE_FLAGS_URL and/or FEATURE_FLAGS_TOKEN were not set, skipping FeatureFlags initialization."
