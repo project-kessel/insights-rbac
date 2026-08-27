@@ -62,7 +62,7 @@ from management.role_binding.view import RoleBindingViewSet
 from management.tenant_mapping.v2_activation import is_v2_write_activated
 from management.utils import is_valid_uuid
 from management.workspace.view import WorkspaceViewSet
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from prometheus_client import Counter, Histogram
 from redis import Redis, exceptions as redis_exceptions
 
@@ -202,12 +202,12 @@ def _get_all_description_overrides() -> dict[str, str]:
 
 # --- MCP Server setup using the Anthropic MCP Python SDK ---
 
-mcp = FastMCP("RBAC")
+mcp = MCPServer("RBAC")
 
 
 # --- Tool configuration ---
 #
-# @register_tool registers each tool with both FastMCP (for schema generation)
+# @register_tool registers each tool with both MCPServer (for schema generation)
 # and _TOOL_CONFIG (for sync execution). This eliminates the need for separate
 # stub functions and a manual config dict.
 
@@ -253,10 +253,10 @@ def register_tool(
     caveats: str = "",
     redacted_fields: tuple[str, ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register a tool with both FastMCP and _TOOL_CONFIG.
+    """Register a tool with both MCPServer and _TOOL_CONFIG.
 
     If the function's first parameter is named ``request``, a schema-only
-    wrapper (without the ``request`` param) is registered with FastMCP so
+    wrapper (without the ``request`` param) is registered with MCPServer so
     the generated JSON schema matches what MCP clients send. The real
     implementation receives the Django request at call time via
     ``_handle_tools_call``.
@@ -286,14 +286,14 @@ def register_tool(
         )
 
         if passes_request:
-            # Build a wrapper whose signature omits `request` so FastMCP
+            # Build a wrapper whose signature omits `request` so MCPServer
             # generates a schema without it.
             remaining = [p for name, p in sig.parameters.items() if name != "request"]
             wrapper_sig = sig.replace(parameters=remaining)
 
             @wraps(fn)
             def _schema_stub(**kwargs: Any) -> str:
-                raise RuntimeError(f"{tool_name} should not be called via FastMCP dispatch")
+                raise RuntimeError(f"{tool_name} should not be called via MCPServer dispatch")
 
             _schema_stub.__signature__ = wrapper_sig  # type: ignore[attr-defined]
             mcp.tool(name=tool_name, description=description)(_schema_stub)
@@ -5583,7 +5583,7 @@ def _handle_initialize(request: HttpRequest, request_id: Any, params: dict[str, 
 
 @lru_cache(maxsize=1)
 def _get_tools() -> list[Any]:
-    """Resolve and cache tool metadata from FastMCP on first call.
+    """Resolve and cache tool metadata from MCPServer on first call.
 
     Tools are static (listChanged: False). Lazy initialization avoids
     import-time side effects. Runs in WSGI context where no event loop
@@ -5595,7 +5595,7 @@ def _get_tools() -> list[Any]:
 @lru_cache(maxsize=1)
 def _get_tool_schemas() -> dict[str, dict[str, Any]]:
     """Build a {tool_name: inputSchema} lookup from the cached tool list."""
-    return {tool.name: tool.inputSchema for tool in _get_tools()}
+    return {tool.name: tool.input_schema for tool in _get_tools()}
 
 
 def _sanitize_validation_error(error: jsonschema.ValidationError) -> str:
@@ -5630,7 +5630,7 @@ def _validate_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> str |
     """Validate arguments against the tool's JSON schema.
 
     Injects ``additionalProperties: false`` so unknown arguments are
-    rejected even though FastMCP-generated schemas omit that keyword.
+    rejected even though MCPServer-generated schemas omit that keyword.
 
     Returns None on success, or a sanitized error message on failure.
     """
@@ -5990,7 +5990,7 @@ def _generate_write_preview(tool_name: str, arguments: dict[str, Any]) -> str:
 
 
 def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
-    """Handle MCP tools/list request using FastMCP's registered tools."""
+    """Handle MCP tools/list request using MCPServer's registered tools."""
     v2_available = _is_v2_available()
     write_enabled = _is_write_enabled()
     overrides = _get_all_description_overrides()
@@ -6008,7 +6008,7 @@ def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, 
             {
                 "name": tool.name,
                 "description": description,
-                "inputSchema": tool.inputSchema,
+                "inputSchema": tool.input_schema,
             }
         )
     return _success_response(request_id, {"tools": tools_data})
@@ -6143,7 +6143,7 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
     """Handle MCP tools/call request.
 
     Calls tool functions directly in the sync WSGI context (not through
-    FastMCP's async call_tool) to avoid Django's SynchronousOnlyOperation
+    MCPServer's async call_tool) to avoid Django's SynchronousOnlyOperation
     error when tools access the ORM.
 
     Tools that need auth context receive the Django request as the first
