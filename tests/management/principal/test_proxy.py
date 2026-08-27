@@ -18,13 +18,13 @@
 
 from unittest.mock import patch
 
-from django.test import TestCase
 from rest_framework import status
 import requests
 
 from api.models import Tenant
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy
+from tests.identity_request import IdentityRequest
 
 
 class MockResponse:  # pylint: disable=too-few-public-methods
@@ -109,7 +109,7 @@ def mocked_requests_get_200_except(url, *args, **kwargs):  # pylint: disable=unu
     return MockResponse(url, json_response, status.HTTP_200_OK, exception=ValueError)
 
 
-class PrincipalProxyTest(TestCase):
+class PrincipalProxyTest(IdentityRequest):
     """Test PrincipalProxy object."""
 
     @patch(
@@ -260,3 +260,44 @@ class PrincipalProxyTest(TestCase):
         usernames.sort()
         expected = ["user1", "user2"]
         self.assertEqual(usernames, expected)
+
+    @patch("management.principal.proxy.LOGGER")
+    def test__request_principals_200_info_log_no_pii_list_response(self, mock_logger):
+        """Test INFO log does not contain PII fields from BOP list response."""
+        proxy = PrincipalProxy()
+        proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_200_json)
+
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+        pii_fields = ["test_user1@email.foo", "first_name", "last_name", "account_number", "address_string"]
+        for pii in pii_fields:
+            self.assertNotIn(pii, log_msg, f"INFO log should not contain PII field: {pii}")
+        # Username is allowed — verify it IS present
+        self.assertIn("test_user1", log_msg)
+
+    @patch("management.principal.proxy.LOGGER")
+    def test__request_principals_200_info_log_no_pii_dict_response(self, mock_logger):
+        """Test INFO log does not contain PII fields from BOP dict response (with userCount)."""
+        proxy = PrincipalProxy()
+        proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_200_json_count)
+
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+        pii_fields = ["test_user1@email.foo", "test_user2@email.foo"]
+        for pii in pii_fields:
+            self.assertNotIn(pii, log_msg, f"INFO log should not contain PII field: {pii}")
+        # Usernames and user_count are allowed
+        self.assertIn("test_user1", log_msg)
+        self.assertIn("test_user2", log_msg)
+        self.assertIn("user_count=2", log_msg)
+
+    @patch("management.principal.proxy.LOGGER")
+    def test__request_principals_200_debug_log_has_full_response(self, mock_logger):
+        """Test DEBUG log contains the full BOP response for debugging."""
+        proxy = PrincipalProxy()
+        proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_200_json)
+
+        mock_logger.debug.assert_called_once()
+        debug_msg = mock_logger.debug.call_args[0][0] % mock_logger.debug.call_args[0][1:]
+        # Full response should be in DEBUG log
+        self.assertIn("test_user1@email.foo", debug_msg, "DEBUG log should contain full BOP response")

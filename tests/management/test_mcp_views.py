@@ -114,6 +114,7 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def tearDown(self):
         """Tear down MCP view tests."""
+        _shutdown_in_progress.clear()
         AuditLog.objects.all().delete()
         Policy.objects.all().delete()
         Role.objects.all().delete()
@@ -308,10 +309,18 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         self.assertNotIn("result", data)
         self.assertEqual(data["error"]["code"], -32600)
 
-    def test_get_returns_405(self):
-        """Negative: GET request returns 405 (SSE not supported in WSGI)."""
+    def test_get_returns_status(self):
+        """Positive: GET request returns JSON status for health probes."""
         response = self.client.get(self.url, **self.headers)
-        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_get_returns_503_during_shutdown(self):
+        """Negative: GET returns 503 when shutdown is in progress."""
+        _shutdown_in_progress.set()
+        response = self.client.get(self.url, **self.headers)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "shutting_down"})
 
     def test_delete_returns_200(self):
         """Positive: DELETE for session termination returns 200."""

@@ -105,7 +105,7 @@ All MCP protocol messages are sent as HTTP POST requests to this single endpoint
 | HTTP Method | Behavior |
 |-------------|----------|
 | `POST` | Handle MCP JSON-RPC requests |
-| `GET` | Returns 405 (SSE streaming not supported in WSGI) |
+| `GET` | Returns JSON health status (`{"status": "ok"}` or `{"status": "shutting_down"}`) — usable as a health probe. SSE streaming is not supported in WSGI mode |
 | `DELETE` | Returns 200 (session termination acknowledgement) |
 
 ---

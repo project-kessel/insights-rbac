@@ -5446,9 +5446,17 @@ class MCPView(View):
         logger.warning("mcp: unknown method=%s, org_id=%s, req_id=%s", rpc_req.method, org_id, req_id)
         return _error_response(rpc_req.request_id, -32601, f"Method not found: {rpc_req.method}")
 
-    def get(self, request: HttpRequest) -> HttpResponse:
-        """SSE streaming is not supported in WSGI mode."""
-        return HttpResponse("SSE streaming not supported in WSGI mode", status=405, content_type="text/plain")
+    def get(self, request: HttpRequest) -> JsonResponse:
+        """Return server status for health probes and capability discovery.
+
+        SSE streaming is not supported in WSGI mode, but GET on the base
+        path is commonly used by health-check probes and MCP clients to
+        verify the endpoint is alive.  Return a JSON status instead of 405
+        so these probes succeed without a POST.
+        """
+        if _shutdown_in_progress.is_set():
+            return JsonResponse({"status": "shutting_down"}, status=503)
+        return JsonResponse({"status": "ok"})
 
     def delete(self, request: HttpRequest) -> HttpResponse:
         """Handle MCP session termination."""

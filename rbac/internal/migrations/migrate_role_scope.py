@@ -28,7 +28,7 @@ from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
 from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import RelationReplicator
+from management.relation_replicator.relation_replicator import DualWriteException, RelationReplicator
 from management.role.model import Role, RoleScopeState
 from migration_tool.migrate_binding_scope import migrate_car_bindings, migrate_system_role_bindings_for_group
 
@@ -263,7 +263,9 @@ def migrate_batch_with_fallback[T](
         # Although migrating each entity is still done individually, it's still worth it to attempt batching because it
         # saves us having to re-validate the migration for every single entity.
         return migrate_batch_fn(context, batch)
-    except OperationalError:
+    # In the worst case where we have a persistent error condition, we'll fail while retrying the first element, so we
+    # don't need to be very fine-grained here.
+    except Exception:
         logger.warning("Falling back to per-model scope migration.", exc_info=True)
 
         migrated = 0

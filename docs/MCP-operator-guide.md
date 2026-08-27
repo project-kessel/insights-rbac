@@ -321,7 +321,7 @@ Write operations are **disabled by default** for defense in depth. When enabling
 | Thread pool limit | `MCP_TOOL_MAX_WORKERS` (default 10) caps concurrent tool executions per WSGI worker |
 | Existing rate limits | Delegated views inherit the RBAC service's existing rate limiting |
 | No batch requests | JSON-RPC batch requests are explicitly rejected |
-| No SSE streaming | GET requests return 405 — no long-lived connections |
+| No SSE streaming | GET requests return a JSON health status (no long-lived connections). SSE is not supported in WSGI mode |
 
 ---
 
@@ -674,7 +674,7 @@ Replace the URL and identity header with values appropriate for your environment
 | Confirmation token expired | More than `MCP_WRITE_CONFIRMATION_TTL` seconds between phases | Increase the TTL or complete the confirmation more quickly |
 | `tools/list` returns empty or missing tools | V2 tools hidden because `V2_APIS_ENABLED=False`; write tools show `[DISABLED]` | Check feature flags match the expected tool set |
 | Redis errors in logs | Redis unavailable for description overrides or confirmation tokens | Ensure Redis is running and accessible. Read-only mode degrades gracefully; write confirmations require Redis. |
-| HTTP 405 on GET | Client attempted SSE streaming | Use POST for all MCP protocol messages. SSE is not supported in WSGI mode. |
+| HTTP 503 on GET | MCP endpoint is shutting down | Wait for the pod to be replaced; probes will stop routing traffic to this pod |
 
 ---
 
