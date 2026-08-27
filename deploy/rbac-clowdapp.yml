@@ -298,6 +298,10 @@ objects:
             value: ${WORKSPACE_RESTRICT_DEFAULT_PEERS}
           - name: FEATURE_FLAGS_CACHE_DIR
             value: ${FEATURE_FLAGS_CACHE_DIR}
+          - name: UNLEASH_REFRESH_INTERVAL
+            value: ${UNLEASH_REFRESH_INTERVAL}
+          - name: UNLEASH_REQUEST_TIMEOUT
+            value: ${UNLEASH_REQUEST_TIMEOUT}
           - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
             value: ${SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID}
           - name: SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID
@@ -652,6 +656,10 @@ objects:
             value: ${READ_YOUR_WRITES_TIMEOUT_SECONDS}
           - name: FEATURE_FLAGS_CACHE_DIR
             value: ${FEATURE_FLAGS_CACHE_DIR}
+          - name: UNLEASH_REFRESH_INTERVAL
+            value: ${UNLEASH_REFRESH_INTERVAL}
+          - name: UNLEASH_REQUEST_TIMEOUT
+            value: ${UNLEASH_REQUEST_TIMEOUT}
           - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
             value: ${SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID}
           - name: SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID
@@ -1141,6 +1149,10 @@ objects:
               value: ${WORKSPACE_ORG_CREATION_LIMIT}
             - name: FEATURE_FLAGS_CACHE_DIR
               value: ${FEATURE_FLAGS_CACHE_DIR}
+            - name: UNLEASH_REFRESH_INTERVAL
+              value: ${UNLEASH_REFRESH_INTERVAL}
+            - name: UNLEASH_REQUEST_TIMEOUT
+              value: ${UNLEASH_REQUEST_TIMEOUT}
             ######## Following envs are different from worker
             - name: S3_AWS_ACCESS_KEY_ID
               valueFrom:
@@ -1366,6 +1378,10 @@ objects:
               value: ${WORKSPACE_ORG_CREATION_LIMIT}
             - name: FEATURE_FLAGS_CACHE_DIR
               value: ${FEATURE_FLAGS_CACHE_DIR}
+            - name: UNLEASH_REFRESH_INTERVAL
+              value: ${UNLEASH_REFRESH_INTERVAL}
+            - name: UNLEASH_REQUEST_TIMEOUT
+              value: ${UNLEASH_REQUEST_TIMEOUT}
             - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
               value: ${SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID}
             - name: SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID
@@ -2043,6 +2059,12 @@ parameters:
 - name: FEATURE_FLAGS_CACHE_DIR
   description: The cache dir for unleash
   value: '/tmp/unleash_cache'
+- name: UNLEASH_REFRESH_INTERVAL
+  description: Unleash feature flag polling interval in seconds
+  value: '30'
+- name: UNLEASH_REQUEST_TIMEOUT
+  description: Unleash HTTP request timeout in seconds
+  value: '30'
 - name: RBAC_KAFKA_CONSUMER_CPU_LIMIT
   description:
   value: 500m

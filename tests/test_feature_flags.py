@@ -18,10 +18,12 @@
 
 import threading
 import time
+from unittest.mock import MagicMock, patch
+
 from django.conf import settings
-from django.test import TestCase
-from unittest.mock import patch
-from feature_flags import FEATURE_FLAGS
+from django.test import TestCase, override_settings
+
+from feature_flags import FEATURE_FLAGS, FeatureFlags, rbac_unleash_fetch_total, rbac_unleash_last_fetch_timestamp
 
 
 class FeatureFlagsTest(TestCase):
@@ -295,3 +297,77 @@ class FeatureFlagsTest(TestCase):
 
         # Restore original method
         FEATURE_FLAGS.get_principal_cleanup_mode = original_get_mode
+
+    @override_settings(
+        FEATURE_FLAGS_URL="http://unleash:4242/api",
+        FEATURE_FLAGS_TOKEN="test-token",
+        UNLEASH_REFRESH_INTERVAL=45,
+        UNLEASH_REQUEST_TIMEOUT=20,
+    )
+    @patch("feature_flags.UnleashClient")
+    def test_init_uses_configurable_refresh_interval(self, mock_unleash_cls):
+        """Test that _init_unleash_client passes configurable refresh_interval and request_timeout."""
+        mock_client = MagicMock()
+        mock_unleash_cls.return_value = mock_client
+
+        FEATURE_FLAGS.client = None
+        result = FEATURE_FLAGS._init_unleash_client()
+
+        self.assertEqual(result, mock_client)
+        mock_client.initialize_client.assert_called_once()
+        mock_unleash_cls.assert_called_once()
+        call_kwargs = mock_unleash_cls.call_args[1]
+        self.assertEqual(call_kwargs["refresh_interval"], 45)
+        self.assertEqual(call_kwargs["request_timeout"], 20)
+        self.assertIn("event_callback", call_kwargs)
+
+    @override_settings(FEATURE_FLAGS_URL="http://unleash:4242/api", FEATURE_FLAGS_TOKEN="test-token")
+    @patch("feature_flags.UnleashClient")
+    def test_init_default_refresh_interval(self, mock_unleash_cls):
+        """Test that _init_unleash_client uses default refresh_interval and request_timeout."""
+        mock_client = MagicMock()
+        mock_unleash_cls.return_value = mock_client
+
+        FEATURE_FLAGS.client = None
+        result = FEATURE_FLAGS._init_unleash_client()
+
+        self.assertEqual(result, mock_client)
+        mock_client.initialize_client.assert_called_once()
+        call_kwargs = mock_unleash_cls.call_args[1]
+        self.assertEqual(call_kwargs["refresh_interval"], 30)
+        self.assertEqual(call_kwargs["request_timeout"], 30)
+
+    def test_on_unleash_event_tracks_fetched(self):
+        """Test that _on_unleash_event increments poll counter on FETCHED events."""
+        from UnleashClient.events import UnleashEventType, UnleashFetchedEvent
+        import uuid
+
+        before_count = rbac_unleash_fetch_total.labels(status="success")._value.get()
+
+        event = UnleashFetchedEvent(
+            event_type=UnleashEventType.FETCHED,
+            event_id=uuid.uuid4(),
+            raw_features="{}",
+        )
+        FeatureFlags._on_unleash_event(event)
+
+        after_count = rbac_unleash_fetch_total.labels(status="success")._value.get()
+        self.assertEqual(after_count, before_count + 1)
+
+    def test_on_unleash_event_updates_timestamp(self):
+        """Test that _on_unleash_event updates last poll timestamp on FETCHED events."""
+        from UnleashClient.events import UnleashEventType, UnleashFetchedEvent
+        import uuid
+
+        event = UnleashFetchedEvent(
+            event_type=UnleashEventType.FETCHED,
+            event_id=uuid.uuid4(),
+            raw_features="{}",
+        )
+        before_time = time.time()
+        FeatureFlags._on_unleash_event(event)
+        after_time = time.time()
+
+        ts = rbac_unleash_last_fetch_timestamp._value.get()
+        self.assertGreaterEqual(ts, before_time)
+        self.assertLessEqual(ts, after_time)
