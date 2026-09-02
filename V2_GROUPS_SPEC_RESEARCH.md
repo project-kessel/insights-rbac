@@ -8,9 +8,9 @@
 
 ## Why this document exists
 
-An earlier iteration of PR #3278 shipped a full V2 Groups CRUD implementation **plus** unrelated cleanup, 
-but never updated the TypeSpec/OpenAPI contract. This spec-only PR was extracted to get agreement on the 
-**interface** first — that's what the UI team consumes and what's most expensive to change later. 
+An earlier iteration of PR #3278 shipped a full V2 Groups CRUD implementation **plus** unrelated cleanup,
+but never updated the TypeSpec/OpenAPI contract. This spec-only PR was extracted to get agreement on the
+**interface** first — that's what the UI team consumes and what's most expensive to change later.
 This document answers the three questions raised in review and proposes a spec.
 
 Colleague's three questions (paraphrased):
@@ -158,9 +158,9 @@ DELETE /api/rbac/v2/groups/{uuid}/principals/{principal_uuid}/ # remove one memb
    for groups) and the unrelated cleanup; keep only TypeSpec changes + regenerated openapi. The PR
    becomes the proposal artifact for the interface.
 2. **Add the V2 `Groups` namespace to `docs/source/specs/typespec/main.tsp`** describing the endpoints
-   above. Define a full `Group` model for the Groups API (uuid, name, description, principal_count, 
-   timestamps, system/default flags) distinct from the lightweight `GroupDetails` (name, description, 
-   user_count) used in role binding subjects. The full model serves the Groups lifecycle API; the 
+   above. Define a full `Group` model for the Groups API (uuid, name, description, principal_count,
+   timestamps, system/default flags) distinct from the lightweight `GroupDetails` (name, description,
+   user_count) used in role binding subjects. The full model serves the Groups lifecycle API; the
    lightweight model embeds in role binding responses. Run `make generate_v2_spec`.
 3. **Bring this doc + the spec diff to the UI team** to answer Q2 (needed? / external?) and the open spec
    questions before any code.
