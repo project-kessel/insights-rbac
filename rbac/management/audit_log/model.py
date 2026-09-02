@@ -33,6 +33,7 @@ class AuditLog(TenantAwareModel):
     """An audit log."""
 
     GROUP = "group"
+    GROUP_V2 = "group_v2"
     ROLE = "role"
     ROLE_V2 = "role_v2"
     USER = "user"
@@ -41,6 +42,7 @@ class AuditLog(TenantAwareModel):
     ROLE_BINDING = "role_binding"
     RESOURCE_CHOICES = (
         (GROUP, "Group"),
+        (GROUP_V2, "V2 Group"),
         (ROLE, "Role"),
         (ROLE_V2, "V2 Role"),
         (USER, "User"),
@@ -69,6 +71,7 @@ class AuditLog(TenantAwareModel):
 
     _model_class_by_resource_type = {
         GROUP: Group,
+        GROUP_V2: Group,
         ROLE: Role,
         ROLE_V2: RoleV2,
         WORKSPACE: Workspace,
@@ -104,6 +107,9 @@ class AuditLog(TenantAwareModel):
 
     @staticmethod
     def _format_resource_type(resource_type: str) -> str:
+        if resource_type == AuditLog.GROUP_V2:
+            return "V2 group"
+
         if resource_type == AuditLog.ROLE_V2:
             return "V2 role"
 
@@ -169,12 +175,29 @@ class AuditLog(TenantAwareModel):
 
         return resource_name + ":\n" + "\n".join(annotations)
 
+    def _group_v2_edited_field(self, resource_name, request, object):
+        annotations = []
+
+        if "name" in request.data and request.data["name"] != object.name:
+            annotations.append("Edited name")
+
+        if "description" in request.data and request.data.get("description", "") != (object.description or ""):
+            annotations.append("Edited description")
+
+        if not annotations:
+            return resource_name
+
+        return resource_name + ":\n" + "\n".join(annotations)
+
     def find_edited_field(self, resource, resource_name, request, object):
         """Add additional information when group/role is edited."""
         # We can't fix the usual format because of backwards-compatibility concerns, but we can use a fixed format
         # for V2 role and workspace operations.
         if resource == AuditLog.ROLE_V2:
             return self._v2_role_edited_field(resource_name, request, object)
+
+        if resource == AuditLog.GROUP_V2:
+            return self._group_v2_edited_field(resource_name, request, object)
 
         if resource == AuditLog.WORKSPACE:
             return self._workspace_edited_field(resource_name, request, object)

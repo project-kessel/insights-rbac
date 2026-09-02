@@ -37,12 +37,10 @@ from management.role_binding.model import (
     RoleBindingPrincipal,
 )
 from management.tenant_mapping.model import TenantMapping
-from management.tenant_mapping.v2_activation import ensure_v2_write_activated, assert_v1_write_allowed
 from management.workspace.model import Workspace
 from tests.identity_request import IdentityRequest
 
 from api.models import Tenant
-from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
 class ParityCheckResultTests(TestCase):
@@ -94,12 +92,23 @@ class ParityAccessCheckerTests(IdentityRequest):
         self.tenant.save()
 
         # Create tenant mapping with v2 activated
-        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
-        self.root_workspace = bootstrap_result.root_workspace
-        self.default_workspace = bootstrap_result.default_workspace
+        self.tenant_mapping = TenantMapping.objects.create(
+            tenant=self.tenant,
+            v2_write_activated_at=timezone.now(),
+        )
 
-        ensure_v2_write_activated(self.tenant)
-        self.tenant_mapping = self.tenant.tenant_mapping
+        # Create root and default workspaces
+        self.root_workspace = Workspace.objects.create(
+            name=Workspace.SpecialNames.ROOT,
+            type=Workspace.Types.ROOT,
+            tenant=self.tenant,
+        )
+        self.default_workspace = Workspace.objects.create(
+            name=Workspace.SpecialNames.DEFAULT,
+            type=Workspace.Types.DEFAULT,
+            parent=self.root_workspace,
+            tenant=self.tenant,
+        )
 
         # Create a standard workspace
         self.standard_workspace = Workspace.objects.create(
@@ -124,6 +133,19 @@ class ParityAccessCheckerTests(IdentityRequest):
         )
         self.group.principals.add(self.principal)
 
+    def tearDown(self):
+        """Clean up test data."""
+        RoleBindingPrincipal.objects.all().delete()
+        RoleBindingGroup.objects.all().delete()
+        RoleBinding.objects.all().delete()
+        CustomRoleV2.objects.all().delete()
+        Group.objects.all().delete()
+        Principal.objects.all().delete()
+        Workspace.objects.update(parent=None)
+        Workspace.objects.all().delete()
+        TenantMapping.objects.all().delete()
+        super().tearDown()
+
     def test_get_bootstrapped_tenants(self):
         """Test getting bootstrapped tenants."""
         checker = ParityAccessChecker(tenant_sample_size=100)
@@ -138,9 +160,10 @@ class ParityAccessCheckerTests(IdentityRequest):
             tenant_name="other-tenant",
             org_id="other-org-12345",
         )
-
-        bootstrap_tenant_for_v2_test(other_tenant)
-        assert_v1_write_allowed(other_tenant)
+        TenantMapping.objects.create(
+            tenant=other_tenant,
+            v2_write_activated_at=None,
+        )
 
         checker = ParityAccessChecker(tenant_sample_size=100)
         tenants = checker.get_bootstrapped_tenants()
@@ -148,6 +171,9 @@ class ParityAccessCheckerTests(IdentityRequest):
         # Both tenants should be included since both have TenantMapping
         self.assertIn(self.tenant, tenants)
         self.assertIn(other_tenant, tenants)
+
+        TenantMapping.objects.filter(tenant=other_tenant).delete()
+        other_tenant.delete()
 
     def test_get_principals_for_tenant(self):
         """Test getting principals for a tenant."""
@@ -324,12 +350,24 @@ class RunParityChecksTests(IdentityRequest):
         self.tenant.org_id = "test-org-67890"
         self.tenant.save()
 
-        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
-        self.root_workspace = bootstrap_result.root_workspace
-        self.default_workspace = bootstrap_result.default_workspace
+        # Create tenant mapping with v2 activated
+        self.tenant_mapping = TenantMapping.objects.create(
+            tenant=self.tenant,
+            v2_write_activated_at=timezone.now(),
+        )
 
-        ensure_v2_write_activated(self.tenant)
-        self.tenant_mapping = self.tenant.tenant_mapping
+        # Create workspaces
+        self.root_workspace = Workspace.objects.create(
+            name=Workspace.SpecialNames.ROOT,
+            type=Workspace.Types.ROOT,
+            tenant=self.tenant,
+        )
+        self.default_workspace = Workspace.objects.create(
+            name=Workspace.SpecialNames.DEFAULT,
+            type=Workspace.Types.DEFAULT,
+            parent=self.root_workspace,
+            tenant=self.tenant,
+        )
 
         # Create a principal
         self.principal = Principal.objects.create(
@@ -419,10 +457,6 @@ class ParityCheckerEdgeCasesTests(IdentityRequest):
         self.tenant.org_id = "edge-case-org"
         self.tenant.save()
 
-        bootstrap_result = bootstrap_tenant_for_v2_test(self.tenant)
-        self.root_ws = bootstrap_result.root_workspace
-        self.default_ws = bootstrap_result.default_workspace
-
     def tearDown(self):
         """Clean up test data."""
         TenantMapping.objects.all().delete()
@@ -443,7 +477,10 @@ class ParityCheckerEdgeCasesTests(IdentityRequest):
 
     def test_no_principals_with_user_id(self):
         """Test running checks when no principals have user_id."""
-        ensure_v2_write_activated(self.tenant)
+        TenantMapping.objects.create(
+            tenant=self.tenant,
+            v2_write_activated_at=timezone.now(),
+        )
 
         # Create principal without user_id
         Principal.objects.create(
@@ -459,7 +496,23 @@ class ParityCheckerEdgeCasesTests(IdentityRequest):
     @patch("management.parity_check.checker.WorkspaceInventoryAccessChecker")
     def test_pdp_error_handling(self, mock_checker_class):
         """Test that PDP errors are handled gracefully."""
-        ensure_v2_write_activated(self.tenant)
+        TenantMapping.objects.create(
+            tenant=self.tenant,
+            v2_write_activated_at=timezone.now(),
+        )
+
+        # Create workspaces
+        root_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.ROOT,
+            type=Workspace.Types.ROOT,
+            tenant=self.tenant,
+        )
+        default_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.DEFAULT,
+            type=Workspace.Types.DEFAULT,
+            parent=root_ws,
+            tenant=self.tenant,
+        )
 
         # Create principal
         principal = Principal.objects.create(
@@ -485,7 +538,23 @@ class ParityCheckerEdgeCasesTests(IdentityRequest):
 
     def test_principal_without_principal_resource_id(self):
         """Test that principal without resource_id returns empty set from PDP."""
-        ensure_v2_write_activated(self.tenant)
+        TenantMapping.objects.create(
+            tenant=self.tenant,
+            v2_write_activated_at=timezone.now(),
+        )
+
+        # Create workspaces
+        root_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.ROOT,
+            type=Workspace.Types.ROOT,
+            tenant=self.tenant,
+        )
+        default_ws = Workspace.objects.create(
+            name=Workspace.SpecialNames.DEFAULT,
+            type=Workspace.Types.DEFAULT,
+            parent=root_ws,
+            tenant=self.tenant,
+        )
 
         # Create principal with empty user_id (but not None)
         principal = Principal.objects.create(

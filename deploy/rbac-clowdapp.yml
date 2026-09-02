@@ -278,8 +278,6 @@ objects:
             value: ${KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
-          - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
-            value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
           - name: V2_BOOTSTRAP_TENANT
             value: ${V2_BOOTSTRAP_TENANT}
           - name: WORKSPACE_APPLICATION_NAME
@@ -634,8 +632,6 @@ objects:
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
             value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
-          - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
-            value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
           - name: V2_BOOTSTRAP_TENANT
             value: ${V2_BOOTSTRAP_TENANT}
           - name: WORKSPACE_APPLICATION_NAME
@@ -770,8 +766,6 @@ objects:
             value: ${V2_READ_ONLY_API_MODE}
           - name: V2_EDIT_API_ENABLED
             value: ${V2_EDIT_API_ENABLED}
-          - name: KESSEL_TENANT_AUTH_ENABLED
-            value: ${KESSEL_TENANT_AUTH_ENABLED}
           - name: V1_ROLE_PERMISSION_BLOCK_LIST
             value: ${V1_ROLE_PERMISSION_BLOCK_LIST}
           - name: READ_ONLY_API_MODE
@@ -1129,8 +1123,6 @@ objects:
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
-            - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
-              value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
             - name: V2_BOOTSTRAP_TENANT
               value: ${V2_BOOTSTRAP_TENANT}
             - name: WORKSPACE_APPLICATION_NAME
@@ -1358,8 +1350,6 @@ objects:
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
               value: ${V2_MIGRATION_APP_EXCLUDE_LIST}
-            - name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
-              value: ${V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES}
             - name: V2_BOOTSTRAP_TENANT
               value: ${V2_BOOTSTRAP_TENANT}
             - name: WORKSPACE_APPLICATION_NAME
@@ -1718,9 +1708,6 @@ parameters:
 - description: Comma-separated apps excluded from v2 migration; same list filters the v2 roles list API only
   name: V2_MIGRATION_APP_EXCLUDE_LIST
   value: ansible,automation-analytics,cost-management,hybrid-committed-spend,idmsvc,ocm,ocp-advisor,policies,sources
-- description: Comma-separated list of apps required to use V2 access checks when the strict access checks flag is enabled.
-  name: V2_STRICT_ACCESS_CHECK_FLAG_APPLICATION_NAMES
-  value: inventory
 - description: Whether or not to bootstrap tenants using V2 logic (i.e. creating workspaces and relations).
   name: V2_BOOTSTRAP_TENANT
   value: 'True'
@@ -1977,9 +1964,6 @@ parameters:
   value: 'False'
 - name: V2_EDIT_API_ENABLED
   description: Fallback for feature flag to enable v2 edit APIs and block v1 write APIs per org
-  value: 'False'
-- name: KESSEL_TENANT_AUTH_ENABLED
-  description: Route tenant-level role binding access checks through Kessel instead of org-admin middleware
   value: 'False'
 - name: V1_ROLE_PERMISSION_BLOCK_LIST
   description: Comma-separated list of exact permission strings to hide from v1 API (e.g., rbac:role:read,rbac:group:write)
