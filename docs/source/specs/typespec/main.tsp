@@ -1783,3 +1783,132 @@ namespace Principals {
         @path uuid: UUID;
     ): ItemResponse<Principal, 200> | Problems.CommonProblems | Problems.Problem404;
 }
+
+@route("/groups/")
+@tag("Groups")
+@doc("Group lifecycle and membership management. Role assignment is handled via role bindings API.")
+namespace Groups {
+    model GroupInput {
+        @doc("Name of the group")
+        @minLength(1)
+        @maxLength(255)
+        name: string;
+        @doc("Description of the group")
+        @maxLength(1000)
+        description?: string;
+    }
+
+    model Group {
+        @doc("UUID that uniquely identifies the group")
+        uuid: UUID;
+        @doc("Name of the group")
+        @minLength(1)
+        @maxLength(255)
+        name: string;
+        @doc("Description of the group")
+        @maxLength(1000)
+        description?: string;
+        @doc("Number of principals in the group")
+        @minValue(0)
+        principal_count: int64;
+        @doc("2019-01-21T17:32:28Z")
+        created: offsetDateTime;
+        @doc("2019-01-21T17:32:28Z")
+        modified: offsetDateTime;
+        @doc("Whether this is a system-managed group")
+        system: boolean;
+        @doc("Whether this is the platform default group")
+        platform_default: boolean;
+        @doc("Whether this is the admin default group")
+        admin_default: boolean;
+    }
+
+    model GroupListResponse {
+        @statusCode _: 200;
+        meta: OffsetPaginationMeta;
+        links: OffsetPaginationLinks;
+        data: Group[];
+    }
+
+    @doc("List groups")
+    @summary("List groups")
+    @get op list(
+        @doc("Filter by name (substring or glob with *)")
+        @query name?: string;
+        @doc("Filter by comma-separated UUIDs")
+        @query uuid?: string;
+        @doc("Order by field (prefix - for descending). Allowed: name, modified, principal_count")
+        @query order_by?: string = "name";
+        @query limit?: int32 = 10;
+        @query @minValue(0) offset?: int32 = 0;
+    ): GroupListResponse | Problems.CommonProblems;
+
+    @doc("Create a group")
+    @summary("Create a group")
+    @post op create(
+        @body body: GroupInput;
+    ): ItemResponse<Group, 201> | Problems.CommonProblems;
+
+    @route("{uuid}/")
+    @doc("Retrieve a group by UUID")
+    @summary("Retrieve a group")
+    @get op retrieve(
+        @path uuid: UUID;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem404;
+
+    @route("{uuid}/")
+    @doc("Update a group (system groups cannot be modified)")
+    @summary("Update a group")
+    @put op update(
+        @path uuid: UUID;
+        @body body: GroupInput;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem404;
+
+    @route("{uuid}/")
+    @doc("Delete a group (system groups and groups with active role bindings cannot be deleted)")
+    @summary("Delete a group")
+    @delete op destroy(
+        @path uuid: UUID;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404;
+
+    model PrincipalListResponse {
+        @statusCode _: 200;
+        meta: OffsetPaginationMeta;
+        links: OffsetPaginationLinks;
+        data: Principal[];
+    }
+
+    @route("{uuid}/principals/")
+    @doc("List principals who are members of this group")
+    @summary("List group principals")
+    @get op listPrincipals(
+        @path uuid: UUID;
+        @query limit?: int32 = 10;
+        @query @minValue(0) offset?: int32 = 0;
+        @query order_by?: string = "username";
+    ): PrincipalListResponse | Problems.CommonProblems | Problems.Problem404;
+
+    model AddPrincipalsInput {
+        @doc("Usernames to add")
+        usernames?: string[];
+        @doc("Service account client IDs to add")
+        @example(#["abc-123-def"])
+        service_accounts?: string[];
+    }
+
+    @route("{uuid}/principals/")
+    @doc("Add principals to a group (system groups cannot be modified)")
+    @summary("Add principals to a group")
+    @post op addPrincipals(
+        @path uuid: UUID;
+        @body body: AddPrincipalsInput;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem404;
+
+    @route("{uuid}/principals/{principal_uuid}/")
+    @doc("Remove a principal from a group (system groups cannot be modified)")
+    @summary("Remove a principal from a group")
+    @delete op removePrincipal(
+        @path uuid: UUID;
+        @path principal_uuid: UUID;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404;
+}
