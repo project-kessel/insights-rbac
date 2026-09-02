@@ -1676,8 +1676,7 @@ enum PrincipalType {
     username: "jdoe",
     type: PrincipalType.user,
     user_id: "12345",
-    service_account_id: null,
-    group_count: 3
+    service_account_id: null
 })
 model Principal {
     @doc("UUID that uniquely identifies the principal")
@@ -1690,9 +1689,6 @@ model Principal {
     user_id: string | null;
     @doc("Service account client ID. Null for users.")
     service_account_id: string | null;
-    @doc("Number of groups the principal belongs to")
-    @minValue(0)
-    group_count: int32;
 }
 
 model PrincipalListResponse {
@@ -1732,16 +1728,14 @@ namespace Principals {
                     username: "jdoe",
                     type: PrincipalType.user,
                     user_id: "12345",
-                    service_account_id: null,
-                    group_count: 3
+                    service_account_id: null
                 },
                 #{
                     uuid: "660e8400-e29b-41d4-a716-446655440003",
                     username: "service-account-abc123",
                     type: PrincipalType.`service-account`,
                     user_id: null,
-                    service_account_id: "abc123",
-                    group_count: 1
+                    service_account_id: "abc123"
                 }
             ]
         }
@@ -1775,8 +1769,7 @@ namespace Principals {
             username: "jdoe",
             type: PrincipalType.user,
             user_id: "12345",
-            service_account_id: null,
-            group_count: 3
+            service_account_id: null
         }
     })
     @get op read(
@@ -1835,12 +1828,12 @@ namespace Groups {
     @get op list(
         @doc("Filter by name (substring or glob with *)")
         @query name?: string;
-        @doc("Filter by comma-separated UUIDs")
-        @query uuid?: string;
+        @doc("Filter by workspace UUIDs")
+        @query(#{explode: false}) uuid?: UUID[];
         @doc("Order by field (prefix - for descending). Allowed: name, modified, principal_count")
         @query order_by?: string = "name";
-        @query limit?: int32 = 10;
-        @query @minValue(0) offset?: int32 = 0;
+        @query limit?: Limit = DefaultLimit;
+        @query offset?: Offset = DefaultOffset;
     ): GroupListResponse | Problems.CommonProblems;
 
     @doc("Create a group")
@@ -1869,7 +1862,7 @@ namespace Groups {
     @summary("Delete a group")
     @delete op destroy(
         @path uuid: UUID;
-    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404 | Problems.Problem400;
 
     model PrincipalListResponse {
         @statusCode _: 200;
@@ -1883,16 +1876,18 @@ namespace Groups {
     @summary("List group principals")
     @get op listPrincipals(
         @path uuid: UUID;
-        @query limit?: int32 = 10;
-        @query @minValue(0) offset?: int32 = 0;
+        @query limit?: Limit = DefaultLimit;
+        @query offset?: Offset = DefaultOffset;
         @query order_by?: string = "username";
     ): PrincipalListResponse | Problems.CommonProblems | Problems.Problem404;
 
     model AddPrincipalsInput {
         @doc("Usernames to add")
+        @minItems(0)
         usernames?: string[];
-        @doc("Service account client IDs to add")
+        @doc("Service account client IDs to add. At least one of usernames or service_accounts must contain items.")
         @example(#["abc-123-def"])
+        @minItems(0)
         service_accounts?: string[];
     }
 
