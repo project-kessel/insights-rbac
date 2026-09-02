@@ -2454,7 +2454,8 @@ def send_kafka_test_message(request):
         if not topic:
             return HttpResponse("RBAC_KAFKA_CONSUMER_TOPIC is not configured", status=400)
 
-        producer.send_kafka_message(topic, debezium_message)
+        if not producer.send_kafka_message(topic, debezium_message):
+            return JsonResponse({"error": "Failed to send Kafka message"}, status=500)
 
         logger.info(f"Test Kafka message sent to topic '{topic}' by user '{request.user.username}'")
 

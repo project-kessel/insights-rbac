@@ -73,13 +73,25 @@ class RBACProducer:
                         retries += 1
         return self.producer
 
-    def send_kafka_message(self, topic, message, headers=None):
-        """Send message to kafka server."""
-        producer = self.get_producer()
-        json_data = json.dumps(message).encode("utf-8")
-        if headers and not isinstance(headers, list):
-            headers = [headers]
-        producer.send(topic, value=json_data, headers=headers)
+    def send_kafka_message(self, topic, message, headers=None) -> bool:
+        """Send message to kafka server.
+
+        Returns True if sent successfully, False if an error occurred (error is logged).
+        """
+        try:
+            producer = self.get_producer()
+            json_data = json.dumps(message).encode("utf-8")
+            if headers and not isinstance(headers, list):
+                headers = [headers]
+            producer.send(topic, value=json_data, headers=headers)
+            return True
+        except (KafkaError, TypeError, ValueError, AttributeError):
+            logger.exception(
+                "Failed to send Kafka message to topic '%s'. Message type: %s",
+                topic,
+                list(message.keys()) if isinstance(message, dict) else type(message).__name__,
+            )
+            return False
 
 
 """

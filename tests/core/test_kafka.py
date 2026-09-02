@@ -1,9 +1,9 @@
 from copy import deepcopy
-from unittest.mock import Mock, MagicMock, patch, DEFAULT
+from unittest.mock import DEFAULT, Mock, patch
+
 from django.test import TestCase
-from kafka.errors import KafkaError
-from core.kafka import RBACProducer, logger
-from django.test.utils import override_settings
+from core.kafka import RBACProducer
+from kafka.errors import KafkaError, KafkaTimeoutError
 
 
 def copy_call_args(mock):
@@ -83,3 +83,66 @@ class KafkaTests(TestCase):
             MockKafkaProducer.get_producer.side_effect = mock_logger.info("Kafka producer initialized successfully")
 
         mock_logger.info.assert_any_call("Kafka producer initialized successfully")
+
+
+class SendKafkaMessageTests(TestCase):
+    def setUp(self):
+        self.producer = RBACProducer()
+        self.mock_kafka = Mock()
+        self.producer.producer = self.mock_kafka
+
+    def test_send_calls_producer_with_correct_args(self):
+        result = self.producer.send_kafka_message("test-topic", {"key": "value"})
+        self.mock_kafka.send.assert_called_once_with("test-topic", value=b'{"key": "value"}', headers=None)
+        self.assertTrue(result)
+
+    def test_send_wraps_single_header_in_list(self):
+        header = ("key", b"value")
+        self.producer.send_kafka_message("test-topic", {"key": "value"}, headers=header)
+        self.mock_kafka.send.assert_called_once_with("test-topic", value=b'{"key": "value"}', headers=[header])
+
+    def test_send_preserves_header_list(self):
+        headers = [("k1", b"v1"), ("k2", b"v2")]
+        self.producer.send_kafka_message("test-topic", {"key": "value"}, headers=headers)
+        self.mock_kafka.send.assert_called_once_with("test-topic", value=b'{"key": "value"}', headers=headers)
+
+    @patch("core.kafka.logger")
+    def test_send_swallows_kafka_error(self, mock_logger):
+        self.mock_kafka.send.side_effect = KafkaError("broker unavailable")
+        result = self.producer.send_kafka_message("sync-topic", {"action": "delete"})
+        self.assertFalse(result)
+        mock_logger.exception.assert_called_once_with(
+            "Failed to send Kafka message to topic '%s'. Message type: %s",
+            "sync-topic",
+            ["action"],
+        )
+
+    @patch("core.kafka.logger")
+    def test_send_swallows_kafka_timeout_error(self, mock_logger):
+        self.mock_kafka.send.side_effect = KafkaTimeoutError("buffer full")
+        result = self.producer.send_kafka_message("sync-topic", {"action": "update"})
+        self.assertFalse(result)
+        mock_logger.exception.assert_called_once()
+
+    @patch("core.kafka.logger")
+    def test_send_swallows_attribute_error_from_bad_producer(self, mock_logger):
+        self.producer.producer = None
+        result = self.producer.send_kafka_message("sync-topic", {"action": "create"})
+        self.assertFalse(result)
+        mock_logger.exception.assert_called_once()
+
+    @patch("core.kafka.logger")
+    def test_send_swallows_serialization_error(self, mock_logger):
+        non_serializable = {"data": object()}
+        result = self.producer.send_kafka_message("chrome-topic", non_serializable)
+        self.assertFalse(result)
+        self.mock_kafka.send.assert_not_called()
+        mock_logger.exception.assert_called_once()
+
+    @patch("core.kafka.logger")
+    def test_repeated_failures_are_independent(self, mock_logger):
+        self.mock_kafka.send.side_effect = KafkaError("down")
+        self.assertFalse(self.producer.send_kafka_message("topic-a", {"msg": 1}))
+        self.assertFalse(self.producer.send_kafka_message("topic-b", {"msg": 2}))
+        self.assertFalse(self.producer.send_kafka_message("topic-c", {"msg": 3}))
+        self.assertEqual(mock_logger.exception.call_count, 3)

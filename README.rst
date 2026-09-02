@@ -2,7 +2,7 @@
 Insights Role Based Access Control README
 =========================================
 
-|license| |Build Status| |Docs|
+|license| |Build Status|
 
 ~~~~~
 About
@@ -10,7 +10,6 @@ About
 
 Insights RBAC's goal is to provide an open source solution for storing roles, permissions and groups.
 
-Full documentation is available through readthedocs_.
 More info is available through platformdocs_.
 
 
@@ -279,20 +278,6 @@ Change the 'x-rh-rbac-client-id', 'x-rh-rbac-psk' and 'x-rh-rbac-org-id' header 
 
 You can also send a request *with* the identity header explicitly in the curl command along with the service-to-service headers to verify that the identity header will take precedence.
 
-Building Documentation
-^^^^^^^^^^^^^^^^^^^^^^^
-
-The project uses Sphinx to build documentation from reStructuredText files and Python docstrings.
-Documentation is automatically published to `readthedocs`_ when changes are pushed.
-
-To build documentation locally::
-
-  $ make html
-  $ open docs/_build/html/index.html
-
-For detailed information about the documentation system, dependencies, and troubleshooting,
-see `docs/BUILD_DOCS.md`_.
-
 Generating v2 openAPI specification
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -399,18 +384,14 @@ Default roles can be found in the `RBAC config repo`_.
 
 For additional information please refer to Contributing_.
 
-.. _readthedocs: http://insights-rbac.readthedocs.io/en/latest/
-.. _`docs/BUILD_DOCS.md`: docs/BUILD_DOCS.md
 .. _platformdocs: https://consoledot.pages.redhat.com/docs/dev/services/rbac.html
 .. _tutorial: https://www.postgresql.org/docs/10/static/tutorial-start.html
-.. _`Working with Openshift`: https://insights-rbac.readthedocs.io/en/latest/openshift.html
-.. _Contributing: https://insights-rbac.readthedocs.io/en/latest/CONTRIBUTING.html
+.. _`Working with Openshift`: https://github.com/project-kessel/insights-rbac/tree/master/openshift
+.. _Contributing: https://github.com/project-kessel/insights-rbac/blob/master/CONTRIBUTING.md
 .. _insights-service-deployer: https://github.com/project-kessel/insights-service-deployer
 
 .. |license| image:: https://img.shields.io/github/license/project-kessel/insights-rbac.svg
    :target: https://github.com/project-kessel/insights-rbac/blob/master/LICENSE
 .. |Build Status| image:: https://ci.ext.devshift.net/buildStatus/icon?job=RedHatInsights-insights-rbac-gh-build-master
    :target: https://ci.ext.devshift.net/job/RedHatInsights-insights-rbac-gh-build-master/
-.. |Docs| image:: https://readthedocs.org/projects/insights-rbac/badge/
-   :target: https://insights-rbac.readthedocs.io/en/latest/
 .. _`RBAC config repo`: https://github.com/project-kessel/rbac-config.git

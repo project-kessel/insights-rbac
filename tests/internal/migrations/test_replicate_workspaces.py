@@ -9,6 +9,7 @@ from internal.migrations.replicate_workspaces import (
     replicate_deleted_workspaces,
     replicate_updated_workspaces,
 )
+from internal.utils import get_or_create_ungrouped_workspace
 from management.audit_log.model import AuditLog
 from management.relation_replicator.noop_replicator import NoopReplicator
 from management.relation_replicator.relation_replicator import (
@@ -106,9 +107,9 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self.default_workspace = Workspace.objects.default(tenant=self.tenant)
         self.workspace = WorkspaceService(NoopReplicator()).create({"name": "a workspace"}, request_tenant=self.tenant)
 
-        self.workspace.created = "2026-06-25T00:00:00Z"
-        self.workspace.modified = "2026-06-25T00:00:00Z"
-        self.workspace.save()
+        Workspace.objects.filter(pk=self.workspace.id).update(
+            created="2026-06-25T00:00:00Z", modified="2026-06-25T00:00:00Z"
+        )
 
     def _do_replicate(self, stream: WorkspaceEventStream, **kwargs) -> list[WorkspaceEvent]:
         replicator = WorkspaceCacheReplicator(NoopReplicator())
@@ -120,31 +121,36 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
 
         return replicator.workspace_events_for(stream)
 
-    def _assert_event_ids(self, events: list[WorkspaceEvent], ids: Iterable[str]):
+    def _assert_event_ids(self, events: list[WorkspaceEvent], ids: Iterable[str], create_only_ids: Iterable[str] = ()):
         ids = set(ids)
+        create_only_ids = set(create_only_ids)
+
+        self.assertTrue(create_only_ids.issubset(ids))
 
         self.assertCountEqual(
             [
-                (type, id)
-                for id in ids
-                for type in [ReplicationEventType.CREATE_WORKSPACE, ReplicationEventType.UPDATE_WORKSPACE]
+                *((ReplicationEventType.CREATE_WORKSPACE, id) for id in ids),
+                *((ReplicationEventType.UPDATE_WORKSPACE, id) for id in (ids - create_only_ids)),
             ],
             [(event.event_type, event.workspace["id"]) for event in events],
         )
 
         # We also need to check that each create event precedes the corresponding update event.
         ids_created: set[str] = set()
+        ids_updated: set[str] = set()
 
         for event in events:
             if event.event_type == ReplicationEventType.CREATE_WORKSPACE:
                 ids_created.add(event.workspace["id"])
             elif event.event_type == ReplicationEventType.UPDATE_WORKSPACE:
                 self.assertIn(event.workspace["id"], ids_created)
+                ids_updated.add(event.workspace["id"])
             else:
                 self.fail(f"Unexpected event type: {event.event_type}")
 
-        # Final paranoid check
+        # Final paranoid check.
         self.assertEqual(ids_created, ids)
+        self.assertEqual(ids_updated, ids - create_only_ids)
 
     def test_replication(self):
         events = self._do_replicate(
@@ -180,8 +186,7 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         self._assert_event_ids(events, [str(self.workspace.id)])
 
     def test_include_modified_default_workspace(self):
-        self.default_workspace.modified = "2026-06-25T00:00:00Z"
-        self.default_workspace.save()
+        Workspace.objects.filter(pk=self.default_workspace.pk).update(modified="2026-06-25T00:00:00Z")
 
         events = self._do_replicate(
             stream=WorkspaceEventStream.STANDARD,
@@ -190,6 +195,16 @@ class ReplicateUpdatedWorkspacesTest(TestCase):
         )
 
         self._assert_event_ids(events, [str(self.default_workspace.id), str(self.workspace.id)])
+
+    def test_ungrouped_hosts(self):
+        ungrouped_ws = get_or_create_ungrouped_workspace(self.tenant)
+
+        events = self._do_replicate(
+            stream=WorkspaceEventStream.STANDARD,
+            since=ungrouped_ws.modified,
+        )
+
+        self._assert_event_ids(events, [str(ungrouped_ws.id)], create_only_ids=[str(ungrouped_ws.id)])
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

@@ -27,7 +27,9 @@ class _ReplicateConfig:
     with_update_event: bool
 
 
-_permitted_types = [Workspace.Types.DEFAULT, Workspace.Types.STANDARD, Workspace.Types.UNGROUPED_HOSTS]
+_create_types = frozenset({Workspace.Types.DEFAULT, Workspace.Types.STANDARD, Workspace.Types.UNGROUPED_HOSTS})
+_update_types = frozenset({Workspace.Types.DEFAULT, Workspace.Types.STANDARD})
+_permitted_types = _create_types.union(_update_types)
 
 
 @atomic_with_retry(retries=20)
@@ -49,16 +51,18 @@ def _do_replicate_batch(
         if workspace.type not in _permitted_types:
             raise AssertionError(f"Unexpected workspace type: {workspace.type}")
 
-        replicator.replicate_workspace(
-            make_workspace_event(workspace=workspace, event_type=ReplicationEventType.CREATE_WORKSPACE),
-            config.event_stream,
-        )
-
-        if config.with_update_event:
+        if workspace.type in _create_types:
             replicator.replicate_workspace(
-                make_workspace_event(workspace=workspace, event_type=ReplicationEventType.UPDATE_WORKSPACE),
+                make_workspace_event(workspace=workspace, event_type=ReplicationEventType.CREATE_WORKSPACE),
                 config.event_stream,
             )
+
+        if workspace.type in _update_types:
+            if config.with_update_event:
+                replicator.replicate_workspace(
+                    make_workspace_event(workspace=workspace, event_type=ReplicationEventType.UPDATE_WORKSPACE),
+                    config.event_stream,
+                )
 
     return len(workspaces)
 

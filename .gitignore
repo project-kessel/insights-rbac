@@ -66,10 +66,6 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/build/
-docs/source/rbac/
-
 # PyBuilder
 target/
 
@@ -147,9 +143,6 @@ rbac/management/principal/umb_certs/
 
 # direnv
 .envrc
-
-# Sphinx documentation build output
-_build/
 
 # Skill configuration (contains URLs and proxy settings)
 .cursor/skills/config.env
