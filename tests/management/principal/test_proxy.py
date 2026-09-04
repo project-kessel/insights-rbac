@@ -18,6 +18,7 @@
 
 from unittest.mock import patch
 
+from django.conf import settings
 from rest_framework import status
 import requests
 
@@ -59,6 +60,11 @@ def mocked_requests_get_500_json(url, *args, **kwargs):  # pylint: disable=unuse
 def mocked_requests_get_500_except(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock invalid response that raises an exception."""
     raise requests.exceptions.ConnectionError()
+
+
+def mocked_requests_get_timeout(url, *args, **kwargs):  # pylint: disable=unused-argument
+    """Mock response that raises a timeout exception."""
+    raise requests.exceptions.Timeout()
 
 
 def mocked_requests_get_200_json(url, *args, **kwargs):  # pylint: disable=unused-argument
@@ -167,6 +173,43 @@ class PrincipalProxyTest(IdentityRequest):
             "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
         }
         self.assertEqual(expected, result)
+
+    def test__request_principals_timeout(self):
+        """Test request with expected 500 on timeout exception."""
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_timeout)
+        expected = {
+            "status_code": 500,
+            "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
+        }
+        self.assertEqual(expected, result)
+
+    def test__request_principals_passes_timeout_kwarg(self):
+        """Test that _request_principals passes timeout in kwargs."""
+        proxy = PrincipalProxy()
+        captured_kwargs = {}
+
+        def capture_method(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return MockResponse(url, [], status.HTTP_200_OK)
+
+        result = proxy._request_principals(url="http://localhost:8080/v1/users", method=capture_method)
+        self.assertIn("timeout", captured_kwargs)
+        self.assertEqual(captured_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["data"], [])
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_passes_timeout(self, mock_post):
+        """Test that fetch_account_org_mapping passes timeout in kwargs."""
+        mock_post.return_value = MockResponse("http://test", {"acc1": "org1"}, status.HTTP_200_OK)
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1"])
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        self.assertIn("timeout", call_kwargs)
+        self.assertEqual(call_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+        self.assertEqual(result, {"acc1": "org1"})
 
     def test__request_principals_200_success(self):
         """Test request with expected 200 and good data."""
