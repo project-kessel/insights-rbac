@@ -18,7 +18,7 @@ import uuid
 
 from django.test import TestCase
 
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from tests.management.role.test_dual_write import RbacFixture
 
@@ -46,7 +46,7 @@ class TenantMappingTests(TestCase):
         binding_uuids = set()
 
         for access_type in DefaultAccessType:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 try:
                     binding_uuid = self.tenant_mapping.default_role_binding_uuid_for(access_type, scope)
                 except Exception as e:
@@ -94,7 +94,7 @@ class TenantMappingTests(TestCase):
 
     def test_source_for_role_binding_id(self):
         for default_access_type in DefaultAccessType:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 self.assertEqual(
                     (default_access_type, scope),
                     self.tenant_mapping.source_for_role_binding_id(

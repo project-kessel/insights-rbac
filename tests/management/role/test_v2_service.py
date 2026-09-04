@@ -25,7 +25,12 @@ from management.models import Group, Workspace, Permission
 from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.role.definer import seed_roles
-from management.role.v2_exceptions import RoleAlreadyExistsError, RolesNotFoundError, CustomRoleRequiredError
+from management.role.v2_exceptions import (
+    InvalidRolePermissionsError,
+    RoleAlreadyExistsError,
+    RolesNotFoundError,
+    CustomRoleRequiredError,
+)
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2, PlatformRoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding
@@ -273,6 +278,89 @@ class RoleV2ServiceTests(IdentityRequest):
                 tenant=self.tenant,
             )
         self.assertEqual(role.permissions.count(), 2)
+
+    def test_create_role_with_all_scope_and_concrete_scope_succeeds(self):
+        """ALL-scoped permissions can coexist with one concrete scope in a role."""
+        from management.permission.scope_service import ImplicitResourceService
+
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=["rbac:*:*"],
+            root_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        Permission.objects.create(permission="rbac:group:read", tenant=self.tenant)
+        Permission.objects.create(permission="rbac:role_binding:read", tenant=self.tenant)
+
+        with patch("management.role.v2_service.default_implicit_resource_service", scope_service):
+            role = self.service.create(
+                name="ALL Plus Tenant Role",
+                description="Should pass",
+                permission_data=[
+                    {"application": "rbac", "resource_type": "group", "operation": "read"},
+                    {"application": "rbac", "resource_type": "role_binding", "operation": "read"},
+                ],
+                tenant=self.tenant,
+            )
+        self.assertEqual(role.permissions.count(), 2)
+        self.assertCountEqual(
+            list(role.permissions.values_list("permission", flat=True)),
+            ["rbac:group:read", "rbac:role_binding:read"],
+        )
+
+    def test_create_role_with_all_scope_only_succeeds(self):
+        """A role with only ALL-scoped permissions succeeds (single scope)."""
+        from management.permission.scope_service import ImplicitResourceService
+
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=[],
+            root_scope_permissions=[],
+            all_scope_permissions=["rbac:role_binding:*"],
+        )
+        Permission.objects.create(permission="rbac:role_binding:read", tenant=self.tenant)
+        Permission.objects.create(permission="rbac:role_binding:write", tenant=self.tenant)
+
+        with patch("management.role.v2_service.default_implicit_resource_service", scope_service):
+            role = self.service.create(
+                name="ALL Only Role",
+                description="Should pass",
+                permission_data=[
+                    {"application": "rbac", "resource_type": "role_binding", "operation": "read"},
+                    {"application": "rbac", "resource_type": "role_binding", "operation": "write"},
+                ],
+                tenant=self.tenant,
+            )
+        self.assertEqual(role.permissions.count(), 2)
+        self.assertCountEqual(
+            list(role.permissions.values_list("permission", flat=True)),
+            ["rbac:role_binding:read", "rbac:role_binding:write"],
+        )
+
+    def test_create_role_with_all_scope_two_concrete_scopes_fails(self):
+        """ALL-scoped permissions don't mask conflicts between two concrete scopes."""
+        from management.permission.scope_service import ImplicitResourceService
+
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=["tenant_app:*:*"],
+            root_scope_permissions=["root_app:*:*"],
+            all_scope_permissions=["allapp:*:*"],
+        )
+        Permission.objects.create(permission="tenant_app:res:read", tenant=self.tenant)
+        Permission.objects.create(permission="root_app:res:read", tenant=self.tenant)
+        Permission.objects.create(permission="allapp:res:read", tenant=self.tenant)
+
+        with patch("management.role.v2_service.default_implicit_resource_service", scope_service):
+            with self.assertRaises(InvalidRolePermissionsError) as ctx:
+                self.service.create(
+                    name="ALL Plus Two Concrete",
+                    description="Should fail",
+                    permission_data=[
+                        {"application": "tenant_app", "resource_type": "res", "operation": "read"},
+                        {"application": "root_app", "resource_type": "res", "operation": "read"},
+                        {"application": "allapp", "resource_type": "res", "operation": "read"},
+                    ],
+                    tenant=self.tenant,
+                )
+            self.assertIn("same scope", str(ctx.exception))
 
     def test_create_role_generates_uuid(self):
         """Test that creating a role auto-generates a UUID."""

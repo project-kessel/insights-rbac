@@ -39,7 +39,7 @@ from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
 from management.models import Group, Permission, Principal, Workspace
 from management.utils import PROBLEM_TYPES
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.role.definer import seed_roles
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
@@ -3311,7 +3311,7 @@ class DefaultBindingsAPITests(TestCase):
 
     def _count_default_bindings(self, access_type: DefaultAccessType) -> int:
         """Count existing default bindings for the given access type."""
-        binding_uuids = [self.mapping.default_role_binding_uuid_for(access_type, s) for s in Scope]
+        binding_uuids = [self.mapping.default_role_binding_uuid_for(access_type, s) for s in CONCRETE_SCOPES]
         return RoleBinding.objects.filter(uuid__in=binding_uuids).count()
 
     @skip("Flaky: fails intermittently in CI when tests run in parallel due to test isolation issues")

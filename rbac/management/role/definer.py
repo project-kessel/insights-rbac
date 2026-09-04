@@ -33,7 +33,7 @@ from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permission.model import Permission
-from management.permission.scope_service import ImplicitResourceService, Scope
+from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.model import Access, ExtRoleRelation, ExtTenant, ResourceDefinition, Role, RoleScopeState
 from management.role.platform import (
@@ -428,7 +428,7 @@ def _seed_v2_role_from_v1(v1_role, display_name, description, public_tenant, pla
 
 
 def _seed_platform_roles():
-    """Create the 6 platform roles (3 scopes × 2 access types).
+    """Create platform roles (one per concrete scope per access type).
 
     Raises RuntimeError if not all platform roles could be created.
     """
@@ -438,7 +438,7 @@ def _seed_platform_roles():
     platform_roles = {}
 
     for access_type in DefaultAccessType:
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             try:
                 platform_role = _create_single_platform_role(access_type, scope, policy_service, public_tenant)
                 platform_roles[(access_type, scope)] = platform_role
@@ -454,8 +454,10 @@ def _seed_platform_roles():
                 platform_role = _create_single_platform_role(access_type, scope, policy_service, public_tenant)
                 platform_roles[(access_type, scope)] = platform_role
 
-    if len(platform_roles) != 6:
-        raise RuntimeError(f"Expected 6 platform roles, got {len(platform_roles)}")
+    if len(platform_roles) != len(CONCRETE_SCOPES) * len(DefaultAccessType):
+        raise RuntimeError(
+            f"Expected {len(CONCRETE_SCOPES) * len(DefaultAccessType)} platform roles, got {len(platform_roles)}"
+        )
 
     logger.info(f"Successfully seeded {len(platform_roles)} platform roles.")
     return platform_roles

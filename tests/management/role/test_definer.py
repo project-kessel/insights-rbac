@@ -33,7 +33,7 @@ from management.models import (
     Role,
     SeededRoleV2,
 )
-from management.permission.scope_service import Scope
+from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.relation_replicator.relation_replicator import ReplicationEvent, ReplicationEventType
 from management.role.definer import _seed_platform_roles, seed_permissions, seed_roles
 from management.role.platform import (
@@ -912,7 +912,7 @@ class V2RoleSeedingTests(IdentityRequest):
 
         # Verify all combinations exist
         for access_type in DefaultAccessType:
-            for scope in Scope:
+            for scope in CONCRETE_SCOPES:
                 self.assertIn((access_type, scope), platform_roles)
                 platform_role = platform_roles[(access_type, scope)]
                 self.assertIsInstance(platform_role, PlatformRoleV2)
@@ -1019,7 +1019,7 @@ class V2RoleSeedingTests(IdentityRequest):
 
         # Check at least one scope has children
         found_child = False
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             # Get the user platform role for this scope
             platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.USER, scope, policy_service)
             platform_role = PlatformRoleV2.objects.get(uuid=platform_role_uuid)
@@ -1052,7 +1052,7 @@ class V2RoleSeedingTests(IdentityRequest):
 
         # Check at least one scope has children
         found_child = False
-        for scope in Scope:
+        for scope in CONCRETE_SCOPES:
             # Get the admin platform role for this scope
             admin_platform_role_uuid = platform_v2_role_uuid_for(DefaultAccessType.ADMIN, scope, policy_service)
             admin_platform_role = PlatformRoleV2.objects.get(uuid=admin_platform_role_uuid)
