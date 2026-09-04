@@ -71,11 +71,11 @@ Hierarchy rooted at `RoleV2Error`:
 - `UnableMeetPrerequisitesError` -- can't validate token (500).
 
 ### Other
-- `DualWriteException` (`relation_replicator/relation_replicator.py`) -- wraps replication failures.
+- `DualWriteException` (`inventory_replicator/inventory_api_replicator.py`) -- wraps replication failures.
 - `V1WriteBlockedError` (`tenant_mapping/v2_activation.py`) -- v1 write on v2-activated tenant.
 - `InsufficientPrivilegesError` (`group/insufficient_privileges.py`) -- service account privilege check.
 - `FieldSelectionValidationError` (`management/utils.py`) -- invalid `?fields=` parameter.
-- `GRPCError` (`relation_replicator/relations_api_replicator.py`) -- wrapper for gRPC errors (not an Exception subclass).
+- `GRPCError` (`inventory_replicator/inventory_api_replicator.py`) -- wrapper for gRPC errors (not an Exception subclass).
 
 ## Where to Raise What
 

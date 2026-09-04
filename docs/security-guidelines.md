@@ -147,7 +147,7 @@ Rules:
 - `DJANGO_SECRET_KEY` has a hardcoded fallback for development. In production, it must be set via environment variable.
 - `SERVICE_PSKS` and `SYSTEM_USERS` are JSON environment variables. Never log their contents.
 - Never commit `.env`, `.envrc`, or credential files. The `.gitignore` should exclude them.
-- gRPC channels use `grpc.insecure_channel()` in development/Clowder but `grpc.ssl_channel_credentials()` in production. The switch is in `create_client_channel()`, `create_client_channel_relation()`, and `create_client_channel_inventory()` functions.
+- gRPC channels use `grpc.insecure_channel()` in development/Clowder but `grpc.ssl_channel_credentials()` in production. The switch is in `create_client_channel()` and `create_client_channel_inventory()` functions.
 
 ## Development-Only Features
 

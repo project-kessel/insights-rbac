@@ -56,10 +56,6 @@
       "description": "Operations related to inventory api."
     },
     {
-      "name": "Relations",
-      "description": "Operations related to relations api."
-    },
-    {
       "name": "Permission",
       "description": "Operations about permissions."
     },
@@ -3645,29 +3641,29 @@
         }
       }
     },
-    "/api/relations/lookup_resource/": {
+    "/api/inventory/lookup_resource/": {
       "post": {
         "tags": [
-          "Relations"
+          "Inventory"
         ],
-        "summary": "Get a resource from relations api.",
-        "description": "Returns resource from relations api.",
+        "summary": "Get a resource from the inventory api.",
+        "description": "Returns resources from the inventory api that have the given relation to the given subject.",
         "requestBody": {
           "content": {
             "application/json": {
               "example": {
                 "resource_type": {
-                  "name": "group",
-                  "namespace": "rbac"
+                  "resource_type": "group",
+                  "reporter_type": "rbac"
                 },
                 "relation": "member",
                 "subject": {
-                  "subject": {
-                    "type": {
-                      "namespace": "rbac",
-                      "name": "principal"
-                    },
-                    "id": "bob"
+                  "resource": {
+                    "resource_id": "bob",
+                    "resource_type": "principal",
+                    "reporter": {
+                      "type": "rbac"
+                    }
                   }
                 }
               }
@@ -3686,27 +3682,7 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "properties": {
-                          "resource": {
-                            "type": "object",
-                            "properties": {
-                              "type": {
-                                "type": "object",
-                                "properties": {
-                                  "namespace": {
-                                    "type": "string"
-                                  },
-                                  "name": {
-                                    "type": "string"
-                                  }
-                                }
-                              },
-                              "id": {
-                                "type": "string"
-                              }
-                            }
-                          }
-                        }
+                        "description": "A resource reference from the inventory API"
                       }
                     }
                   }
@@ -3714,12 +3690,9 @@
                 "example": {
                   "resources": [
                     {
-                      "resource": {
-                        "type": {
-                          "namespace": "rbac",
-                          "name": "group"
-                        },
-                        "id": "bob_club"
+                      "object": {
+                        "resourceType": "group",
+                        "resourceId": "bob_club"
                       }
                     }
                   ]
@@ -3757,75 +3730,66 @@
         }
       }
     },
-    "/api/relations/check_relation/": {
+    "/api/inventory/lookup_subjects/": {
       "post": {
         "tags": [
-          "Relations"
+          "Inventory"
         ],
-        "summary": "Check a relationship in the relations api.",
-        "description": "Checks if a relationship exists between a resource and subject in the relations api.",
+        "summary": "Get subjects from the inventory api.",
+        "description": "Returns subjects from the inventory api that have the given relation to the given resource.",
         "requestBody": {
           "content": {
             "application/json": {
               "example": {
                 "resource": {
-                  "type": {
-                    "name": "group",
-                    "namespace": "rbac"
-                  },
-                  "id": "bob_club"
+                  "resource_id": "bob_club",
+                  "resource_type": "group",
+                  "reporter": {
+                    "type": "rbac"
+                  }
                 },
                 "relation": "member",
-                "subject": {
-                  "subject": {
-                    "type": {
-                      "namespace": "rbac",
-                      "name": "principal"
-                    },
-                    "id": "bob"
-                  }
-                }
+                "subject_type": {
+                  "resource_type": "principal",
+                  "reporter_type": "rbac"
+                },
+                "subject_relation": ""
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Relation check result returned.",
+            "description": "Subjects returned.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "allowed": {
-                      "type": "boolean",
-                      "example": true
+                    "subjects": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "description": "A subject reference from the inventory API"
+                      }
                     }
                   }
                 },
                 "example": {
-                  "allowed": true
+                  "subjects": [
+                    {
+                      "subject": {
+                        "resourceType": "principal",
+                        "resourceId": "bob"
+                      }
+                    }
+                  ]
                 }
               }
             }
           },
           "204": {
-            "description": "No relation found."
-          },
-          "400": {
-            "description": "gRPC Error",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "gRPCError": {
-                    "value": {
-                      "detail": "Error occurred in gRPC call",
-                      "error": "gRPC Error"
-                    }
-                  }
-                }
-              }
-            }
+            "description": "No subjects found."
           },
           "500": {
             "description": "Unexpected Error",
@@ -3835,9 +3799,15 @@
                   "$ref": "#/components/schemas/Error500"
                 },
                 "examples": {
+                  "gRPCError": {
+                    "value": {
+                      "detail": "Error occurred in gRPC call",
+                      "error": "gRPC Error"
+                    }
+                  },
                   "Error": {
                     "value": {
-                      "detail": "Error occurred in call to check relation endpoint",
+                      "detail": "Error occurred in call to lookup subjects endpoint",
                       "error": "Error message"
                     }
                   }
@@ -3848,13 +3818,13 @@
         }
       }
     },
-    "/api/relations/read_tuples/": {
+    "/api/inventory/read_tuples/": {
       "post": {
         "tags": [
-          "Relations"
+          "Inventory"
         ],
-        "summary": "Read tuples from the relations api.",
-        "description": "Reads relation tuples from the relations api based on filter criteria.",
+        "summary": "Read tuples from the inventory api.",
+        "description": "Reads relation tuples from the inventory api based on filter criteria.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3887,7 +3857,7 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "description": "A relation tuple from the relations API"
+                        "description": "A relation tuple from the inventory API"
                       }
                     }
                   }

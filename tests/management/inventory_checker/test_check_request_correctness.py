@@ -35,7 +35,7 @@ from management.inventory_checker.inventory_api_check import (
     relation_tuple_to_check_request,
 )
 from management.principal.model import Principal
-from management.relation_replicator.types import (
+from management.inventory_replicator.types import (
     ObjectReference,
     ObjectType,
     RelationTuple,
@@ -577,7 +577,7 @@ class CustomRolePermissionCheckerCheckRequestTest(TestCase):
         self.checker = CustomRolePermissionChecker()
 
     @patch("management.inventory_checker.inventory_api_check.jwt_manager")
-    @patch("management.inventory_checker.inventory_api_check.create_client_channel_relation")
+    @patch("management.inventory_checker.inventory_api_check.create_client_channel_inventory")
     def test_read_tuples_filter_resource_is_role_subject_is_principal(self, mock_create_channel, mock_jwt_manager):
         mock_jwt_manager.get_jwt_from_redis.return_value = "fake-jwt"
 
@@ -592,7 +592,7 @@ class CustomRolePermissionCheckerCheckRequestTest(TestCase):
         permission_tuple = role_permission_tuple(role_uuid, "inventory_groups_read")
 
         with patch(
-            "management.inventory_checker.inventory_api_check.relation_tuples_pb2_grpc.KesselTupleServiceStub",
+            "management.inventory_checker.inventory_api_check.tuple_service_pb2_grpc.KesselTupleServiceStub",
             return_value=mock_stub,
         ):
             self.checker.check_custom_role_permissions([permission_tuple], role_uuid)

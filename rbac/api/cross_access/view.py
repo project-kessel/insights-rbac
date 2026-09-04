@@ -24,14 +24,14 @@ from django.utils import timezone
 from django_filters import rest_framework as filters
 from management.atomic_transactions import atomic
 from management.filters import CommonFilters
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.principal.proxy import PrincipalProxy
-from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.utils import raise_validation_error, validate_and_get_key, validate_uuid
 from rest_framework import mixins, viewsets
 from rest_framework.filters import OrderingFilter
 
 from api.cross_access.access_control import CrossAccountRequestAccessPermission
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from api.cross_access.serializer import CrossAccountRequestDetailSerializer, CrossAccountRequestSerializer
 from api.cross_access.util import create_cross_principal
 from api.models import CrossAccountRequest, Tenant
@@ -230,12 +230,12 @@ class CrossAccountRequestViewSet(
         self,
         car: CrossAccountRequest,
         replication_event_type: ReplicationEventType,
-        generate_relations: Optional[Callable[[RelationApiDualWriteCrossAccessHandler, List], None]] = None,
+        generate_relations: Optional[Callable[[InventoryApiDualWriteCrossAccessHandler, List], None]] = None,
     ) -> None:
         """Use dual write handler."""
         cross_account_roles = car.roles.all()
         if any(True for _ in cross_account_roles):
-            dual_write_handler = RelationApiDualWriteCrossAccessHandler(car, replication_event_type)
+            dual_write_handler = InventoryApiDualWriteCrossAccessHandler(car, replication_event_type)
 
             if generate_relations and callable(generate_relations):
                 generate_relations(dual_write_handler, cross_account_roles)

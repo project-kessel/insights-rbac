@@ -3,9 +3,9 @@ from typing import Callable, Optional
 from api.models import Tenant
 from management.group.platform import GlobalPolicyIdService
 from management.models import Permission, Role
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     WorkspaceEventStream,
     WorkspaceEvent,
     ReplicationEvent,
@@ -124,11 +124,11 @@ def bootstrap_tenant_for_v2_test(tenant: Tenant, tuples: Optional[InMemoryTuples
     return V2TenantBootstrapService(replicator=replicator).bootstrap_tenant(tenant, force=True)
 
 
-class WorkspaceCacheReplicator(RelationReplicator):
-    _base_replicator: RelationReplicator
+class WorkspaceCacheReplicator(InventoryReplicator):
+    _base_replicator: InventoryReplicator
     _workspace_events: dict[WorkspaceEventStream, list[WorkspaceEvent]]
 
-    def __init__(self, base_replicator: RelationReplicator):
+    def __init__(self, base_replicator: InventoryReplicator):
         self._base_replicator = base_replicator
         self._workspace_events = {}
 

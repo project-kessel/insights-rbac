@@ -24,7 +24,7 @@ from django.urls import reverse
 from django.utils import timezone
 from management.cache import TenantCache
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.tenant_service.v2 import V2TenantBootstrapService
 from rest_framework import status
 from rest_framework.test import APIClient

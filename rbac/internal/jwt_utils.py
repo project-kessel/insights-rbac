@@ -50,7 +50,7 @@ class JWTProvider:
             self.connection = http.client.HTTPSConnection(settings.REDHAT_SSO)
         return self.connection
 
-    def get_jwt_token(self, client_id, client_secret):
+    def get_jwt_token(self):
         """Retrieve jwt token from Redhat SSO."""
         connection = self.get_conn()
 
@@ -58,13 +58,13 @@ class JWTProvider:
         if connection is None:
             return None
 
-        if client_id is None or client_secret is None:
+        if settings.INVENTORY_API_CLIENT_ID is None or settings.INVENTORY_API_CLIENT_SECRET is None:
             raise Exception("Missing client_id or client_secret in environment file.")
 
         payload = (
             f"grant_type={settings.TOKEN_GRANT_TYPE}&"
-            f"client_id={settings.RELATIONS_API_CLIENT_ID}&"
-            f"client_secret={settings.RELATIONS_API_CLIENT_SECRET}&"
+            f"client_id={settings.INVENTORY_API_CLIENT_ID}&"
+            f"client_secret={settings.INVENTORY_API_CLIENT_SECRET}&"
             f"scope={settings.SCOPE}"
         )
 
@@ -146,7 +146,7 @@ class JWTManager:
                 logger.info("No token in cache, requesting new token.")
 
             token = self.jwt_provider.get_jwt_token(
-                settings.RELATIONS_API_CLIENT_ID, settings.RELATIONS_API_CLIENT_SECRET
+                settings.INVENTORY_API_CLIENT_ID, settings.INVENTORY_API_CLIENT_SECRET
             )
             # Token obtained store it in redis
             if token:

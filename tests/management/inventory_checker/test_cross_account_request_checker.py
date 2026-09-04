@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 from kessel.inventory.v1beta2.check_response_pb2 import CheckResponse
 from management.inventory_checker.inventory_api_check import CrossAccountRequestInventoryChecker
-from management.relation_replicator.types import RelationTuple, ObjectReference, ObjectType, SubjectReference
+from management.inventory_replicator.types import RelationTuple, ObjectReference, ObjectType, SubjectReference
 from tests.identity_request import IdentityRequest
 
 INVENTORY_STUB_PATH = (

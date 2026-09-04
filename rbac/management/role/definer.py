@@ -31,18 +31,18 @@ from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from management.atomic_transactions import atomic, atomic_with_retry
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permission.model import Permission
 from management.permission.scope_service import ImplicitResourceService, Scope
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.role.inventory_api_dual_write_handler import (
+    InventoryApiDualWriteHandler,
+    SeedingInventoryApiDualWriteHandler,
+)
 from management.role.model import Access, ExtRoleRelation, ExtTenant, ResourceDefinition, Role, RoleScopeState
 from management.role.platform import (
     admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
-)
-from management.role.relation_api_dual_write_handler import (
-    RelationApiDualWriteHandler,
-    SeedingRelationApiDualWriteHandler,
 )
 from management.role.v2_model import PlatformRoleV2, SeededRoleV2
 from management.tenant_mapping.model import DefaultAccessType
@@ -121,7 +121,7 @@ def _make_role(data, config: _SeedRolesConfig, platform_roles=None, resource_ser
     role, created = Role.objects.select_for_update().get_or_create(name=name, defaults=defaults, tenant=public_tenant)
     updated = False
 
-    dual_write_handler = SeedingRelationApiDualWriteHandler(role)
+    dual_write_handler = SeedingInventoryApiDualWriteHandler(role)
     if created:
         if role.display_name != display_name:
             role.display_name = display_name
@@ -200,7 +200,7 @@ def _do_delete_system_roles(roles: QuerySet):
     logger.info(f"Removing the following role(s): {roles.values()}")
 
     for role in roles:
-        dual_write_handler = SeedingRelationApiDualWriteHandler(role)
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(role)
         dual_write_handler.replicate_deleted_system_role()
 
     roles.delete()
@@ -321,16 +321,16 @@ def delete_permission(permission: Permission):
     for role in roles:
         role = Role.objects.filter(id=role.id).select_for_update().get()
         dual_write_handler = (
-            SeedingRelationApiDualWriteHandler(role=role)
+            SeedingInventoryApiDualWriteHandler(role=role)
             if role.system
-            else RelationApiDualWriteHandler(role, ReplicationEventType.UPDATE_CUSTOM_ROLE)
+            else InventoryApiDualWriteHandler(role, ReplicationEventType.UPDATE_CUSTOM_ROLE)
         )
         dual_write_handler.prepare_for_update()
         dual_write_handlers.append(dual_write_handler)
     permission.delete()
     for dual_write_handler in dual_write_handlers:
         role = dual_write_handler.role
-        if isinstance(dual_write_handler, SeedingRelationApiDualWriteHandler):
+        if isinstance(dual_write_handler, SeedingInventoryApiDualWriteHandler):
             dual_write_handler.replicate_update_system_role()
         else:
             dual_write_handler.replicate_new_or_updated_role(role)

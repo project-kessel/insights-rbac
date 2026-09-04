@@ -220,8 +220,8 @@ class JWTProviderTest(TestCase):
         # Configure mock settings
         mock_settings.REDHAT_SSO = "sso.example.com"
         mock_settings.TOKEN_GRANT_TYPE = "client_credentials"
-        mock_settings.RELATIONS_API_CLIENT_ID = "test-client-id"
-        mock_settings.RELATIONS_API_CLIENT_SECRET = "test-secret"
+        mock_settings.INVENTORY_API_CLIENT_ID = "test-client-id"
+        mock_settings.INVENTORY_API_CLIENT_SECRET = "test-secret"
         mock_settings.SCOPE = "test-scope"
         mock_settings.OPENID_URL = "/auth/token"
 
@@ -233,7 +233,7 @@ class JWTProviderTest(TestCase):
         mock_conn.getresponse.return_value = mock_response
 
         provider = JWTProvider()
-        token = provider.get_jwt_token("test-client-id", "test-secret")
+        token = provider.get_jwt_token()
 
         self.assertEqual(token, "test-token-12345")
         mock_conn.request.assert_called_once()
@@ -245,7 +245,7 @@ class JWTProviderTest(TestCase):
         mock_settings.REDHAT_SSO = None
 
         provider = JWTProvider()
-        token = provider.get_jwt_token("test-client-id", "test-secret")
+        token = provider.get_jwt_token()
 
         self.assertIsNone(token)
         mock_https.assert_not_called()
@@ -254,16 +254,18 @@ class JWTProviderTest(TestCase):
     def test_get_jwt_token_raises_on_missing_credentials(self, mock_settings):
         """Test that exception is raised when credentials are missing."""
         mock_settings.REDHAT_SSO = "sso.example.com"
+        mock_settings.INVENTORY_API_CLIENT_ID = None
+        mock_settings.INVENTORY_API_CLIENT_SECRET = None
 
         provider = JWTProvider()
 
         with self.assertRaises(Exception) as context:
-            provider.get_jwt_token(None, "test-secret")
+            provider.get_jwt_token()
 
         self.assertIn("Missing client_id or client_secret", str(context.exception))
 
         with self.assertRaises(Exception) as context:
-            provider.get_jwt_token("test-client-id", None)
+            provider.get_jwt_token()
 
         self.assertIn("Missing client_id or client_secret", str(context.exception))
 
@@ -274,8 +276,8 @@ class JWTProviderTest(TestCase):
         # Configure mock settings
         mock_settings.REDHAT_SSO = "sso.example.com"
         mock_settings.TOKEN_GRANT_TYPE = "client_credentials"
-        mock_settings.RELATIONS_API_CLIENT_ID = "test-client-id"
-        mock_settings.RELATIONS_API_CLIENT_SECRET = "test-secret"
+        mock_settings.INVENTORY_API_CLIENT_ID = "test-client-id"
+        mock_settings.INVENTORY_API_CLIENT_SECRET = "test-secret"
         mock_settings.SCOPE = "test-scope"
         mock_settings.OPENID_URL = "/auth/token"
 
@@ -289,6 +291,6 @@ class JWTProviderTest(TestCase):
         provider = JWTProvider()
 
         with self.assertRaises(Exception) as context:
-            provider.get_jwt_token("test-client-id", "test-secret")
+            provider.get_jwt_token()
 
         self.assertIn("an unexpected error", str(context.exception))

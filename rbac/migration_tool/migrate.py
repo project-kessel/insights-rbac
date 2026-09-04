@@ -19,26 +19,23 @@ import logging
 from typing import Union
 
 from django.db import transaction
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
+from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEventType
+from management.inventory_replicator.logging_replicator import LoggingReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import Group
 from management.principal.model import Principal
-from management.relation_replicator.logging_replicator import LoggingReplicator
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
-    ReplicationEventType,
-)
-from management.relation_replicator.relations_api_replicator import RelationsApiReplicator
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.model import Role
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
 
-from api.cross_access.relation_api_dual_write_cross_access_handler import RelationApiDualWriteCrossAccessHandler
+from api.cross_access.inventory_api_dual_write_cross_access_handler import InventoryApiDualWriteCrossAccessHandler
 from api.models import CrossAccountRequest, Tenant
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-def migrate_groups_for_tenant(tenant: Tenant, replicator: RelationReplicator):
+def migrate_groups_for_tenant(tenant: Tenant, replicator: InventoryReplicator):
     """Generate user relationships and system role assignments for groups in a tenant."""
     groups = tenant.group_set.only("pk").values("pk")
     for group in groups:
@@ -58,7 +55,7 @@ def migrate_groups_for_tenant(tenant: Tenant, replicator: RelationReplicator):
             if group.system is False and group.admin_default is False:
                 system_roles = group.roles().public_tenant_only()
             if any(True for _ in system_roles) or any(True for _ in principals):
-                dual_write_handler = RelationApiDualWriteGroupHandler(
+                dual_write_handler = InventoryApiDualWriteGroupHandler(
                     group, ReplicationEventType.MIGRATE_TENANT_GROUPS, replicator=replicator
                 )
                 # this operation requires lock on group as well as in view,
@@ -87,7 +84,7 @@ def migrate_roles_for_tenant(tenant, exclude_apps, replicator):
             # Requery and lock role
             role = Role.objects.select_for_update().get(pk=role)
             logger.info(f"Migrating role: {role.name} with UUID {role.uuid}.")
-            dual_write_handler = RelationApiDualWriteHandler(
+            dual_write_handler = InventoryApiDualWriteHandler(
                 role, ReplicationEventType.MIGRATE_CUSTOM_ROLE, replicator
             )
             dual_write_handler.prepare_for_update()
@@ -98,7 +95,7 @@ def migrate_roles_for_tenant(tenant, exclude_apps, replicator):
     logger.info(f"Migrated {roles.count()} roles for tenant: {tenant.org_id}")
 
 
-def migrate_data_for_tenant(tenant: Tenant, exclude_apps: list, replicator: RelationReplicator, skip_roles: bool):
+def migrate_data_for_tenant(tenant: Tenant, exclude_apps: list, replicator: InventoryReplicator, skip_roles: bool):
     """Migrate all data for a given tenant."""
     logger.info("Migrating relations of group and user.")
 
@@ -116,7 +113,7 @@ def migrate_data_for_tenant(tenant: Tenant, exclude_apps: list, replicator: Rela
     logger.info("Finished relations of cross account requests.")
 
 
-def migrate_cross_account_requests(tenant: Tenant, replicator: RelationReplicator):
+def migrate_cross_account_requests(tenant: Tenant, replicator: InventoryReplicator):
     """Migrate approved account requests."""
     cross_account_requests = CrossAccountRequest.objects.filter(status="approved", target_org=tenant.org_id)
     for cross_account_request in cross_account_requests:
@@ -129,7 +126,7 @@ def migrate_cross_account_requests(tenant: Tenant, replicator: RelationReplicato
             cross_account_request = CrossAccountRequest.objects.select_for_update().get(pk=cross_account_request.pk)
             cross_account_roles = cross_account_request.roles.all()
             if any(True for _ in cross_account_roles):
-                dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+                dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request, ReplicationEventType.MIGRATE_CROSS_ACCOUNT_REQUEST, replicator
                 )
                 # This operation requires lock on cross account request as is done
@@ -147,7 +144,7 @@ def migrate_cross_account_requests(tenant: Tenant, replicator: RelationReplicato
 def migrate_data(
     exclude_apps: list = [],
     orgs: list = [],
-    write_relationships: Union[str, RelationReplicator] = "False",
+    write_relationships: Union[str, InventoryReplicator] = "False",
     skip_roles: bool = False,
 ):
     """Migrate all data for all tenants."""
@@ -174,14 +171,14 @@ def migrate_data(
     logger.info("Finished migrating data for all tenants")
 
 
-def _get_replicator(write_relationships: Union[str, RelationReplicator]) -> RelationReplicator:
-    if isinstance(write_relationships, RelationReplicator):
+def _get_replicator(write_relationships: Union[str, InventoryReplicator]) -> InventoryReplicator:
+    if isinstance(write_relationships, InventoryReplicator):
         return write_relationships
 
     option = write_relationships.lower()
 
-    if option == "true" or option == "relations-api":
-        return RelationsApiReplicator()
+    if option == "true" or option == "inventory-api":
+        return InventoryApiReplicator()
 
     if option == "outbox":
         return OutboxReplicator()

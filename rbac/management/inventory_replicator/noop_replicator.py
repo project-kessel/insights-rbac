@@ -15,12 +15,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-"""A RelationReplicator which does nothing."""
+"""A InventoryReplicator which does nothing."""
 
-from management.relation_replicator.relation_replicator import RelationReplicator, ReplicationEvent
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEvent
 
 
-class NoopReplicator(RelationReplicator):
+class NoopReplicator(InventoryReplicator):
     """Noop replicator."""
 
     def replicate(self, event: ReplicationEvent):

@@ -1,24 +1,6 @@
-"""Validation schemas for /_private/api/relations/ endpoints."""
+"""Validation schemas for /_private/api/relations/ and /_private/api/inventory/ endpoints."""
 
-# Common schemas
-TYPE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "namespace": {"type": "string"},
-        "name": {"type": "string"},
-    },
-    "required": ["namespace", "name"],
-}
-
-ENTITY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "type": TYPE_SCHEMA,
-        "id": {"type": "string"},
-    },
-    "required": ["type", "id"],
-}
-
+# Schemas for the Inventory API's tuple filter format (kessel.inventory.v1beta2 RelationTupleFilter).
 SUBJECT_FILTER_SCHEMA = {
     "type": "object",
     "properties": {
@@ -42,62 +24,16 @@ FILTER_SCHEMA = {
     "required": ["resource_id", "resource_type", "resource_namespace", "relation", "subject_filter"],
 }
 
-RELATIONS_TOOL_INPUT_SCHEMAS = [
-    # "api/relations/lookup_resource/"
-    {
-        "type": "object",
-        "properties": {
-            "resource_type": TYPE_SCHEMA,
-            "relation": {"type": "string"},
-            "subject": {
-                "type": "object",
-                "properties": {"subject": ENTITY_SCHEMA},
-                "required": ["subject"],
-            },
-        },
-        "required": ["resource_type", "relation", "subject"],
-    },
-    # "api/relations/check_relation/"
-    {
-        "type": "object",
-        "properties": {
-            "resource": ENTITY_SCHEMA,
-            "relation": {"type": "string"},
-            "subject": {
-                "type": "object",
-                "relation": {"type": "string"},
-                "properties": {"subject": ENTITY_SCHEMA},
-                "required": ["subject"],
-            },
-        },
-        "required": ["resource", "relation", "subject"],
-    },
-    # "api/relations/read_tuples/"
-    {
+RELATION_INPUT_SCHEMAS = {
+    # "api/inventory/read_tuples/"
+    "read_tuples": {
         "type": "object",
         "properties": {"filter": FILTER_SCHEMA},
         "required": ["filter"],
     },
-]
-
-LOOKUP_SUBJECTS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "resource": ENTITY_SCHEMA,
-        "relation": {"type": "string"},
-        "subject_type": TYPE_SCHEMA,
-        "subject_relation": {"type": "string"},
-    },
-    "required": ["resource", "relation", "subject_type"],
 }
 
-RELATION_INPUT_SCHEMAS = {
-    "lookup_resources": RELATIONS_TOOL_INPUT_SCHEMAS[0],
-    "check_relation": RELATIONS_TOOL_INPUT_SCHEMAS[1],
-    "read_tuples": RELATIONS_TOOL_INPUT_SCHEMAS[2],
-    "lookup_subjects": LOOKUP_SUBJECTS_SCHEMA,
-}
-
+# Schemas for the Inventory API's resource/subject reference format (reporter-based, not namespace-based).
 INVENTORY_RESOURCE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -106,6 +42,15 @@ INVENTORY_RESOURCE_SCHEMA = {
         "reporter": {"type": "object", "properties": {"type": {"type": "string"}}, "required": ["type"]},
     },
     "required": ["resource_id", "resource_type", "reporter"],
+}
+
+REPRESENTATION_TYPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resource_type": {"type": "string"},
+        "reporter_type": {"type": "string"},
+    },
+    "required": ["resource_type", "reporter_type"],
 }
 
 ENTITY_SCHEMA = {"type": "object", "properties": {"resource": INVENTORY_RESOURCE_SCHEMA}, "required": ["resource"]}
@@ -121,6 +66,31 @@ INVENTORY_API_SCHEMAS = [
         },
         "required": ["resource", "relation", "subject"],
     },
+    # "api/inventory/lookup_resource/"
+    {
+        "type": "object",
+        "properties": {
+            "resource_type": REPRESENTATION_TYPE_SCHEMA,
+            "relation": {"type": "string"},
+            "subject": ENTITY_SCHEMA,
+        },
+        "required": ["resource_type", "relation", "subject"],
+    },
+    # "api/inventory/lookup_subjects/"
+    {
+        "type": "object",
+        "properties": {
+            "resource": INVENTORY_RESOURCE_SCHEMA,
+            "relation": {"type": "string"},
+            "subject_type": REPRESENTATION_TYPE_SCHEMA,
+            "subject_relation": {"type": "string"},
+        },
+        "required": ["resource", "relation", "subject_type"],
+    },
 ]
 
-INVENTORY_INPUT_SCHEMAS = {"check": INVENTORY_API_SCHEMAS[0]}
+INVENTORY_INPUT_SCHEMAS = {
+    "check": INVENTORY_API_SCHEMAS[0],
+    "lookup_resources": INVENTORY_API_SCHEMAS[1],
+    "lookup_subjects": INVENTORY_API_SCHEMAS[2],
+}

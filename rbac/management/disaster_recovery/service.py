@@ -10,7 +10,7 @@ from management.disaster_recovery.corrective_writer import (
 )
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent, read_events_in_window
 from management.disaster_recovery.resource_checker import check_resources_exist
-from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 
 logger = logging.getLogger(__name__)
 

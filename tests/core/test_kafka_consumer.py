@@ -643,8 +643,8 @@ class RBACKafkaConsumerTests(TestCase):
             consumer._process_debezium_message(message_value, 0, 0)
 
     @patch("core.kafka_consumer.json_format.ParseDict")
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     @patch("core.kafka_consumer._save_consistency_token_best_effort")
     def test_process_relations_message_success(self, mock_save_token, mock_delete, mock_write, mock_parse_dict):
         """Test successful relations message processing."""
@@ -714,14 +714,14 @@ class RBACKafkaConsumerTests(TestCase):
     @patch("internal.migration_coordination.migration_notify_coordination")
     @patch("core.kafka_consumer.connection.cursor")
     @patch("core.kafka_consumer.json_format.ParseDict")
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     @patch("core.kafka_consumer._save_consistency_token_best_effort")
     def test_process_relations_message_remove_legacy_root_parent_sends_notify(
         self, mock_save_token, mock_delete, mock_write, mock_parse_dict, mock_conn_cursor, mock_coordination
     ):
         """Consumer NOTIFYs after remove_root_parent_tenant_relationships batch replication."""
-        from management.relation_replicator.relation_replicator import ReplicationEventType
+        from management.inventory_replicator.inventory_replicator import ReplicationEventType
 
         mock_coordination.return_value = MigrationNotifyCoordination(
             channel="test_legacy_ch",
@@ -771,14 +771,14 @@ class RBACKafkaConsumerTests(TestCase):
     @patch("internal.migration_coordination.migration_notify_coordination")
     @patch("core.kafka_consumer.connection.cursor")
     @patch("core.kafka_consumer.json_format.ParseDict")
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     @patch("core.kafka_consumer._save_consistency_token_best_effort")
     def test_process_relations_message_migrate_binding_scope_sends_notify(
         self, mock_save_token, mock_delete, mock_write, mock_parse_dict, mock_conn_cursor, mock_coordination
     ):
         """Consumer NOTIFYs after migrate_binding_scope batch replication."""
-        from management.relation_replicator.relation_replicator import ReplicationEventType
+        from management.inventory_replicator.inventory_replicator import ReplicationEventType
 
         mock_coordination.return_value = MigrationNotifyCoordination(
             channel="test_migrate_binding_scope_ch",
@@ -1447,7 +1447,7 @@ class FencingTokenTests(TestCase):
         self.consumer.consumer = Mock()
         self.consumer.consumer.config = {"group_id": "test-consumer-group"}
 
-    @patch("core.kafka_consumer.relations_api_replication.acquire_lock")
+    @patch("core.kafka_consumer.inventory_api_replication.acquire_lock")
     def test_acquire_lock_success(self, mock_acquire_lock):
         """Test successful lock acquisition."""
         mock_acquire_lock.return_value = "test-token-12345"
@@ -1457,7 +1457,7 @@ class FencingTokenTests(TestCase):
         self.assertEqual(lock_token, "test-token-12345")
         mock_acquire_lock.assert_called_once_with("test-group/0")
 
-    @patch("core.kafka_consumer.relations_api_replication.acquire_lock")
+    @patch("core.kafka_consumer.inventory_api_replication.acquire_lock")
     def test_acquire_lock_failure(self, mock_acquire_lock):
         """Test lock acquisition failure."""
         mock_error = create_mock_grpc_error(grpc.StatusCode.UNAVAILABLE, "Service unavailable")
@@ -1699,8 +1699,8 @@ class FencingTokenProcessingTests(TestCase):
             "relations_to_remove": [],
         }
 
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     def test_fencing_check_included_in_api_calls(self, mock_delete, mock_write):
         """Test that fencing check is included in Relations API calls."""
         from core.kafka_consumer import DebeziumMessage
@@ -1734,8 +1734,8 @@ class FencingTokenProcessingTests(TestCase):
         self.assertEqual(fencing_check.lock_id, "test-group/0")
         self.assertEqual(fencing_check.lock_token, "test-token-12345")
 
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     def test_no_fencing_check_when_no_lock_token(self, mock_delete, mock_write):
         """Test that processing fails when lock token is not available."""
         from core.kafka_consumer import DebeziumMessage
@@ -1949,8 +1949,8 @@ class FencingTokenErrorHandlingTests(TestCase):
             "relations_to_remove": [],
         }
 
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     def test_failed_precondition_raises_runtime_error(self, mock_delete, mock_write):
         """Test that FAILED_PRECONDITION error raises RuntimeError."""
         from core.kafka_consumer import DebeziumMessage
@@ -1976,8 +1976,8 @@ class FencingTokenErrorHandlingTests(TestCase):
 
         self.assertIn("Fencing token validation failed", str(ctx.exception))
 
-    @patch("core.kafka_consumer.relations_api_replication.write_relationships")
-    @patch("core.kafka_consumer.relations_api_replication.delete_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.write_relationships")
+    @patch("core.kafka_consumer.inventory_api_replication.delete_relationships")
     def test_other_grpc_errors_are_reraised(self, mock_delete, mock_write):
         """Test that other gRPC errors are re-raised for retry."""
         from core.kafka_consumer import DebeziumMessage
@@ -2094,7 +2094,7 @@ class HeartbeatMetricTests(TestCase):
         self.consumer.offset_manager = Mock()
         self.consumer.offset_manager.should_commit.return_value = False
 
-    @patch("core.kafka_consumer.relations_api_replication")
+    @patch("core.kafka_consumer.inventory_api_replication")
     @patch("core.kafka_consumer.json_format.ParseDict")
     def test_last_message_processed_time_updated_on_success(self, mock_parse_dict, mock_replication):
         """Test that last_message_processed_time Gauge is updated after successful processing."""
