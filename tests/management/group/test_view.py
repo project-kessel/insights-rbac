@@ -4457,6 +4457,133 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         )
 
 
+@override_settings(
+    ROOT_SCOPE_PERMISSIONS="root:*:*",
+    TENANT_SCOPE_PERMISSIONS="tenant:*:*",
+    REPLICATION_TO_RELATION_ENABLED=False,
+)
+class GroupPrincipalV2SyncTests(IdentityRequest):
+    """Test that adding principals to a group syncs TenantMapping membership via update_user."""
+
+    def setUp(self):
+        """Set up the V2 sync tests."""
+        super().setUp()
+        request = self.request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        user.org_id = self.customer_data["org_id"]
+        user.admin = True
+        request.user = user
+
+        self.principal = Principal(username=self.user_data["username"], tenant=self.tenant, user_id="1")
+        self.principal.save()
+
+        self.group = Group(name="testGroup", tenant=self.tenant)
+        self.group.save()
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "new_user",
+                    "user_id": "99001",
+                    "org_id": "test_org",
+                    "is_org_admin": True,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_new_principal_calls_update_user(self, mock_proxy):
+        """Test that adding a new principal triggers update_user for TenantMapping sync."""
+        with patch("management.group.service.get_tenant_bootstrap_service") as mock_get_service:
+            mock_service = Mock()
+            mock_get_service.return_value = mock_service
+
+            url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+            client = APIClient()
+            request_body = {"principals": [{"username": "new_user"}]}
+            response = client.post(url, request_body, format="json", **self.headers)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            mock_service.update_user.assert_called_once()
+            call_args = mock_service.update_user.call_args
+            synced_user = call_args[0][0]
+            self.assertEqual(synced_user.user_id, "99001")
+            self.assertTrue(synced_user.admin)
+            self.assertEqual(call_args[1]["upsert"], True)
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "lazy_user",
+                    "user_id": "99002",
+                    "org_id": "test_org",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_lazy_principal_calls_update_user(self, mock_proxy):
+        """Test that adding a lazy principal (user_id=None) triggers update_user when user_id is populated."""
+        # Create a lazy principal without user_id
+        Principal.objects.create(username="lazy_user", tenant=self.tenant, user_id=None)
+
+        with patch("management.group.service.get_tenant_bootstrap_service") as mock_get_service:
+            mock_service = Mock()
+            mock_get_service.return_value = mock_service
+
+            url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+            client = APIClient()
+            request_body = {"principals": [{"username": "lazy_user"}]}
+            response = client.post(url, request_body, format="json", **self.headers)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            mock_service.update_user.assert_called_once()
+            # Verify the principal's user_id was updated
+            principal = Principal.objects.get(username__iexact="lazy_user", tenant=self.tenant)
+            self.assertEqual(principal.user_id, "99002")
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "existing_user",
+                    "user_id": "88001",
+                    "org_id": "test_org",
+                    "is_org_admin": True,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_existing_principal_skips_update_user(self, mock_proxy):
+        """Test that adding an existing principal with user_id already set skips update_user."""
+        # Create a principal that already has user_id
+        Principal.objects.create(username="existing_user", tenant=self.tenant, user_id="88001")
+
+        with patch("management.group.service.get_tenant_bootstrap_service") as mock_get_service:
+            mock_service = Mock()
+            mock_get_service.return_value = mock_service
+
+            url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+            client = APIClient()
+            request_body = {"principals": [{"username": "existing_user"}]}
+            response = client.post(url, request_body, format="json", **self.headers)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            mock_service.update_user.assert_not_called()
+
+
 class GroupViewNonAdminTests(IdentityRequest):
     """Test the group view for nonadmin user."""
 

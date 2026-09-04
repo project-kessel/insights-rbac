@@ -229,7 +229,39 @@ class IdentityHeaderMiddleware:
                     # and when we went to create one, another request or the listener job created one.
                     tenant = Tenant.objects.get(org_id=request.user.org_id)
             TENANTS.save_tenant(tenant)
+
+        # Sync requesting user's principal to TenantMapping groups independently of tenant cache.
+        self._sync_requesting_user_principal(request, tenant)
+
         return tenant
+
+    def _sync_requesting_user_principal(self, request, tenant):
+        """Sync the requesting user's principal to TenantMapping default/admin groups if needed.
+
+        Runs on every request independently of the tenant cache so that new users
+        in an already-cached tenant are still synchronized.  Skips system accounts,
+        service accounts, and principals that already have a user_id set.
+        """
+        if request.user.system or getattr(request.user, "is_service_account", False) or not request.user.username:
+            return
+
+        try:
+            principal = Principal.objects.get(username__iexact=request.user.username, tenant=tenant)
+            needs_v2_sync = principal.user_id is None
+        except Principal.DoesNotExist:
+            needs_v2_sync = True
+
+        if needs_v2_sync:
+            try:
+                with transaction.atomic():
+                    self.bootstrap_service.update_user(request.user, upsert=True)
+            except Exception:
+                logger.warning(
+                    "Failed to sync TenantMapping membership for user %s in org %s",
+                    request.user.username,
+                    request.user.org_id,
+                    exc_info=True,
+                )
 
     @staticmethod  # noqa: C901
     def _get_access_for_user(username, tenant):  # pylint: disable=too-many-locals,too-many-branches

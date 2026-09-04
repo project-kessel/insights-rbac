@@ -1316,6 +1316,146 @@ class V2RbacTenantMiddlewareTest(RbacTenantMiddlewareTest):
             root = Workspace.objects.root(tenant=tenant)
             self.assertIsNotNone(root)
 
+    def test_existing_tenant_new_user_calls_update_user(self):
+        """Test that a new user hitting an existing tenant triggers update_user for TenantMapping sync."""
+        with patch("rbac.middleware.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)):
+            # First, bootstrap a tenant so it exists in the DB
+            self.request.user.org_id = "77001"
+            mock_request = self.request
+            mock_request.user.admin = True
+            mock_request.user.system = False
+            mock_request.user.user_id = "u77"
+            mock_request.user.is_service_account = False
+
+            tenant_cache = TenantCache()
+            tenant_cache.delete_tenant("77001")
+
+            middleware = IdentityHeaderMiddleware(get_response=IdentityHeaderMiddleware.get_tenant)
+            # Bootstrap tenant via first call (Tenant.DoesNotExist path)
+            result = middleware.get_tenant(Tenant, "localhost", mock_request)
+            tenant = Tenant.objects.get(org_id="77001")
+            self.assertIsNotNone(tenant)
+
+            # Clear cache so next call goes through DB lookup path
+            tenant_cache.delete_tenant("77001")
+
+            # Now simulate a NEW user in the same org (no Principal yet)
+            mock_request.user.username = "brand_new_admin"
+            mock_request.user.user_id = "u78"
+            mock_request.user.admin = True
+
+            result2 = middleware.get_tenant(Tenant, "localhost", mock_request)
+            self.assertEqual(result2.org_id, "77001")
+
+            # Verify a Principal was created for the new user
+            principal = Principal.objects.get(username="brand_new_admin", tenant=tenant)
+            self.assertEqual(principal.user_id, "u78")
+
+            # Verify group membership tuples were created
+            mapping = TenantMapping.objects.get(tenant=tenant)
+            default_group_tuple_count = self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "group", str(mapping.default_group_uuid)),
+                    relation("member"),
+                    subject("rbac", "principal", "redhat/u78"),
+                )
+            )
+            self.assertEqual(default_group_tuple_count, 1)
+
+            admin_group_tuple_count = self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "group", str(mapping.default_admin_group_uuid)),
+                    relation("member"),
+                    subject("rbac", "principal", "redhat/u78"),
+                )
+            )
+            self.assertEqual(admin_group_tuple_count, 1)
+
+    def test_cached_tenant_new_user_calls_update_user(self):
+        """Test that a new user hitting a cached tenant still triggers update_user."""
+        with patch("rbac.middleware.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)):
+            # Bootstrap a tenant so it exists in DB and cache
+            self.request.user.org_id = "77003"
+            mock_request = self.request
+            mock_request.user.admin = True
+            mock_request.user.system = False
+            mock_request.user.user_id = "u90"
+            mock_request.user.is_service_account = False
+
+            tenant_cache = TenantCache()
+            tenant_cache.delete_tenant("77003")
+
+            middleware = IdentityHeaderMiddleware(get_response=IdentityHeaderMiddleware.get_tenant)
+            # Bootstrap tenant via first call
+            result = middleware.get_tenant(Tenant, "localhost", mock_request)
+            tenant = Tenant.objects.get(org_id="77003")
+            self.assertIsNotNone(tenant)
+
+            # Do NOT clear cache — tenant is cached
+            # Simulate a NEW user in the same org
+            mock_request.user.username = "cached_tenant_new_user"
+            mock_request.user.user_id = "u91"
+            mock_request.user.admin = True
+
+            result2 = middleware.get_tenant(Tenant, "localhost", mock_request)
+            self.assertEqual(result2.org_id, "77003")
+
+            # Verify a Principal was created even though tenant was cached
+            principal = Principal.objects.get(username="cached_tenant_new_user", tenant=tenant)
+            self.assertEqual(principal.user_id, "u91")
+
+            # Verify group membership tuples were created
+            mapping = TenantMapping.objects.get(tenant=tenant)
+            default_group_tuple_count = self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "group", str(mapping.default_group_uuid)),
+                    relation("member"),
+                    subject("rbac", "principal", "redhat/u91"),
+                )
+            )
+            self.assertEqual(default_group_tuple_count, 1)
+
+            admin_group_tuple_count = self._tuples.count_tuples(
+                all_of(
+                    resource("rbac", "group", str(mapping.default_admin_group_uuid)),
+                    relation("member"),
+                    subject("rbac", "principal", "redhat/u91"),
+                )
+            )
+            self.assertEqual(admin_group_tuple_count, 1)
+
+    def test_existing_tenant_existing_principal_skips_update_user(self):
+        """Test that an existing principal with user_id set does NOT trigger update_user."""
+        with patch("rbac.middleware.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)):
+            # Bootstrap a tenant
+            self.request.user.org_id = "77002"
+            mock_request = self.request
+            mock_request.user.admin = True
+            mock_request.user.system = False
+            mock_request.user.user_id = "u80"
+            mock_request.user.is_service_account = False
+
+            tenant_cache = TenantCache()
+            tenant_cache.delete_tenant("77002")
+
+            middleware = IdentityHeaderMiddleware(get_response=IdentityHeaderMiddleware.get_tenant)
+            result = middleware.get_tenant(Tenant, "localhost", mock_request)
+            tenant = Tenant.objects.get(org_id="77002")
+
+            # Count tuples after bootstrap
+            initial_tuple_count = len(self._tuples.find_tuples(all_of()))
+
+            # Clear cache, same user again
+            tenant_cache.delete_tenant("77002")
+
+            with patch.object(
+                middleware.bootstrap_service, "update_user", wraps=middleware.bootstrap_service.update_user
+            ) as mock_update:
+                result2 = middleware.get_tenant(Tenant, "localhost", mock_request)
+                self.assertEqual(result2.org_id, "77002")
+                # update_user should NOT be called — principal exists with user_id
+                mock_update.assert_not_called()
+
 
 @override_settings(V2_BOOTSTRAP_TENANT=True)
 class V2IdentityHeaderMiddlewareTest(IdentityHeaderMiddlewareTest):
