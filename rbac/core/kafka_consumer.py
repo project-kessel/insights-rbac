@@ -17,6 +17,7 @@
 
 """RBAC Kafka consumer for processing Debezium and replication messages."""
 
+import asyncio
 import enum
 import json
 import logging
@@ -34,7 +35,7 @@ from django.db import OperationalError, connection, transaction
 from google.protobuf import json_format
 from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
-from kafka.consumer.subscription_state import ConsumerRebalanceListener
+from kafka.consumer.subscription_state import AsyncConsumerRebalanceListener
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata
 from kessel.relations.v1beta1 import common_pb2
@@ -624,10 +625,12 @@ class OffsetManager:
             self.stored_offsets.clear()
 
 
-class RebalanceListener(ConsumerRebalanceListener):
+class RebalanceListener(AsyncConsumerRebalanceListener):
     """Listen for Kafka consumer rebalance events.
 
-    Inherits from ConsumerRebalanceListener to properly integrate with kafka-python.
+    Uses AsyncConsumerRebalanceListener so that blocking IO (offset commits,
+    gRPC lock acquisition) runs in a worker thread via asyncio.to_thread(),
+    keeping the consumer's IO / heartbeat loop responsive.
     """
 
     def __init__(self, consumer_instance):
@@ -638,22 +641,26 @@ class RebalanceListener(ConsumerRebalanceListener):
         """
         self.consumer_instance = consumer_instance
 
-    def on_partitions_revoked(self, revoked):
+    async def on_partitions_revoked(self, revoked):
         """Handle partition revocation during rebalance.
+
+        Runs the blocking offset commit in a worker thread to avoid
+        blocking the consumer IO thread.
 
         Args:
             revoked: List of TopicPartition objects being revoked
         """
-        self.consumer_instance._on_partitions_revoked(revoked)
+        await asyncio.to_thread(self.consumer_instance._on_partitions_revoked, revoked)
 
-    def on_partitions_assigned(self, assigned):
+    async def on_partitions_assigned(self, assigned):
         """Handle partition assignment during rebalance.
+
+        Runs the blocking lock acquisition in a worker thread to avoid
+        blocking the consumer IO thread.
 
         Args:
             assigned: List of TopicPartition objects being assigned
         """
-        import time
-
         # Track rebalance event
         rebalance_events_total.labels(event_type="partitions_assigned").inc()
 
@@ -685,8 +692,9 @@ class RebalanceListener(ConsumerRebalanceListener):
             start_time = time.time()
 
             try:
-                # Acquire lock token from Relations API
-                lock_token = self.consumer_instance._acquire_lock_with_retry(lock_id)
+                # Acquire lock token from Relations API in a worker thread
+                # to avoid blocking the consumer IO / heartbeat loop
+                lock_token = await asyncio.to_thread(self.consumer_instance._acquire_lock_with_retry, lock_id)
 
                 # Record successful acquisition
                 duration = time.time() - start_time
