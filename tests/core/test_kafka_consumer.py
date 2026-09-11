@@ -17,6 +17,7 @@
 
 """Tests for RBAC Kafka consumer."""
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -1538,7 +1539,8 @@ class FencingTokenRebalanceTests(TestCase):
 
         listener = RebalanceListener(self.consumer)
         # Note: Kafka library passes a set of TopicPartition objects, not a list
-        listener.on_partitions_assigned({self.partition})
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        asyncio.run(listener.on_partitions_assigned({self.partition}))
 
         # Verify lock was acquired
         mock_acquire_lock.assert_called_once_with("test-consumer-group/0")
@@ -1561,7 +1563,8 @@ class FencingTokenRebalanceTests(TestCase):
 
         # Should NOT raise - instead sets a flag for later detection
         # Note: Kafka library passes a set of TopicPartition objects, not a list
-        listener.on_partitions_assigned({self.partition})
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        asyncio.run(listener.on_partitions_assigned({self.partition}))
 
         # Verify lock state was cleared
         self.assertIsNone(self.consumer.lock_id)
@@ -1574,7 +1577,7 @@ class FencingTokenRebalanceTests(TestCase):
     def test_partition_assignment_handles_set_not_list(self, mock_acquire_lock):
         """Test that on_partitions_assigned handles set of TopicPartition (not list).
 
-        Regression test: The Kafka library's ConsumerRebalanceListener.on_partitions_assigned()
+        Regression test: The Kafka library's AsyncConsumerRebalanceListener.on_partitions_assigned()
         callback receives a SET of TopicPartition objects, not a list. Previously the code
         tried to access assigned[0] which failed with "'set' object is not subscriptable".
         """
@@ -1589,7 +1592,8 @@ class FencingTokenRebalanceTests(TestCase):
         self.assertIsInstance(assigned_partitions, set)
 
         # This should not raise "'set' object is not subscriptable"
-        listener.on_partitions_assigned(assigned_partitions)
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        asyncio.run(listener.on_partitions_assigned(assigned_partitions))
 
         # Verify lock was acquired successfully
         mock_acquire_lock.assert_called_once_with("test-consumer-group/0")
