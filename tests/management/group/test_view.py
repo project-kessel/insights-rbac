@@ -4457,6 +4457,211 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         )
 
 
+@override_settings(REPLICATION_TO_RELATION_ENABLED=False)
+class GroupPrincipalV2SyncTests(IdentityRequest):
+    """Test that adding principals to a group syncs TenantMapping membership via update_user."""
+
+    def setUp(self):
+        """Set up the V2 sync tests."""
+        super().setUp()
+        request = self.request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        user.org_id = self.customer_data["org_id"]
+        user.admin = True
+        request.user = user
+
+        self.principal = Principal(username=self.user_data["username"], tenant=self.tenant, user_id="1")
+        self.principal.save()
+
+        self.group = Group(name="testGroup", tenant=self.tenant)
+        self.group.save()
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "new_user",
+                    "user_id": "99001",
+                    "is_org_admin": True,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_new_principal_calls_update_user(self, mock_proxy):
+        """Test that adding a new principal creates the principal and adds it to the group."""
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {"principals": [{"username": "new_user"}]}
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(username__iexact="new_user", tenant=self.tenant)
+        self.assertEqual(principal.user_id, "99001")
+        self.assertEqual(principal.tenant, self.tenant)
+        self.assertIn(principal, self.group.principals.all())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "lazy_user",
+                    "user_id": "99002",
+                    "is_org_admin": False,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_lazy_principal_calls_update_user(self, mock_proxy):
+        """Test that adding a lazy principal (user_id=None) populates user_id and adds to group."""
+        # Create a lazy principal without user_id
+        Principal.objects.create(username="lazy_user", tenant=self.tenant, user_id=None)
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {"principals": [{"username": "lazy_user"}]}
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(username__iexact="lazy_user", tenant=self.tenant)
+        self.assertEqual(principal.user_id, "99002")
+        self.assertIn(principal, self.group.principals.all())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "existing_user",
+                    "user_id": "88001",
+                    "is_org_admin": True,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_existing_principal_skips_update_user(self, mock_proxy):
+        """Test that adding an existing principal with user_id already set skips update_user."""
+        # Create a principal that already has user_id
+        Principal.objects.create(username="existing_user", tenant=self.tenant, user_id="88001")
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {"principals": [{"username": "existing_user"}]}
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(username__iexact="existing_user", tenant=self.tenant)
+        self.assertEqual(principal.user_id, "88001")
+        self.assertIn(principal, self.group.principals.all())
+
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "fail_user",
+                    "user_id": "99010",
+                    "is_org_admin": False,
+                    "is_active": True,
+                },
+                {
+                    "username": "ok_user",
+                    "user_id": "99011",
+                    "is_org_admin": False,
+                    "is_active": True,
+                },
+            ],
+        },
+    )
+    def test_integrity_error_in_update_user_does_not_rollback_group_add(self, mock_proxy):
+        """Test that an IntegrityError in update_user for one principal does not roll back the group addition."""
+        from django.db import IntegrityError
+
+        with patch("management.group.view.get_tenant_bootstrap_service") as mock_get_service:
+            mock_service = Mock()
+            mock_service.update_user.side_effect = [IntegrityError("duplicate key"), None]
+            mock_get_service.return_value = mock_service
+
+            url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+            client = APIClient()
+            request_body = {"principals": [{"username": "fail_user"}, {"username": "ok_user"}]}
+            response = client.post(url, request_body, format="json", **self.headers)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            # Both principals should be added to the group despite the IntegrityError on the first
+            self.assertTrue(Principal.objects.filter(username__iexact="fail_user", tenant=self.tenant).exists())
+            self.assertTrue(Principal.objects.filter(username__iexact="ok_user", tenant=self.tenant).exists())
+            group = Group.objects.get(uuid=self.group.uuid)
+            group_usernames = list(group.principals.values_list("username", flat=True))
+            self.assertIn("fail_user", group_usernames)
+            self.assertIn("ok_user", group_usernames)
+            # Second update_user should still have been called
+            self.assertEqual(mock_service.update_user.call_count, 2)
+
+    @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_USER_DOMAIN="redhat")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "tuple_user",
+                    "user_id": "77001",
+                    "is_org_admin": True,
+                    "is_active": True,
+                }
+            ],
+        },
+    )
+    def test_add_new_principal_creates_tuples(self, mock_proxy, mock_replicate):
+        """Test that adding a new principal creates TenantMapping group membership tuples."""
+        from management.group.definer import seed_group
+
+        Tenant.objects.get_or_create(tenant_name="public")
+        seed_group()
+
+        tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(tuples)
+        mock_replicate.side_effect = replicator.replicate
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        response = client.post(url, {"principals": [{"username": "tuple_user"}]}, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Verify TenantMapping was created and tuples were written
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        default_group_tuple_count = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(mapping.default_group_uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/77001"),
+            )
+        )
+        self.assertEqual(default_group_tuple_count, 1, "Expected default group membership tuple")
+
+        admin_group_tuple_count = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(mapping.default_admin_group_uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/77001"),
+            )
+        )
+        self.assertEqual(admin_group_tuple_count, 1, "Expected admin group membership tuple")
+
+
 class GroupViewNonAdminTests(IdentityRequest):
     """Test the group view for nonadmin user."""
 

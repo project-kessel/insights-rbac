@@ -35,6 +35,7 @@ from management.authorization.token_validator import ITSSOTokenValidator, TokenV
 from management.cache import TenantCache
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import Principal
+from management.principal.backfill import backfill_remote_principal
 from management.principal.proxy import PrincipalProxy
 from management.tenant_service import get_tenant_bootstrap_service
 from management.tenant_service.tenant_service import TenantBootstrapService
@@ -229,6 +230,10 @@ class IdentityHeaderMiddleware:
                     # and when we went to create one, another request or the listener job created one.
                     tenant = Tenant.objects.get(org_id=request.user.org_id)
             TENANTS.save_tenant(tenant)
+
+        # Backfill requesting user's TenantMapping membership.
+        backfill_remote_principal(self.bootstrap_service, request.user, tenant)
+
         return tenant
 
     @staticmethod  # noqa: C901

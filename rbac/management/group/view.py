@@ -50,6 +50,7 @@ from management.group.serializer import (
     RoleMinimumSerializer,
 )
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import AuditLog, Group, Role
 from management.notifications.notification_handlers import (
     group_obj_change_notification_handler,
@@ -57,9 +58,10 @@ from management.notifications.notification_handlers import (
 )
 from management.permissions import GroupAccessPermission
 from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
+from management.principal.backfill import backfill_remote_principals
 from management.principal.it_service import ITService
 from management.principal.model import Principal
-from management.principal.proxy import PrincipalProxy
+from management.principal.proxy import PrincipalProxy, external_principal_to_user
 from management.principal.serializer import ServiceAccountSerializer
 from management.principal.view import ADMIN_ONLY_KEY, USERNAME_ONLY_KEY, VALID_BOOLEAN_VALUE
 from management.querysets import (
@@ -69,6 +71,7 @@ from management.querysets import (
 from management.role.view import RoleViewSet
 from management.role_binding.service import RoleBindingService
 from management.tenant_mapping.v2_activation import V1WriteBlockedError, assert_v1_write_allowed
+from management.tenant_service import get_tenant_bootstrap_service
 from management.utils import validate_and_get_key, validate_group_name, validate_uuid
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -935,6 +938,13 @@ class GroupViewSet(
                         sa,
                         Principal.Types.SERVICE_ACCOUNT,
                     )
+            # Backfill new principals into SpiceDB via TenantMapping.
+            if principals_from_response:
+                tenant = self.request.tenant
+                bootstrap_service = get_tenant_bootstrap_service(OutboxReplicator())
+                users = [external_principal_to_user(bop_item) for bop_item in principals_from_response]
+                backfill_remote_principals(bootstrap_service, users, tenant)
+
             new_users = []
             if len(principals) > 0:
                 group, new_users = self.add_users(group, principals_from_response, org_id=org_id)
