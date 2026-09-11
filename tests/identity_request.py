@@ -88,7 +88,12 @@ class BaseIdentityRequest:
         # Generate unique username by appending UUID to avoid cache collisions
         base_username = cls.fake.user_name()
         unique_username = f"{base_username}_{uuid.uuid4().hex[:8]}"
-        user_data = {"username": unique_username, "email": cls.fake.email(), "user_id": cls.fake.ean8()}
+        user_data = {
+            "username": unique_username,
+            "email": cls.fake.email(),
+            # We add a prefix to ensure we don't conflict with any hard-coded user IDs.
+            "user_id": "ir-" + cls.fake.ean8(),
+        }
         return user_data
 
     def _create_service_account_data(cls) -> dict[str, str]:
@@ -141,7 +146,7 @@ class BaseIdentityRequest:
                 "username": user_data.get("username"),
                 "email": user_data.get("email"),
                 "is_org_admin": is_org_admin,
-                "user_id": "1111111",
+                "user_id": user_data.get("user_id") or ("ir-" + cls.fake.ean8()),
             }
 
         if service_account_data:

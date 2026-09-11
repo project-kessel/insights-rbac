@@ -1675,8 +1675,7 @@ class RequestContextMiddlewareTest(IdentityRequest):
             returned = middleware(self.request)
             self.assertIs(returned, response)
             self.assertEqual(captured["org_id"], self.customer["org_id"])
-            # user_id is hardcoded as "1111111" in _build_identity
-            self.assertEqual(captured["user_id"], "1111111")
+            self.assertEqual(captured["user_id"], self.user_data["user_id"])
             self.assertEqual(captured["user_type"], "user")
 
         ctx.run(_run)

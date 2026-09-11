@@ -49,11 +49,17 @@ class CrossAccountRequestTest(IdentityRequest):
         self.replicator = InMemoryRelationReplicator(self.relations)
         self.fixture = RbacFixture(V2TenantBootstrapService(InMemoryRelationReplicator(self.relations)))
 
+        self.user_1_data = {
+            "email": "fake_user_1@example.com",
+            "username": "1111111",
+            "user_id": "1111111",
+        }
+
         self.ref_time = timezone.now()
         self.account = self.customer_data["account_id"]
         self.org_id = self.customer_data["org_id"]
         self.associate_non_admin_request_context = self._create_request_context(
-            self.customer_data, self.user_data, is_org_admin=False, is_internal=True
+            self.customer_data, self.user_1_data, is_org_admin=False, is_internal=True
         )
         self.associate_non_admin_request = self.associate_non_admin_request_context["request"]
 
@@ -63,13 +69,13 @@ class CrossAccountRequestTest(IdentityRequest):
         self.not_anemic_customer_data["account_id"] = self.not_anemic_account
         self.not_anemic_customer_data["tenant_name"] = f"acct{self.not_anemic_account}"
         self.associate_not_anemic_request_context = self._create_request_context(
-            self.not_anemic_customer_data, self.user_data, is_org_admin=False, is_internal=True
+            self.not_anemic_customer_data, self.user_1_data, is_org_admin=False, is_internal=True
         )
         self.associate_not_anemic_request = self.associate_not_anemic_request_context["request"]
         self.not_anemic_headers = self.associate_not_anemic_request_context["request"].META
 
         self.associate_admin_request_context = self._create_request_context(
-            self.customer_data, self.user_data, is_org_admin=True, is_internal=True
+            self.customer_data, self.user_1_data, is_org_admin=True, is_internal=True
         )
         self.associate_admin_request = self.associate_admin_request_context["request"]
 
@@ -112,12 +118,16 @@ class CrossAccountRequestTest(IdentityRequest):
         self.role_9 = self.fixture.new_system_role(name="role_9")
         self.role_8 = self.fixture.new_system_role(name="role_8")
 
-        Principal.objects.create(tenant=public_tenant, username="1111111", user_id="1111111")
+        Principal.objects.create(
+            tenant=public_tenant, username=self.user_1_data["username"], user_id=self.user_1_data["user_id"]
+        )
         Principal.objects.create(tenant=public_tenant, username="2222222", user_id="2222222")
+
+        user_1_id = self.user_1_data["user_id"]
 
         self.request_1 = CrossAccountRequest.objects.create(
             target_org=self.org_id,
-            user_id="1111111",
+            user_id=user_1_id,
             end_date=self.ref_time + timedelta(10),
             status="approved",
         )
@@ -130,7 +140,7 @@ class CrossAccountRequestTest(IdentityRequest):
         self.request_2.roles.add(*(self.role_1, self.role_2))
         self.request_3 = CrossAccountRequest.objects.create(
             target_org=self.another_org_id,
-            user_id="1111111",
+            user_id=user_1_id,
             end_date=self.ref_time + timedelta(10),
             status="approved",
         )
@@ -148,13 +158,13 @@ class CrossAccountRequestTest(IdentityRequest):
         )
         self.request_6 = CrossAccountRequest.objects.create(
             target_org=self.another_org_id,
-            user_id="1111111",
+            user_id=user_1_id,
             end_date=self.ref_time + timedelta(10),
             status="pending",
         )
         self.not_anemic_request_1 = CrossAccountRequest.objects.create(
             target_org=self.not_anemic_org_id,
-            user_id="1111111",
+            user_id=user_1_id,
             end_date=self.ref_time + timedelta(10),
             status="approved",
         )
