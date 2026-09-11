@@ -16,7 +16,8 @@
 #
 """Test the group model."""
 
-from management.models import Group, Role, Policy
+from api.models import Tenant
+from management.models import CustomRoleV2, Group, Policy, Role, RoleBinding, RoleBindingGroup
 from tests.identity_request import IdentityRequest
 
 
@@ -37,8 +38,19 @@ class GroupModelTests(IdentityRequest):
         self.group.policies.add(self.policy)
         self.group.save()
 
+        # V2 role bindings for role_count tests
+        self.v2_role_a = CustomRoleV2.objects.create(name="v2RoleA", tenant=self.tenant)
+        self.v2_role_b = CustomRoleV2.objects.create(name="v2RoleB", tenant=self.tenant)
+        self.binding_a = RoleBinding.objects.create(
+            tenant=self.tenant, role=self.v2_role_a, resource_type="workspace", resource_id="ws-1"
+        )
+        RoleBindingGroup.objects.create(group=self.group, binding=self.binding_a)
+
     def tearDown(self):
         """Tear down group model tests."""
+        RoleBindingGroup.objects.all().delete()
+        RoleBinding.objects.all().delete()
+        CustomRoleV2.objects.all().delete()
         Group.objects.all().delete()
         Policy.objects.all().delete()
         Role.objects.all().delete()
@@ -48,5 +60,41 @@ class GroupModelTests(IdentityRequest):
         self.assertEqual(list(self.group.roles()), [self.roleA])
 
     def test_role_count_for_group(self):
-        """Test the role count for a group."""
+        """Test the role count for a group derives from RoleBindingGroup."""
+        self.assertEqual(self.group.role_count(), 1)
+
+    def test_role_count_multiple_roles(self):
+        """Test role count with multiple distinct roles."""
+        binding_b = RoleBinding.objects.create(
+            tenant=self.tenant, role=self.v2_role_b, resource_type="workspace", resource_id="ws-2"
+        )
+        RoleBindingGroup.objects.create(group=self.group, binding=binding_b)
+        self.assertEqual(self.group.role_count(), 2)
+
+    def test_role_count_deduplicates_same_role(self):
+        """Test role count deduplicates when same role is bound at multiple resources."""
+        binding_dup = RoleBinding.objects.create(
+            tenant=self.tenant, role=self.v2_role_a, resource_type="workspace", resource_id="ws-other"
+        )
+        RoleBindingGroup.objects.create(group=self.group, binding=binding_dup)
+        # Same role bound at two resources → still counts as 1
+        self.assertEqual(self.group.role_count(), 1)
+
+    def test_role_count_no_bindings(self):
+        """Test role count is zero when group has no role binding entries."""
+        empty_group = Group.objects.create(name="emptyGroup", tenant=self.tenant)
+        self.assertEqual(empty_group.role_count(), 0)
+
+    def test_role_count_excludes_cross_tenant_bindings(self):
+        """Test role count excludes bindings from a different tenant."""
+        other_tenant = Tenant.objects.create(
+            tenant_name="acctOther", account_id="other-acct", org_id="other-org", ready=True
+        )
+        other_role = CustomRoleV2.objects.create(name="otherRole", tenant=other_tenant)
+        cross_binding = RoleBinding.objects.create(
+            tenant=other_tenant, role=other_role, resource_type="workspace", resource_id="ws-cross"
+        )
+        # Link cross-tenant binding to our group
+        RoleBindingGroup.objects.create(group=self.group, binding=cross_binding)
+        # Should only count same-tenant binding (1), not the cross-tenant one
         self.assertEqual(self.group.role_count(), 1)
