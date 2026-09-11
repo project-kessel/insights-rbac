@@ -48,6 +48,17 @@ services:
       READ_YOUR_WRITES_WORKSPACE_ENABLED: "True"
       READ_YOUR_WRITES_TIMEOUT_SECONDS: "30"
       SERVICE_PSKS: '{"inventory":{"secret":"local-dev-psk"}}'
+      ROOT_SCOPE_PERMISSIONS: "advisor:*:*,patch:*:*,staleness:*:*"
+      TENANT_SCOPE_PERMISSIONS: "rbac:*:*,subscriptions:*:*"
+      DEFAULT_SCOPE_PERMISSIONS: "subscriptions:reports:*,subscriptions:manifests:*,subscriptions:cloud_access:*"
+      ALL_SCOPE_PERMISSIONS: "rbac:role_binding:*"
+
+  rbac-migrate:
+    environment:
+      ROOT_SCOPE_PERMISSIONS: "advisor:*:*,patch:*:*,staleness:*:*"
+      TENANT_SCOPE_PERMISSIONS: "rbac:*:*,subscriptions:*:*"
+      DEFAULT_SCOPE_PERMISSIONS: "subscriptions:reports:*,subscriptions:manifests:*,subscriptions:cloud_access:*"
+      ALL_SCOPE_PERMISSIONS: "rbac:role_binding:*"
 
   inventory-api:
     # The full-kessel config permits unauthenticated gRPC transport but does
@@ -85,6 +96,10 @@ services:
       INVENTORY_API_SERVER: inventory-api:9081
       READ_YOUR_WRITES_WORKSPACE_ENABLED: "True"
       READ_YOUR_WRITES_TIMEOUT_SECONDS: "30"
+      ROOT_SCOPE_PERMISSIONS: "advisor:*:*,patch:*:*,staleness:*:*"
+      TENANT_SCOPE_PERMISSIONS: "rbac:*:*,subscriptions:*:*"
+      DEFAULT_SCOPE_PERMISSIONS: "subscriptions:reports:*,subscriptions:manifests:*,subscriptions:cloud_access:*"
+      ALL_SCOPE_PERMISSIONS: "rbac:role_binding:*"
     depends_on:
       inventory-api:
         condition: service_healthy
@@ -95,6 +110,10 @@ services:
     environment:
       READ_YOUR_WRITES_WORKSPACE_ENABLED: "True"
       READ_YOUR_WRITES_TIMEOUT_SECONDS: "30"
+      ROOT_SCOPE_PERMISSIONS: "advisor:*:*,patch:*:*,staleness:*:*"
+      TENANT_SCOPE_PERMISSIONS: "rbac:*:*,subscriptions:*:*"
+      DEFAULT_SCOPE_PERMISSIONS: "subscriptions:reports:*,subscriptions:manifests:*,subscriptions:cloud_access:*"
+      ALL_SCOPE_PERMISSIONS: "rbac:role_binding:*"
     # `celery status` starts a broker RPC for every probe and is unreliable
     # while the constrained local stack is starting. The process check still
     # lets rbac-server wait for the worker container to be running.
@@ -107,6 +126,11 @@ services:
   # The upstream check probes Celery workers, but beat is not a worker.
   # Keep the scheduler dependency meaningful by checking that its PID is alive.
   rbac-scheduler:
+    environment:
+      ROOT_SCOPE_PERMISSIONS: "advisor:*:*,patch:*:*,staleness:*:*"
+      TENANT_SCOPE_PERMISSIONS: "rbac:*:*,subscriptions:*:*"
+      DEFAULT_SCOPE_PERMISSIONS: "subscriptions:reports:*,subscriptions:manifests:*,subscriptions:cloud_access:*"
+      ALL_SCOPE_PERMISSIONS: "rbac:role_binding:*"
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s

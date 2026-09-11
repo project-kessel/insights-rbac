@@ -13,7 +13,8 @@
 #     ../insights-host-inventory  or  HBI_REPO
 #
 # Usage:
-#   make docker-local-full-up
+#   make docker-local-full-up local
+#   make docker-local-full-up pr=https://github.com/project-kessel/insights-rbac/pull/3309
 #   ./scripts/local_stack/up-full.sh
 #   ./scripts/local_stack/up-full.sh --no-hbi
 #   ./scripts/local_stack/up-full.sh --no-build
@@ -29,15 +30,21 @@ source "${SCRIPT_DIR}/../common/container_runtime.sh"
 
 INVENTORY_API_REPO="${INVENTORY_API_REPO:-${KESSEL_REPO:-}}"
 HBI_REPO="${HBI_REPO:-}"
-RBAC_IMAGE="${RBAC_IMAGE:-insights-rbac-local:dev}"
+RBAC_PR_NUMBER="${RBAC_PR_NUMBER:-3309}"
+RBAC_IMAGE="${RBAC_IMAGE:-}"
+RBAC_PR_URL="${RBAC_PR_URL:-}"
 COMPOSE_PULL_MODE="${COMPOSE_PULL_MODE:-missing}"
 SKIP_HBI=false
 SKIP_BUILD=false
 HBI_COMPOSE_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
+DEPLOYMENT_SOURCE="${RBAC_DEPLOYMENT_SOURCE:-local}"
 
 usage() {
   cat <<'EOF'
-Usage: up-full.sh [options]
+Usage: up-full.sh [pr|local] [options]
+
+  pr            Build the current checkout as insights-rbac-pr-<number>:dev.
+  local         Build the current checkout as insights-rbac-local:dev (default).
 
   --no-hbi      Start Kessel + Debezium + RBAC only (skip Host Inventory)
   --no-build    Skip building the local RBAC image (use existing RBAC_IMAGE tag)
@@ -46,7 +53,9 @@ Usage: up-full.sh [options]
 Environment:
   INVENTORY_API_REPO   Path to project-kessel/inventory-api checkout
   HBI_REPO             Path to RedHatInsights/insights-host-inventory checkout
-  RBAC_IMAGE           Docker image tag for RBAC services (default: insights-rbac-local:dev)
+  RBAC_IMAGE           Docker image tag for RBAC services (default depends on source)
+  RBAC_PR_NUMBER       PR number used by the pr source (default: 3309)
+  RBAC_PR_URL           GitHub PR URL; fetched into a temporary worktree in pr mode
   COMPOSE_PULL_MODE    Passed to inventory-api start-full-kessel (default: missing)
   INVENTORY_DB_PORT    Host port for HBI Postgres (default: 15433)
   HBI_WEB_PORT         Host port for HBI API (default: 8080)
@@ -56,6 +65,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    pr|local) DEPLOYMENT_SOURCE="$1"; shift ;;
     --no-hbi) SKIP_HBI=true; shift ;;
     --no-build) SKIP_BUILD=true; shift ;;
     -h | --help) usage; exit 0 ;;
@@ -67,11 +77,66 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "${DEPLOYMENT_SOURCE}" in
+  pr)
+    RBAC_IMAGE="${RBAC_IMAGE:-insights-rbac-pr-${RBAC_PR_NUMBER}:dev}"
+    ;;
+  local)
+    RBAC_IMAGE="${RBAC_IMAGE:-insights-rbac-local:dev}"
+    ;;
+  *)
+    log-err "Unknown deployment source '${DEPLOYMENT_SOURCE}'. Expected 'pr' or 'local'."
+    usage
+    exit 1
+    ;;
+esac
+
 require_cmd() {
   if ! command -v "$1" &>/dev/null; then
     log-err "Required command not found: $1"
     exit 1
   fi
+}
+
+start_pr_worktree() {
+  [[ "${DEPLOYMENT_SOURCE}" == pr && -n "${RBAC_PR_URL}" ]] || return 0
+  [[ -z "${RBAC_PR_WORKTREE:-}" ]] || return 0
+
+  local repository pr_number pr_worktree status
+  if [[ "${RBAC_PR_URL}" =~ ^https://github\.com/([^/]+/[^/]+)/pull/([0-9]+)(/.*)?$ ]]; then
+    repository="https://github.com/${BASH_REMATCH[1]}.git"
+    pr_number="${BASH_REMATCH[2]}"
+  else
+    log-err "RBAC_PR_URL must be a GitHub pull request URL: ${RBAC_PR_URL}"
+    exit 1
+  fi
+
+  pr_worktree="$(mktemp -d "${TMPDIR:-/tmp}/insights-rbac-pr-${pr_number}.XXXXXX")"
+  rmdir "${pr_worktree}"
+  log-info "Fetching PR #${pr_number} from ${repository}..."
+  git -C "${REPO_ROOT}" fetch --no-tags "${repository}" "pull/${pr_number}/head"
+  git -C "${REPO_ROOT}" worktree add --detach "${pr_worktree}" FETCH_HEAD >/dev/null
+
+  cp "${SCRIPT_DIR}/up-full.sh" "${pr_worktree}/scripts/local_stack/up-full.sh"
+  cp "${SCRIPT_DIR}/full-kessel.rbac-override.yml" \
+    "${pr_worktree}/scripts/local_stack/full-kessel.rbac-override.yml"
+  chmod +x "${pr_worktree}/scripts/local_stack/up-full.sh"
+
+  log-info "Using PR #${pr_number} checkout at ${pr_worktree}"
+  local child_args=(pr)
+  [[ "${SKIP_HBI}" == true ]] && child_args+=(--no-hbi)
+  [[ "${SKIP_BUILD}" == true ]] && child_args+=(--no-build)
+
+  if RBAC_PR_WORKTREE=true RBAC_PR_URL= RBAC_PR_NUMBER="${pr_number}" \
+    RBAC_IMAGE="insights-rbac-pr-${pr_number}:dev" \
+    "${pr_worktree}/scripts/local_stack/up-full.sh" "${child_args[@]}"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  git -C "${REPO_ROOT}" worktree remove --force "${pr_worktree}" >/dev/null 2>&1 || true
+  exit "${status}"
 }
 
 resolve_inventory_api_repo() {
@@ -158,6 +223,8 @@ EOF
 
 require_cmd curl
 require_cmd git
+
+start_pr_worktree
 
 detect_container_runtime
 

@@ -298,6 +298,28 @@ docker-up:
 	@docker network ls --format '{{.Name}}' |grep -q  rbac-network > /dev/null 2>&1 && echo "" || docker network create rbac-network
 	docker-compose up --build -d
 
+docker-local-up:
+	docker compose -f docker-compose.local.yml up --build -d
+
+docker-local-down:
+	docker compose -f docker-compose.local.yml down
+
+docker-local-logs:
+	docker compose -f docker-compose.local.yml logs -f
+
+PR_URL ?= $(pr)
+
+docker-local-full-up:
+	RBAC_PR_URL="$(PR_URL)" ./scripts/local_stack/up-full.sh $(if $(strip $(PR_URL)),pr,$(if $(filter pr,$(MAKECMDGOALS)),pr,local))
+
+# Allow `make docker-local-full-up pr=<github-pr-url>` and
+# `make docker-local-full-up local`.
+pr local:
+	@:
+
+docker-local-full-down:
+	./scripts/local_stack/down-full.sh
+
 docker-logs:
 	docker-compose logs -f
 
