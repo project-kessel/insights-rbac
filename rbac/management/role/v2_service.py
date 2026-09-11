@@ -56,7 +56,11 @@ from management.role.v2_exceptions import (
     RolesNotFoundError,
 )
 from management.role.v2_model import CustomRoleV2, RoleV2
-from management.role.v2_role_scope import v2_role_excluded_applications
+from management.role.v2_role_scope import (
+    OCM_V2_ROLE_Q,
+    ocm_roles_allowed_for_workspace_binding,
+    v2_role_excluded_applications,
+)
 from management.role_binding.model import RoleBinding
 from management.utils import as_uuid
 
@@ -338,6 +342,11 @@ class RoleV2Service:
             if explicit_default_ids:
                 queryset = queryset.exclude(permissions__id__in=explicit_default_ids)
             queryset = queryset.filter(permissions__isnull=False).distinct()
+
+        if self.tenant is not None and not ocm_roles_allowed_for_workspace_binding(
+            resource_type, resource_id, self.tenant
+        ):
+            queryset = queryset.exclude(OCM_V2_ROLE_Q)
 
         return queryset
 

@@ -14,11 +14,16 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""V2 role list filtering by migration-excluded permission applications."""
+"""V2 role list and binding eligibility rules."""
 
 from __future__ import annotations
 
 from django.conf import settings
+from django.db.models import Q
+from management.role.v2_model import RoleV2
+from management.workspace.model import Workspace
+
+from api.models import Tenant
 
 
 def v2_role_excluded_applications() -> frozenset[str]:
@@ -67,3 +72,32 @@ class V2RoleExcludedApplicationPermissionIdsCache:
 
 
 v2_role_excluded_application_permission_ids_cache = V2RoleExcludedApplicationPermissionIdsCache()
+
+
+# OCM external roles
+OCM_EXTERNAL_TENANT = "ocm"
+
+OCM_V2_ROLE_Q = Q(v1_source__ext_relation__ext_tenant__name__iexact=OCM_EXTERNAL_TENANT)
+
+
+def is_ocm_v2_role(role: RoleV2) -> bool:
+    """Return True when the V2 role is a seeded OCM external role."""
+    v1_source = getattr(role, "v1_source", None)
+    if v1_source is None:
+        return False
+    ext_relation = getattr(v1_source, "ext_relation", None)
+    if ext_relation is None:
+        return False
+    ext_tenant = getattr(ext_relation, "ext_tenant", None)
+    if ext_tenant is None:
+        return False
+    return ext_tenant.name.lower() == OCM_EXTERNAL_TENANT
+
+
+def ocm_roles_allowed_for_workspace_binding(resource_type: str, resource_id: str | None, tenant: Tenant) -> bool:
+    """Return True when OCM roles may appear in list or be bound for the given resource."""
+    if resource_type != "workspace":
+        return False
+    if resource_id is None:
+        return True
+    return str(Workspace.objects.default(tenant=tenant).id) == str(resource_id)

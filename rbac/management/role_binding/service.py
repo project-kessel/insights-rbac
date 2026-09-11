@@ -49,6 +49,7 @@ from management.permission.scope_service import (
 from management.principal.model import Principal
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2
+from management.role.v2_role_scope import is_ocm_v2_role, ocm_roles_allowed_for_workspace_binding
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.role_binding.util import lookup_binding_subjects
 from management.subject import Subject, SubjectType
@@ -1116,7 +1117,12 @@ class RoleBindingService:
         if not role_ids:
             return []
 
-        roles = list(RoleV2.objects.filter(uuid__in=role_ids).assignable().excluding_out_of_scope_v2_roles())
+        roles = list(
+            RoleV2.objects.filter(uuid__in=role_ids)
+            .assignable()
+            .excluding_out_of_scope_v2_roles()
+            .select_related("v1_source__ext_relation__ext_tenant")
+        )
 
         found_ids = {str(r.uuid) for r in roles}
         requested_ids = set(role_ids)
@@ -1186,6 +1192,15 @@ class RoleBindingService:
                 "roles",
                 f"The following roles are not scoped for this resource ({scope_label}): {', '.join(mismatched)}",
             )
+
+        if not ocm_roles_allowed_for_workspace_binding(resource_type, resource_id, self.tenant):
+            ocm_mismatched = [f"{role.name} ({role.uuid})" for role in roles if is_ocm_v2_role(role)]
+            if ocm_mismatched:
+                raise InvalidFieldError(
+                    "roles",
+                    "The following OCM roles can only be assigned at the Default Workspace: "
+                    + ", ".join(ocm_mismatched),
+                )
 
     def _replace_role_bindings(
         self,
