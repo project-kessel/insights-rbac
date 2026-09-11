@@ -361,7 +361,7 @@ class CrossAccountRequestViewTests(CrossAccountRequestTest):
         notify_mock.assert_called_once_with(
             EVENT_TYPE_RH_TAM_REQUEST_CREATED,
             {
-                "username": self.user_data["username"],
+                "username": self.user_1_data["username"],
                 "request_id": response.data["request_id"],
             },
             self.data4create["target_org"],
@@ -387,7 +387,7 @@ class CrossAccountRequestViewTests(CrossAccountRequestTest):
         notify_mock.assert_called_once_with(
             EVENT_TYPE_RH_TAM_REQUEST_CREATED,
             {
-                "username": self.user_data["username"],
+                "username": self.user_1_data["username"],
                 "request_id": response.data["request_id"],
             },
             self.data4create["target_org"],
