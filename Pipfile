@@ -48,7 +48,7 @@ mcp = "==2.2.0"
 
 [dev-packages]
 coverage = "==7.16.0"
-faker = "==40.38.0"
+faker = "==40.39.0"
 black = "==26.5.1"
 flake8-docstrings = "==1.7.0"
 flake8-import-order = "==0.19.2"
