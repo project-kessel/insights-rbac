@@ -25,7 +25,7 @@ from django.db.models import F
 from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
-from management.permission.scope_service import ImplicitResourceService, Scope
+from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, Scope
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
@@ -50,15 +50,25 @@ def constant_bound_resource(resource: V2boundresource) -> ScopeBoundResourceReso
 
 
 def with_workspace_scope_inheritance(resource_map: dict[Scope, V2boundresource]) -> dict[Scope, V2boundresource]:
-    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT when needed.
+    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT, and ALL aliased to a concrete scope.
 
     Workspace bindings at ROOT cover the default workspace via parent inheritance,
     so callers building a map from ``binding_scopes_for_role`` should apply this
     before resolving per-permission scopes that may include DEFAULT.
+
+    ``Scope.ALL`` (scope-agnostic permissions) is aliased to the narrowest concrete
+    scope present in the map, so per-permission resolution of an ALL-scoped
+    permission (via ``scope_for_permission``) lands on a real resource.
     """
     result = dict(resource_map)
     if Scope.ROOT in result and Scope.DEFAULT not in result:
         result[Scope.DEFAULT] = result[Scope.ROOT]
+
+    if Scope.ALL not in result:
+        concrete_present = [scope for scope in CONCRETE_SCOPES if scope in result]
+        if concrete_present:
+            result[Scope.ALL] = result[min(concrete_present)]
+
     return result
 
 

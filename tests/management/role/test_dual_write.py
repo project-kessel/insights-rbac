@@ -2924,6 +2924,113 @@ class DualWriteMixedScopeTestCase(DualWriteTestCase):
             self.assertIn(group_uuid, m.mappings.get("groups", []))
 
 
+@override_settings(
+    ROOT_SCOPE_PERMISSIONS="advisor:*:*",
+    TENANT_SCOPE_PERMISSIONS="subscriptions:*:*",
+    ALL_SCOPE_PERMISSIONS="agnostic:*:*",
+)
+class DualWriteAllScopeTestCase(DualWriteTestCase):
+    """Test that Scope.ALL (scope-agnostic) permissions resolve to a real resource, not KeyError."""
+
+    def tearDown(self):
+        with self.subTest(msg="V2 consistency"):
+            assert_v1_v2_tuples_fully_consistent(test=self, tuples=self.tuples)
+        super().tearDown()
+
+    def test_custom_role_tenant_and_all_scope_aliases_all_to_tenant(self):
+        """TENANT + ALL: the ALL-scoped permission is aliased to the only concrete scope present (TENANT)."""
+        role = self.given_v1_role(
+            "tenant_all",
+            default=["subscriptions:organization:read", "agnostic:resource:read"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 1, "Should have a single BindingMapping record (tenant)")
+        self.assertEqual(mappings.first().resource_type_name, "tenant")
+
+        tenant_binding = mappings.first().get_role_binding()
+        self.assertIn("subscriptions_organization_read", tenant_binding.role.permissions)
+        self.assertIn("agnostic_resource_read", tenant_binding.role.permissions)
+
+    def test_custom_role_root_and_all_scope_aliases_all_to_root(self):
+        """ROOT + ALL: the ALL-scoped permission is aliased to the only concrete scope present (ROOT)."""
+        role = self.given_v1_role(
+            "root_all",
+            default=["advisor:recommendation:read", "agnostic:resource:read"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 1, "Should have a single BindingMapping record (root workspace)")
+        mapping = mappings.first()
+        self.assertEqual(mapping.resource_type_name, "workspace")
+        root_ws = Workspace.objects.root(tenant=self.tenant)
+        self.assertEqual(mapping.resource_id, str(root_ws.id))
+
+        root_binding = mapping.get_role_binding()
+        self.assertIn("advisor_recommendation_read", root_binding.role.permissions)
+        self.assertIn("agnostic_resource_read", root_binding.role.permissions)
+
+    def test_custom_role_all_scope_only_binds_default_workspace(self):
+        """A role with only ALL-scoped permissions binds at the default workspace (no concrete scope present)."""
+        role = self.given_v1_role(
+            "all_only",
+            default=["agnostic:resource:read"],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        self.assertEqual(mappings.count(), 1, "Should have a single BindingMapping record (default workspace)")
+        mapping = mappings.first()
+        self.assertEqual(mapping.resource_type_name, "workspace")
+        default_ws = Workspace.objects.default(tenant=self.tenant)
+        self.assertEqual(mapping.resource_id, str(default_ws.id))
+
+        binding = mapping.get_role_binding()
+        self.assertIn("agnostic_resource_read", binding.role.permissions)
+
+    def test_custom_role_tenant_root_and_all_scope_does_not_raise(self):
+        """TENANT + ROOT + ALL: the ALL-scoped permission aliases to the narrowest concrete scope (ROOT).
+
+        This is a V1-migration-only combination (unreachable from V2 role creation, see #49776);
+        the narrowest-concrete-scope alias avoids a KeyError/DualWriteException during migration.
+        """
+        role = self.given_v1_role(
+            "tenant_root_all",
+            default=[
+                "subscriptions:organization:read",
+                "advisor:recommendation:read",
+                "agnostic:resource:read",
+            ],
+        )
+
+        mappings = BindingMapping.objects.filter(role=role)
+        resource_types = {m.resource_type_name for m in mappings}
+        self.assertEqual(resource_types, {"tenant", "workspace"})
+
+        ws_mapping = mappings.filter(resource_type_name="workspace").first()
+        root_ws = Workspace.objects.root(tenant=self.tenant)
+        self.assertEqual(ws_mapping.resource_id, str(root_ws.id))
+        self.assertIn("agnostic_resource_read", ws_mapping.get_role_binding().role.permissions)
+
+    def test_system_role_all_scope_only_binds_default_workspace(self):
+        """A system role with only ALL-scoped permissions binds at the default workspace (existing behavior)."""
+        seed_group()
+        role = self.given_v1_system_role(
+            "all_only_system",
+            permissions=["agnostic:resource:read"],
+            platform_default=True,
+        )
+
+        group, _ = self.given_group("test_group")
+        self.given_roles_assigned_to_group(group, [role])
+
+        mappings = BindingMapping.objects.filter(role=role)
+        ws_mappings = [m for m in mappings if m.resource_type_name == "workspace"]
+        self.assertGreaterEqual(len(ws_mappings), 1, "Should have workspace-scope binding")
+        default_ws = Workspace.objects.default(tenant=self.tenant)
+        for m in ws_mappings:
+            self.assertEqual(m.resource_id, str(default_ws.id))
+
+
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class DualWriteCrossAccountReqeustTestCase(DualWriteTestCase):
     user_id: str
