@@ -351,6 +351,17 @@ class ImplicitResourceService:
             )
         return max(concrete, default=Scope.DEFAULT)
 
+    def is_all_scope_only(self, permissions: Iterable[str]) -> bool:
+        """
+        Return True if every permission in permissions resolves to Scope.ALL.
+
+        Returns False for an empty iterable, since a permissionless role has no
+        scope-agnostic permissions to bypass scope validation for.
+        Permission scopes are determined as if by using scope_for_permission.
+        """
+        permissions = list(permissions)
+        return bool(permissions) and all(self.scope_for_permission(p) == Scope.ALL for p in permissions)
+
     def binding_scopes_for_role(self, role: Role) -> list["Scope"]:
         """Return the scopes at which bindings should be created for this role.
 
