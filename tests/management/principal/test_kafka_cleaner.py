@@ -566,138 +566,6 @@ class PrincipalKafkaTests(IdentityRequest):
             "data": [],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_does_not_modify_database(self, consumer_mock, proxy_mock):
-        """Test that dry-run mode processes messages but doesn't modify the database."""
-        principal_name = "principal-test-dry-run"
-        self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
-        self.principal.save()
-        self.group.principals.add(self.principal)
-        self.group.save()
-
-        # Verify principal exists before dry-run
-        self.assertTrue(Principal.objects.filter(username=principal_name).exists())
-        initial_principal_count = Principal.objects.count()
-
-        # Mock consumer with one message (inactive user)
-        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
-        consumer_mock.return_value = consumer_instance
-
-        # Run in dry-run mode
-        before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
-        after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
-
-        # Verify principal still exists (dry-run didn't delete it)
-        self.assertTrue(Principal.objects.filter(username=principal_name).exists())
-        self.assertEqual(Principal.objects.count(), initial_principal_count)
-        self.group.refresh_from_db()
-        self.assertTrue(self.group.principals.filter(username=principal_name).exists())
-
-        # Verify dry-run metric was incremented
-        self.assertEqual(
-            after_dry_run,
-            before_dry_run + 1,
-            f"Expected dry-run metric to increment by 1, but went from {before_dry_run} to {after_dry_run}",
-        )
-
-    @patch(
-        "management.principal.proxy.PrincipalProxy._request_principals",
-        return_value={
-            "status_code": status.HTTP_200_OK,
-            "data": [],
-        },
-    )
-    @patch("management.principal.cleaner.RBACProducer")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
-    def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock, dlq_producer_mock, proxy_mock):
-        """Test that dry-run mode sends malformed messages to DLQ for inspection."""
-        # Mock consumer with malformed message
-        mock_message = create_mock_kafka_message(b'{"invalid": "json without required fields"}')
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
-        consumer_mock.return_value = consumer_instance
-
-        # Mock DLQ producer
-        mock_dlq_instance = MagicMock()
-        dlq_producer_mock.return_value = mock_dlq_instance
-
-        # Run in dry-run mode
-        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
-        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-
-        # Verify error metric was incremented
-        self.assertEqual(
-            after_errors,
-            before_errors + 1,
-            f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
-        )
-
-        # Verify message was sent to DLQ for inspection
-        mock_dlq_instance.send_kafka_message.assert_called_once()
-        dlq_call_args = mock_dlq_instance.send_kafka_message.call_args
-        self.assertEqual(dlq_call_args[0][0], "test-dlq-topic")  # First positional arg is topic
-        dlq_message = dlq_call_args[0][1]  # Second positional arg is the message
-        self.assertTrue(dlq_message["dry_run"])  # Should be marked as dry-run
-        self.assertIn("error", dlq_message)  # Should contain error details
-
-    @patch("management.principal.cleaner.retrieve_user_info_kafka")
-    @patch(
-        "management.principal.proxy.PrincipalProxy._request_principals",
-        return_value={
-            "status_code": status.HTTP_200_OK,
-            "data": [],
-        },
-    )
-    @patch("management.principal.cleaner.RBACProducer")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
-    def test_dry_run_mode_handles_transient_errors(
-        self, consumer_mock, dlq_producer_mock, proxy_mock, retrieve_user_mock
-    ):
-        """Test that dry-run mode does NOT send transient errors to DLQ."""
-        # Mock consumer with valid message
-        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
-        consumer_mock.return_value = consumer_instance
-
-        # Mock DLQ producer
-        mock_dlq_instance = MagicMock()
-        dlq_producer_mock.return_value = mock_dlq_instance
-
-        # Mock a transient error (e.g., network timeout when calling BOP)
-        retrieve_user_mock.side_effect = ConnectionError("Network timeout")
-
-        # Run in dry-run mode
-        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
-        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-
-        # Verify error metric was incremented
-        self.assertEqual(
-            after_errors,
-            before_errors + 1,
-            f"Expected error metric to increment by 1, but went from {before_errors} to {after_errors}",
-        )
-
-        # Verify message was NOT sent to DLQ (transient errors should retry, not go to DLQ)
-        mock_dlq_instance.send_kafka_message.assert_not_called()
-
-    @patch(
-        "management.principal.proxy.PrincipalProxy._request_principals",
-        return_value={
-            "status_code": status.HTTP_200_OK,
-            "data": [],
-        },
-    )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
@@ -729,7 +597,7 @@ class PrincipalKafkaTests(IdentityRequest):
         bootstrap_mock.return_value = mock_service
 
         # Run in normal mode - should parse XML and call update_user
-        process_principal_events_from_kafka(dry_run=False)
+        process_principal_events_from_kafka()
 
         # Verify update_user was called (XML message was successfully parsed)
         mock_service.update_user.assert_called()
@@ -772,7 +640,7 @@ class PrincipalKafkaTests(IdentityRequest):
                 kafka_retrieve_mock.return_value = mock_user
 
                 # Run in normal mode
-                process_principal_events_from_kafka(dry_run=False)
+                process_principal_events_from_kafka()
 
                 # Verify JSON retrieval was called (not UMB/XML retrieval)
                 kafka_retrieve_mock.assert_called_once()
@@ -835,7 +703,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Run in normal mode (not dry-run) - should send to DLQ
         before_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
-        process_principal_events_from_kafka(dry_run=False)
+        process_principal_events_from_kafka()
         after_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
 
         # Verify failure metric was incremented
@@ -849,62 +717,6 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertEqual(Principal.objects.count(), initial_principal_count)
         # Original principal should still exist
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
-
-    @patch(
-        "management.principal.proxy.PrincipalProxy._request_principals",
-        return_value={
-            "status_code": status.HTTP_200_OK,
-            "data": [],
-        },
-    )
-    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
-        """Test that dry-run mode does not call bootstrap_service.update_user()."""
-        # Mock consumer with one message
-        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
-        consumer_mock.return_value = consumer_instance
-
-        # Mock bootstrap service
-        mock_service = MagicMock()
-        bootstrap_mock.return_value = mock_service
-
-        # Run in dry-run mode
-        process_principal_events_from_kafka(dry_run=True)
-
-        # Verify update_user was NOT called
-        mock_service.update_user.assert_not_called()
-
-    @patch(
-        "management.principal.proxy.PrincipalProxy._request_principals",
-        return_value={
-            "status_code": status.HTTP_200_OK,
-            "data": [],
-        },
-    )
-    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_normal_mode_calls_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
-        """Test that normal mode (not dry-run) calls bootstrap_service.update_user()."""
-        # Mock consumer with one message
-        mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
-        consumer_mock.return_value = consumer_instance
-
-        # Mock bootstrap service
-        mock_service = MagicMock()
-        bootstrap_mock.return_value = mock_service
-
-        # Run in normal mode (dry_run=False)
-        process_principal_events_from_kafka(dry_run=False)
-
-        # Verify update_user WAS called
-        mock_service.update_user.assert_called()
 
 
 @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)

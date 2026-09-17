@@ -678,26 +678,9 @@ IT_TOKEN_JKWS_CACHE_LIFETIME = ENVIRONMENT.int("IT_TOKEN_JKWS_CACHE_LIFETIME", d
 
 PRINCIPAL_USER_DOMAIN = ENVIRONMENT.get_value("PRINCIPAL_USER_DOMAIN", default="localhost")
 
-# Settings for enabling/disabling deletion in principal cleanup job via UMB
-PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB", default=False)
-PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB", default=False)
-UMB_JOB_ENABLED = ENVIRONMENT.bool("UMB_JOB_ENABLED", default=True)
-
-UMB_HOST = ENVIRONMENT.get_value("UMB_HOST", default="localhost")
-UMB_PORT = ENVIRONMENT.get_value("UMB_PORT", default="61612")
-
-# Settings for enabling/disabling deletion in principal cleanup job via Kafka
-PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA", default=False)
+# Settings for enabling/disabling principal cleanup job via Kafka
 PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA", default=False)
 KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED = ENVIRONMENT.bool("KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED", default=True)
-
-# Validate Kafka principal cleanup configuration at startup
-# Fail fast if Kafka cleanup is enabled but topic is not configured
-if PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA and not KAFKA_PRINCIPAL_CLEANUP_TOPIC:
-    raise ValueError(
-        "PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is True but KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
-        "Set KAFKA_PRINCIPAL_CLEANUP_TOPIC to a valid Kafka topic name or disable Kafka cleanup."
-    )
 
 # Service account name
 SA_NAME = ENVIRONMENT.get_value("SA_NAME", default="nonprod-hcc-rbac")

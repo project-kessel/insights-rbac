@@ -20,8 +20,6 @@
 import base64
 import json
 import logging
-import os
-import ssl
 from typing import NamedTuple, Optional
 from xml.parsers.expat import ExpatError
 
@@ -39,10 +37,6 @@ from management.tenant_service.tenant_service import TenantBootstrapService
 from prometheus_client import Counter
 from rest_framework import status
 from sentry_sdk import capture_exception
-from stompest.config import StompConfig
-from stompest.error import StompConnectionError
-from stompest.protocol import StompSpec
-from stompest.sync import Stomp
 
 from api.models import Tenant, User
 
@@ -50,27 +44,8 @@ logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 PROXY = PrincipalProxy()  # pylint: disable=invalid-name
 
-# Location of the CA, certificate and key files as defined in the
-# "it-umb-key-pair" secret and the "umb-certificates" volume mount.
-CA_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/ca.crt"
-CERT_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/tls.crt"
-KEY_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/tls.key"
-
-
 LOCK_ID = 42  # For Keith, with Love
 KAFKA_CONSUMER_LOCK_ID = 43  # Guards Kafka consumer construction to prevent multi-worker join thrash
-
-# UMB Metric Messages
-METRIC_STOMP_MESSAGES_ACK_TOTAL = "stomp_messages_ack_total"
-METRIC_STOMP_MESSAGES_NACK_TOTAL = "stomp_messages_nack_total"
-stomp_messages_ack_total = Counter(
-    METRIC_STOMP_MESSAGES_ACK_TOTAL,
-    "Number of stomp UMB messages processed",
-)
-stomp_messages_nack_total = Counter(
-    METRIC_STOMP_MESSAGES_NACK_TOTAL,
-    "Number of stomp UMB messages that failed to be processed",
-)
 
 # KAFKA Metric Messages
 METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL = "kafka_messages_success_total"
@@ -82,30 +57,6 @@ kafka_messages_success_total = Counter(
 kafka_messages_failure_total = Counter(
     METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
     "Number of Kafka messages that failed to be processed",
-)
-
-# KAFKA Shadow Mode Metrics
-METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "kafka_dry_run_messages_total"
-METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "kafka_dry_run_errors_total"
-kafka_dry_run_messages_total = Counter(
-    METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL,
-    "Number of Kafka messages processed in dry-run/shadow mode",
-)
-kafka_dry_run_errors_total = Counter(
-    METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL,
-    "Number of Kafka messages that would have failed if not in dry-run mode",
-)
-
-# KAFKA Validation Mode Metrics
-METRIC_KAFKA_VALIDATION_SUCCESS_TOTAL = "kafka_validation_success_total"
-METRIC_KAFKA_VALIDATION_FALLBACK_TOTAL = "kafka_validation_fallback_total"
-kafka_validation_success_total = Counter(
-    METRIC_KAFKA_VALIDATION_SUCCESS_TOTAL,
-    "Number of times Kafka succeeded in validation mode (no UMB fallback needed)",
-)
-kafka_validation_fallback_total = Counter(
-    METRIC_KAFKA_VALIDATION_FALLBACK_TOTAL,
-    "Number of times UMB fallback was triggered in validation mode",
 )
 
 
@@ -172,25 +123,6 @@ def clean_tenants_principals():
         logger.info("clean_tenant_principals: Completed principal clean up for tenant %s.", tenant.tenant_name)
 
     logger.info("clean_tenant_principals: Principal cleanup complete for all tenants.")
-
-
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-# Cert verification of IT host is failing complains about self-signed cert
-# Since hot umb host it is within Red Hat network, we can trust the host
-ssl_context.verify_mode = ssl.CERT_NONE
-if os.path.isfile(CERT_LOC):
-    ssl_context.load_cert_chain(certfile=CERT_LOC, keyfile=KEY_LOC)
-
-# Load the CA's certificate in the context.
-if os.path.isfile(CA_LOC):
-    ssl_context.load_verify_locations(cafile=CA_LOC)
-
-CONFIG = StompConfig(
-    f"ssl://{settings.UMB_HOST}:{settings.UMB_PORT}", sslContext=ssl_context, version=StompSpec.VERSION_1_2
-)
-QUEUE = f"/queue/Consumer.{settings.SA_NAME}.users-subscription.VirtualTopic.canonical.user"
-UMB_CLIENT = Stomp(CONFIG)
 
 
 def retrieve_user_info_umb(message) -> User:
@@ -332,48 +264,6 @@ def retrieve_user_info_kafka(message) -> User:
     return external_principal_to_user(user_data)
 
 
-def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstrapService) -> bool:
-    """
-    Process each umb frame.
-
-    If the process should continue to listen for more frames, return True. Otherwise, return False.
-    """
-    with transaction.atomic():
-        # This is locked per transaction to ensure another listener process does not run concurrently.
-        if not _lock_listener():
-            # If there is another listener, let it run and abort this one.
-            logger.info("process_umb_event: Another listener is running. Aborting.")
-            return False
-
-        try:
-            body = frame.body.decode("utf-8", errors="ignore")
-            data_dict = xmltodict.parse(body)
-            canonical_message = data_dict.get("CanonicalMessage")
-
-            user = retrieve_user_info_umb(canonical_message)
-            # By default, only process disabled users.
-            # If the setting is enabled, process all users.
-            if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB:
-                # If Tenant is not already ready, don't ready it
-                bootstrap_service.update_user(user, ready_tenant=False)
-            umb_client.ack(frame)
-            stomp_messages_ack_total.inc()
-        except Exception as e:
-            logger.error("process_umb_event: Error processing umb message : %s", str(e))
-            capture_exception(e)
-            # Nack sends back to the broker that we failed to process this message.
-            # The broker may redeliver the message up to a certain number of retries.
-            # Eventually, the message is discarded, usually logged and sent to a DLQ.
-            # In other words, nacking is appropriate for messages which *may* be processable
-            # if retried.
-            # Either way, this lets us eventually proceed further in the queue,
-            # and should mark the message so it can be debugged later if needed.
-            umb_client.nack(frame)
-            stomp_messages_nack_total.inc()
-
-    return True
-
-
 class MessageProcessingResult(NamedTuple):
     """
     Result of processing a Kafka message.
@@ -388,7 +278,7 @@ class MessageProcessingResult(NamedTuple):
 
 
 def process_kafka_message(
-    message, bootstrap_service: TenantBootstrapService, dlq_producer=None, dry_run: bool = False
+    message, bootstrap_service: TenantBootstrapService, dlq_producer=None
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -397,7 +287,6 @@ def process_kafka_message(
         message: Kafka message containing user event data
         bootstrap_service: Service for updating user/tenant state
         dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
-        dry_run: If True, validate message but don't write to database (shadow mode)
 
     Returns:
         MessageProcessingResult with:
@@ -453,31 +342,16 @@ def process_kafka_message(
                     )
                     raise parse_error
 
-            if dry_run:
-                # DRY RUN MODE: Validate message structure and log what would happen
-                logger.debug("DRY RUN: Would process user")
+            # By default, only process disabled users.
+            # If the setting is enabled, process all users.
+            if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
+                # If Tenant is not already ready, don't ready it
+                bootstrap_service.update_user(user, ready_tenant=False)
 
-                # Validate message structure is correct but DON'T call update_user (no DB writes)
-                if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
-                    logger.debug("DRY RUN: Would call bootstrap_service.update_user()")
-
-                kafka_messages_success_total.inc()
-                kafka_dry_run_messages_total.inc()
-                return MessageProcessingResult(should_continue=True, success=True)
-
-            else:
-                # NORMAL MODE: Actually update the database
-                # By default, only process disabled users.
-                # If the setting is enabled, process all users.
-                if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
-                    # If Tenant is not already ready, don't ready it
-                    bootstrap_service.update_user(user, ready_tenant=False)
-
-                kafka_messages_success_total.inc()
-                return MessageProcessingResult(should_continue=True, success=True)
+            kafka_messages_success_total.inc()
+            return MessageProcessingResult(should_continue=True, success=True)
         except Exception as e:
-            mode_msg = " (DRY RUN)" if dry_run else ""
-            logger.error(f"process_kafka_message: Error processing Kafka message{mode_msg}: %s", str(e))
+            logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
             capture_exception(e)
             kafka_messages_failure_total.inc()
 
@@ -497,20 +371,9 @@ def process_kafka_message(
                 ),
             )
 
-            if dry_run:
-                # In dry-run, track errors but ALWAYS continue processing (never block)
-                kafka_dry_run_errors_total.inc()
-                if is_permanent_error:
-                    logger.warning("DRY RUN: Permanent error detected - testing DLQ path.")
-                    # In dry-run, test DLQ functionality by sending to DLQ (fall through to DLQ logic)
-                else:
-                    logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
-                    # In dry-run mode, always commit offset to continue validation (never block on any errors)
-                    return MessageProcessingResult(should_continue=True, success=True)
-
-            # For permanent errors, send to DLQ. For transient errors (production only), retry.
-            if not dry_run and not is_permanent_error:
-                # Production mode: transient errors don't commit offset and will retry
+            # For permanent errors, send to DLQ. For transient errors, retry.
+            if not is_permanent_error:
+                # Transient errors don't commit offset and will retry
                 logger.warning(
                     "process_kafka_message: Transient error at offset %d. "
                     "Will not commit offset - message will be retried on next consumer run.",
@@ -518,7 +381,7 @@ def process_kafka_message(
                 )
                 return MessageProcessingResult(should_continue=True, success=False)
 
-            # Permanent error (or dry-run permanent error) - send to DLQ inside transaction
+            # Permanent error - send to DLQ inside transaction
             # This prevents race window where advisory lock is released before DLQ send completes
             if dlq_producer and hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
                 dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
@@ -552,7 +415,6 @@ def process_kafka_message(
                             "partition": message.partition,
                             "offset": message.offset,
                             "timestamp": message.timestamp,
-                            "dry_run": dry_run,
                         }
 
                         # Send to DLQ while holding advisory lock (inside transaction)
@@ -582,12 +444,6 @@ def process_kafka_message(
                         )
                         capture_exception(dlq_error)
                         # DLQ send failed, so don't commit offset (will retry message)
-                        # Exception: in dry-run mode, commit the offset to allow processing to continue
-                        if dry_run:
-                            logger.warning(
-                                "process_kafka_message: DLQ failure in dry-run mode, committing offset anyway"
-                            )
-                            return MessageProcessingResult(should_continue=True, success=True)
                         return MessageProcessingResult(should_continue=True, success=False)
                 else:
                     logger.warning(
@@ -595,63 +451,24 @@ def process_kafka_message(
                         "Failed message at offset %d will be retried on restart.",
                         message.offset,
                     )
-                    return MessageProcessingResult(should_continue=True, success=False if not dry_run else True)
+                    return MessageProcessingResult(should_continue=True, success=False)
             else:
                 logger.warning(
                     "process_kafka_message: No DLQ producer configured. "
                     "Failed message at offset %d will be retried on restart.",
                     message.offset,
                 )
-                return MessageProcessingResult(should_continue=True, success=False if not dry_run else True)
+                return MessageProcessingResult(should_continue=True, success=False)
 
 
-def process_principal_events_from_umb(bootstrap_service: Optional[TenantBootstrapService] = None):
-    """Process principals events from UMB."""
-    logger.info("process_tenant_principal_events: Start processing principal events from umb.")
-    bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
-    try:
-        # 1.1 or greater is required to support NACK, used when messages fail.
-        UMB_CLIENT.connect(versions=[StompSpec.VERSION_1_1, StompSpec.VERSION_1_2])
-        # We only have one subscription for this connection, so using a static ID header.
-        UMB_CLIENT.subscribe(QUEUE, {StompSpec.ACK_HEADER: StompSpec.ACK_CLIENT_INDIVIDUAL, StompSpec.ID_HEADER: "0"})
-    except StompConnectionError as e:
-        # Skip if already connected/subscribed
-        if not str(e).startswith(("Already connected", "Already subscribed")):
-            raise e
-
-    try:
-        while UMB_CLIENT.canRead(15):  # Check if queue is empty, 15 sec timeout
-            frame = UMB_CLIENT.receiveFrame()
-            logger.info(
-                "process_tenant_principal_events: Processing frame for %s",
-                frame.headers.get("esbWebUserId", "unknown"),
-            )
-            logger.debug("process_tenant_principal_events: Processing frame. info=%s", frame.info())
-            if not process_umb_event(frame, UMB_CLIENT, bootstrap_service):
-                break
-    finally:
-        UMB_CLIENT.disconnect()
-        logger.info("process_tenant_principal_events: Principal event processing finished.")
-
-
-def process_principal_events_from_kafka(
-    bootstrap_service: Optional[TenantBootstrapService] = None, dry_run: bool = False
-):
+def process_principal_events_from_kafka(bootstrap_service: Optional[TenantBootstrapService] = None):
     """
     Process principal events from Kafka.
 
     Args:
         bootstrap_service: Service for tenant/user operations
-        dry_run: If True, process messages but don't write to database (shadow mode)
     """
-    mode_msg = " (DRY RUN - SHADOW MODE)" if dry_run else ""
-    logger.info(f"process_principal_events_from_kafka: Start processing principal events from Kafka{mode_msg}.")
-
-    if dry_run:
-        logger.warning(
-            "KAFKA SHADOW MODE: Messages will be processed but NO database writes will occur. "
-            "This is for validation only."
-        )
+    logger.info("process_principal_events_from_kafka: Start processing principal events from Kafka.")
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
 
     # Validate required configuration
@@ -738,14 +555,12 @@ def process_principal_events_from_kafka(
 
         # Process messages
         for message in consumer:
-            mode_suffix = " (DRY RUN)" if dry_run else ""
             logger.info(
-                "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
+                "process_principal_events_from_kafka: Processing message from partition %d at offset %d",
                 message.partition,
                 message.offset,
-                mode_suffix,
             )
-            result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
+            result = process_kafka_message(message, bootstrap_service, dlq_producer)
             if not result.should_continue:
                 # Lock contention - another listener is running, abort this consumer
                 logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")

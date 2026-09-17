@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "c60b1ef0f017c451d64017c134fb01511d6592a3bf40fa8770cc1540e5149685"
+            "sha256": "f301f1ed005e270eb98536516a5568c052b2ea04276a9ca8413f2ce86cf53b4f"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -91,11 +91,11 @@
         },
         "botocore": {
             "hashes": [
-                "sha256:0fda26d16c7c7bf7082c421390a817b696f98a43d3da7c43dbbb093f76662876",
-                "sha256:779588da32bd48a7bb0c097da4bcb747260e86d2bfc507369dca56f1450e0722"
+                "sha256:3ef7c8c40738bb42a40eb0ac3dc2d9f1698946541874ae9b505e49f289272805",
+                "sha256:c21153a07b97e8497f4ffa83e340a055f3f479b074e6eedf7d0562a9bc861cac"
             ],
             "markers": "python_version >= '3.10'",
-            "version": "==1.43.95"
+            "version": "==1.43.96"
         },
         "celery": {
             "hashes": [
@@ -1761,13 +1761,6 @@
             ],
             "markers": "python_version >= '3.10'",
             "version": "==1.6.0"
-        },
-        "stompest": {
-            "hashes": [
-                "sha256:83a4d9d9627028953e7bec71a958a60488243f7ea6f41c2a428ad95f533cedce"
-            ],
-            "index": "pypi",
-            "version": "==2.3.0"
         },
         "truststore": {
             "hashes": [
