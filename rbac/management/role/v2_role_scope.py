@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""V2 role list filtering by migration-excluded permission applications."""
+"""V2 role list and binding eligibility rules."""
 
 from __future__ import annotations
 
