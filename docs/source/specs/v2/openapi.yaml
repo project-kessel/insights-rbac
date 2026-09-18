@@ -913,7 +913,7 @@ paths:
     get:
       operationId: Principals_list
       summary: List the principals for a tenant
-      description: List the principals for a tenant
+      description: List the principals for a tenant. Uses offset pagination (`limit`, `offset`). Max limit 1000.
       parameters:
         - name: limit
           in: query
@@ -1069,7 +1069,7 @@ paths:
     get:
       operationId: RoleBindings_list
       summary: List role bindings
-      description: List role bindings
+      description: List role bindings. Uses cursor pagination (`limit`, `cursor`). Max limit 1000.
       parameters:
         - name: limit
           in: query
@@ -1241,7 +1241,7 @@ paths:
     get:
       operationId: RoleBindings_listBySubject
       summary: List role bindings grouped by subject
-      description: List role bindings grouped by subject. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.
+      description: List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.
       parameters:
         - name: limit
           in: query
@@ -1622,7 +1622,7 @@ paths:
     get:
       operationId: Roles_list
       summary: List the roles for a tenant
-      description: List the roles for a tenant
+      description: List the roles for a tenant. Uses cursor pagination (`limit`, `cursor`). Max limit 1000.
       parameters:
         - name: limit
           in: query
@@ -2066,7 +2066,7 @@ paths:
     get:
       operationId: Workspaces_list
       summary: List workspaces in a tenant
-      description: List workspaces in a tenant
+      description: List workspaces in a tenant. Uses offset pagination (`limit`, `offset`). Max limit 3000.
       parameters:
         - name: limit
           in: query
@@ -2256,7 +2256,7 @@ paths:
     post:
       operationId: Workspaces_query
       summary: Query workspaces by a list of IDs
-      description: Query workspaces by a list of IDs
+      description: Query workspaces by a list of IDs. Uses offset pagination (`limit`, `offset` in query string). Max limit 3000.
       parameters:
         - name: limit
           in: query
@@ -2877,7 +2877,11 @@ components:
       format: int64
       description: |-
         Limit for pagination. Controls the maximum number of items returned.
-        Use -1 to return all objects.
+        Default: 10. Use -1 to return all objects in a single response.
+
+        Maximum values (enforced server-side, not in schema):
+        - Workspaces: 3000
+        - All other list endpoints: 1000
     Offset:
       type: integer
       format: int64
