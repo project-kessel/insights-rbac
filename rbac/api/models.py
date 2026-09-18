@@ -34,10 +34,14 @@ class TenantModifiedQuerySet(models.QuerySet):
     """Queryset for modified tenants."""
 
     def modified_only(self):
-        """Return only modified tenants."""
+        """Return only modified tenants.
+
+        A tenant is considered modified when it contains at least one
+        non-system group **or** at least one custom V2 role.
+        """
         return (
-            self.filter(Q(group__system=False) | Q(role__system=False))
-            .prefetch_related("group_set", "role_set")
+            self.filter(Q(group__system=False) | Q(rolev2__type="custom"))
+            .prefetch_related("group_set", "rolev2_set")
             .distinct()
         )
 

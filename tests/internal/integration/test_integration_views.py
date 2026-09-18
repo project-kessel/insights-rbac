@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from api.models import User, Tenant
 from management.models import Group, Policy, Principal, Role
+from management.role.v2_model import RoleV2
 from tests.identity_request import IdentityRequest
 
 
@@ -88,14 +89,15 @@ class IntegrationViewsTests(IdentityRequest):
             system=False, name="modifiedTenant1Group", tenant=self.modifiedTenant1
         )
         self.modifiedTenant2 = Tenant.objects.create(tenant_name="Modified Role", org_id=1212)
-        modifiedTenant2Role = Role.objects.create(
-            system=False, name="modifiedTenant2Role", tenant=self.modifiedTenant2
+        self.modifiedTenant2Role = RoleV2.objects.create(
+            name="modifiedTenant2Role", type=RoleV2.Types.CUSTOM, tenant=self.modifiedTenant2
         )
 
     def tearDown(self):
         """Tear down internal viewset tests."""
         Group.objects.all().delete()
         Role.objects.all().delete()
+        RoleV2.objects.all().delete()
         Policy.objects.all().delete()
         # Clear the principal cache to avoid test isolation issues
         from management.utils import PRINCIPAL_CACHE
@@ -462,7 +464,7 @@ class IntegrationViewsTests(IdentityRequest):
         self.assertEqual(response.data.get("meta").get("count"), 4)
 
     def test_tenants_modified(self):
-        """Test that we get tenants back on /tenant/"""
+        """Test that modified_only returns tenants with non-system groups or custom V2 roles."""
         response = self.client.get(
             f"/_private/api/v1/integrations/tenant/?modified_only=true",
             **self.request.META,
@@ -473,6 +475,34 @@ class IntegrationViewsTests(IdentityRequest):
         expected_org_ids = [t.org_id for t in [self.modifiedTenant1, self.modifiedTenant2]]
         actual_org_ids = [t["org_id"] for t in response.data.get("data")]
         self.assertEqual(sorted(expected_org_ids), sorted(actual_org_ids))
+
+    def test_tenants_modified_seeded_role_excluded(self):
+        """Test that tenants with only seeded V2 roles are not considered modified."""
+        seeded_tenant = Tenant.objects.create(tenant_name="Seeded Only", org_id=3333)
+        RoleV2.objects.create(name="seededRole", type=RoleV2.Types.SEEDED, tenant=seeded_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertNotIn(int(seeded_tenant.org_id), returned_org_ids)
+
+    def test_tenants_modified_custom_v2_role_detected(self):
+        """Test that a tenant with a custom V2 role is detected as modified."""
+        custom_tenant = Tenant.objects.create(tenant_name="Custom V2", org_id=4444)
+        RoleV2.objects.create(name="customRole", type=RoleV2.Types.CUSTOM, tenant=custom_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertIn(int(custom_tenant.org_id), returned_org_ids)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
