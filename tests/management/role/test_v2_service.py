@@ -1082,6 +1082,137 @@ class RoleV2ServiceListResourceTypeTests(IdentityRequest):
         self.assertEqual(names, {"default_role"})
 
 
+class RoleV2ServiceListAllScopeTests(IdentityRequest):
+    """Test that Scope.ALL (scope-agnostic) roles are included for every resource_type."""
+
+    def setUp(self):
+        """Set up resource_type filter tests with an ALL-scoped role."""
+        super().setUp()
+        self.service = RoleV2Service(tenant=self.tenant)
+
+        self._root_ws, _ = Workspace.objects.get_or_create(
+            tenant=self.tenant,
+            type=Workspace.Types.ROOT,
+            defaults={
+                "name": Workspace.SpecialNames.ROOT,
+                "description": Workspace.SpecialDescriptions.ROOT,
+            },
+        )
+        self._default_ws, _ = Workspace.objects.get_or_create(
+            tenant=self.tenant,
+            type=Workspace.Types.DEFAULT,
+            defaults={
+                "name": Workspace.SpecialNames.DEFAULT,
+                "description": Workspace.SpecialDescriptions.DEFAULT,
+                "parent": self._root_ws,
+            },
+        )
+
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=["tenant_app:*:*"],
+            root_scope_permissions=["root_app:*:*"],
+            all_scope_permissions=["all_app:*:*"],
+        )
+        test_cache = PermissionScopeCache(scope_service)
+        self._cache_patcher = patch("management.role.v2_service.permission_scope_cache", test_cache)
+        self._cache_patcher.start()
+
+        self.default_perm = Permission.objects.create(permission="default_app:resource:read", tenant=self.tenant)
+        self.root_perm = Permission.objects.create(permission="root_app:resource:read", tenant=self.tenant)
+        self.tenant_perm = Permission.objects.create(permission="tenant_app:resource:read", tenant=self.tenant)
+        self.all_perm = Permission.objects.create(permission="all_app:resource:read", tenant=self.tenant)
+
+        self.default_role = RoleV2.objects.create(
+            name="default_role", description="Default scoped", tenant=self.tenant
+        )
+        self.default_role.permissions.add(self.default_perm)
+
+        self.root_role = RoleV2.objects.create(name="root_role", description="Root scoped", tenant=self.tenant)
+        self.root_role.permissions.add(self.root_perm)
+
+        self.tenant_role = RoleV2.objects.create(name="tenant_role", description="Tenant scoped", tenant=self.tenant)
+        self.tenant_role.permissions.add(self.tenant_perm)
+
+        self.all_role = RoleV2.objects.create(name="all_role", description="Scope-agnostic", tenant=self.tenant)
+        self.all_role.permissions.add(self.all_perm)
+
+    def tearDown(self):
+        """Tear down resource_type filter tests."""
+        from management.utils import PRINCIPAL_CACHE
+
+        self._cache_patcher.stop()
+        RoleV2.objects.all().delete()
+        Permission.objects.filter(tenant=self.tenant).delete()
+        PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)
+        super().tearDown()
+
+    def test_list_resource_type_tenant_includes_all_scope_role(self):
+        """resource_type=tenant should include ALL-scoped roles alongside TENANT-scoped roles."""
+        queryset = self.service.list({"resource_type": "tenant"})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"tenant_role", "all_role"})
+
+    def test_list_resource_type_workspace_with_root_resource_id_includes_all_scope_role(self):
+        """resource_type=workspace with the root workspace id should include ALL-scoped roles."""
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._root_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"root_role", "all_role"})
+
+    def test_list_resource_type_workspace_with_default_resource_id_includes_all_scope_role(self):
+        """resource_type=workspace with the default workspace id should include ALL-scoped roles.
+
+        This already worked before this change since the DEFAULT bucket applies no positive
+        filter, but is pinned here as a regression test.
+        """
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._default_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"default_role", "all_role"})
+
+    def test_list_resource_type_workspace_without_resource_id_includes_all_scope_role(self):
+        """resource_type=workspace without resource_id should include ALL-scoped roles.
+
+        This already worked before this change since the DEFAULT bucket applies no positive
+        filter, but is pinned here as a regression test.
+        """
+        queryset = self.service.list({"resource_type": "workspace"})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"default_role", "all_role"})
+
+    def test_list_resource_type_workspace_with_standard_resource_id_includes_all_scope_role(self):
+        """A standard (child) workspace id should include ALL-scoped roles alongside workspace-granular roles."""
+        child = Workspace.objects.create(
+            name="Sub WS",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=self._default_ws,
+        )
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": child.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"default_role", "all_role"})
+
+    def test_list_resource_type_tenant_excludes_root_and_all_mixed_role(self):
+        """A role with ROOT + ALL permissions must not leak into the tenant-scoped list via ALL."""
+        root_all_role = RoleV2.objects.create(
+            name="root_all_role", description="Root scoped plus scope-agnostic", tenant=self.tenant
+        )
+        root_all_role.permissions.add(self.root_perm, self.all_perm)
+
+        queryset = self.service.list({"resource_type": "tenant"})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"tenant_role", "all_role"})
+
+    def test_list_resource_type_workspace_with_root_resource_id_excludes_default_and_all_mixed_role(self):
+        """A role with DEFAULT + ALL permissions must not leak into the root-scoped list via ALL."""
+        default_all_role = RoleV2.objects.create(
+            name="default_all_role", description="Default scoped plus scope-agnostic", tenant=self.tenant
+        )
+        default_all_role.permissions.add(self.default_perm, self.all_perm)
+
+        queryset = self.service.list({"resource_type": "workspace", "resource_id": self._root_ws.id})
+        names = set(queryset.values_list("name", flat=True))
+        self.assertEqual(names, {"root_role", "all_role"})
+
+
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class RoleV2ServiceListExplicitDefaultScopeTests(IdentityRequest):
     """Test workspace-level role scoping with explicit DEFAULT_SCOPE_PERMISSIONS.
