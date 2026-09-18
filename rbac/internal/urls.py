@@ -107,6 +107,7 @@ urlpatterns = [
     path("api/inventory/check_workspace/<workspace_uuid>/", views.check_workspace_relation),
     path("api/inventory/check_role/<role_uuid>/", views.check_role),
     path("api/inventory/check_cross_account_request/<request_id>/", views.check_cross_account_request),
+    path("api/inventory/verify_migration/<str:org_id>/", views.verify_migration),
     path("api/inventory/check/", views.check_inventory),
     path("api/utils/kafka_test_message/", views.send_kafka_test_message),
     path("api/utils/migrate_binding_scope/", views.migrate_binding_scope),
