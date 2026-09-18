@@ -6,10 +6,154 @@ tags:
   - name: Workspaces
   - name: Role Bindings
   - name: Roles
+  - name: Audit Logs
   - name: Principals
   - name: Permissions
   - name: Groups
 paths:
+  /auditlogs/:
+    get:
+      operationId: AuditLogs_list
+      summary: List the audit log entries for a tenant
+      description: List the audit log entries for a tenant
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Limit'
+            default: 10
+          explode: false
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor for cursor-based pagination.
+          schema:
+            $ref: '#/components/schemas/Cursor'
+          explode: false
+        - name: principal_username
+          in: query
+          required: false
+          description: Filter by principal username. Case-insensitive substring match by default; use * for glob patterns (e.g. jd*).
+          schema:
+            type: string
+          explode: false
+        - name: resource_type
+          in: query
+          required: false
+          description: Filter by the type of resource the action was performed on.
+          schema:
+            $ref: '#/components/schemas/AuditLogResourceType'
+          explode: false
+        - name: resource_id
+          in: query
+          required: false
+          description: Filter by the UUID of the resource the action was performed on.
+          schema:
+            $ref: '#/components/schemas/UUID'
+          explode: false
+        - name: action
+          in: query
+          required: false
+          description: Filter by the action that was performed.
+          schema:
+            $ref: '#/components/schemas/AuditLogAction'
+          explode: false
+        - name: created_after
+          in: query
+          required: false
+          description: Only return entries created at or after this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+          explode: false
+        - name: created_before
+          in: query
+          required: false
+          description: Only return entries created at or before this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+          explode: false
+        - name: fields
+          in: query
+          required: false
+          description: Control which fields are included in the response to optimize payload size.
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/FieldMask'
+            default: created,principal_username,description,resource_type,resource_id,action,source
+          explode: false
+        - name: order_by
+          in: query
+          required: false
+          description: "Sort by specified field, prefix with '-' for descending order. Allowed fields: created."
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/OrderBy'
+            default: -created
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - meta
+                  - links
+                  - data
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/CursorPaginationMeta'
+                  links:
+                    $ref: '#/components/schemas/CursorPaginationLinks'
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+              example:
+                meta:
+                  limit: 10
+                links:
+                  next: /api/rbac/v2/auditlogs/?limit=10&cursor=eyJwIjoiMjAyNC0wOC0wNFQxMjowMDowMFoifQ%3D%3D
+                  previous: null
+                data:
+                  - created: '2024-08-04T12:00:00Z'
+                    principal_username: jdoe
+                    description: 'Created workspace: Alpha Workspace'
+                    resource_type: workspace
+                    resource_id: e4277742-b91c-43f1-a185-b827e8574345
+                    action: create
+                    source: null
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem400'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem401'
+        '403':
+          description: Access is forbidden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem403'
+        '500':
+          description: Server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem500'
+      tags:
+        - Audit Logs
   /groups/:
     get:
       operationId: Groups_list
@@ -2670,6 +2814,72 @@ paths:
               parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
 components:
   schemas:
+    AuditLog:
+      type: object
+      properties:
+        created:
+          type: string
+          format: date-time
+          description: Timestamp of when the audited action occurred
+        principal_username:
+          type: string
+          description: Username of the principal that performed the action
+        description:
+          type: string
+          description: Human readable description of the audited action
+        resource_type:
+          allOf:
+            - $ref: '#/components/schemas/AuditLogResourceType'
+          description: Type of resource the action was performed on
+        resource_id:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/UUID'
+          nullable: true
+          description: UUID of the resource the action was performed on. Null for entries recorded before UUIDs were captured, or for resource types without a UUID.
+        action:
+          allOf:
+            - $ref: '#/components/schemas/AuditLogAction'
+          description: Action that was performed
+        source:
+          allOf:
+            - $ref: '#/components/schemas/AuditLogSource'
+          nullable: true
+          description: Origin of the request. Null for ordinary API requests.
+      example:
+        created: '2024-08-04T12:00:00Z'
+        principal_username: jdoe
+        description: 'Created workspace: Alpha Workspace'
+        resource_type: workspace
+        resource_id: e4277742-b91c-43f1-a185-b827e8574345
+        action: create
+        source: null
+    AuditLogAction:
+      type: string
+      enum:
+        - delete
+        - add
+        - edit
+        - create
+        - remove
+        - read
+      description: Action recorded by an audit log entry
+    AuditLogResourceType:
+      type: string
+      enum:
+        - group
+        - role
+        - role_v2
+        - user
+        - permission
+        - workspace
+        - role_binding
+      description: Type of resource an audit log entry refers to
+    AuditLogSource:
+      type: string
+      enum:
+        - ai_assistant
+      description: Origin of the request that produced the audit log entry. Null for ordinary API requests.
     Cursor:
       type: string
       description: |-
