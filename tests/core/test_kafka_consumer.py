@@ -17,6 +17,7 @@
 
 """Tests for RBAC Kafka consumer."""
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -47,6 +48,7 @@ from core.kafka_consumer import (
     DebeziumMessage,
     MessageValidator,
     RBACKafkaConsumer,
+    RebalanceListener,
     ReplicationMessage,
     RetryConfig,
     _save_consistency_token_best_effort,
@@ -1526,6 +1528,27 @@ class FencingTokenRebalanceTests(TestCase):
 
         self.partition = TopicPartition("test-topic", 0)
 
+        # Patch _run_in_thread to run synchronously in tests.
+        # kafka-python uses its own event loop (not asyncio), so
+        # _run_in_thread uses kafka.future.Future + threading.Thread
+        # which is incompatible with asyncio.run(). This patch runs
+        # the function synchronously and returns a pre-resolved
+        # KafkaFuture, which __await__ handles without yielding.
+        from kafka.future import Future as KafkaFuture
+
+        def _sync_run_in_thread(self_listener, fn, *args):
+            future = KafkaFuture()
+            try:
+                result = fn(*args)
+                future.success(result)
+            except Exception as exc:
+                future.failure(exc)
+            return future
+
+        patcher = patch.object(RebalanceListener, "_run_in_thread", _sync_run_in_thread)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch("core.kafka_consumer.RBACKafkaConsumer._acquire_lock_with_retry")
     def test_partition_assignment_acquires_lock(self, mock_acquire_lock):
         """Test that partition assignment acquires lock token and resets failure flag."""
@@ -1538,7 +1561,9 @@ class FencingTokenRebalanceTests(TestCase):
 
         listener = RebalanceListener(self.consumer)
         # Note: Kafka library passes a set of TopicPartition objects, not a list
-        listener.on_partitions_assigned({self.partition})
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        result = asyncio.run(listener.on_partitions_assigned({self.partition}))
+        self.assertIsNone(result)
 
         # Verify lock was acquired
         mock_acquire_lock.assert_called_once_with("test-consumer-group/0")
@@ -1561,7 +1586,9 @@ class FencingTokenRebalanceTests(TestCase):
 
         # Should NOT raise - instead sets a flag for later detection
         # Note: Kafka library passes a set of TopicPartition objects, not a list
-        listener.on_partitions_assigned({self.partition})
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        result = asyncio.run(listener.on_partitions_assigned({self.partition}))
+        self.assertIsNone(result)
 
         # Verify lock state was cleared
         self.assertIsNone(self.consumer.lock_id)
@@ -1574,7 +1601,7 @@ class FencingTokenRebalanceTests(TestCase):
     def test_partition_assignment_handles_set_not_list(self, mock_acquire_lock):
         """Test that on_partitions_assigned handles set of TopicPartition (not list).
 
-        Regression test: The Kafka library's ConsumerRebalanceListener.on_partitions_assigned()
+        Regression test: The Kafka library's AsyncConsumerRebalanceListener.on_partitions_assigned()
         callback receives a SET of TopicPartition objects, not a list. Previously the code
         tried to access assigned[0] which failed with "'set' object is not subscriptable".
         """
@@ -1589,7 +1616,9 @@ class FencingTokenRebalanceTests(TestCase):
         self.assertIsInstance(assigned_partitions, set)
 
         # This should not raise "'set' object is not subscriptable"
-        listener.on_partitions_assigned(assigned_partitions)
+        # on_partitions_assigned is async (AsyncConsumerRebalanceListener)
+        result = asyncio.run(listener.on_partitions_assigned(assigned_partitions))
+        self.assertIsNone(result)
 
         # Verify lock was acquired successfully
         mock_acquire_lock.assert_called_once_with("test-consumer-group/0")
@@ -1662,6 +1691,34 @@ class FencingTokenRebalanceTests(TestCase):
 
         # Revoke partitions
         self.consumer._on_partitions_revoked([self.partition])
+
+        # Verify lock was cleared
+        self.assertIsNone(self.consumer.lock_id)
+        self.assertIsNone(self.consumer.lock_token)
+
+        # Verify offsets were committed
+        self.consumer.offset_manager.commit.assert_called_once()
+
+    def test_partition_revocation_via_async_listener(self):
+        """Test that on_partitions_revoked works through the async wrapper.
+
+        The RebalanceListener.on_partitions_revoked is an async method that
+        dispatches blocking work (offset commit, lock clearing) to a worker
+        thread via kafka.future.Future. This test exercises that code path,
+        mirroring the pattern used for on_partitions_assigned tests.
+        """
+        from core.kafka_consumer import RebalanceListener
+
+        # Set up lock state
+        self.consumer.lock_id = "test-consumer-group/0"
+        self.consumer.lock_token = "test-token-12345"
+        self.consumer.offset_manager.commit.return_value = (True, 5)
+
+        listener = RebalanceListener(self.consumer)
+
+        # Call through the async wrapper, same as Kafka library would
+        result = asyncio.run(listener.on_partitions_revoked([self.partition]))
+        self.assertIsNone(result)
 
         # Verify lock was cleared
         self.assertIsNone(self.consumer.lock_id)
