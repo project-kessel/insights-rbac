@@ -17,6 +17,99 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 logger = logging.getLogger(__name__)
 
 
+# Benign kafka-python idle/transport messages that are safe to NOT investigate.
+# These are logged by kafka-python's internal loggers (logger names starting with "kafka."),
+# NOT by RBAC code. They become GlitchTip events because of LoggingIntegration(event_level=logging.ERROR).
+# New benign signatures can be added here.
+KAFKA_BENIGN_SIGNATURES = [
+    "Connection reset by peer",
+    "Closing idle connection",
+    "Broken pipe",
+    "Fetch to node",  # kafka.consumer.fetcher retry noise, e.g. "Fetch to node 3 failed"
+    "Errno 104",
+    "Errno 32",
+]
+
+
+def _get_event_text_for_filtering(event, hint):
+    """Extract all text from event and hint for benign-signature matching.
+
+    Args:
+        event: Sentry event dict
+        hint: Sentry hint dict (may contain exc_info)
+
+    Returns:
+        str: Concatenated text from message and exception fields (lowercased)
+    """
+    parts = []
+
+    # Extract log message
+    logentry = event.get("logentry", {})
+    if logentry.get("message"):
+        parts.append(logentry["message"])
+    if logentry.get("formatted"):
+        parts.append(logentry["formatted"])
+
+    # Extract exception text from event
+    exception_data = event.get("exception", {})
+    if exception_data.get("values"):
+        for exc_value in exception_data["values"]:
+            if exc_value.get("value"):
+                parts.append(exc_value["value"])
+
+    # Extract exception text from hint
+    exc_info = hint.get("exc_info")
+    if exc_info:
+        try:
+            # exc_info is typically (type, value, traceback) tuple
+            if isinstance(exc_info, tuple) and len(exc_info) >= 2:
+                exc_instance = exc_info[1]
+                if exc_instance:
+                    parts.append(str(exc_instance))
+        except Exception:
+            # If anything goes wrong extracting from hint, continue with what we have
+            pass
+
+    return " ".join(parts).lower()
+
+
+def _filter_kafka_benign_events(event, hint):
+    """Filter out benign kafka-python idle/transport noise events.
+
+    Returns None (drop) ONLY when BOTH conditions are true:
+    1. Logger name starts with "kafka."
+    2. Message or exception text matches a benign signature
+
+    Otherwise returns the event unchanged.
+
+    This is wrapped in a try/except to ensure we never drop events due to
+    unexpected errors in the filter logic (fail-open).
+    """
+    try:
+        logger_name = event.get("logger", "")
+
+        # Only filter events from kafka-python's own loggers
+        if not logger_name.startswith("kafka."):
+            return event
+
+        # Gather all text from the event
+        event_text = _get_event_text_for_filtering(event, hint)
+
+        # Check if any benign signature matches (case-insensitive substring)
+        for signature in KAFKA_BENIGN_SIGNATURES:
+            if signature.lower() in event_text:
+                # This is a known-benign kafka idle/transport event, drop it
+                return None
+
+        # Not a benign signature, send it
+        return event
+
+    except Exception:
+        # On any unexpected error, fail-open: return the event unchanged
+        # (never raise from inside before_send)
+        return event
+
+
 def _configure_sentry_integrations():
     """Configure Sentry integrations for the consumer.
 
@@ -75,6 +168,7 @@ def initialize_consumer_sentry():
             integrations=_configure_sentry_integrations(),
             environment=os.getenv("ENV_NAME", "unknown"),
             release=os.getenv("GIT_COMMIT", "unknown"),
+            before_send=_filter_kafka_benign_events,
         )
 
         _set_sentry_consumer_context()
