@@ -57,6 +57,8 @@ class FeatureFlags:
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
     # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # Per-org rollout of V2 data for OCM integrations.
+    TOGGLE_OCM_V2_ENABLED = "rbac.ocm-v2.enabled"
     # When enabled, use Kafka for principal cleanup; when disabled, use UMB.
     TOGGLE_USE_KAFKA_CLEANUP = "rbac.principal-cleanup.use-kafka.enabled"
     # Per-org flag: when enabled, the org uses only V2 access checks for HBI (and V1 access checks are blocked).
@@ -217,6 +219,14 @@ class FeatureFlags:
             feature_name=self.TOGGLE_V2_EDIT_API_ENABLED,
             context={"orgId": str(org_id)},
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
+        )
+
+    def is_ocm_v2_enabled(self, org_id: str) -> bool:
+        """Check the independent OCM V2 rollout flag for the target organization."""
+        return self.is_enabled(
+            feature_name=self.TOGGLE_OCM_V2_ENABLED,
+            context={"orgId": str(org_id)},
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.OCM_V2_ENABLED,
         )
 
     def is_kafka_principal_cleanup_enabled(self):
