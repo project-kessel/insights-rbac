@@ -22,13 +22,13 @@ from uuid import uuid4
 from django.test import TestCase, override_settings
 
 from api.models import Tenant
-from management.relation_replicator.outbox_replicator import (
+from management.inventory_replicator.outbox_replicator import (
     InMemoryLog,
     OutboxReplicator,
     OutboxWAL,
     WorkspaceEventPayload,
 )
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEvent,
     ReplicationEventType,
@@ -47,7 +47,7 @@ from tests.v2_util import bootstrap_tenant_for_v2_test
         "version": 1,
         "disable_existing_loggers": False,
         "loggers": {
-            "management.relation_replicator.outbox_replicator": {
+            "management.inventory_replicator.outbox_replicator": {
                 "level": "INFO",
             },
         },
@@ -420,7 +420,7 @@ class OutboxReplicatorTest(TestCase):
             partition_key=PartitionKey.byEnvironment(),
         )
 
-        with self.assertLogs("management.relation_replicator.outbox_replicator", level="WARNING") as logs:
+        with self.assertLogs("management.inventory_replicator.outbox_replicator", level="WARNING") as logs:
             self.replicator.replicate(event)
 
         self.assertEqual(len(self.log), 0)
@@ -442,7 +442,7 @@ class OutboxReplicatorTest(TestCase):
             partition_key=PartitionKey.byEnvironment(),
         )
 
-        with self.assertLogs("management.relation_replicator.outbox_replicator") as logs:
+        with self.assertLogs("management.inventory_replicator.outbox_replicator") as logs:
             self.replicator.replicate(event)
 
         self.assertEqual(len(self.log), 1)

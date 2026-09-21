@@ -6,13 +6,13 @@ from typing import Literal
 
 from django.db import transaction
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEvent,
     ReplicationEventType,
 )
-from management.relation_replicator.types import RelationTuple
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.types import RelationTuple
 
 logger = logging.getLogger(__name__)
 

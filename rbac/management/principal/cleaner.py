@@ -32,9 +32,9 @@ from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata
 from management.atomic_transactions import run_atomic_with_retry
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
-from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import get_tenant_bootstrap_service
 from management.tenant_service.tenant_service import TenantBootstrapService
 from prometheus_client import Counter

@@ -38,22 +38,21 @@ Rules:
 
 ### RelationTuple Domain Type
 
-Use `RelationTuple` from `management/relation_replicator/types.py` instead of raw protobuf messages. It validates fields on construction (non-empty strings, valid patterns, no `*` for resource IDs). Convert to protobuf with `.as_message()` or to dict with `.to_dict()`.
+Use `RelationTuple` from `management/inventory_replicator/types.py` instead of raw protobuf messages. It validates fields on construction (non-empty strings, valid patterns, no `*` for resource IDs). Convert to protobuf with `.as_message()` or to dict with `.to_dict()`.
 
 ### gRPC Channel Creation
 
 Three channel factories in `management/utils.py`:
-- `create_client_channel_relation(addr)` -- Relations API (JWT auth via metadata)
 - `create_client_channel_inventory(addr)` -- Inventory API (OAuth2 credentials)
 - `create_client_channel(addr)` -- Legacy, same as relation
 
 All use insecure channels when `DEVELOPMENT=True` or `CLOWDER_ENABLED=true`, TLS otherwise. Always use as context managers.
 
-### Auth for Relations API
+### Auth for Inventory API
 
-JWT tokens are obtained from Redis via `JWTManager` (not per-request OAuth2). The consumer uses `JWTCacheOptimized`; request-path code uses `JWTCache`. Both are in `management/cache.py`. Token is passed as gRPC metadata: `[("authorization", f"Bearer {token}")]`.
+Auth uses a `kessel.auth.OAuth2ClientCredentials` instance (`inventory_auth_credentials` in `management/utils.py`), which fetches/caches/refreshes OAuth2 tokens in-process (thread-safe, no Redis involved). Build gRPC metadata for a call via `get_inventory_auth_metadata()`, which returns `[("authorization", f"Bearer {token}")]` or `[]` if `INVENTORY_API_CLIENT_ID`/`INVENTORY_API_CLIENT_SECRET` aren't configured (e.g. local/ephemeral). Metadata is attached per-call (`stub.SomeMethod(request, metadata=metadata)`) rather than at the channel level, since `create_client_channel_inventory` uses a plaintext channel under Clowder, which can't carry gRPC channel-level call credentials.
 
-Key env vars: `RELATION_API_SERVER` (default `localhost:9000`), `RELATION_API_CLIENT_ID`, `RELATION_API_CLIENT_SECRET`.
+Key env vars: `INVENTORY_API_SERVER` (default `localhost:9000`), `INVENTORY_API_CLIENT_ID`, `INVENTORY_API_CLIENT_SECRET`, `INVENTORY_API_TOKEN_URL`.
 
 ## 2. Debezium CDC / Outbox Pattern
 

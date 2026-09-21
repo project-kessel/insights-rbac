@@ -3,15 +3,15 @@
 from collections import defaultdict
 from typing import Callable, Hashable, Iterable, List, Optional, Set, Tuple, TypeVar, Union
 
-from kessel.relations.v1beta1.common_pb2 import Relationship
-from management.relation_replicator.relation_replicator import RelationReplicator
-from management.relation_replicator.types import RelationTuple  # noqa: F401 - Re-exported for backward compatibility
+from kessel.inventory.v1beta2 import relationship_pb2
+from management.inventory_replicator.inventory_replicator import InventoryReplicator
+from management.inventory_replicator.types import RelationTuple  # noqa: F401 - Re-exported for backward compatibility
 
 RelationPredicate = Callable[["RelationTuple"], bool]
 T = TypeVar("T", bound=Hashable)
 
 
-def _to_relation_tuple(item: Union[RelationTuple, Relationship]) -> RelationTuple:
+def _to_relation_tuple(item: Union[RelationTuple, relationship_pb2.Relationship]) -> RelationTuple:
     """Convert a proto Relationship or RelationTuple to a RelationTuple."""
     if isinstance(item, RelationTuple):
         return item
@@ -301,18 +301,18 @@ class InMemoryTuples(TupleSet):
         self._tuples: Set[RelationTuple] = set(tuples) if tuples is not None else set()
         super().__init__(self, self._tuples)
 
-    def add(self, item: Union[RelationTuple, Relationship]):
+    def add(self, item: Union[RelationTuple, relationship_pb2.Relationship]):
         """Add a tuple to the store."""
         self._tuples.add(_to_relation_tuple(item))
 
-    def remove(self, item: Union[RelationTuple, Relationship]):
+    def remove(self, item: Union[RelationTuple, relationship_pb2.Relationship]):
         """Remove a tuple from the store."""
         self._tuples.discard(_to_relation_tuple(item))
 
     def write(
         self,
-        add: Iterable[Union[RelationTuple, Relationship]],
-        remove: Iterable[Union[RelationTuple, Relationship]],
+        add: Iterable[Union[RelationTuple, relationship_pb2.Relationship]],
+        remove: Iterable[Union[RelationTuple, relationship_pb2.Relationship]],
     ):
         """
         Add / remove tuples, checking for duplicates within this batch.
@@ -470,7 +470,7 @@ def subject(namespace: str, name: str, id: object, relation: Optional[str] = Non
     return all_of(subject_type(namespace, name, relation), subject_id(str(id)))
 
 
-class InMemoryRelationReplicator(RelationReplicator):
+class InMemoryRelationReplicator(InventoryReplicator):
     """Replicates relations to an in-memory store."""
 
     def __init__(self, store: InMemoryTuples = InMemoryTuples()):

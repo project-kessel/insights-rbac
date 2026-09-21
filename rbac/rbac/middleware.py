@@ -34,10 +34,10 @@ from feature_flags import FEATURE_FLAGS
 from management.atomic_transactions import run_atomic_with_retry
 from management.authorization.token_validator import ITSSOTokenValidator, TokenValidator
 from management.cache import TenantCache
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import Principal
 from management.principal.backfill import backfill_remote_principal
 from management.principal.proxy import PrincipalProxy
-from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import get_tenant_bootstrap_service
 from management.tenant_service.tenant_service import TenantBootstrapService
 from management.utils import APPLICATION_KEY, access_for_principal, build_system_user_from_token, build_user_from_psk

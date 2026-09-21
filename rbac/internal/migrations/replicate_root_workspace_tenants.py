@@ -5,9 +5,9 @@ from typing import Optional
 
 from api.models import Tenant
 from management.atomic_transactions import atomic_with_retry
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     ReplicationEvent,
     ReplicationEventType,
     PartitionKey,
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 @atomic_with_retry(retries=10)
-def _do_replicate(replicator: RelationReplicator, raw_tenants: list[Tenant]) -> int:
+def _do_replicate(replicator: InventoryReplicator, raw_tenants: list[Tenant]) -> int:
     tenants = list(Tenant.objects.filter(pk__in=(t.pk for t in raw_tenants)).exclude(org_id=None))
     bootstrap_locks = {t: l for t, l in try_lock_tenants_for_bootstrap(tenants).items() if l is not None}
 
@@ -68,7 +68,7 @@ def _do_replicate(replicator: RelationReplicator, raw_tenants: list[Tenant]) -> 
 
 
 def replicate_root_workspace_tenants(
-    replicator: Optional[RelationReplicator] = None, *, batch_sleep_seconds: int | float = 0
+    replicator: Optional[InventoryReplicator] = None, *, batch_sleep_seconds: int | float = 0
 ):
     """
     Replicate the tenant relation for all existing root workspaces.

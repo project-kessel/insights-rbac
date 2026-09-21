@@ -23,8 +23,8 @@ from django.db import models, transaction
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 from management.group.model import Group
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 from management.principal.model import Principal
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 from management.role_binding.queryset import RoleBindingQuerySet
 from migration_tool.models import V2boundresource, V2rolebinding
 from uuid_utils.compat import UUID, uuid7

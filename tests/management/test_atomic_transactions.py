@@ -254,7 +254,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
 
     def test_reraise_serialization_failure_as_operational_error(self):
         """Serialization failures must not be wrapped as DualWriteException."""
-        from management.relation_replicator.relation_replicator import (
+        from management.inventory_replicator.inventory_replicator import (
             DualWriteException,
             raise_dual_write_exception,
         )
@@ -267,7 +267,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
 
     def test_reraise_deadlock_as_operational_error(self):
         """Deadlocks must not be wrapped as DualWriteException."""
-        from management.relation_replicator.relation_replicator import raise_dual_write_exception
+        from management.inventory_replicator.inventory_replicator import raise_dual_write_exception
 
         exc = _make_deadlock_error()
         with self.assertRaises(OperationalError) as ctx:
@@ -276,7 +276,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
 
     def test_wraps_other_errors_as_dual_write_exception(self):
         """Non-retriable errors are still wrapped as DualWriteException."""
-        from management.relation_replicator.relation_replicator import (
+        from management.inventory_replicator.inventory_replicator import (
             DualWriteException,
             raise_dual_write_exception,
         )
@@ -287,11 +287,11 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
 
     def test_retriable_conflict_logs_info_not_error(self):
         """Serialization conflicts must not emit ERROR (avoids Glitchtip noise on successful retries)."""
-        from management.relation_replicator.relation_replicator import raise_dual_write_exception
+        from management.inventory_replicator.inventory_replicator import raise_dual_write_exception
 
         with (
             _enable_logging(),
-            self.assertLogs("management.relation_replicator.relation_replicator", level="INFO") as cm,
+            self.assertLogs("management.inventory_replicator.inventory_replicator", level="INFO") as cm,
         ):
             with self.assertRaises(OperationalError):
                 raise_dual_write_exception(_make_serialization_error(), context="Replication event for group X")
@@ -301,14 +301,14 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
 
     def test_non_retriable_failure_logs_error(self):
         """Hard dual-write failures still log at ERROR."""
-        from management.relation_replicator.relation_replicator import (
+        from management.inventory_replicator.inventory_replicator import (
             DualWriteException,
             raise_dual_write_exception,
         )
 
         with (
             _enable_logging(),
-            self.assertLogs("management.relation_replicator.relation_replicator", level="INFO") as cm,
+            self.assertLogs("management.inventory_replicator.inventory_replicator", level="INFO") as cm,
         ):
             with self.assertRaises(DualWriteException):
                 raise_dual_write_exception(ValueError("boom"), context="Replication event for group X")
@@ -319,7 +319,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
     @override_settings(ATOMIC_RETRY_DISABLED=False)
     def test_atomic_with_retry_retries_when_handler_uses_raise_dual_write_exception(self):
         """Simulates dual-write wrapping: SSI via raise_dual_write_exception is retried."""
-        from management.relation_replicator.relation_replicator import (
+        from management.inventory_replicator.inventory_replicator import (
             DualWriteException,
             raise_dual_write_exception,
         )

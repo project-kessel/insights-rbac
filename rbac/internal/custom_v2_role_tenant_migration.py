@@ -30,13 +30,13 @@ from typing import Any
 
 from django.conf import settings
 from management.atomic_transactions import atomic_block
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.role.relations import role_owner_relationship
 from management.role.v2_model import RoleV2
 
@@ -65,7 +65,7 @@ def _base_queryset():
     return RoleV2.objects.filter(type=RoleV2.Types.CUSTOM).select_related("tenant").order_by("pk")
 
 
-def _replicate_role(role: RoleV2, replicator: RelationReplicator) -> None:
+def _replicate_role(role: RoleV2, replicator: InventoryReplicator) -> None:
     resource_id = _require_tenant_resource_id(role)
     tenant = role.tenant
 
@@ -91,7 +91,7 @@ def _replicate_role(role: RoleV2, replicator: RelationReplicator) -> None:
 
 def replicate_custom_v2_role_owner_relationships(
     *,
-    replicator: RelationReplicator | None = None,
+    replicator: InventoryReplicator | None = None,
 ) -> dict[str, Any]:
     """Emit owner tuples for every custom V2 role from ``role.tenant.tenant_resource_id()``.
 

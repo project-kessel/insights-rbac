@@ -29,11 +29,11 @@ from internal.migration_coordination import (
     build_migration_notify_resource_context,
     migration_notify_coordination,
 )
-from kessel.relations.v1beta1 import common_pb2
+from kessel.inventory.v1beta2 import relationship_pb2
 from management.atomic_transactions import _is_serialization_or_deadlock
 
 if TYPE_CHECKING:
-    from management.relation_replicator.types import RelationTuple
+    from management.inventory_replicator.types import RelationTuple
 
 logger = logging.getLogger(__name__)
 
@@ -120,15 +120,15 @@ class ReplicationEvent:
     event_type: ReplicationEventType
     event_info: dict[str, object]
     partition_key: "PartitionKey"
-    add: list[Union["RelationTuple", common_pb2.Relationship]]
-    remove: list[Union["RelationTuple", common_pb2.Relationship]]
+    add: list[Union["RelationTuple", relationship_pb2.Relationship]]
+    remove: list[Union["RelationTuple", relationship_pb2.Relationship]]
 
     def __init__(
         self,
         event_type: ReplicationEventType,
         partition_key: "PartitionKey",
-        add: list[Union["RelationTuple", common_pb2.Relationship]] = [],
-        remove: list[Union["RelationTuple", common_pb2.Relationship]] = [],
+        add: list[Union["RelationTuple", relationship_pb2.Relationship]] = [],
+        remove: list[Union["RelationTuple", relationship_pb2.Relationship]] = [],
         info: dict[str, object] = {},
     ):
         """Initialize ReplicationEvent."""
@@ -273,7 +273,7 @@ class WorkspaceEventStream(Enum):
         raise AssertionError(f"Unexpected WorkspaceEventClass: {self!r}")
 
 
-class RelationReplicator(ABC):
+class InventoryReplicator(ABC):
     """Type responsible for replicating relations to Kessel Relations."""
 
     @abstractmethod

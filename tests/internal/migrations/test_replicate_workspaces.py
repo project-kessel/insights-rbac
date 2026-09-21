@@ -11,8 +11,8 @@ from internal.migrations.replicate_workspaces import (
 )
 from internal.utils import get_or_create_ungrouped_workspace
 from management.audit_log.model import AuditLog
-from management.relation_replicator.noop_replicator import NoopReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEventType,
     WorkspaceEvent,

@@ -243,6 +243,7 @@ namespace Problems {
         InvalidRequest:"http://project-kessel.org/problems/invalid-request",
         AlreadyExists:"http://project-kessel.org/problems/already-exists",
         WorkspaceNotEmpty:"http://project-kessel.org/problems/workspace-not-empty",
+        ServiceUnavailable:"http://project-kessel.org/problems/service-unavailable",
         Conflict:"http://project-kessel.org/problems/conflict",
     }
 
@@ -285,6 +286,17 @@ namespace Problems {
     model Problem500 extends ProblemDetails<Status = 500>{
         type: ProblemType.InternalError,
         title: "Unexpected error occurred.";
+    }
+
+    @error
+    model Problem503 extends ProblemDetails<Status = 503>{
+        type: ProblemType.ServiceUnavailable,
+        title: "A downstream dependency is temporarily unavailable. Please retry shortly.",
+        @example("Inventory authorization is temporarily unavailable. Please try again shortly.")
+        detail: string,
+        @header("Retry-After")
+        @example("1")
+        retryAfter: string
     }
 
     @error
@@ -594,7 +606,7 @@ namespace Workspaces {
         @doc("When true, list responses include ancestor workspaces for tree navigation and fallback workspaces (root, default, ungrouped) when the user has no explicit access. When false (default), only workspaces with explicit Inventory permission are returned.")
         @example(false)
         @query with_ancestry?: boolean = false;
-    ): WorkspaceListResponse | Problems.CommonProblems;
+    ): WorkspaceListResponse | Problems.CommonProblems | Problems.Problem503;
 
     @doc("Create workspace in tenant")
     @summary("Create workspace in tenant")
@@ -848,7 +860,7 @@ namespace Workspaces {
         @query order_by?: string = "name";
 
         @body body: WorkspaceQueryRequest;
-    ): WorkspaceListResponse | Problems.CommonProblems;
+    ): WorkspaceListResponse | Problems.CommonProblems | Problems.Problem503;
 }
 
 @route("/role-bindings/")

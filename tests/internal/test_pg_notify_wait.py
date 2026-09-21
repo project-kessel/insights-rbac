@@ -30,7 +30,7 @@ from internal.pg_notify_wait import (
     NotifyCoordinatedReplicator,
     replicate_with_notify,
 )
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEvent,
     ReplicationEventType,

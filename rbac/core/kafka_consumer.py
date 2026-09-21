@@ -37,15 +37,13 @@ from kafka import KafkaConsumer, TopicPartition
 from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from kafka.errors import KafkaError
 from kafka.structs import OffsetAndMetadata
-from kessel.relations.v1beta1 import common_pb2
-from management.relation_replicator.relations_api_replicator import (
-    RelationsApiReplicator,
-)
+from kessel.inventory.v1beta2 import relationship_pb2
+from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
 from prometheus_client import Counter, Gauge, Histogram
 
 from api.models import Tenant
 
-relations_api_replication = RelationsApiReplicator()
+inventory_api_replication = InventoryApiReplicator()
 
 logger = logging.getLogger("rbac.core.kafka_consumer")
 
@@ -75,7 +73,7 @@ message_processing_duration = Histogram(
 
 kessel_write_duration = Histogram(
     "rbac_kessel_write_duration_seconds",
-    "Time spent on Kessel Relations API write and delete calls",
+    "Time spent on Kessel Inventory API write and delete calls",
     ["operation", "event_type"],
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
@@ -898,7 +896,7 @@ class RBACKafkaConsumer:
         Raises:
             grpc.RpcError: If the lock acquisition fails
         """
-        return relations_api_replication.acquire_lock(lock_id)
+        return inventory_api_replication.acquire_lock(lock_id)
 
     def _acquire_lock_with_retry(
         self,
@@ -1354,12 +1352,12 @@ class RBACKafkaConsumer:
             # Convert JSON dictionaries to protobuf objects
             relations_to_add_pb = []
             for relation_dict in replication_msg.relations_to_add:
-                relation_pb = json_format.ParseDict(relation_dict, common_pb2.Relationship())
+                relation_pb = json_format.ParseDict(relation_dict, relationship_pb2.Relationship())
                 relations_to_add_pb.append(relation_pb)
 
             relations_to_remove_pb = []
             for relation_dict in replication_msg.relations_to_remove:
-                relation_pb = json_format.ParseDict(relation_dict, common_pb2.Relationship())
+                relation_pb = json_format.ParseDict(relation_dict, relationship_pb2.Relationship())
                 relations_to_remove_pb.append(relation_pb)
 
             # Build fencing check with lock token (thread-safe read)
@@ -1369,9 +1367,9 @@ class RBACKafkaConsumer:
             fencing_check = None
             with self._lock_mutex:
                 if self.lock_id and self.lock_token:
-                    from kessel.relations.v1beta1 import relation_tuples_pb2
+                    from kessel.inventory.v1beta2 import relation_fencing_check_pb2
 
-                    fencing_check = relation_tuples_pb2.FencingCheck(
+                    fencing_check = relation_fencing_check_pb2.RelationFencingCheck(
                         lock_id=self.lock_id,
                         lock_token=self.lock_token,
                     )
@@ -1390,14 +1388,14 @@ class RBACKafkaConsumer:
 
             # Do tuple deletes for relationships with fencing check
             delete_start = time.time()
-            replication_delete_response = relations_api_replication.delete_relationships(
+            replication_delete_response = inventory_api_replication.delete_relationships(
                 relationships=relations_to_remove_pb, fencing_check=fencing_check
             )
             delete_duration = time.time() - delete_start
 
             # Do tuple writes for relationships with fencing check
             add_start = time.time()
-            replication_add_response = relations_api_replication.write_relationships(
+            replication_add_response = inventory_api_replication.write_relationships(
                 relationships=relations_to_add_pb, fencing_check=fencing_check
             )
             add_duration = time.time() - add_start
