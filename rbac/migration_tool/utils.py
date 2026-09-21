@@ -2,7 +2,7 @@
 
 from typing import Optional, Tuple
 
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 
 
 def create_relationship(

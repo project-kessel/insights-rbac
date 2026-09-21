@@ -28,9 +28,9 @@ from django.db.models import BooleanField, IntegerField, OneToOneField, signals
 from django.utils import timezone
 from internal.integration import sync_handlers
 from management.cache import AccessCache, skip_purging_cache_for_public_tenant
+from management.inventory_replicator.types import RelationTuple
 from management.models import Permission, Principal
 from management.rbac_fields import AutoDateTimeField
-from management.relation_replicator.types import RelationTuple
 from management.role.user_source import SourceKey
 from migration_tool.models import (
     V2boundresource,

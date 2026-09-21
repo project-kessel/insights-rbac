@@ -43,3 +43,11 @@ class NotFoundError(Exception):
         self.resource_type = resource_type
         self.resource_id = resource_id
         super().__init__(f"{resource_type} with id '{resource_id}' not found")
+
+
+class InventoryAuthUnavailableError(Exception):
+    """Raised when the Inventory API OAuth token service is temporarily unavailable."""
+
+    def __init__(self):
+        """Initialize the exception with a safe client-facing message."""
+        super().__init__("Inventory authorization is temporarily unavailable")

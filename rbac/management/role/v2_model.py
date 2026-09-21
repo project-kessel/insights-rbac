@@ -27,9 +27,9 @@ from django.db import models
 from django.db.models import signals
 from django.utils import timezone
 from management.exceptions import RequiredFieldError
+from management.inventory_replicator.types import RelationTuple
 from management.models import Permission, Role
 from management.rbac_fields import AutoDateTimeField
-from management.relation_replicator.types import RelationTuple
 from management.role.queryset import RoleV2QuerySet
 from management.role.relations import role_owner_relationship
 from migration_tool.models import V2role, role_permission_tuple

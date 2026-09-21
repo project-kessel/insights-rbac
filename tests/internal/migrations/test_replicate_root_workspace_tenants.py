@@ -2,7 +2,7 @@ from django.test import TestCase, override_settings
 
 from api.models import Tenant
 from internal.migrations.replicate_root_workspace_tenants import replicate_root_workspace_tenants
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.tenant_service import V2TenantBootstrapService
 from management.models import Workspace
 from migration_tool.in_memory_tuples import (

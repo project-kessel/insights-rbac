@@ -165,7 +165,7 @@ For tests that only need the replicator signature but don't inspect tuples, use 
 
 Patch `OutboxReplicator.replicate` and redirect to in-memory:
 ```python
-@patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+@patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
 def test_something(self, mock_replicate):
     mock_replicate.side_effect = self.in_memory_replicator.replicate
 ```

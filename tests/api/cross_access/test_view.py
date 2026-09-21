@@ -21,7 +21,7 @@ from api.cross_access.util import get_cross_principal_name
 from django.urls import reverse
 from django.utils import timezone
 
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 from management.models import Group, Role, Principal
 from management.notifications.notification_handlers import EVENT_TYPE_RH_TAM_REQUEST_CREATED
 from rest_framework import status
@@ -30,7 +30,7 @@ from rest_framework.test import APIClient
 from datetime import timedelta
 from unittest.mock import patch
 
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.model import BindingMapping
 from management.workspace.model import Workspace
 from migration_tool.in_memory_tuples import (
@@ -726,7 +726,7 @@ class CrossAccountRequestViewTests(CrossAccountRequestTest):
 
         test_group = Group.objects.create(tenant=self.tenant, name="test_group")
 
-        dual_write = RelationApiDualWriteGroupHandler(test_group, ReplicationEventType.ASSIGN_ROLE)
+        dual_write = InventoryApiDualWriteGroupHandler(test_group, ReplicationEventType.ASSIGN_ROLE)
         dual_write.generate_relations_reset_roles([self.role_1])
         dual_write.replicate()
 
@@ -975,7 +975,7 @@ class CrossAccountRequestViewTests(CrossAccountRequestTest):
         self.assertEqual(len(response.data.get("roles")), 2)
 
     @override_settings(PRINCIPAL_USER_DOMAIN="localhost")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_approval_replicates_bindings(self, replicate):
         """Test that when cross account access is approved, role bindings are replicated to Relations."""
         replicate.side_effect = self.replicator.replicate
@@ -1040,7 +1040,7 @@ class CrossAccountRequestViewTests(CrossAccountRequestTest):
         )
 
     @override_settings(PRINCIPAL_USER_DOMAIN="localhost")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_approval_and_deny_replicates_bindings(self, replicate):
         """Test that when cross account access is approved, role bindings are replicated to Relations."""
         replicate.side_effect = self.replicator.replicate

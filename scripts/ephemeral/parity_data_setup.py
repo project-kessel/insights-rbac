@@ -32,10 +32,10 @@ django.setup()
 
 from api.models import Tenant  # noqa: E402
 from management.group.model import Group  # noqa: E402
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler  # noqa: E402
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler  # noqa: E402
 from management.principal.model import Principal  # noqa: E402
-from management.relation_replicator.outbox_replicator import OutboxReplicator  # noqa: E402
-from management.relation_replicator.relation_replicator import ReplicationEventType  # noqa: E402
+from management.inventory_replicator.outbox_replicator import OutboxReplicator  # noqa: E402
+from management.inventory_replicator.inventory_replicator import ReplicationEventType  # noqa: E402
 from management.role.v2_service import RoleV2Service  # noqa: E402
 from management.role_binding.service import CreateBindingRequest, RoleBindingService  # noqa: E402
 from management.workspace.service import WorkspaceService  # noqa: E402
@@ -104,7 +104,7 @@ def setup(org_id: str, run_tag: str, minimal: bool) -> None:
             tenant=tenant,
         )
         group.principals.add(principal)
-        handler = RelationApiDualWriteGroupHandler(
+        handler = InventoryApiDualWriteGroupHandler(
             group,
             ReplicationEventType.ADD_PRINCIPALS_TO_GROUP,
             replicator=replicator,

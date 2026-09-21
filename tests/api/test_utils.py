@@ -5,7 +5,7 @@ from api.models import Tenant
 from api.utils import migration_resource_deletion
 from management.group.definer import seed_group
 from management.models import BindingMapping, Role, Workspace
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service.v2 import V2TenantBootstrapService
 

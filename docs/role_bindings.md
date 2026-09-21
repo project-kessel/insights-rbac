@@ -667,7 +667,7 @@ subscriptions_report_view
 
 During the V1→V2 transition, every change to a `BindingMapping` is mirrored to a `RoleBinding`.
 
-**Source:** `rbac/management/group/relation_api_dual_write_subject_handler.py`
+**Source:** `rbac/management/group/inventory_api_dual_write_subject_handler.py`
 
 ### Sync Flow
 

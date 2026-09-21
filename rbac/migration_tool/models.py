@@ -19,8 +19,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
 
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple
 from management.principal.model import Principal
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple
 from management.workspace.model import Workspace
 from migration_tool.utils import create_relationship
 

@@ -7,9 +7,9 @@ from django.db.models.functions import Cast
 
 from api.models import Tenant
 from management.atomic_transactions import atomic, atomic_with_retry
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     ReplicationEvent,
     ReplicationEventType,
     PartitionKey,
@@ -20,7 +20,7 @@ from management.workspace.model import Workspace
 
 
 @atomic_with_retry(retries=3)
-def _handle_role_binding_batch(tenant: Tenant, raw_bindings: list[RoleBinding], replicator: RelationReplicator):
+def _handle_role_binding_batch(tenant: Tenant, raw_bindings: list[RoleBinding], replicator: InventoryReplicator):
     bootstrap_lock = lock_tenant_for_bootstrap(tenant)
 
     # Exclude any default access bindings here due to paranoia, even though they should never end up referencing a
@@ -53,7 +53,7 @@ def _handle_role_binding_batch(tenant: Tenant, raw_bindings: list[RoleBinding], 
     RoleBinding.objects.filter(pk__in=(rb.pk for rb in role_bindings)).delete()
 
 
-def remove_deleted_workspace_bindings(replicator: Optional[RelationReplicator] = None):
+def remove_deleted_workspace_bindings(replicator: Optional[InventoryReplicator] = None):
     """Remove RoleBindings that are bound to a workspace that no longer exists."""
     if replicator is None:
         replicator = OutboxReplicator()

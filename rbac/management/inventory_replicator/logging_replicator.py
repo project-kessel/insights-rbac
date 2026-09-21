@@ -15,19 +15,19 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-"""RelationReplicator which just logs added tuples."""
+"""InventoryReplicator which just logs added tuples."""
 
 import logging
 from typing import Union
 
-from kessel.relations.v1beta1 import common_pb2
-from management.relation_replicator.relation_replicator import RelationReplicator, ReplicationEvent
-from management.relation_replicator.types import RelationTuple
+from kessel.inventory.v1beta2 import relationship_pb2
+from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEvent
+from management.inventory_replicator.types import RelationTuple
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class LoggingReplicator(RelationReplicator):
+class LoggingReplicator(InventoryReplicator):
     """Just logs relations."""
 
     def replicate(self, event: ReplicationEvent):
@@ -36,7 +36,7 @@ class LoggingReplicator(RelationReplicator):
             logger.info(stringify_spicedb_relationship(rel))
 
 
-def stringify_spicedb_relationship(rel: Union[RelationTuple, common_pb2.Relationship]):
+def stringify_spicedb_relationship(rel: Union[RelationTuple, relationship_pb2.Relationship]):
     """Stringify a relationship for logging.
 
     Works with both RelationTuple and protobuf Relationship since they

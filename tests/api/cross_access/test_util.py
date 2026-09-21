@@ -70,7 +70,7 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
         self.another_tenant.save()
         self.fixture.bootstrap_tenant(self.another_tenant)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_expired_cross_account_requests_remove_bindings(self, replicate):
         """Test that there are no bindings after a CAR expires."""
 
@@ -123,7 +123,7 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
             f"Expected no cross account bindings, found {len(cross_account_bindings)}",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_expired_cross_account_request_does_not_remove_binding_if_granted_by_another_request(self, replicate):
         replicate.side_effect = self.replicator.replicate
 
@@ -185,7 +185,7 @@ class CrossAccountRequestUtilTests(CrossAccountRequestTest):
             f"Expected remaining cross account binding, found {len(cross_account_bindings)}",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_expired_cross_account_request_does_not_remove_bindings_if_granted_by_another_request_multiple_roles(
         self, replicate
     ):

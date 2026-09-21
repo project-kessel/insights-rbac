@@ -22,8 +22,8 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 from django.db import IntegrityError, transaction
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.principal.model import Principal
-from management.role.relation_api_dual_write_handler import OutboxReplicator
 from management.tenant_mapping.model import logger
 from management.tenant_service.v2 import V2TenantBootstrapService
 from management.workspace.model import Workspace

@@ -3440,6 +3440,24 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Service unavailable.",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem503"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -3657,6 +3675,24 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problems.Problem500"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable.",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem503"
                 }
               }
             }
@@ -5180,6 +5216,58 @@
           }
         ]
       },
+      "Problems.Problem503": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "detail"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/service-unavailable"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "enum": [
+              "A downstream dependency is temporarily unavailable. Please retry shortly."
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "example": "Inventory authorization is temporarily unavailable. Please try again shortly."
+          }
+        },
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/Problems.ProblemType"
+              },
+              "status": {
+                "type": "number",
+                "enum": [
+                  503
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "instance": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        ]
+      },
       "Problems.ProblemType": {
         "type": "string",
         "enum": [
@@ -5190,6 +5278,7 @@
           "http://project-kessel.org/problems/invalid-request",
           "http://project-kessel.org/problems/already-exists",
           "http://project-kessel.org/problems/workspace-not-empty",
+          "http://project-kessel.org/problems/service-unavailable",
           "http://project-kessel.org/problems/conflict"
         ]
       },
