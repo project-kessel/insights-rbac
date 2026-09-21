@@ -21,8 +21,8 @@ import signal
 import sys
 from io import StringIO
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from django.core.management import call_command
+from unittest.mock import Mock, patch
+from django.core.management import call_command  # noqa: I201
 from django.test import TestCase
 
 # Ensure the rbac module can be found when running in different environments
@@ -42,12 +42,18 @@ else:
     if str(project_root) not in sys.path:
         sys.path.insert(1, str(project_root))
 
-import importlib
+import importlib  # noqa: I100
 
 launch_rbac_kafka_consumer = importlib.import_module("management.management.commands.launch-rbac-kafka-consumer")
 Command = launch_rbac_kafka_consumer.Command
 _filter_kafka_benign_events = launch_rbac_kafka_consumer._filter_kafka_benign_events
 _get_event_text_for_filtering = launch_rbac_kafka_consumer._get_event_text_for_filtering
+
+
+def _reset_benign_match_state():
+    """Reset module-level benign match state (for test isolation)."""
+    with launch_rbac_kafka_consumer._benign_match_lock:
+        launch_rbac_kafka_consumer._benign_match_timestamps.clear()
 
 
 class LaunchRBACKafkaConsumerCommandTests(TestCase):
@@ -269,59 +275,160 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 class SentryBeforeSendFilterTests(TestCase):
     """Tests for Sentry before_send filter that drops benign kafka-python events."""
 
-    def test_kafka_conn_errno_104_dropped(self):
-        """Test that kafka.conn logger with 'Connection reset by peer' is dropped."""
+    def setUp(self):
+        """Reset benign match state before each test for isolation."""
+        _reset_benign_match_state()
+
+    def tearDown(self):
+        """Reset benign match state after each test for isolation."""
+        _reset_benign_match_state()
+
+    def test_production_fetch_to_node_event_dropped(self):
+        """Test that REAL production 'Fetch to node' event (GlitchTip issue 4709802) is dropped.
+
+        This is the actual payload shape from production: no top-level "logger" field,
+        message in entries[].data.formatted, kafka origin only in breadcrumbs.
+        """
         event = {
-            "logger": "kafka.conn",
-            "logentry": {"message": "[Errno 104] Connection reset by peer"},
+            "message": "Fetch to node 3 failed: KafkaConnectionError: [Errno 104] Connection reset by peer",
+            "metadata": {
+                "title": "Fetch to node 3 failed: KafkaConnectionError: [Errno 104] Connection reset by peer"
+            },
+            "culprit": "management.tasks.principal_cleanup_via_message_bus",
+            "entries": [
+                {
+                    "type": "message",
+                    "data": {
+                        "message": "Fetch to node %s failed: %s",
+                        "formatted": (
+                            "Fetch to node 3 failed: KafkaConnectionError: [Errno 104] Connection reset by peer"
+                        ),
+                        "params": ["3", "KafkaConnectionError(ConnectionResetError(104, 'Connection reset by peer'))"],
+                    },
+                },
+                {
+                    "type": "breadcrumbs",
+                    "data": {
+                        "values": [
+                            {
+                                "category": "kafka.consumer.fetcher",
+                                "message": "Fetch to node 3 failed with KafkaConnectionError",
+                                "level": "error",
+                            }
+                        ]
+                    },
+                },
+            ],
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertIsNone(result, "Benign kafka.conn Errno 104 event should be dropped")
+        self.assertIsNone(result, "Production 'Fetch to node' event should be dropped")
 
-    def test_kafka_fetcher_fetch_to_node_dropped(self):
-        """Test that kafka.consumer.fetcher logger with 'Fetch to node' is dropped."""
+    def test_entries_formatted_only_dropped(self):
+        """Test that benign text in entries[].data.formatted (no top-level message) is caught."""
         event = {
-            "logger": "kafka.consumer.fetcher",
-            "logentry": {"formatted": "Fetch to node 3 failed with error: Connection refused"},
+            "entries": [
+                {
+                    "type": "message",
+                    "data": {
+                        "formatted": "[Errno 104] Connection reset by peer",
+                    },
+                }
+            ],
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertIsNone(result, "Benign kafka fetcher 'Fetch to node' event should be dropped")
+        self.assertIsNone(result, "Event with benign text in entries[].data.formatted should be dropped")
 
-    def test_kafka_conn_authentication_failed_sent(self):
-        """Test that kafka.conn logger with 'Authentication failed' is SENT (not dropped)."""
+    def test_app_error_sent_guardrail(self):
+        """GUARDRAIL: Real RBAC app error with NO benign signature is SENT (not dropped)."""
         event = {
-            "logger": "kafka.conn",
-            "logentry": {"message": "Authentication failed for node 1"},
+            "message": "process_kafka_message: Error decoding payload",
+            "culprit": "management.principal.cleaner",
+            "entries": [
+                {
+                    "type": "message",
+                    "data": {
+                        "formatted": "process_kafka_message: Error decoding payload - invalid JSON",
+                    },
+                }
+            ],
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertEqual(result, event, "Real kafka authentication error should be SENT")
+        self.assertEqual(result, event, "Real RBAC app error should be SENT")
 
-    def test_non_kafka_logger_sent(self):
-        """Test that non-kafka logger events are always SENT."""
+    def test_kafka_authentication_failed_sent_guardrail(self):
+        """GUARDRAIL: Kafka authentication failure (not on benign list) is SENT."""
         event = {
-            "logger": "management.principal.cleaner",
-            "logentry": {"message": "process_kafka_message: Error processing message"},
+            "message": "Authentication failed for node 1",
+            "entries": [
+                {
+                    "type": "message",
+                    "data": {
+                        "formatted": "Authentication failed for node 1",
+                    },
+                }
+            ],
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertEqual(result, event, "Non-kafka logger events should always be SENT")
+        self.assertEqual(result, event, "Kafka authentication error should be SENT")
+
+    def test_malformed_event_sent(self):
+        """Test that malformed/empty events are SENT (fail-open, never raise)."""
+        event = {}  # Missing all expected keys
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "Malformed event should be SENT (fail-open)")
+
+    def test_malformed_entries_non_list_sent(self):
+        """Test that event with entries as non-list is SENT (fail-open)."""
+        event = {
+            "entries": "not a list",  # Invalid type
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "Event with malformed entries should be SENT (fail-open)")
+
+    def test_closing_idle_connection_dropped(self):
+        """Test that 'Closing idle connection' signature is dropped."""
+        event = {
+            "message": "Closing idle connection to broker 192.168.1.1:9092",
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertIsNone(result, "Benign 'Closing idle connection' event should be dropped")
+
+    def test_broken_pipe_dropped(self):
+        """Test that 'Broken pipe' signature is dropped."""
+        event = {
+            "message": "[Errno 32] Broken pipe",
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertIsNone(result, "Benign 'Broken pipe' event should be dropped")
 
     def test_exception_in_hint_dropped(self):
         """Test that benign text in exception (via hint) is caught and dropped."""
         event = {
-            "logger": "kafka.conn",
-            "logentry": {"message": "Error in connection"},
+            "message": "Error in connection",
         }
         # Simulate exc_info tuple: (type, value, traceback)
         exc_instance = ConnectionResetError("[Errno 104] Connection reset by peer")
@@ -333,44 +440,10 @@ class SentryBeforeSendFilterTests(TestCase):
 
         self.assertIsNone(result, "Event with benign text in exception (hint) should be dropped")
 
-    def test_malformed_event_sent(self):
-        """Test that malformed/empty events are SENT (fail-open, never raise)."""
-        event = {}  # Missing all expected keys
-        hint = {}
-
-        result = _filter_kafka_benign_events(event, hint)
-
-        self.assertEqual(result, event, "Malformed event should be SENT (fail-open)")
-
-    def test_closing_idle_connection_dropped(self):
-        """Test that 'Closing idle connection' signature is dropped."""
-        event = {
-            "logger": "kafka.conn",
-            "logentry": {"message": "Closing idle connection to broker 192.168.1.1:9092"},
-        }
-        hint = {}
-
-        result = _filter_kafka_benign_events(event, hint)
-
-        self.assertIsNone(result, "Benign 'Closing idle connection' event should be dropped")
-
-    def test_broken_pipe_dropped(self):
-        """Test that 'Broken pipe' signature is dropped."""
-        event = {
-            "logger": "kafka.client",
-            "logentry": {"message": "[Errno 32] Broken pipe"},
-        }
-        hint = {}
-
-        result = _filter_kafka_benign_events(event, hint)
-
-        self.assertIsNone(result, "Benign 'Broken pipe' event should be dropped")
-
     def test_case_insensitive_matching(self):
         """Test that signature matching is case-insensitive."""
         event = {
-            "logger": "kafka.conn",
-            "logentry": {"message": "connection reset by PEER"},  # Mixed case
+            "message": "connection reset by PEER",  # Mixed case
         }
         hint = {}
 
@@ -381,7 +454,6 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_get_event_text_extracts_from_exception_values(self):
         """Test that _get_event_text_for_filtering extracts text from event exception values."""
         event = {
-            "logger": "kafka.conn",
             "exception": {
                 "values": [
                     {"value": "[Errno 104] Connection reset by peer"},
@@ -394,14 +466,101 @@ class SentryBeforeSendFilterTests(TestCase):
 
         self.assertIn("connection reset by peer", text.lower())
 
-    def test_filter_preserves_event_when_no_match(self):
-        """Test that non-matching kafka events are preserved unchanged."""
+    def test_get_event_text_handles_message_as_dict(self):
+        """Test that _get_event_text_for_filtering handles message field as dict."""
         event = {
-            "logger": "kafka.coordinator",
-            "logentry": {"message": "OffsetOutOfRange error for partition 0"},
+            "message": {
+                "message": "raw message",
+                "formatted": "Fetch to node 5 failed",
+            }
+        }
+        hint = {}
+
+        text = _get_event_text_for_filtering(event, hint)
+
+        self.assertIn("fetch to node", text.lower())
+
+    def test_top_level_title_extracted(self):
+        """Test that top-level title field is extracted."""
+        event = {
+            "title": "Connection reset by peer",
+        }
+        hint = {}
+
+        text = _get_event_text_for_filtering(event, hint)
+
+        self.assertIn("connection reset by peer", text.lower())
+
+    def test_steady_low_rate_all_dropped(self):
+        """Test that steady low-rate benign events (< threshold) are all dropped."""
+        benign_event = {
+            "message": "[Errno 104] Connection reset by peer",
+        }
+        hint = {}
+
+        # Call before_send 5 times (well under threshold of 10)
+        for i in range(5):
+            result = _filter_kafka_benign_events(benign_event, hint)
+            self.assertIsNone(result, f"Benign event {i + 1} should be dropped (low rate)")
+
+    def test_storm_breakout_passes_through_after_threshold(self):
+        """Test that storm breakout passes events through after threshold is reached."""
+        benign_event = {
+            "message": "[Errno 104] Connection reset by peer",
+        }
+        hint = {}
+
+        # Call before_send 15 times in quick succession
+        for i in range(15):
+            result = _filter_kafka_benign_events(benign_event, hint)
+            if i < 10:
+                # First 10 should be dropped (under threshold)
+                self.assertIsNone(result, f"Benign event {i + 1} should be dropped (under threshold)")
+            else:
+                # Events 11-15 should pass through (storm breakout)
+                self.assertEqual(result, benign_event, f"Benign event {i + 1} should pass through (storm breakout)")
+
+    @patch.object(launch_rbac_kafka_consumer, "_get_monotonic_time")
+    def test_window_eviction_resumes_suppression(self, mock_time):
+        """Test that suppression resumes after old timestamps evict from the window."""
+        benign_event = {
+            "message": "[Errno 104] Connection reset by peer",
+        }
+        hint = {}
+
+        # Start at time 0
+        mock_time.return_value = 0.0
+
+        # Add 5 events at time 0 (all dropped)
+        for i in range(5):
+            result = _filter_kafka_benign_events(benign_event, hint)
+            self.assertIsNone(result, f"Event {i + 1} at t=0 should be dropped")
+
+        # Advance time to 400 seconds (past the 300-second window)
+        mock_time.return_value = 400.0
+
+        # Events from t=0 are now outside the window, so suppression should resume
+        result = _filter_kafka_benign_events(benign_event, hint)
+        self.assertIsNone(result, "Event after window eviction should be dropped (suppression resumed)")
+
+    def test_fetch_to_node_with_reset_dropped(self):
+        """Test that 'Fetch to node' with a reset signature is dropped."""
+        event = {
+            "message": "Fetch to node 3 failed: KafkaConnectionError: [Errno 104] Connection reset by peer",
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertEqual(result, event, "Non-benign kafka event should be SENT unchanged")
+        self.assertIsNone(result, "'Fetch to node' with reset signature should be dropped")
+
+    def test_fetch_to_node_without_reset_sent(self):
+        """Test that 'Fetch to node' WITHOUT a reset signature is SENT (not suppressed)."""
+        event = {
+            "message": "Fetch to node 3 failed: SomeOtherError not a reset",
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "'Fetch to node' without reset signature should be SENT")
