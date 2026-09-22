@@ -22,7 +22,7 @@ import sys
 from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
-from django.core.management import call_command  # noqa: I201
+from django.core.management import call_command
 from django.test import TestCase
 
 # Ensure the rbac module can be found when running in different environments
@@ -42,7 +42,7 @@ else:
     if str(project_root) not in sys.path:
         sys.path.insert(1, str(project_root))
 
-import importlib  # noqa: I100
+import importlib  # noqa: E402
 
 launch_rbac_kafka_consumer = importlib.import_module("management.management.commands.launch-rbac-kafka-consumer")
 Command = launch_rbac_kafka_consumer.Command
@@ -511,7 +511,7 @@ class SentryBeforeSendFilterTests(TestCase):
             result = _filter_kafka_benign_events(benign_event, hint)
             self.assertIsNone(result, f"Benign event {i + 1} should be dropped (low rate)")
 
-    @patch.object(launch_rbac_kafka_consumer, "kafka_benign_events_matched_total")
+    @patch("rbac.sentry_kafka_filter.kafka_benign_events_matched_total")
     def test_storm_breakout_passes_through_after_threshold(self, mock_counter):
         """Test that storm breakout passes events through after threshold is reached."""
         benign_event = {
@@ -570,17 +570,17 @@ class SentryBeforeSendFilterTests(TestCase):
 
         self.assertIsNone(result, "'Fetch to node' with reset signature should be dropped")
 
-    def test_fetch_to_node_without_reset_sent(self):
-        """Test that 'Fetch to node' WITHOUT a reset signature is SENT (kafka origin, non-benign text)."""
+    def test_kafka_origin_non_benign_text_sent(self):
+        """Test that kafka-origin event with non-benign message text is SENT."""
         event = {
             "logger": "kafka.consumer.fetcher",
-            "message": "Fetch to node 3 failed: SomeOtherError not a reset",
+            "message": "Unexpected coordinator response: InvalidGroupIdException",
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertEqual(result, event, "'Fetch to node' without reset signature should be SENT")
+        self.assertEqual(result, event, "Kafka-origin event with non-benign text should be SENT")
 
     def test_non_kafka_origin_with_benign_text_sent_guardrail(self):
         """GUARDRAIL: Non-kafka app error containing benign text is SENT (origin gate blocks drop).
@@ -648,6 +648,25 @@ class SentryBeforeSendFilterTests(TestCase):
         }
 
         self.assertFalse(_is_kafka_origin(event), "Non-kafka logger should not be kafka origin")
+
+    def test_non_kafka_logger_with_kafka_breadcrumbs_not_kafka_origin(self):
+        """An explicit non-Kafka logger wins even when kafka breadcrumbs exist."""
+        event = {
+            "logger": "celery.task",
+            "message": "Broken pipe",
+            "breadcrumbs": {
+                "values": [
+                    {
+                        "category": "kafka.conn",
+                        "message": "connection closed",
+                    }
+                ]
+            },
+        }
+        self.assertFalse(
+            _is_kafka_origin(event),
+            "Explicit non-kafka logger must override kafka breadcrumbs",
+        )
 
     def test_empty_event_not_kafka_origin(self):
         """Test that empty event is not kafka origin (fail-open)."""

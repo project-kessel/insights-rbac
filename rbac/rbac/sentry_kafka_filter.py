@@ -176,10 +176,15 @@ def _is_kafka_origin(event):
         bool: True if the event originated from kafka-python internals
     """
     try:
-        # Check top-level logger field (set by Sentry LoggingIntegration)
+        # Check top-level logger field (set by Sentry LoggingIntegration).
+        # When an explicit non-empty logger is present, use it as the
+        # authoritative origin signal – fall back to breadcrumbs only when
+        # the logger is absent or empty.
         event_logger = event.get("logger", "")
-        if isinstance(event_logger, str) and event_logger.startswith("kafka."):
-            return True
+        if isinstance(event_logger, str):
+            event_logger = event_logger.strip()
+            if event_logger:
+                return event_logger.startswith("kafka.")
 
         # Check breadcrumb categories (production event shape)
         entries = event.get("entries", [])
