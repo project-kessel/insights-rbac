@@ -22,6 +22,7 @@ import sys
 from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
+
 from django.core.management import call_command
 from django.test import TestCase
 
@@ -42,13 +43,19 @@ else:
     if str(project_root) not in sys.path:
         sys.path.insert(1, str(project_root))
 
-import importlib  # noqa: E402
+import importlib  # noqa: I100 - deferred until sys.path is set up above
 
 launch_rbac_kafka_consumer = importlib.import_module("management.management.commands.launch-rbac-kafka-consumer")
 Command = launch_rbac_kafka_consumer.Command
 _filter_kafka_benign_events = launch_rbac_kafka_consumer._filter_kafka_benign_events
 _get_event_text_for_filtering = launch_rbac_kafka_consumer._get_event_text_for_filtering
 _is_kafka_origin = launch_rbac_kafka_consumer._is_kafka_origin
+
+# The filter logic and its module-level state (counter, monotonic clock) now live in
+# rbac.sentry_kafka_filter. The command module re-imports these names, but the filter
+# functions resolve them from the sentry_kafka_filter namespace, so mock.patch targets
+# must point there, not at the command module's re-exported copies.
+sentry_kafka_filter = importlib.import_module("rbac.sentry_kafka_filter")
 
 
 def _reset_benign_match_state():
@@ -511,7 +518,7 @@ class SentryBeforeSendFilterTests(TestCase):
             result = _filter_kafka_benign_events(benign_event, hint)
             self.assertIsNone(result, f"Benign event {i + 1} should be dropped (low rate)")
 
-    @patch("rbac.sentry_kafka_filter.kafka_benign_events_matched_total")
+    @patch.object(sentry_kafka_filter, "kafka_benign_events_matched_total")
     def test_storm_breakout_passes_through_after_threshold(self, mock_counter):
         """Test that storm breakout passes events through after threshold is reached."""
         benign_event = {
@@ -534,7 +541,7 @@ class SentryBeforeSendFilterTests(TestCase):
         # (10 suppressed + 5 passed through = 15 total)
         self.assertEqual(mock_counter.inc.call_count, 15)
 
-    @patch.object(launch_rbac_kafka_consumer, "_get_monotonic_time")
+    @patch.object(sentry_kafka_filter, "_get_monotonic_time")
     def test_window_eviction_resumes_suppression(self, mock_time):
         """Test that suppression resumes after old timestamps evict from the window."""
         benign_event = {
@@ -570,17 +577,38 @@ class SentryBeforeSendFilterTests(TestCase):
 
         self.assertIsNone(result, "'Fetch to node' with reset signature should be dropped")
 
-    def test_kafka_origin_non_benign_text_sent(self):
-        """Test that kafka-origin event with non-benign message text is SENT."""
+    def test_fetch_to_node_headline_dropped(self):
+        """Test that a 'Fetch to node' headline is dropped even without reset text.
+
+        'Fetch to node' is itself a benign signature (kafka connection churn is grouped
+        under this headline in GlitchTip), so a kafka-origin 'Fetch to node' event is
+        suppressed regardless of whether the Errno-104 reset text is also present.
+        """
         event = {
             "logger": "kafka.consumer.fetcher",
-            "message": "Unexpected coordinator response: InvalidGroupIdException",
+            "message": "Fetch to node 3 failed",
         }
         hint = {}
 
         result = _filter_kafka_benign_events(event, hint)
 
-        self.assertEqual(result, event, "Kafka-origin event with non-benign text should be SENT")
+        self.assertIsNone(result, "'Fetch to node' headline should be dropped")
+
+    def test_kafka_origin_non_benign_message_sent(self):
+        """Test that a kafka-origin event matching NO benign signature is SENT.
+
+        Guards the signature list: a genuine kafka failure (e.g. auth) whose text does
+        not match any benign signature must still surface, even from a kafka logger.
+        """
+        event = {
+            "logger": "kafka.conn",
+            "message": "Authentication failed: SASL handshake error",
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "Kafka-origin non-benign error should be SENT")
 
     def test_non_kafka_origin_with_benign_text_sent_guardrail(self):
         """GUARDRAIL: Non-kafka app error containing benign text is SENT (origin gate blocks drop).
