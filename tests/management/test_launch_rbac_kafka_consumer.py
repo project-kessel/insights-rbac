@@ -511,7 +511,8 @@ class SentryBeforeSendFilterTests(TestCase):
             result = _filter_kafka_benign_events(benign_event, hint)
             self.assertIsNone(result, f"Benign event {i + 1} should be dropped (low rate)")
 
-    def test_storm_breakout_passes_through_after_threshold(self):
+    @patch.object(launch_rbac_kafka_consumer, "kafka_benign_events_matched_total")
+    def test_storm_breakout_passes_through_after_threshold(self, mock_counter):
         """Test that storm breakout passes events through after threshold is reached."""
         benign_event = {
             "logger": "kafka.conn",
@@ -528,6 +529,10 @@ class SentryBeforeSendFilterTests(TestCase):
             else:
                 # Events 11-15 should pass through (storm breakout)
                 self.assertEqual(result, benign_event, f"Benign event {i + 1} should pass through (storm breakout)")
+
+        # All 15 benign matches should have incremented the counter
+        # (10 suppressed + 5 passed through = 15 total)
+        self.assertEqual(mock_counter.inc.call_count, 15)
 
     @patch.object(launch_rbac_kafka_consumer, "_get_monotonic_time")
     def test_window_eviction_resumes_suppression(self, mock_time):
