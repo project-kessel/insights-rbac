@@ -222,6 +222,7 @@ class SentryKafkaFilterTests(TestCase):
         hint = {}
 
         # Mock time to control window calculations
+        before_count = sentry_kafka_filter.kafka_benign_events_matched_total._value.get()
         with patch.object(sentry_kafka_filter, "_get_monotonic_time", side_effect=range(1, 100)):
             # First 10 should be dropped
             for i in range(STORM_THRESHOLD):
@@ -232,6 +233,11 @@ class SentryKafkaFilterTests(TestCase):
             for i in range(5):
                 result = _filter_kafka_benign_events(event.copy(), hint)
                 self.assertEqual(result, event, f"Benign event {STORM_THRESHOLD + i + 1} should break out")
+
+        # Every benign match increments the counter, whether suppressed or passed through:
+        # all 15 invocations matched a benign signature, so the metric rises by exactly 15.
+        after_count = sentry_kafka_filter.kafka_benign_events_matched_total._value.get()
+        self.assertEqual(after_count - before_count, 15, "Counter should increment by 15 (all benign matches)")
 
     def test_entries_formatted_only_dropped(self):
         """Test that benign text in entries[].data.formatted (no top-level message) is caught."""
