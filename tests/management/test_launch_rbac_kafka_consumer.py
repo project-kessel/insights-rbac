@@ -17,6 +17,7 @@
 
 """Tests for launch-rbac-kafka-consumer management command."""
 
+import importlib
 import signal
 import sys
 from io import StringIO
@@ -42,8 +43,6 @@ else:
     # Also ensure the project root is early in sys.path for rbac package imports
     if str(project_root) not in sys.path:
         sys.path.insert(1, str(project_root))
-
-import importlib  # noqa: I100 - deferred until sys.path is set up above
 
 launch_rbac_kafka_consumer = importlib.import_module("management.management.commands.launch-rbac-kafka-consumer")
 Command = launch_rbac_kafka_consumer.Command
