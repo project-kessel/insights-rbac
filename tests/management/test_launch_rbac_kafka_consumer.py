@@ -48,6 +48,7 @@ launch_rbac_kafka_consumer = importlib.import_module("management.management.comm
 Command = launch_rbac_kafka_consumer.Command
 _filter_kafka_benign_events = launch_rbac_kafka_consumer._filter_kafka_benign_events
 _get_event_text_for_filtering = launch_rbac_kafka_consumer._get_event_text_for_filtering
+_is_kafka_origin = launch_rbac_kafka_consumer._is_kafka_origin
 
 
 def _reset_benign_match_state():
@@ -329,6 +330,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_entries_formatted_only_dropped(self):
         """Test that benign text in entries[].data.formatted (no top-level message) is caught."""
         event = {
+            "logger": "kafka.conn",
             "entries": [
                 {
                     "type": "message",
@@ -365,8 +367,9 @@ class SentryBeforeSendFilterTests(TestCase):
         self.assertEqual(result, event, "Real RBAC app error should be SENT")
 
     def test_kafka_authentication_failed_sent_guardrail(self):
-        """GUARDRAIL: Kafka authentication failure (not on benign list) is SENT."""
+        """GUARDRAIL: Kafka authentication failure (kafka origin, not on benign list) is SENT."""
         event = {
+            "logger": "kafka.conn",
             "message": "Authentication failed for node 1",
             "entries": [
                 {
@@ -406,6 +409,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_closing_idle_connection_dropped(self):
         """Test that 'Closing idle connection' signature is dropped."""
         event = {
+            "logger": "kafka.conn",
             "message": "Closing idle connection to broker 192.168.1.1:9092",
         }
         hint = {}
@@ -417,6 +421,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_broken_pipe_dropped(self):
         """Test that 'Broken pipe' signature is dropped."""
         event = {
+            "logger": "kafka.conn",
             "message": "[Errno 32] Broken pipe",
         }
         hint = {}
@@ -428,6 +433,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_exception_in_hint_dropped(self):
         """Test that benign text in exception (via hint) is caught and dropped."""
         event = {
+            "logger": "kafka.conn",
             "message": "Error in connection",
         }
         # Simulate exc_info tuple: (type, value, traceback)
@@ -443,6 +449,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_case_insensitive_matching(self):
         """Test that signature matching is case-insensitive."""
         event = {
+            "logger": "kafka.conn",
             "message": "connection reset by PEER",  # Mixed case
         }
         hint = {}
@@ -494,6 +501,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_steady_low_rate_all_dropped(self):
         """Test that steady low-rate benign events (< threshold) are all dropped."""
         benign_event = {
+            "logger": "kafka.conn",
             "message": "[Errno 104] Connection reset by peer",
         }
         hint = {}
@@ -506,6 +514,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_storm_breakout_passes_through_after_threshold(self):
         """Test that storm breakout passes events through after threshold is reached."""
         benign_event = {
+            "logger": "kafka.conn",
             "message": "[Errno 104] Connection reset by peer",
         }
         hint = {}
@@ -524,6 +533,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_window_eviction_resumes_suppression(self, mock_time):
         """Test that suppression resumes after old timestamps evict from the window."""
         benign_event = {
+            "logger": "kafka.conn",
             "message": "[Errno 104] Connection reset by peer",
         }
         hint = {}
@@ -546,6 +556,7 @@ class SentryBeforeSendFilterTests(TestCase):
     def test_fetch_to_node_with_reset_dropped(self):
         """Test that 'Fetch to node' with a reset signature is dropped."""
         event = {
+            "logger": "kafka.consumer.fetcher",
             "message": "Fetch to node 3 failed: KafkaConnectionError: [Errno 104] Connection reset by peer",
         }
         hint = {}
@@ -555,8 +566,9 @@ class SentryBeforeSendFilterTests(TestCase):
         self.assertIsNone(result, "'Fetch to node' with reset signature should be dropped")
 
     def test_fetch_to_node_without_reset_sent(self):
-        """Test that 'Fetch to node' WITHOUT a reset signature is SENT (not suppressed)."""
+        """Test that 'Fetch to node' WITHOUT a reset signature is SENT (kafka origin, non-benign text)."""
         event = {
+            "logger": "kafka.consumer.fetcher",
             "message": "Fetch to node 3 failed: SomeOtherError not a reset",
         }
         hint = {}
@@ -564,3 +576,90 @@ class SentryBeforeSendFilterTests(TestCase):
         result = _filter_kafka_benign_events(event, hint)
 
         self.assertEqual(result, event, "'Fetch to node' without reset signature should be SENT")
+
+    def test_non_kafka_origin_with_benign_text_sent_guardrail(self):
+        """GUARDRAIL: Non-kafka app error containing benign text is SENT (origin gate blocks drop).
+
+        Addresses reviewer concern: an RBAC task error wrapping 'Connection reset by peer'
+        must not be suppressed just because the text matches a benign signature.
+        """
+        event = {
+            "message": "principal_cleanup_via_message_bus failed: Connection reset by peer",
+            "culprit": "management.tasks.principal_cleanup_via_message_bus",
+            "entries": [
+                {
+                    "type": "message",
+                    "data": {
+                        "formatted": "principal_cleanup_via_message_bus failed: Connection reset by peer",
+                    },
+                }
+            ],
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "Non-kafka app error with benign text must be SENT (origin gate)")
+
+    def test_non_kafka_origin_broken_pipe_sent_guardrail(self):
+        """GUARDRAIL: Non-kafka error with 'Broken pipe' text is SENT when origin is not kafka."""
+        event = {
+            "logger": "management.principal.cleaner",
+            "message": "[Errno 32] Broken pipe",
+        }
+        hint = {}
+
+        result = _filter_kafka_benign_events(event, hint)
+
+        self.assertEqual(result, event, "Non-kafka logger with benign text must be SENT")
+
+    def test_breadcrumb_kafka_origin_detected(self):
+        """Test that kafka origin is detected via breadcrumb category (no logger field)."""
+        event = {
+            "message": "[Errno 104] Connection reset by peer",
+            "entries": [
+                {
+                    "type": "breadcrumbs",
+                    "data": {
+                        "values": [
+                            {
+                                "category": "kafka.consumer.fetcher",
+                                "message": "Connection error",
+                                "level": "error",
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+
+        self.assertTrue(_is_kafka_origin(event), "Breadcrumb with kafka. category should detect kafka origin")
+
+    def test_no_kafka_origin_without_markers(self):
+        """Test that events without kafka logger or breadcrumbs are not kafka origin."""
+        event = {
+            "logger": "management.principal.cleaner",
+            "message": "Some error occurred",
+        }
+
+        self.assertFalse(_is_kafka_origin(event), "Non-kafka logger should not be kafka origin")
+
+    def test_empty_event_not_kafka_origin(self):
+        """Test that empty event is not kafka origin (fail-open)."""
+        self.assertFalse(_is_kafka_origin({}), "Empty event should not be kafka origin")
+
+    def test_top_level_breadcrumbs_kafka_origin(self):
+        """Test that kafka origin is detected via top-level breadcrumbs dict (SDK shape)."""
+        event = {
+            "message": "Connection reset by peer",
+            "breadcrumbs": {
+                "values": [
+                    {
+                        "category": "kafka.conn",
+                        "message": "connection closed",
+                    }
+                ]
+            },
+        }
+
+        self.assertTrue(_is_kafka_origin(event), "Top-level breadcrumbs with kafka. category = kafka origin")

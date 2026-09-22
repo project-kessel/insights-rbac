@@ -42,14 +42,14 @@ _benign_match_timestamps = deque()
 _benign_match_lock = threading.Lock()
 
 try:
-    kafka_benign_events_suppressed_total = Counter(
-        "kafka_benign_events_suppressed_total",
+    kafka_benign_events_matched_total = Counter(
+        "kafka_benign_events_matched_total",
         "Total count of benign kafka-python idle/transport events matched (both suppressed and passed through)",
     )
 except ValueError:
     from prometheus_client import REGISTRY
 
-    kafka_benign_events_suppressed_total = REGISTRY._names_to_collectors.get("kafka_benign_events_suppressed_total")
+    kafka_benign_events_matched_total = REGISTRY._names_to_collectors.get("kafka_benign_events_matched_total")
 
 
 def _get_monotonic_time():
@@ -138,6 +138,62 @@ def _get_event_text_for_filtering(event, hint):
     return " ".join(parts).lower()
 
 
+def _is_kafka_origin(event):
+    """Check whether the event originated from kafka-python internals.
+
+    An event is considered kafka-origin if EITHER:
+    1. The top-level ``logger`` field starts with ``kafka.`` (set by
+       LoggingIntegration when a kafka-python logger emits at ERROR), OR
+    2. Any breadcrumb has a ``category`` starting with ``kafka.`` (present
+       in the production GlitchTip event shape even when ``logger`` is absent).
+
+    This gate prevents non-kafka application errors (e.g. RBAC task errors
+    that happen to contain "Connection reset by peer") from being suppressed.
+
+    Args:
+        event: Sentry event dict
+
+    Returns:
+        bool: True if the event originated from kafka-python internals
+    """
+    try:
+        # Check top-level logger field (set by Sentry LoggingIntegration)
+        event_logger = event.get("logger", "")
+        if isinstance(event_logger, str) and event_logger.startswith("kafka."):
+            return True
+
+        # Check breadcrumb categories (production event shape)
+        entries = event.get("entries", [])
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("type") == "breadcrumbs":
+                    breadcrumb_data = entry.get("data", {})
+                    values = breadcrumb_data.get("values", [])
+                    if isinstance(values, list):
+                        for bc in values:
+                            if isinstance(bc, dict):
+                                category = bc.get("category", "")
+                                if isinstance(category, str) and category.startswith("kafka."):
+                                    return True
+
+        # Also check top-level breadcrumbs (alternative Sentry SDK shape)
+        breadcrumbs = event.get("breadcrumbs", {})
+        if isinstance(breadcrumbs, dict):
+            values = breadcrumbs.get("values", [])
+            if isinstance(values, list):
+                for bc in values:
+                    if isinstance(bc, dict):
+                        category = bc.get("category", "")
+                        if isinstance(category, str) and category.startswith("kafka."):
+                            return True
+
+        return False
+
+    except Exception:
+        # On any error, fail-open: assume NOT kafka origin (event will be sent)
+        return False
+
+
 def _should_suppress_benign_event():
     """Check if a benign event should be suppressed based on storm breakout logic.
 
@@ -180,15 +236,24 @@ def _should_suppress_benign_event():
 def _filter_kafka_benign_events(event, hint):
     """Filter out benign kafka-python idle/transport noise events.
 
-    Returns None (drop) if the event text matches a benign signature AND storm breakout allows suppression.
-    Otherwise returns the event unchanged.
+    An event is dropped (returns None) only when ALL THREE conditions are met:
+    1. The event originated from kafka-python internals (logger or breadcrumb origin gate),
+    2. The event text matches a benign signature, AND
+    3. Storm breakout allows suppression (low-rate steady noise).
 
-    Storm breakout: steady low-rate benign events are suppressed, but a burst (reconnect storm) passes through.
+    Non-kafka application errors are always sent, even if their text happens to
+    contain a benign signature (e.g. an RBAC task wrapping "Connection reset by peer").
 
     This is wrapped in a try/except to ensure we never drop events due to
     unexpected errors in the filter logic (fail-open).
     """
     try:
+        # Origin gate: only consider events from kafka-python internals.
+        # Without this, RBAC app errors that happen to contain benign text
+        # (e.g. a task wrapping "Connection reset by peer") would be suppressed.
+        if not _is_kafka_origin(event):
+            return event
+
         # Gather all text from the event
         event_text = _get_event_text_for_filtering(event, hint)
 
@@ -204,7 +269,7 @@ def _filter_kafka_benign_events(event, hint):
             return event
 
         # Benign match: increment the counter (tracks volume regardless of suppress/pass-through)
-        kafka_benign_events_suppressed_total.inc()
+        kafka_benign_events_matched_total.inc()
 
         # Check storm breakout: should we suppress or pass through?
         if _should_suppress_benign_event():
