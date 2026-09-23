@@ -552,10 +552,14 @@ class SentryBeforeSendFilterTests(TestCase):
         # Start at time 0
         mock_time.return_value = 0.0
 
-        # Add 5 events at time 0 (all dropped)
-        for i in range(5):
+        # Fill the window to the threshold at time 0 (all dropped)
+        for i in range(sentry_kafka_filter.STORM_THRESHOLD):
             result = _filter_kafka_benign_events(benign_event, hint)
             self.assertIsNone(result, f"Event {i + 1} at t=0 should be dropped")
+
+        # The next event at t=0 breaks out (proves the window is full)
+        result = _filter_kafka_benign_events(benign_event, hint)
+        self.assertEqual(result, benign_event, "Event past threshold at t=0 should pass through")
 
         # Advance time to 400 seconds (past the 300-second window)
         mock_time.return_value = 400.0
