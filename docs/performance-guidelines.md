@@ -117,7 +117,7 @@ Set `ATOMIC_RETRY_DISABLED=True` in test settings to skip `pgtransaction` wrappe
 | `principal_cleanup_via_kafka` | Every 60 seconds (if Kafka-only enabled) | Process principal events from Kafka |
 | `principal_cleanup` | Every 7 days (if neither UMB nor Kafka enabled) | Clean stale principals via BOP |
 
-When both UMB and Kafka are enabled, each gets its own independent beat entry so a busy UMB consumer cannot starve Kafka (or vice versa). The Unleash flag `rbac.principal-cleanup.use-kafka.enabled` controls which tick actually processes at runtime. The `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` setting (default 50 000 ms) caps the wall-clock budget per Kafka cycle, leaving headroom for consumer setup and shutdown within the 60-second beat interval.
+When both UMB and Kafka are enabled, each gets its own independent beat entry so a busy UMB consumer cannot starve Kafka (or vice versa). The Unleash flag `rbac.principal-cleanup.use-kafka.enabled` controls which tick actually processes at runtime. The `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` setting (default 50 000 ms) caps the wall-clock budget per Kafka cycle, leaving headroom for consumer setup and shutdown within the 60-second beat interval. The `KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS` setting (default 10 000 ms) controls the idle-poll exit: how long `poll()` blocks on a quiet topic before the consumer iterator ends, so idle cycles exit quickly without holding the Celery worker.
 
 ### Task Guidelines
 

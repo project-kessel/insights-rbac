@@ -559,6 +559,12 @@ KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED = ENVIRONMENT.bool(
 # Wall-clock budget per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval
 # with headroom for consumer setup and shutdown.
 KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS = ENVIRONMENT.int("KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", default=50000)
+# Idle-poll exit timeout (consumer_timeout_ms). Controls how long poll() blocks waiting for new
+# messages on a quiet topic. Decoupled from the drain budget so idle cycles exit quickly while
+# busy cycles can still use the full drain window.
+KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS = ENVIRONMENT.int(
+    "KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS", default=10000
+)
 
 PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED = EPH_ENV
 
