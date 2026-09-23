@@ -310,6 +310,18 @@ def create_mock_kafka_message(message_body, partition=0, offset=0):
     return mock_message
 
 
+def _as_polls(messages, topic="test-topic", partition=0):
+    """Convert a list of mock messages to consumer.poll() side effects.
+
+    Each message is returned in a separate poll() call (mimicking max_records=1),
+    followed by an empty dict to signal no more messages.
+    """
+    from kafka import TopicPartition
+
+    tp = TopicPartition(topic, partition)
+    return [{tp: [msg]} for msg in messages] + [{}]
+
+
 IT_MANAGED_KAFKA_CLUSTERS = {
     "it_managed": {
         "servers": ["it-broker-1:9096", "it-broker-2:9096"],
@@ -347,7 +359,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Mock consumer with no messages
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -368,7 +380,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(10)]
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_instance.poll.side_effect = _as_polls(messages)
         consumer_mock.return_value = consumer_instance
 
         # 1) deadline = monotonic() + 15s
@@ -393,7 +405,7 @@ class PrincipalKafkaTests(IdentityRequest):
         """Test that consumer group ID includes ENV_NAME to prevent cross-environment interference."""
         # Mock consumer
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -420,7 +432,7 @@ class PrincipalKafkaTests(IdentityRequest):
     def test_consumer_targets_it_managed_cluster(self, consumer_mock):
         """The cleanup consumer connects to the IT-managed cluster, not the Clowder one."""
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -470,7 +482,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         cache_mock = MagicMock()
@@ -488,7 +500,7 @@ class PrincipalKafkaTests(IdentityRequest):
         self.principal = Principal(username=principal_name, tenant=self.tenant, user_id="56780000")
         self.principal.save()
 
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         process_principal_events_from_kafka()
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
 
@@ -509,13 +521,13 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
 
-        consumer_instance.__iter__.return_value = iter([create_mock_kafka_message(KAFKA_MESSAGE_SPECIAL)])
+        consumer_instance.poll.side_effect = _as_polls([create_mock_kafka_message(KAFKA_MESSAGE_SPECIAL)])
         process_principal_events_from_kafka()
         # Verify second message processing also doesn't delete the existing principal
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
@@ -548,7 +560,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         tenant = Tenant.objects.get(org_id="17685860")
@@ -575,7 +587,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         retrieve_user_mock.side_effect = Exception("Something went wrong")
@@ -613,7 +625,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with one message (inactive user)
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Run in dry-run mode
@@ -650,7 +662,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with malformed message
         mock_message = create_mock_kafka_message(b'{"invalid": "json without required fields"}')
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock DLQ producer
@@ -696,7 +708,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with valid message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock DLQ producer
@@ -751,7 +763,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(xml_message)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock bootstrap service
@@ -781,7 +793,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(json_message)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock bootstrap service
@@ -860,7 +872,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         mock_message = create_mock_kafka_message(malformed_json.encode("utf-8"))
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Run in normal mode (not dry-run) - should send to DLQ
@@ -895,7 +907,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock bootstrap service
@@ -923,7 +935,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock bootstrap service
@@ -966,7 +978,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -991,7 +1003,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1026,7 +1038,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         with patch(
@@ -1063,7 +1075,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         """Test that principal creation event bootstraps existing tenant."""
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         with patch(
@@ -1103,7 +1115,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1138,7 +1150,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1156,7 +1168,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1193,7 +1205,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_CREATION)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1219,7 +1231,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)  # Inactive state
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         cache_mock = MagicMock()
@@ -1250,7 +1262,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         cache_mock = MagicMock()
@@ -1276,7 +1288,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1299,7 +1311,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         # Update event (not insert) shouldn't bootstrap tenant
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1325,7 +1337,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)  # Inactive
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance.poll.side_effect = _as_polls([mock_message])
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1422,7 +1434,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     def test_kafka_config_includes_static_membership_and_timeouts(self, consumer_mock):
         """Test that kafka_config includes group_instance_id and timeout tuning by default."""
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1455,7 +1467,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     def test_kafka_config_static_membership_can_be_disabled(self, consumer_mock):
         """Test that static membership can be disabled via setting."""
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1485,7 +1497,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     def test_kafka_config_timeouts_configurable(self, consumer_mock):
         """Test that timeout values are configurable via settings."""
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()
@@ -1528,7 +1540,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     ):
         """Test that consumer lock is released in finally block when it was acquired."""
         consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
+        consumer_instance.poll.return_value = {}
         consumer_mock.return_value = consumer_instance
 
         process_principal_events_from_kafka()

@@ -762,55 +762,76 @@ def process_principal_events_from_kafka(
         logger.info("process_principal_events_from_kafka: Connected to Kafka, subscribed to topic: %s", topic)
 
         # Wall-clock budget so a busy topic cannot keep this Celery task alive past the drain window.
-        # consumer_timeout_ms alone only ends the iterator after idle polls.
+        # Each poll is bounded by the *remaining* drain time so the consumer cannot block past the
+        # deadline even if the topic goes quiet mid-cycle (kafka-python's iterator resets the full
+        # consumer_timeout_ms on every __next__() call, which could overshoot by up to that amount).
         drain_timeout_ms = settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
         drain_deadline = time.monotonic() + (drain_timeout_ms / 1000.0)
+        consumer_poll_ms = settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS
 
-        # Process messages
-        for message in consumer:
-            if time.monotonic() >= drain_deadline:
+        # Process messages — explicit poll() loop instead of iterator so we control the timeout.
+        should_stop = False
+        while not should_stop:
+            remaining_ms = int((drain_deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
                 logger.info(
                     "process_principal_events_from_kafka: Drain window of %dms elapsed, stopping cycle.",
                     drain_timeout_ms,
                 )
                 break
 
-            mode_suffix = " (DRY RUN)" if dry_run else ""
-            logger.info(
-                "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
-                message.partition,
-                message.offset,
-                mode_suffix,
-            )
-            result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
-            if not result.should_continue:
-                # Lock contention - another listener is running, abort this consumer
-                logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
+            # Bound the poll by whichever is shorter: the normal poll interval or remaining drain time.
+            # max_records=1 ensures we only commit what we have actually processed.
+            poll_timeout = min(consumer_poll_ms, remaining_ms)
+            records = consumer.poll(timeout_ms=poll_timeout, max_records=1)
+            if not records:
                 break
 
-            if not result.success:
-                logger.warning(
-                    "process_principal_events_from_kafka: Message processing failed at offset %d. "
-                    "Stopping consumer to preserve at-least-once semantics. "
-                    "Consumer will retry from this offset on restart.",
-                    message.offset,
-                )
-                break
+            for _tp, messages in records.items():
+                for message in messages:
+                    mode_suffix = " (DRY RUN)" if dry_run else ""
+                    logger.info(
+                        "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
+                        message.partition,
+                        message.offset,
+                        mode_suffix,
+                    )
+                    result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
+                    if not result.should_continue:
+                        # Lock contention - another listener is running, abort this consumer
+                        logger.info(
+                            "process_principal_events_from_kafka: Lock contention detected, aborting consumer."
+                        )
+                        should_stop = True
+                        break
 
-            try:
-                consumer.commit()
-                logger.debug(
-                    "process_principal_events_from_kafka: Committed offset %d for partition %d",
-                    message.offset,
-                    message.partition,
-                )
-            except Exception as commit_error:
-                logger.error(
-                    "process_principal_events_from_kafka: Failed to commit offset %d: %s",
-                    message.offset,
-                    commit_error,
-                )
-                break
+                    if not result.success:
+                        logger.warning(
+                            "process_principal_events_from_kafka: Message processing failed at offset %d. "
+                            "Stopping consumer to preserve at-least-once semantics. "
+                            "Consumer will retry from this offset on restart.",
+                            message.offset,
+                        )
+                        should_stop = True
+                        break
+
+                    try:
+                        consumer.commit()
+                        logger.debug(
+                            "process_principal_events_from_kafka: Committed offset %d for partition %d",
+                            message.offset,
+                            message.partition,
+                        )
+                    except Exception as commit_error:
+                        logger.error(
+                            "process_principal_events_from_kafka: Failed to commit offset %d: %s",
+                            message.offset,
+                            commit_error,
+                        )
+                        should_stop = True
+                        break
+                if should_stop:
+                    break
 
     except KafkaError as e:
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))
