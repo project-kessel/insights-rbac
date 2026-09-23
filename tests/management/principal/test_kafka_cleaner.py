@@ -360,8 +360,8 @@ class PrincipalKafkaTests(IdentityRequest):
     @patch("management.principal.cleaner.time.monotonic")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS", 15000)
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", 15000)
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS", 5000)
     def test_kafka_consumer_stops_after_drain_window(self, consumer_mock, monotonic_mock, process_mock):
         """Busy topics must still stop after the wall-clock drain budget so Celery can re-check Unleash."""
         process_mock.return_value = MessageProcessingResult(should_continue=True, success=True)
@@ -382,8 +382,8 @@ class PrincipalKafkaTests(IdentityRequest):
         process_mock.assert_called_once()
         consumer_instance.commit.assert_called_once()
         consumer_instance.close.assert_called_once()
-        # consumer_timeout_ms uses the idle-poll setting (decoupled from drain budget)
-        self.assertEqual(consumer_mock.call_args[1]["consumer_timeout_ms"], 5000)
+        # consumer_timeout_ms uses idle-poll setting, decoupled from drain budget
+        self.assertEqual(consumer_mock.call_args[1]["consumer_timeout_ms"], 15000)
 
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")

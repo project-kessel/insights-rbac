@@ -195,7 +195,7 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB` | `False` | UMB-based principal cleanup |
 | `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` | `False` | Kafka-based principal cleanup |
 | `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
-| `KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS` | `10000` | Idle-poll exit timeout (ms); how long poll() blocks on a quiet topic before exiting |
+| `KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS` | `15000` | Idle-poll exit timeout (ms); how long the consumer waits with no new records before ending iteration |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
 
 ## 12. Prometheus Metrics Conventions

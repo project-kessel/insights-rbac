@@ -714,8 +714,9 @@ def process_principal_events_from_kafka(
         "auto_offset_reset": "earliest",
         "enable_auto_commit": False,  # Manual commit for at-least-once semantics
         # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
-        # Idle-poll stop: short timeout so a quiet topic exits quickly without holding the worker.
-        # Decoupled from the drain budget (which caps busy cycles).
+        # idle-poll stop; decoupled from wall-clock drain so a quiet topic releases its
+        # worker slot and group membership quickly (default 15 s) without shortening
+        # the busy-topic drain budget (default 50 s).
         "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS,
         # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
         "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,

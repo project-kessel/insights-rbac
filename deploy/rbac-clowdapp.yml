@@ -2198,8 +2198,8 @@ parameters:
   description: Wall-clock budget (ms) per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval with headroom for consumer setup and shutdown.
   value: '50000'
 - name: KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS
-  description: Idle-poll exit timeout (ms) for the Kafka principal-cleanup consumer. Controls how long poll() blocks on a quiet topic before exiting. Decoupled from the drain budget so idle cycles exit quickly.
-  value: '10000'
+  description: Idle-poll exit timeout (ms) for the Kafka principal-cleanup consumer. Controls how long the consumer waits with no new records before ending iteration. Decoupled from the drain budget so a quiet topic releases its worker slot quickly.
+  value: '15000'
 - name: ROOT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to root workspace scope (supports wildcards like rbac:*:read)
   value: ''
