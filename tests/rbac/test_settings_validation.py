@@ -26,6 +26,21 @@ from unittest.mock import patch
 class SettingsValidationTest(TestCase):
     """Test settings validation that occurs at module import time."""
 
+    def test_read_only_api_mode_is_parsed_as_boolean(self):
+        """Parse the global API read-only setting as a Boolean."""
+        with patch.dict(os.environ, {"READ_ONLY_API_MODE": "False"}, clear=False):
+            if "rbac.settings" in sys.modules:
+                del sys.modules["rbac.settings"]
+
+            try:
+                import rbac.settings
+
+                self.assertIs(rbac.settings.READ_ONLY_API_MODE, False)
+            finally:
+                if "rbac.settings" in sys.modules:
+                    del sys.modules["rbac.settings"]
+                importlib.import_module("rbac.settings")
+
     def test_kafka_principal_cleanup_topic_required_when_kafka_enabled(self):
         """Test that settings raises ValueError when Kafka cleanup is enabled but topic is empty."""
         # Mock environment variables to simulate misconfiguration

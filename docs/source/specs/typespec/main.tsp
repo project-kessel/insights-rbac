@@ -127,7 +127,11 @@ scalar FieldMask extends string;
 
 /**
  * Limit for pagination. Controls the maximum number of items returned.
- * Use -1 to return all objects.
+ * Default: 10. Use -1 to return all objects in a single response.
+ *
+ * Maximum values (enforced server-side, not in schema):
+ * - Workspaces: 3000
+ * - All other list endpoints: 1000
  */
 scalar Limit extends int64;
 
@@ -533,7 +537,7 @@ namespace Workspaces {
         data: Workspace[];
     }
 
-    @doc("List workspaces in a tenant")
+    @doc("List workspaces in a tenant. Uses offset pagination (`limit`, `offset`). Max limit 3000.")
     @summary("List workspaces in a tenant")
 
     @opExample(
@@ -794,7 +798,7 @@ namespace Workspaces {
         with_ancestry?: boolean = false;
     }
 
-    @doc("Query workspaces by a list of IDs")
+    @doc("Query workspaces by a list of IDs. Uses offset pagination (`limit`, `offset` in query string). Max limit 3000.")
     @summary("Query workspaces by a list of IDs")
     @route("query/")
     @opExample(#{
@@ -1045,7 +1049,7 @@ namespace RoleBindings {
         sources?: Resource[];
     }
 
-    @doc("List role bindings grouped by subject. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.")
+    @doc("List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.")
     @summary("List role bindings grouped by subject")
     @route("by-subject/")
     @opExample(#{
@@ -1347,7 +1351,7 @@ namespace RoleBindings {
         sources?: Resource[];
     }
 
-    @doc("List role bindings")
+    @doc("List role bindings. Uses cursor pagination (`limit`, `cursor`). Max limit 1000.")
     @summary("List role bindings")
     @opExample(#{
         parameters: #{
@@ -1470,7 +1474,7 @@ namespace Roles {
         ...KesselRBAC.Role;
     }
 
-    @doc("List the roles for a tenant")
+    @doc("List the roles for a tenant. Uses cursor pagination (`limit`, `cursor`). Max limit 1000.")
     @summary("List the roles for a tenant")
     @opExample(#{
         parameters: #{
@@ -1783,7 +1787,7 @@ model PrincipalListResponse {
 @doc("Operations about principals")
 namespace Principals {
 
-    @doc("List the principals for a tenant")
+    @doc("List the principals for a tenant. Uses offset pagination (`limit`, `offset`). Max limit 1000.")
     @summary("List the principals for a tenant")
     @opExample(#{
         parameters: #{

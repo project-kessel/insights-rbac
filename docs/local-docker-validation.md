@@ -36,6 +36,13 @@ hard-coded upstream repositories are
 | Inventory and HBI commits | `make docker-local-full-up inventory=<inventory-commit-sha> hbi=<hbi-commit-sha>` |
 | Inventory and HBI PRs | `make docker-local-full-up inventory=<inventory-pr-url> hbi=<hbi-pr-url>` |
 
+When RBAC is selected from a PR URL, the command creates a temporary worktree,
+checks out the PR head, and rebases it onto the current upstream `master`
+before building the image. When the PR branch contains merge commits, the
+command uses a merge instead of a rebase to preserve manual conflict
+resolutions. If the rebase or merge conflicts, the command stops before
+starting the stack and leaves the conflicting worktree path in its error output.
+
 For a local source, the command prompts for the checkout directory. Press
 Enter to use the default checkout. Defaults are the current repository for
 RBAC, `../rbac-config` for `rbac-config`, and the two `.local-deps` directories

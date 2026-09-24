@@ -236,7 +236,15 @@ class IdentityHeaderMiddleware:
             TENANTS.save_tenant(tenant)
 
         # Backfill requesting user's TenantMapping membership.
-        run_atomic_with_retry(5, lambda: backfill_remote_principal(self.bootstrap_service, request.user, tenant))
+        # Skip for cross-access: username was rewritten to "{org_id}-{user_id}" and
+        # must not create/upsert a principal with the requester's real user_id (RHCLOUD-51516).
+        if not request.user.cross_access:
+            if settings.PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED:
+                run_atomic_with_retry(
+                    5, lambda: backfill_remote_principal(self.bootstrap_service, request.user, tenant)
+                )
+            else:
+                backfill_remote_principal(self.bootstrap_service, request.user, tenant)
 
         return tenant
 
@@ -432,6 +440,11 @@ class IdentityHeaderMiddleware:
                             },
                         )
                         return HttpResponseUnauthorizedRequest()
+                    # Rewrite to the cross-account principal username so access
+                    # checks resolve the CAR principal. Mark the request so
+                    # principal backfill does not treat this as a new user
+                    # (RHCLOUD-51516).
+                    user.cross_access = True
                     user.username = f"{user.org_id}-{user.user_id}"
         except (KeyError, TypeError, JSONDecodeError):
             if _is_a2s_path(request):
@@ -662,7 +675,21 @@ class ReadOnlyApiMiddleware:
 
     def __call__(self, request):
         """Code to be executed for each request before or after the view is called."""
-        if self._should_deny_all_writes(request) or self._should_deny_v2_writes(request):
+        deny_all = self._should_deny_all_writes(request)
+        deny_v2 = self._should_deny_v2_writes(request)
+        if deny_all or deny_v2:
+            logger.warning(
+                "read_only_api_denied",
+                extra={
+                    "path": request.path,
+                    "method": request.method,
+                    "deny_all_writes": deny_all,
+                    "deny_v2_writes": deny_v2,
+                    "read_only_api_mode": settings.READ_ONLY_API_MODE,
+                    "v2_api_read_only_mode_enabled": FEATURE_FLAGS.is_v2_api_read_only_mode_enabled(),
+                    "request_id": getattr(request, "req_id", None),
+                },
+            )
             return self._read_only_response()
         return self.get_response(request)
 

@@ -231,6 +231,9 @@ class User:
     is_active: bool = True
     org_id: Optional[str] = None
     user_id: Optional[str] = None
+    # Set when identity.internal.cross_access is true; username is rewritten to
+    # "{org_id}-{user_id}" for cross-account principal lookup.
+    cross_access: bool = False
     # Service account properties.
     bearer_token: str = ""
     client_id: str = ""

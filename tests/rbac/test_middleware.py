@@ -236,6 +236,49 @@ class IdentityHeaderMiddlewareTest(IdentityRequest):
         middleware = IdentityHeaderMiddleware(get_response=get_response)
         response = middleware(mock_request)
         self.assertEqual(response.status_code, 200)
+        self.assertTrue(mock_request.user.cross_access)
+        self.assertEqual(mock_request.user.username, f"{self.customer['org_id']}-{self.user_data['user_id']}".lower())
+
+    def test_cross_access_does_not_backfill_principal_with_user_id(self):
+        """Cross-access rewrite must not create a principal that collides on user_id (RHCLOUD-51516)."""
+        # Ensure the identity's org already has a tenant and a real principal owning user_id.
+        tenant, _ = Tenant.objects.get_or_create(
+            org_id=self.customer["org_id"],
+            defaults={
+                "tenant_name": create_tenant_name(self.customer["account_id"]),
+                "account_id": self.customer["account_id"],
+                "ready": True,
+            },
+        )
+        TenantCache().delete_tenant(self.customer["org_id"])
+        Principal.objects.get_or_create(
+            username=self.user_data["username"],
+            tenant=tenant,
+            defaults={"user_id": self.user_data["user_id"]},
+        )
+        principal_before = Principal.objects.get(user_id=self.user_data["user_id"])
+        principals_before = Principal.objects.filter(user_id=self.user_data["user_id"]).count()
+
+        self.user_data["email"] = "test@redhat.com"
+        request_context = self._create_request_context(
+            self.customer, self.user_data, cross_account=True, is_internal=True
+        )
+        mock_request = request_context["request"]
+        mock_request.path = "/api/rbac/v1/cross-account-requests/"
+        get_response = Mock(return_value=HttpResponse(status=200))
+        middleware = IdentityHeaderMiddleware(get_response=get_response)
+
+        response = middleware(mock_request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(mock_request.user.cross_access)
+        rewritten = f"{self.customer['org_id']}-{self.user_data['user_id']}".lower()
+        self.assertEqual(mock_request.user.username, rewritten)
+        # No IntegrityError and no second principal for the same user_id.
+        self.assertEqual(Principal.objects.filter(user_id=self.user_data["user_id"]).count(), principals_before)
+        self.assertFalse(Principal.objects.filter(username=rewritten, tenant=tenant).exists())
+        principal_before.refresh_from_db()
+        self.assertEqual(principal_before.username, self.user_data["username"].lower())
 
     def test_process_response(self):
         """Test that the middleware response functions correctly."""

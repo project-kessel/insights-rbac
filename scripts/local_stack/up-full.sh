@@ -295,14 +295,70 @@ save_local_source_paths() {
   log-info "Saved local source paths to ${LOCAL_STACK_CONFIG_FILE}"
 }
 
+has_only_generated_v2_openapi_conflicts() {
+  local worktree="$1" conflicted_file found_conflict=false
+
+  while IFS= read -r conflicted_file; do
+    [[ -n "${conflicted_file}" ]] || continue
+    case "${conflicted_file}" in
+      docs/source/specs/v2/openapi.json|docs/source/specs/v2/openapi.yaml)
+        found_conflict=true
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done < <(git -C "${worktree}" diff --name-only --diff-filter=U)
+
+  [[ "${found_conflict}" == true ]]
+}
+
+resolve_generated_v2_openapi_conflicts() {
+  local worktree="$1"
+
+  has_only_generated_v2_openapi_conflicts "${worktree}" || return 1
+  log-warn "Resolving generated V2 OpenAPI rebase conflicts from TypeSpec source..."
+  git -C "${worktree}" checkout --theirs -- docs/source/specs/v2/openapi.json docs/source/specs/v2/openapi.yaml || return 1
+  git -C "${worktree}" add docs/source/specs/v2/openapi.json docs/source/specs/v2/openapi.yaml || return 1
+}
+
+regenerate_v2_openapi_spec() {
+  local worktree="$1"
+
+  log-info "Regenerating V2 OpenAPI artifacts from merged TypeSpec source..."
+  make -C "${worktree}" generate_v2_spec
+}
+
+rebase_rbac_pr_worktree() {
+  local worktree="$1" master_revision="$2"
+
+  if git -C "${worktree}" rebase "${master_revision}"; then
+    return 0
+  fi
+
+  while git -C "${worktree}" rebase --show-current-patch >/dev/null 2>&1; do
+    if ! resolve_generated_v2_openapi_conflicts "${worktree}"; then
+      return 1
+    fi
+    if GIT_EDITOR=true git -C "${worktree}" rebase --continue; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 start_rbac_worktree() {
   # Create a temporary detached worktree for non-local RBAC sources
   # (upstream, PR, or commit SHA), copy the current orchestration
   # scripts into it, and re-invoke up-full.sh from that checkout.
+  # For PR sources, rebases onto upstream master. When the PR branch
+  # contains merge commits, uses merge instead of rebase to preserve
+  # manual conflict resolutions.
   [[ "${RBAC_SOURCE_KIND}" != local ]] || return 0
   [[ -z "${RBAC_PR_WORKTREE:-}" ]] || return 0
 
-  local fetch_ref repository pr_number worktree_prefix
+  local fetch_ref repository worktree_prefix pr_revision master_revision merge_base_rev
   case "${RBAC_SOURCE_KIND}" in
     upstream)
       fetch_ref=HEAD
@@ -328,7 +384,44 @@ start_rbac_worktree() {
   rmdir "${pr_worktree}"
   log-info "Fetching RBAC ${RBAC_SOURCE_LABEL} from ${repository}..."
   git -C "${REPO_ROOT}" fetch --no-tags "${repository}" "${fetch_ref}"
-  git -C "${REPO_ROOT}" worktree add --detach "${pr_worktree}" FETCH_HEAD >/dev/null
+  pr_revision="$(git -C "${REPO_ROOT}" rev-parse FETCH_HEAD)"
+  git -C "${REPO_ROOT}" worktree add --detach "${pr_worktree}" "${pr_revision}" >/dev/null
+
+  if [[ "${RBAC_SOURCE_KIND}" == pr ]]; then
+    log-info "Fetching RBAC upstream master from ${repository}..."
+    git -C "${REPO_ROOT}" fetch --no-tags "${repository}" master
+    master_revision="$(git -C "${REPO_ROOT}" rev-parse FETCH_HEAD)"
+    if [[ "$(git -C "${REPO_ROOT}" rev-parse --is-shallow-repository)" == true ]]; then
+      git -C "${REPO_ROOT}" fetch --unshallow --no-tags "${repository}" || {
+        log-err "Cannot unshallow ${REPO_ROOT}; merge-commit detection needs full history."
+        exit 1
+      }
+    fi
+    if ! merge_base_rev="$(git -C "${pr_worktree}" merge-base "${master_revision}" HEAD)"; then
+      log-err "Cannot find a merge base between RBAC ${RBAC_SOURCE_LABEL} and upstream master."
+      exit 1
+    fi
+    local merge_count
+    if ! merge_count="$(git -C "${pr_worktree}" rev-list --merges --count "${merge_base_rev}..HEAD")"; then
+      log-err "Cannot inspect RBAC ${RBAC_SOURCE_LABEL} history for merge commits."
+      exit 1
+    fi
+    if (( merge_count > 0 )); then
+      log-info "PR branch contains merge commits; using merge to preserve manual resolutions."
+      git -C "${pr_worktree}" checkout --detach "${master_revision}" >/dev/null 2>&1
+      if ! git -C "${pr_worktree}" merge --no-edit "${pr_revision}"; then
+        log-err "RBAC ${RBAC_SOURCE_LABEL} conflicts with upstream master; stopped at ${pr_worktree}."
+        exit 1
+      fi
+    else
+      log-info "Rebasing RBAC ${RBAC_SOURCE_LABEL} onto upstream master..."
+      if ! rebase_rbac_pr_worktree "${pr_worktree}" "${master_revision}"; then
+        log-err "RBAC ${RBAC_SOURCE_LABEL} conflicts with upstream master; stopped at ${pr_worktree}."
+        exit 1
+      fi
+    fi
+    regenerate_v2_openapi_spec "${pr_worktree}"
+  fi
 
   # Older PR branches may predate the local full-stack helper directory and
   # shared shell helpers. Copy the current orchestration files into the

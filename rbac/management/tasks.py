@@ -74,151 +74,41 @@ def principal_cleanup():
 
 
 @shared_task
-def principal_cleanup_via_umb():
-    """Celery task to clean up principals no longer existing."""
-    from management.principal.cleaner import process_principal_events_from_umb
-
-    process_principal_events_from_umb()
-
-
-@shared_task
 def principal_cleanup_via_kafka():
-    """Celery task to clean up principals via Kafka messages."""
+    """Celery task to clean up principals via Kafka (Kafka-only deployments)."""
     from management.principal.cleaner import process_principal_events_from_kafka
 
     process_principal_events_from_kafka()
 
 
 @shared_task
+def principal_cleanup_kafka_tick():
+    """
+    Kafka principal-cleanup tick.
+
+    Processes principal cleanup events from Kafka when enabled.
+    If KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False, logs a warning and returns.
+    """
+    from management.principal.cleaner import process_principal_events_from_kafka
+
+    if not settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
+        logger.warning("Kafka principal cleanup job is disabled (KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False)")
+        return
+
+    logger.info("Kafka principal cleanup: processing via Kafka")
+    process_principal_events_from_kafka(dry_run=False)
+
+
+@shared_task
 def principal_cleanup_via_message_bus():
     """
-    Dispatcher task that checks Unleash flag at runtime to route principal cleanup.
+    Compatibility dispatcher for principal cleanup via message bus.
 
-    This task is scheduled when both PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB and
-    PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA are enabled. It allows runtime switching
-    between message bus implementations via Unleash flag without requiring worker restart.
-
-    Supported modes (controlled by rbac.principal-cleanup.use-kafka.enabled flag):
-    - 'umb_only' (flag disabled or unknown variant): Only UMB consumer runs and writes to DB
-    - 'kafka_shadow' (flag enabled with kafka_shadow variant): Both UMB and Kafka run, only UMB writes (Kafka dry-run)
-    - 'kafka_validation' (flag enabled with kafka_validation variant): Kafka tries first, UMB fallback if Kafka fails
-    - 'kafka_active' (flag enabled with kafka_active variant): Only Kafka consumer runs and writes to DB
-      NOTE: Raises RuntimeError if Kafka is disabled (KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=False)
-            to prevent silent fallback to UMB. Operators must explicitly change to 'umb_only' mode.
+    This task remains for backward compatibility with tests and manual invocation.
+    Routes directly to Kafka cleanup.
     """
-    from feature_flags import FEATURE_FLAGS
-    from management.principal.cleaner import process_principal_events_from_kafka, process_principal_events_from_umb
-    from sentry_sdk import capture_exception
-
-    mode = FEATURE_FLAGS.get_principal_cleanup_mode()
-    logger.info(f"Principal cleanup mode: {mode}")
-
-    if mode == "umb_only":
-        # UMB-only mode: Only UMB processes and writes to DB
-        if settings.UMB_JOB_ENABLED:
-            logger.info("UMB-only mode: processing via UMB")
-            process_principal_events_from_umb()
-        else:
-            logger.warning("UMB mode selected but UMB_JOB_ENABLED is False")
-
-    elif mode == "kafka_shadow":
-        # Shadow mode: Both run, Kafka in dry-run (no DB writes)
-        # Isolate UMB and Kafka so one backend failure doesn't prevent the other from running
-        logger.info("Shadow mode: processing via UMB (active) and Kafka (dry-run)")
-
-        if settings.UMB_JOB_ENABLED:
-            try:
-                logger.info("Shadow mode: Running UMB consumer (active - writes to DB)")
-                process_principal_events_from_umb()
-            except Exception as umb_error:
-                logger.error("Shadow mode: UMB consumer failed: %s", str(umb_error))
-                capture_exception(umb_error)
-        else:
-            logger.warning("Shadow mode requires UMB but UMB_JOB_ENABLED is False")
-
-        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-            try:
-                logger.info("Shadow mode: Running Kafka consumer (dry-run - no DB writes)")
-                process_principal_events_from_kafka(dry_run=True)
-            except Exception as kafka_error:
-                logger.error("Shadow mode: Kafka consumer (dry-run) failed: %s", str(kafka_error))
-                capture_exception(kafka_error)
-        else:
-            logger.warning("Shadow mode requires Kafka but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
-
-    elif mode == "kafka_validation":
-        # Validation mode: Kafka tries first, UMB fallback if Kafka fails
-        # This allows comparing Kafka behavior while ensuring no data loss
-        from management.principal.cleaner import kafka_validation_success_total, kafka_validation_fallback_total
-
-        logger.info("Validation mode: Kafka attempts DB write, UMB fallback if Kafka fails")
-
-        kafka_success = False
-
-        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-            try:
-                logger.info("Validation mode: Running Kafka consumer (primary - writes to DB)")
-                process_principal_events_from_kafka(dry_run=False)
-                kafka_success = True
-                kafka_validation_success_total.inc()
-                logger.info("Validation mode: Kafka consumer completed successfully")
-            except Exception as kafka_error:
-                logger.error("Validation mode: Kafka consumer failed: %s. Falling back to UMB.", str(kafka_error))
-                capture_exception(kafka_error)
-                kafka_success = False
-        else:
-            logger.warning("Validation mode requires Kafka but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False")
-
-        # UMB runs as fallback only if Kafka failed or is disabled
-        if not kafka_success:
-            kafka_validation_fallback_total.inc()
-            if settings.UMB_JOB_ENABLED:
-                try:
-                    logger.info("Validation mode: Running UMB consumer (fallback - writes to DB)")
-                    process_principal_events_from_umb()
-                    logger.info("Validation mode: UMB fallback completed successfully")
-                except Exception as umb_error:
-                    logger.error("Validation mode: UMB fallback also failed: %s", str(umb_error))
-                    capture_exception(umb_error)
-                    # Both failed - raise to trigger alerting
-                    raise RuntimeError(
-                        "Validation mode: Both Kafka and UMB consumers failed. Principal cleanup incomplete."
-                    ) from umb_error
-            else:
-                logger.error(
-                    "Validation mode: Kafka failed and UMB_JOB_ENABLED is False. " "Principal cleanup incomplete."
-                )
-                raise RuntimeError("Validation mode: Kafka failed and no UMB fallback available")
-        else:
-            # Kafka succeeded - log for comparison purposes
-            logger.info(
-                "Validation mode: Kafka succeeded, UMB fallback not needed. "
-                "Monitor metrics to compare Kafka vs historical UMB performance."
-            )
-
-    elif mode == "kafka_active":
-        # Kafka-active mode: Only Kafka processes and writes to DB
-        if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-            logger.info("Kafka-active mode: processing via Kafka")
-            process_principal_events_from_kafka(dry_run=False)
-        else:
-            # Kafka is disabled but kafka_active mode was explicitly selected via Unleash
-            # This is a configuration error - operators should change Unleash flag to umb_only
-            # instead of relying on silent fallback
-            error_msg = (
-                "Configuration mismatch: kafka_active mode selected in Unleash, "
-                "but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False. "
-                "Change Unleash flag to 'umb_only' mode or enable Kafka via KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED."
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
-    else:
-        logger.error(f"Unknown principal cleanup mode: {mode}, defaulting to UMB")
-        if settings.UMB_JOB_ENABLED:
-            process_principal_events_from_umb()
-        else:
-            logger.warning("Fallback to UMB failed: UMB_JOB_ENABLED is False")
+    logger.info("Principal cleanup via message bus: routing to Kafka")
+    principal_cleanup_kafka_tick()
 
 
 @shared_task
