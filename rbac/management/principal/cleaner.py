@@ -28,8 +28,9 @@ import xmltodict
 from core.kafka import RBACProducer, get_cluster_config
 from django.conf import settings
 from django.db import connection
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
+from kafka.structs import OffsetAndMetadata
 from management.atomic_transactions import run_atomic_with_retry
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
@@ -139,7 +140,59 @@ def clean_tenants_principals():
     logger.info("clean_tenant_principals: Principal cleanup complete for all tenants.")
 
 
-def retrieve_user_info_xml(message, *, skip_bop: bool = False) -> User:
+def _extract_user_id_from_xml_canonical(message) -> str:
+    """Extract WEB User id from a parsed XML CanonicalMessage."""
+    instance_id: Optional[str] = None
+    if (header := message.get("Header")) is not None:
+        if (id := header.get("InstanceId")) is not None:
+            instance_id = id
+
+    identifiers = message["Payload"]["Sync"]["User"]["Identifiers"]
+    user_id: Optional[str] = None
+
+    if isinstance((ids := identifiers["Identifier"]), list):
+        for id in ids:  # type: ignore
+            if id["@system"] == "WEB" and id["@entity-name"] == "User" and id["@qualifier"] == "id":
+                user_id = id["#text"]
+                break
+    else:
+        user_id = identifiers["Identifier"]["#text"]
+
+    if user_id is None:
+        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    return str(user_id)
+
+
+def _extract_user_id_from_kafka_canonical(message) -> str:
+    """Extract WEB User id from a parsed Kafka JSON CanonicalMessage."""
+    instance_id: Optional[str] = None
+    if (header := message.get("Header")) is not None:
+        if (id := header.get("InstanceId")) is not None:
+            instance_id = id
+
+    identifiers = message["Payload"]["Sync"]["User"]["Identifiers"]
+    user_id: Optional[str] = None
+
+    identifier_list = identifiers.get("Identifier", [])
+    if not isinstance(identifier_list, list):
+        identifier_list = [identifier_list]
+
+    for identifier in identifier_list:
+        is_web_user_id = (
+            identifier.get("system") == "WEB"
+            and identifier.get("entity-name") == "User"
+            and identifier.get("qualifier") == "id"
+        )
+        if is_web_user_id:
+            user_id = identifier.get("text") or identifier.get("value")
+            break
+
+    if user_id is None:
+        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    return str(user_id)
+
+
+def retrieve_user_info_xml(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None) -> User:
     """
     Retrieve user info from an XML message.
 
@@ -147,6 +200,9 @@ def retrieve_user_info_xml(message, *, skip_bop: bool = False) -> User:
         message: Parsed XML CanonicalMessage dict
         skip_bop: If True, build User from the message payload only (no BOP call).
             Used by Kafka dry-run/shadow mode for fast consume validation.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
+            When provided, skips the per-message BOP call and uses this map
+            (missing key = user not found / deleted).
 
     returns:
         user: User object as of latest known state.
@@ -161,21 +217,16 @@ def retrieve_user_info_xml(message, *, skip_bop: bool = False) -> User:
 
     message_user = message["Payload"]["Sync"]["User"]
     identifiers = message_user["Identifiers"]
-    user_id: Optional[str] = None
-
-    if isinstance((ids := identifiers["Identifier"]), list):
-        for id in ids:  # type: ignore
-            if id["@system"] == "WEB" and id["@entity-name"] == "User" and id["@qualifier"] == "id":
-                user_id = id["#text"]
-                break
-    else:
-        user_id = identifiers["Identifier"]["#text"]
-
-    if user_id is None:
-        raise ValueError("User id not found in message. instance_id=%s", instance_id)
+    user_id = _extract_user_id_from_xml_canonical(message)
 
     if skip_bop:
         return _user_from_xml_message_payload(user_id, message_user, identifiers)
+
+    if bop_user_by_id is not None:
+        user_data = bop_user_by_id.get(str(user_id))
+        if not user_data:
+            return _user_from_xml_message_payload(user_id, message_user, identifiers)
+        return external_principal_to_user(user_data)
 
     bop_resp = PROXY.request_filtered_principals([user_id], options={"query_by": "user_id", "return_id": True})
 
@@ -204,7 +255,7 @@ def _user_from_xml_message_payload(user_id: str, message_user: dict, identifiers
     return user
 
 
-def retrieve_user_info_kafka(message, *, skip_bop: bool = False) -> User:
+def retrieve_user_info_kafka(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None) -> User:
     """
     Retrieve user info from the Kafka message.
 
@@ -212,6 +263,9 @@ def retrieve_user_info_kafka(message, *, skip_bop: bool = False) -> User:
         message: JSON message from Kafka containing user event data
         skip_bop: If True, build User from the message payload only (no BOP call).
             Used by Kafka dry-run/shadow mode for fast consume validation.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
+            When provided, skips the per-message BOP call and uses this map
+            (missing key = user not found / deleted).
 
     returns:
         user: User object as of latest known state.
@@ -228,29 +282,16 @@ def retrieve_user_info_kafka(message, *, skip_bop: bool = False) -> User:
     # Navigate through JSON structure (similar to XML but without @ and # prefixes)
     message_user = message["Payload"]["Sync"]["User"]
     identifiers = message_user["Identifiers"]
-    user_id: Optional[str] = None
-
-    # Handle both list and single identifier cases
-    identifier_list = identifiers.get("Identifier", [])
-    if not isinstance(identifier_list, list):
-        identifier_list = [identifier_list]
-
-    # Find the user ID from identifiers
-    for identifier in identifier_list:
-        is_web_user_id = (
-            identifier.get("system") == "WEB"
-            and identifier.get("entity-name") == "User"
-            and identifier.get("qualifier") == "id"
-        )
-        if is_web_user_id:
-            user_id = identifier.get("text") or identifier.get("value")
-            break
-
-    if user_id is None:
-        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    user_id = _extract_user_id_from_kafka_canonical(message)
 
     if skip_bop:
         return _user_from_kafka_message_payload(user_id, message_user, identifiers)
+
+    if bop_user_by_id is not None:
+        user_data = bop_user_by_id.get(str(user_id))
+        if not user_data:
+            return _user_from_kafka_message_payload(user_id, message_user, identifiers)
+        return external_principal_to_user(user_data)
 
     # Query BOP for user information
     bop_resp = PROXY.request_filtered_principals([user_id], options={"query_by": "user_id", "return_id": True})
@@ -309,7 +350,7 @@ class MessageProcessingResult(NamedTuple):
     success: bool
 
 
-def _parse_kafka_message_to_user(message, *, skip_bop: bool = False):
+def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None):
     """Parse a Kafka message into a User object.
 
     Handles tombstones, JSON and XML formats.
@@ -319,6 +360,7 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False):
     Args:
         message: Kafka message
         skip_bop: If True, do not call BOP (message-payload User only). Used for dry-run.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
     """
     if message.value is None:
         return None, "tombstone"
@@ -328,16 +370,172 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False):
     try:
         message_data = json.loads(message_value)
         canonical_message = message_data.get("CanonicalMessage", message_data)
-        return retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop), None
+        return (
+            retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
+            None,
+        )
     except json.JSONDecodeError as json_error:
         try:
             data_dict = xmltodict.parse(message_value)
             canonical_message = data_dict.get("CanonicalMessage")
-            return retrieve_user_info_xml(canonical_message, skip_bop=skip_bop), None
+            return (
+                retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
+                None,
+            )
         except ExpatError as xml_error:
             raise Exception(
                 f"Message is neither valid JSON nor valid XML. " f"JSON error: {json_error}. XML error: {xml_error}"
             ) from xml_error
+
+
+def _try_extract_user_id_from_kafka_message(message) -> Optional[str]:
+    """Best-effort user_id extraction for BOP batching. Returns None for tombstones/unparseable."""
+    if message.value is None:
+        return None
+
+    message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
+
+    try:
+        message_data = json.loads(message_value)
+        canonical_message = message_data.get("CanonicalMessage", message_data)
+        return _extract_user_id_from_kafka_canonical(canonical_message)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError):
+        try:
+            data_dict = xmltodict.parse(message_value)
+            canonical_message = data_dict.get("CanonicalMessage")
+            if canonical_message is None:
+                return None
+            return _extract_user_id_from_xml_canonical(canonical_message)
+        except Exception:
+            return None
+
+
+def _fetch_bop_users_by_ids(user_ids: list[str]) -> dict:
+    """
+    Fetch BOP user data for the given user_ids in one call.
+
+    Dedupes while preserving order. Returns a map of user_id (str) -> principal dict
+    for users found in BOP. Missing keys mean the user was not returned (deleted/inactive).
+    """
+    unique_ids = list(dict.fromkeys(user_ids))
+    if not unique_ids:
+        return {}
+
+    logger.info(
+        "process_principal_events_from_kafka: Batch BOP lookup for %d unique user_id(s) (from %d message(s))",
+        len(unique_ids),
+        len(user_ids),
+    )
+    bop_resp = PROXY.request_filtered_principals(unique_ids, options={"query_by": "user_id", "return_id": True})
+
+    if "data" not in bop_resp:
+        raise KeyError(f"BOP response missing 'data' key: status_code={bop_resp.get('status_code')}")
+
+    result = {}
+    for item in bop_resp["data"] or []:
+        uid = item.get("user_id")
+        if uid is not None:
+            result[str(uid)] = item
+    return result
+
+
+def _collect_user_ids_from_kafka_messages(messages) -> list[str]:
+    """Collect user_ids from messages for BOP batching (duplicates preserved for logging)."""
+    user_ids = []
+    for message in messages:
+        user_id = _try_extract_user_id_from_kafka_message(message)
+        if user_id is not None:
+            user_ids.append(user_id)
+    return user_ids
+
+
+def _commit_kafka_message(consumer, message) -> None:
+    """
+    Commit the offset for a single message.
+
+    Must use an explicit offset: messages are buffered into a batch before processing,
+    so the consumer position already points past the whole batch. A bare ``commit()``
+    would incorrectly mark unprocessed messages as done.
+    """
+    tp = TopicPartition(message.topic, message.partition)
+    consumer.commit({tp: OffsetAndMetadata(message.offset + 1, "")})
+
+
+def _process_kafka_message_batch(
+    consumer,
+    messages,
+    bootstrap_service: TenantBootstrapService,
+    dlq_producer,
+    dry_run: bool,
+) -> bool:
+    """
+    Process a batch of Kafka messages with a single deduped BOP call.
+
+    Prefetches BOP data for unique user_ids in the batch, then processes and commits
+    each message in order (each message still runs ``update_user``; only the BOP
+    lookup is deduped). Returns False if the consumer should stop.
+    """
+    if not messages:
+        return True
+
+    bop_user_by_id = None
+    if not dry_run:
+        user_ids = _collect_user_ids_from_kafka_messages(messages)
+        try:
+            bop_user_by_id = _fetch_bop_users_by_ids(user_ids)
+        except Exception as e:
+            logger.error(
+                "process_principal_events_from_kafka: Batch BOP lookup failed: %s. "
+                "Stopping consumer without committing batch offsets.",
+                str(e),
+            )
+            capture_exception(e)
+            return False
+
+    for message in messages:
+        mode_suffix = " (DRY RUN)" if dry_run else ""
+        logger.info(
+            "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
+            message.partition,
+            message.offset,
+            mode_suffix,
+        )
+        result = process_kafka_message(
+            message,
+            bootstrap_service,
+            dlq_producer,
+            dry_run=dry_run,
+            bop_user_by_id=bop_user_by_id,
+        )
+        if not result.should_continue:
+            logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
+            return False
+
+        if not result.success:
+            logger.warning(
+                "process_principal_events_from_kafka: Message processing failed at offset %d. "
+                "Stopping consumer to preserve at-least-once semantics. "
+                "Consumer will retry from this offset on restart.",
+                message.offset,
+            )
+            return False
+
+        try:
+            _commit_kafka_message(consumer, message)
+            logger.debug(
+                "process_principal_events_from_kafka: Committed offset %d for partition %d",
+                message.offset,
+                message.partition,
+            )
+        except Exception as commit_error:
+            logger.error(
+                "process_principal_events_from_kafka: Failed to commit offset %d: %s",
+                message.offset,
+                commit_error,
+            )
+            return False
+
+    return True
 
 
 def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResult:
@@ -406,7 +604,11 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
 
 
 def process_kafka_message(
-    message, bootstrap_service: TenantBootstrapService, dlq_producer=None, dry_run: bool = False
+    message,
+    bootstrap_service: TenantBootstrapService,
+    dlq_producer=None,
+    dry_run: bool = False,
+    bop_user_by_id: Optional[dict] = None,
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -421,17 +623,22 @@ def process_kafka_message(
         bootstrap_service: Service for updating user/tenant state
         dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
         dry_run: If True, validate message structure and commit without BOP or DB writes (shadow mode)
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str). When provided
+            (including empty dict), skips per-message BOP calls.
 
     Returns:
         MessageProcessingResult with:
         - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
-    # --- 1. Parse message (+ resolve user via BOP unless dry-run) ---
+    # --- 1. Parse message (+ resolve user via BOP unless dry-run / prefetched) ---
     # Live mode calls BOP (network I/O) so can raise transient errors too.
     # Dry-run skips BOP and builds User from the payload only for structural validation.
+    # When bop_user_by_id is provided, BOP was already fetched for the batch.
     try:
-        user, marker = _parse_kafka_message_to_user(message, skip_bop=dry_run)
+        user, marker = _parse_kafka_message_to_user(
+            message, skip_bop=dry_run, bop_user_by_id=None if dry_run else bop_user_by_id
+        )
     except Exception as e:
         mode_msg = " (DRY RUN)" if dry_run else ""
         logger.error("process_kafka_message: Error parsing Kafka message%s: %s", mode_msg, str(e))
@@ -641,8 +848,10 @@ def process_principal_events_from_kafka(
         # consumer_timeout_ms alone only ends the iterator after idle polls.
         drain_timeout_ms = settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
         drain_deadline = time.monotonic() + (drain_timeout_ms / 1000.0)
+        batch_size = settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
+        batch = []
 
-        # Process messages
+        # Process messages in batches so we can dedupe user_ids and make one BOP call per batch.
         for message in consumer:
             if time.monotonic() >= drain_deadline:
                 logger.info(
@@ -651,42 +860,17 @@ def process_principal_events_from_kafka(
                 )
                 break
 
-            mode_suffix = " (DRY RUN)" if dry_run else ""
-            logger.info(
-                "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
-                message.partition,
-                message.offset,
-                mode_suffix,
-            )
-            result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
-            if not result.should_continue:
-                # Lock contention - another listener is running, abort this consumer
-                logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
-                break
+            batch.append(message)
+            if len(batch) >= batch_size:
+                if not _process_kafka_message_batch(consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run):
+                    batch = []
+                    break
+                batch = []
 
-            if not result.success:
-                logger.warning(
-                    "process_principal_events_from_kafka: Message processing failed at offset %d. "
-                    "Stopping consumer to preserve at-least-once semantics. "
-                    "Consumer will retry from this offset on restart.",
-                    message.offset,
-                )
-                break
-
-            try:
-                consumer.commit()
-                logger.debug(
-                    "process_principal_events_from_kafka: Committed offset %d for partition %d",
-                    message.offset,
-                    message.partition,
-                )
-            except Exception as commit_error:
-                logger.error(
-                    "process_principal_events_from_kafka: Failed to commit offset %d: %s",
-                    message.offset,
-                    commit_error,
-                )
-                break
+        if batch and not _process_kafka_message_batch(
+            consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run
+        ):
+            logger.info("process_principal_events_from_kafka: Final batch processing stopped the consumer.")
 
     except KafkaError as e:
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))

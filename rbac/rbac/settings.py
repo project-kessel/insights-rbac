@@ -559,6 +559,8 @@ KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED = ENVIRONMENT.bool(
 # Wall-clock budget per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval
 # with headroom for consumer setup and shutdown.
 KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS = ENVIRONMENT.int("KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", default=50000)
+# Max Kafka messages per BOP lookup. Duplicate user_ids within a batch are deduped.
+KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE = ENVIRONMENT.int("KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE", default=100)
 
 PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED = EPH_ENV
 

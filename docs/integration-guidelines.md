@@ -192,6 +192,7 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` | `False` | Kafka-based principal cleanup |
 | `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED` | `True` | Enables Kafka principal cleanup beat task (requires `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA`) |
 | `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
+| `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
 
 The Unleash flag `rbac.ocm-v2.enabled` is evaluated using the target organization in the integration
