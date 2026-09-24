@@ -65,9 +65,9 @@ class OCMV2RolesTests(IdentityRequest):
 
     def get_roles(self, enabled=True, query="", url=None):
         """Call the endpoint with only the external flag evaluation mocked."""
-        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled", return_value=enabled) as flag:
+        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=enabled) as flag:
             response = self.client.get((url or self.url) + query, **self.meta)
-        flag.assert_called_once_with(str(self.tenant.org_id))
+        flag.assert_called_once_with()
         return response
 
     def test_disabled_preserves_v1_response(self):
@@ -78,6 +78,26 @@ class OCMV2RolesTests(IdentityRequest):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"][0]["name"], self.v1.name)
         self.assertEqual(response.data["data"][0]["uuid"], str(self.v1.uuid))
+
+    def test_global_flag_selects_the_same_source_for_different_tenants(self):
+        """Every target organization uses the same context-free OCM rollout decision."""
+        other = Tenant.objects.create(tenant_name="global rollout", org_id="47378999")
+        group = Group.objects.create(name="other group", tenant=other)
+        v1 = Role.objects.create(name="other V1 role", tenant=other)
+        policy = Policy.objects.create(name="other policy", tenant=other, group=group)
+        policy.roles.add(v1)
+        v2 = RoleV2.objects.create(name="other V2 role", tenant=other)
+        self.bind(v2, group=group, tenant=other)
+        other_url = f"/_private/api/v1/integrations/tenant/{other.org_id}/groups/{group.uuid}/roles/"
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                for url, expected in (
+                    (self.url, self.role if enabled else self.v1),
+                    (other_url, v2 if enabled else v1),
+                ):
+                    response = self.get_roles(enabled=enabled, url=url)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual([row["uuid"] for row in response.data["data"]], [str(expected.uuid)])
 
     def test_v2_only_role_and_complete_schema(self):
         """No V1 policy or role is needed for a V2-native assignment."""
@@ -265,12 +285,12 @@ class OCMV2RolesTests(IdentityRequest):
     def test_external_identity_denied(self):
         """The V2 data path does not relax the integration authentication boundary."""
         self.meta = self._create_request_context(self.customer_data, self.user_data, is_internal=False)["request"].META
-        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled", return_value=True):
+        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True):
             self.assertEqual(self.client.get(self.url, **self.meta).status_code, 403)
 
     def test_regular_v1_endpoint_unchanged(self):
         """The independent flag cannot switch the public V1 management endpoint."""
-        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled", return_value=True) as flag:
+        with patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True) as flag:
             response = self.client.get(f"/api/rbac/v1/groups/{self.group.uuid}/roles/", **self.headers)
         flag.assert_not_called()
         self.assertEqual(response.status_code, 200)

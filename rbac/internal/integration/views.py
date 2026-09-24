@@ -80,7 +80,7 @@ class TenantViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
 
     def roles_for_group(self, request, org_id, uuid):
         """Select the V1 or V2 data source for the OCM roles-for-group contract."""
-        group_view = OCMGroupViewSet if FEATURE_FLAGS.is_ocm_v2_enabled(org_id) else GroupViewSet
+        group_view = OCMGroupViewSet if FEATURE_FLAGS.is_ocm_v2_enabled_global() else GroupViewSet
         view = group_view.as_view({"get": "roles"})
         return view(request._request, uuid=uuid)
 

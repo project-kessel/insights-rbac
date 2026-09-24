@@ -195,15 +195,18 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
 
-The Unleash flag `rbac.ocm-v2.enabled` is evaluated using the target organization in the integration
-URL, with `OCM_V2_ENABLED` as its environment fallback. It is independent of workspace flags and
-persistent V2 write activation. When disabled, roles-for-group delegates
+The Unleash flag `rbac.ocm-v2.enabled` is evaluated globally, without organization context,
+with `OCM_V2_ENABLED` as its environment fallback. An existing Unleash flag result takes
+precedence over the fallback. It is independent of workspace flags and persistent V2 write
+activation. When disabled, roles-for-group delegates
 to the existing V1 view. When enabled, it reads V2 bindings and preserves the V1 response contract.
 Built-in default groups expose seeded children of platform roles. External role metadata and
 legacy display names use the optional `v1_source` link; V2-native roles use their own name as
 `display_name` and return null external metadata. Role assignment lookup never uses V1 policies.
 
-Before enabling the flag, verify tenant bindings are fully populated and OCM-relevant V2 names
+Use an all-or-nothing Unleash strategy, without per-org constraints or percentage rollout.
+Coordinate the cutover with the OCM team and enable the flag only after both integration changes
+are deployed and bindings are populated for all affected tenants. Verify OCM-relevant V2 names
 match V1 names. The seeder uses V1 display names, so that equality is not guaranteed for every role.
 The roles-for-group V2 response always includes `accessCount`, as required by the integration
 contract; the legacy group query currently omits that field. The modified-tenants endpoint and
