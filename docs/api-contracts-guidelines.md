@@ -21,9 +21,10 @@ Never register v2 routes unconditionally. The feature flag check in `urls.py` is
 - `V2Router` extends `DefaultRouter` with two custom `Route` entries for batch operations:
   - `{prefix}:batchCreate/` maps POST to `batch_create` action.
   - `{prefix}:batchDelete/` maps POST to `bulk_destroy` action.
-- Registered viewsets: `WorkspaceViewSet`, `RoleBindingViewSet`, `RoleV2ViewSet`.
+- Registered viewsets: `WorkspaceViewSet`, `RoleBindingViewSet`, `RoleV2ViewSet`, `PrincipalV2ViewSet`, `GroupV2ViewSet`.
+- `AuditLogV2ViewSet` is registered outside the router as a plain path (`auditlogs/`) because audit log entries have no UUID identity — only a list route is exposed (no detail route).
 
-When adding a v2 endpoint, register on `V2Router` in `v2_urls.py`. For batch operations, use the existing `:batchCreate` / `:batchDelete` route pattern (colon prefix, camelCase action name).
+When adding a v2 endpoint, register on `V2Router` in `v2_urls.py`. For batch operations, use the existing `:batchCreate` / `:batchDelete` route pattern (colon prefix, camelCase action name). For read-only list endpoints without UUID-addressable resources, register as a plain `path()` in `urlpatterns` instead of on the router.
 
 ## ViewSet Patterns
 
@@ -84,6 +85,7 @@ Each cursor paginator has its own `FIELD_MAPPING` dict. Role bindings use dot-no
 | `GET /role-bindings/` | cursor | `V2CursorPagination` | 10 | 1000 |
 | `GET /role-bindings/by-subject/` | cursor | `V2CursorPagination` | 10 | 1000 |
 | `GET /roles/` | cursor | `RoleV2CursorPagination` | 10 | 1000 |
+| `GET /auditlogs/` | cursor | `AuditLogV2CursorPagination` | 10 | 1000 |
 
 ### Rationale for dual strategy
 
@@ -96,6 +98,7 @@ Each cursor paginator has its own `FIELD_MAPPING` dict. Role bindings use dot-no
 
 - **Role bindings** -- Avoids expensive `COUNT(*)` queries. Provides stable iteration under concurrent writes. Supports cross-relation `order_by` via dot notation (e.g., `role.name` on the list endpoint, `group.modified` on the by-subject endpoint).
 - **Roles** -- Same cursor benefits (`RoleV2CursorPagination`). Uses plain field names (`name`, `last_modified`) since roles are queried directly, not across relations.
+- **Audit logs** -- Append-only, growing dataset. `AuditLogV2CursorPagination` defaults to `-created` ordering (newest first). Only `created` / `-created` ordering is supported.
 
 **Workspace cursor unification is not recommended.** Cursor pagination would remove `count`/`last` links and complicate the Console "fetch all workspaces" flow. The bounded workspace dataset does not justify the client-experience cost.
 
@@ -106,7 +109,7 @@ All v2 list endpoints support `limit=-1` to return all results in a single respo
 - **Offset** -- runs `queryset.count()` to set the page size, then returns the full offset envelope.
 - **Cursor** -- loads the full queryset into memory and returns a cursor envelope with `next`/`previous` set to `null`.
 
-Avoid `limit=-1` on large datasets (roles, role-bindings). Acceptable for bounded lists (workspaces, principals).
+Avoid `limit=-1` on large datasets (roles, role-bindings, audit logs). Acceptable for bounded lists (workspaces, principals).
 
 ### `order_by` conventions
 
@@ -118,6 +121,7 @@ Avoid `limit=-1` on large datasets (roles, role-bindings). Acceptable for bounde
 | Role bindings — `GET /role-bindings/` (cursor) | Dot notation for cross-relation fields; prefix `-` for descending | `role.id`, `-role.id`, `role.name`, `-role.name`, `role.modified`, `-role.modified`, `role.created`, `-role.created`, `resource.id`, `-resource.id`, `resource.type`, `-resource.type` |
 | Role bindings — `GET /role-bindings/by-subject/` `subject_type=group` (cursor) | Dot notation; prefix `-` for descending | `group.name`, `-group.name`, `group.description`, `-group.description`, `group.user_count`, `-group.user_count`, `group.uuid`, `-group.uuid`, `group.created`, `-group.created`, `group.modified`, `-group.modified`, `role.name`, `-role.name`, `role.modified`, `-role.modified`, `role.created`, `-role.created`, `last_modified`, `-last_modified` |
 | Role bindings — `GET /role-bindings/by-subject/` `subject_type=user` (cursor) | Dot notation; prefix `-` for descending | `user.username`, `-user.username`, `user.uuid`, `-user.uuid`, `role.name`, `-role.name`, `role.modified`, `-role.modified`, `role.created`, `-role.created`, `last_modified`, `-last_modified` |
+| Audit logs (cursor) | Simple field names; prefix `-` for descending | `created`, `-created` |
 
 ## Serializer Conventions
 

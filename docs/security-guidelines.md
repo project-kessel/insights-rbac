@@ -77,6 +77,7 @@ Rules:
 - When Kessel is unreachable, `_call_inventory()` returns a safe default (False for checks, empty set for lookups). Never default to granting access.
 - Resource type allowlists are enforced. `RoleBindingKesselAccessPermission.ALLOWED_RESOURCE_TYPES` only allows `{"workspace", "tenant"}`. Unknown types are denied.
 - Tenant-level authorization uses `request.user.admin` (org-admin check), not Kessel. This is intentional for the current milestone.
+- Audit log v2 access uses `AuditLogV2KesselAccessPermission`, which checks the `rbac_audit_log_view` relation on the tenant resource. Unlike v1, there is no org-admin bypass — access is decided solely by Kessel. Org admins receive the relation through the platform admin default role binding.
 
 ### System user access
 

@@ -886,6 +886,61 @@ class FieldSelection:
         return parts
 
 
+def resolve_field_selection(
+    value: Optional[str],
+    selection_class: type[FieldSelection],
+    default_fields: set,
+    error_key: Optional[str] = None,
+    strict: bool = False,
+) -> set:
+    """Parse a ``fields`` query parameter into the set of root fields to return.
+
+    Args:
+        value: The raw fields parameter value from the request.
+        selection_class: The endpoint's :class:`FieldSelection` subclass.
+        default_fields: Fields to return when value is empty or selects nothing valid.
+        error_key: When set, validation errors are nested under this key so the
+            response points at the offending query parameter.
+        strict: If True, reject unknown field names (write operations per AIP-161).
+            If False, silently filter them out (read operations per AIP-161).
+
+    Returns:
+        Set of field names to include in the response.
+
+    Raises:
+        serializers.ValidationError: If the fields parameter has invalid syntax or
+            (when strict) names a field the endpoint does not return.
+    """
+
+    def _error(message: str) -> serializers.ValidationError:
+        return serializers.ValidationError({error_key: message} if error_key else message)
+
+    if not value:
+        return default_fields
+
+    try:
+        field_selection = selection_class.parse(value)
+    except FieldSelectionValidationError as e:
+        raise _error(e.message)
+
+    if not field_selection:
+        return default_fields
+
+    valid_fields = selection_class.VALID_ROOT_FIELDS
+    requested = field_selection.root_fields
+
+    if strict:
+        invalid = requested - valid_fields
+        if invalid:
+            raise _error(
+                f"Invalid field(s): {', '.join(sorted(invalid))}. "
+                f"Valid fields are: {', '.join(sorted(valid_fields))}"
+            )
+
+    resolved = requested & valid_fields
+    return resolved or default_fields
+
+
 class UUIDStringField(UUIDField):
     """A UUID field that is always represented as a hex string with hyphens (the hex_verbose) format."""
 

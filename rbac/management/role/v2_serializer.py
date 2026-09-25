@@ -29,7 +29,7 @@ from management.role.v2_exceptions import (
 )
 from management.role.v2_model import RoleV2
 from management.role.v2_service import RoleV2Service
-from management.utils import FieldSelection, FieldSelectionValidationError, UUIDStringField, normalize_blank_or_none
+from management.utils import FieldSelection, UUIDStringField, normalize_blank_or_none, resolve_field_selection
 from rest_framework import serializers
 
 
@@ -127,30 +127,7 @@ def validate_fields_parameter(value: str, default_fields: set, strict: bool = Fa
     Raises:
         ValidationError: If fields parameter has invalid syntax or (when strict=True) invalid field names
     """
-    if not value:
-        return default_fields
-
-    try:
-        field_selection = RoleFieldSelection.parse(value)
-    except FieldSelectionValidationError as e:
-        raise serializers.ValidationError(e.message)
-
-    if not field_selection:
-        return default_fields
-
-    valid_fields = set(RoleV2ResponseSerializer.Meta.fields)
-    requested = field_selection.root_fields
-
-    if strict:
-        invalid = requested - valid_fields
-        if invalid:
-            raise serializers.ValidationError(
-                f"Invalid field(s): {', '.join(sorted(invalid))}. "
-                f"Valid fields are: {', '.join(sorted(valid_fields))}"
-            )
-
-    resolved = requested & valid_fields
-    return resolved or default_fields
+    return resolve_field_selection(value, RoleFieldSelection, default_fields, strict=strict)
 
 
 class RoleV2ListSerializer(DottedQueryParamSerializerMixin, serializers.Serializer):

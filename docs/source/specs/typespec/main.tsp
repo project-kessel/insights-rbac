@@ -1782,6 +1782,132 @@ model PrincipalListResponse {
     data: Principal[];
 }
 
+@doc("Type of resource an audit log entry refers to")
+enum AuditLogResourceType {
+    group,
+    group_v2,
+    role,
+    role_v2,
+    user,
+    permission,
+    workspace,
+    role_binding,
+}
+
+@doc("Action recorded by an audit log entry")
+enum AuditLogAction {
+    delete,
+    add,
+    edit,
+    create,
+    remove,
+    read,
+}
+
+@doc("Origin of the request that produced the audit log entry. Null for ordinary API requests.")
+enum AuditLogSource {
+    ai_assistant,
+}
+
+@example(#{
+    created: offsetDateTime.fromISO("2024-08-04T12:00:00Z"),
+    principal_username: "jdoe",
+    description: "Created workspace: Alpha Workspace",
+    resource_type: AuditLogResourceType.workspace,
+    resource_id: "e4277742-b91c-43f1-a185-b827e8574345",
+    action: AuditLogAction.create,
+    source: null
+})
+model AuditLog {
+    @doc("Timestamp of when the audited action occurred")
+    created?: offsetDateTime;
+    @doc("Username of the principal that performed the action")
+    principal_username?: string;
+    @doc("Human readable description of the audited action")
+    description?: string;
+    @doc("Type of resource the action was performed on")
+    resource_type?: AuditLogResourceType;
+    @doc("UUID of the resource the action was performed on. Null for entries recorded before UUIDs were captured, or for resource types without a UUID.")
+    resource_id?: UUID | null;
+    @doc("Action that was performed")
+    action?: AuditLogAction;
+    @doc("Origin of the request. Null for ordinary API requests.")
+    source?: AuditLogSource | null;
+}
+
+@route("/auditlogs/")
+@tag("Audit Logs")
+@doc("Operations about audit logs")
+namespace AuditLogs {
+
+    /**
+     * Default fields returned for audit log entries
+     */
+    const DefaultAuditLogFieldMask: FieldMask = "created,principal_username,description,resource_type,resource_id,action,source";
+
+    @doc("List the audit log entries for a tenant")
+    @summary("List the audit log entries for a tenant")
+    @opExample(#{
+        parameters: #{
+            limit: 10
+        },
+        returnType: #{
+            _: 200,
+            meta: #{
+                limit: 10
+            },
+            links: #{
+                next: "/api/rbac/v2/auditlogs/?limit=10&cursor=eyJwIjoiMjAyNC0wOC0wNFQxMjowMDowMFoifQ%3D%3D",
+                previous: null
+            },
+            data: #[
+                #{
+                    created: offsetDateTime.fromISO("2024-08-04T12:00:00Z"),
+                    principal_username: "jdoe",
+                    description: "Created workspace: Alpha Workspace",
+                    resource_type: AuditLogResourceType.workspace,
+                    resource_id: "e4277742-b91c-43f1-a185-b827e8574345",
+                    action: AuditLogAction.create,
+                    source: null
+                }
+            ]
+        }
+    })
+    @get op list(
+        @query limit?: Limit = DefaultLimit;
+
+        @doc("Cursor for cursor-based pagination.")
+        @query cursor?: Cursor;
+
+        @doc("Filter by principal username. Case-insensitive substring match by default; use * for glob patterns (e.g. jd*).")
+        @query principal_username?: string;
+
+        @doc("Filter by the type of resource the action was performed on.")
+        @query resource_type?: AuditLogResourceType;
+
+        @doc("Filter by the UUID of the resource the action was performed on.")
+        @query resource_id?: UUID;
+
+        @doc("Filter by the action that was performed.")
+        @query action?: AuditLogAction;
+
+        @doc("Only return entries created at or after this ISO 8601 timestamp.")
+        @example(offsetDateTime.fromISO("2024-08-01T00:00:00Z"))
+        @query created_after?: offsetDateTime;
+
+        @doc("Only return entries created at or before this ISO 8601 timestamp.")
+        @example(offsetDateTime.fromISO("2024-08-31T23:59:59Z"))
+        @query created_before?: offsetDateTime;
+
+        @doc("Control which fields are included in the response to optimize payload size.")
+        @query fields?: FieldMask = DefaultAuditLogFieldMask;
+
+        @doc("Sort by specified field, prefix with '-' for descending order. Allowed fields: created.")
+        @example("created")
+        @query order_by?: OrderBy = "-created";
+    ): ListResponse<AuditLog> | Problems.CommonProblems;
+}
+
 @route("/principals/")
 @tag("Principals")
 @doc("Operations about principals")
