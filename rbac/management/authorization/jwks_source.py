@@ -22,6 +22,7 @@ from json import JSONDecodeError
 from typing import Protocol
 
 import requests
+from django.conf import settings
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 from management.cache import JWKSCache
 from requests import Response
@@ -113,7 +114,7 @@ class JWKSCacheSource(JWKSSource):
 def _request_json(url: str) -> dict:
     """Perform an JWKS related GET request and return the JSON response."""
     try:
-        response: Response = requests.get(url=url)
+        response: Response = requests.get(url=url, timeout=settings.OUTBOUND_HTTP_TIMEOUT)
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ce:
         logger.error("Unable to fetch %s to validate the token: %s", url, ce)
 
