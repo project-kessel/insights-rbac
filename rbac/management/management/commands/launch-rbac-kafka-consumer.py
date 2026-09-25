@@ -14,6 +14,20 @@ from django.core.management import BaseCommand
 from prometheus_client import start_http_server
 from sentry_sdk.integrations.logging import LoggingIntegration
 
+from rbac.sentry_kafka_filter import (  # noqa: F401 - re-exported for tests
+    KAFKA_BENIGN_SIGNATURES,
+    STORM_THRESHOLD,
+    STORM_WINDOW_SECONDS,
+    _benign_match_lock,
+    _benign_match_timestamps,
+    _filter_kafka_benign_events,
+    _get_event_text_for_filtering,
+    _get_monotonic_time,
+    _is_kafka_origin,
+    _should_suppress_benign_event,
+    kafka_benign_events_matched_total,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,6 +89,7 @@ def initialize_consumer_sentry():
             integrations=_configure_sentry_integrations(),
             environment=os.getenv("ENV_NAME", "unknown"),
             release=os.getenv("GIT_COMMIT", "unknown"),
+            before_send=_filter_kafka_benign_events,
         )
 
         _set_sentry_consumer_context()

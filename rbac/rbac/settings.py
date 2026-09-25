@@ -56,9 +56,20 @@ GLITCHTIP_DSN = os.getenv("GLITCHTIP_DSN", "")
 if GLITCHTIP_DSN:
     import sentry_sdk
     from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
     from sentry_sdk.integrations.redis import RedisIntegration
 
-    sentry_sdk.init(dsn=GLITCHTIP_DSN, integrations=[DjangoIntegration(), RedisIntegration()])
+    from .sentry_kafka_filter import _filter_kafka_benign_events
+
+    sentry_sdk.init(
+        dsn=GLITCHTIP_DSN,
+        integrations=[
+            DjangoIntegration(),
+            RedisIntegration(),
+            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+        ],
+        before_send=_filter_kafka_benign_events,
+    )
     print("Sentry SDK initialization using Glitchtip was successful!")
 else:
     print("GLITCHTIP_DSN was not set, skipping Glitchtip initialization.")
