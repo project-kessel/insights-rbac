@@ -182,6 +182,7 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | Flag | Default | Effect |
 |------|---------|--------|
 | `V2_APIS_ENABLED` | `False` | Registers v2 URL routes |
+| `OCM_V2_ENABLED` | `False` | Fallback setting for V2-backed OCM roles-for-group reads |
 | `KAFKA_ENABLED` | `False` | Enables Kafka producer/consumer |
 | `NOTIFICATIONS_ENABLED` | `False` | Enables custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enables RH system notifications |
@@ -193,6 +194,23 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
 | `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
+
+The Unleash flag `rbac.ocm-v2.enabled` is evaluated globally, without organization context,
+with `OCM_V2_ENABLED` as its environment fallback. An existing Unleash flag result takes
+precedence over the fallback. It is independent of workspace flags and persistent V2 write
+activation. When disabled, roles-for-group delegates
+to the existing V1 view. When enabled, it reads V2 bindings and preserves the V1 response contract.
+Built-in default groups expose seeded children of platform roles. External role metadata and
+legacy display names use the optional `v1_source` link; V2-native roles use their own name as
+`display_name` and return null external metadata. Role assignment lookup never uses V1 policies.
+
+Use an all-or-nothing Unleash strategy, without per-org constraints or percentage rollout.
+Coordinate the cutover with the OCM team and enable the flag only after both integration changes
+are deployed and bindings are populated for all affected tenants. Verify OCM-relevant V2 names
+match V1 names. The seeder uses V1 display names, so that equality is not guaranteed for every role.
+The roles-for-group V2 response always includes `accessCount`, as required by the integration
+contract; the legacy group query currently omits that field. The modified-tenants endpoint and
+principal-specific roles endpoint are outside this rollout's scope.
 
 ## 12. Prometheus Metrics Conventions
 

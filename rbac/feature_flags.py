@@ -57,6 +57,8 @@ class FeatureFlags:
     TOGGLE_USE_ROLE_BINDING_VIEW_PERMISSION = "rbac.use-role-binding-view-permission.enabled"
     # Per-org flag: when enabled, the org uses v2 APIs for write operations and v1 write APIs are blocked.
     TOGGLE_V2_EDIT_API_ENABLED = "platform.rbac.workspaces"
+    # Global rollout of V2 data for OCM integrations.
+    TOGGLE_OCM_V2_ENABLED = "rbac.ocm-v2.enabled"
     # Per-org flag: when enabled, the org uses only V2 access checks for HBI (and V1 access checks are blocked).
     TOGGLE_V2_ADDITIONAL_MANDATORY_ACCESS_CHECK_REQUIRED = "hbi.rbac-v2"
 
@@ -215,6 +217,13 @@ class FeatureFlags:
             feature_name=self.TOGGLE_V2_EDIT_API_ENABLED,
             context={"orgId": str(org_id)},
             fallback_function=lambda ignored_toggle_name, ignored_context: settings.V2_EDIT_API_ENABLED,
+        )
+
+    def is_ocm_v2_enabled_global(self) -> bool:
+        """Check the global OCM V2 rollout flag without organization targeting."""
+        return self.is_enabled(
+            feature_name=self.TOGGLE_OCM_V2_ENABLED,
+            fallback_function=lambda ignored_toggle_name, ignored_context: settings.OCM_V2_ENABLED,
         )
 
     def is_v2_strict_access_check_enabled(self, org_id: str) -> bool:
