@@ -7,8 +7,8 @@ from management.disaster_recovery.corrective_writer import (
     write_corrective_events,
 )
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
-from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from tests.management.disaster_recovery.helpers import FAKE_WS_UUID, _make_tuple
 
 

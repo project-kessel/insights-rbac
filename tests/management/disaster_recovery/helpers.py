@@ -1,6 +1,6 @@
 """Shared test helpers for disaster recovery tests."""
 
-from management.relation_replicator.types import (
+from management.inventory_replicator.types import (
     ObjectReference,
     ObjectType,
     RelationTuple,

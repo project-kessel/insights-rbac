@@ -27,18 +27,18 @@ from django.db.models.query import QuerySet
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
+from management.group.inventory_api_dual_write_group_handler import (
+    InventoryApiDualWriteGroupHandler,
+)
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
-from management.group.relation_api_dual_write_group_handler import (
-    RelationApiDualWriteGroupHandler,
-)
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.notifications.notification_handlers import (
     group_flag_change_notification_handler,
     group_role_change_notification_handler,
 )
 from management.policy.model import Policy
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.model import Role
 from management.role_binding.service import RoleBindingService
 from management.tenant_service.v2 import V2TenantBootstrapService, lock_tenant_for_bootstrap
@@ -143,7 +143,7 @@ def clone_default_group_in_public_schema(group, tenant) -> Optional[Group]:
     tenant_default_policy.roles.set(public_default_roles)
 
     if bootstrapped_tenant:
-        dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.CUSTOMIZE_DEFAULT_GROUP)
+        dual_write_handler = InventoryApiDualWriteGroupHandler(group, ReplicationEventType.CUSTOMIZE_DEFAULT_GROUP)
         dual_write_handler.generate_relations_reset_roles(
             public_default_roles, remove_default_access_from=bootstrapped_tenant.mapping
         )
@@ -227,7 +227,7 @@ def add_roles(group, roles_or_role_ids, tenant, user=None):
     if not added_roles:
         return
     if tenant.tenant_name != "public":
-        dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.ASSIGN_ROLE)
+        dual_write_handler = InventoryApiDualWriteGroupHandler(group, ReplicationEventType.ASSIGN_ROLE)
         dual_write_handler.generate_relations_reset_roles(added_roles)
         dual_write_handler.replicate()
 
@@ -257,7 +257,7 @@ def remove_roles(group, roles_or_role_ids, tenant, user=None):
                 removed_roles.append(role)
 
     if tenant.tenant_name != "public":
-        dual_write_handler = RelationApiDualWriteGroupHandler(group, ReplicationEventType.UNASSIGN_ROLE)
+        dual_write_handler = InventoryApiDualWriteGroupHandler(group, ReplicationEventType.UNASSIGN_ROLE)
         dual_write_handler.generate_relations_to_remove_roles(removed_roles)
         dual_write_handler.replicate()
 

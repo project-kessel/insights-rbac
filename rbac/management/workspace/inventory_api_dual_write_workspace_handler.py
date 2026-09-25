@@ -20,23 +20,23 @@
 import logging
 from typing import Optional
 
-from management.models import Workspace
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
     WorkspaceEventStream,
     raise_dual_write_exception,
 )
-from management.role.relation_api_dual_write_handler import BaseRelationApiDualWriteHandler
+from management.models import Workspace
+from management.role.inventory_api_dual_write_handler import BaseInventoryApiDualWriteHandler
 from management.workspace.utils.event import make_workspace_event
 from migration_tool.utils import create_relationship
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
+class InventoryApiDualWriteWorkspaceHandler(BaseInventoryApiDualWriteHandler):
     """Class to handle Dual Write for group bindings and membership."""
 
     workspace: Workspace
@@ -45,9 +45,9 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
         self,
         workspace: Workspace,
         event_type: ReplicationEventType,
-        replicator: Optional[RelationReplicator] = None,
+        replicator: Optional[InventoryReplicator] = None,
     ):
-        """Initialize RelationApiDualWriteGroupHandler."""
+        """Initialize InventoryApiDualWriteGroupHandler."""
         if not self.replication_enabled():
             return
 
@@ -58,7 +58,7 @@ class RelationApiDualWriteWorkspaceHandler(BaseRelationApiDualWriteHandler):
             self.relations_to_remove = []
             super().__init__(replicator)
         except Exception as e:
-            raise_dual_write_exception(e, context="Initialization of RelationApiDualWriteWorkspaceHandler")
+            raise_dual_write_exception(e, context="Initialization of InventoryApiDualWriteWorkspaceHandler")
 
     def replicate_new_workspace(self):
         """Replicate new principals into group."""

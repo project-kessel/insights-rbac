@@ -30,20 +30,20 @@ from feature_flags import FEATURE_FLAGS
 from internal.pg_notify_wait import wait_for_pg_notify
 from internal.utils import get_workspace_ids_from_resource_definition
 from management.atomic_transactions import atomic
-from management.models import ResourceDefinition, Role, Workspace
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.models import ResourceDefinition, Role, Workspace
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.model import BindingMapping
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from management.v2_filters import v2_name_filter
-from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
+from management.workspace.inventory_api_dual_write_workspace_handler import InventoryApiDualWriteWorkspaceHandler
 from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
 from rest_framework import serializers
@@ -89,7 +89,7 @@ def _record_ryw_metrics(duration: float, result: str) -> None:
     ryw_wait_total.labels(result=result).inc()
 
 
-def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicator: RelationReplicator) -> int:
+def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicator: InventoryReplicator) -> int:
     """
     Update roles that reference a removed workspace and replicate the changes.
 
@@ -166,7 +166,7 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
 
                 continue
 
-            dual_write = RelationApiDualWriteHandler(
+            dual_write = InventoryApiDualWriteHandler(
                 role, ReplicationEventType.FIX_RESOURCE_DEFINITIONS, replicator=replicator
             )
 
@@ -263,7 +263,7 @@ def _update_custom_roles_for_removed_workspace(workspace_id: uuid.UUID, replicat
 
 # This must be SERIALIZABLE because we are potentially interacting with RoleBindings in V2 tenants.
 @atomic
-def _remove_workspace_direct_role_bindings(workspace: Workspace, replicator: RelationReplicator) -> int:
+def _remove_workspace_direct_role_bindings(workspace: Workspace, replicator: InventoryReplicator) -> int:
     """
     Delete role bindings bound a workspace about to be deleted.
 
@@ -345,9 +345,9 @@ def _remove_workspace_direct_role_bindings(workspace: Workspace, replicator: Rel
 class WorkspaceService:
     """Workspace service."""
 
-    _replicator: RelationReplicator
+    _replicator: InventoryReplicator
 
-    def __init__(self, replicator: Optional[RelationReplicator] = None):
+    def __init__(self, replicator: Optional[InventoryReplicator] = None):
         """Create a WorkspaceService that uses the provided replicator (defaulting to OutboxReplicator)."""
         if replicator is None:
             replicator = OutboxReplicator()
@@ -373,8 +373,8 @@ class WorkspaceService:
 
     def _dual_write_handler(
         self, workspace: Workspace, event_type: ReplicationEventType
-    ) -> RelationApiDualWriteWorkspaceHandler:
-        return RelationApiDualWriteWorkspaceHandler(
+    ) -> InventoryApiDualWriteWorkspaceHandler:
+        return InventoryApiDualWriteWorkspaceHandler(
             workspace=workspace, event_type=event_type, replicator=self._replicator
         )
 

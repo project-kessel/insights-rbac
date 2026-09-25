@@ -29,7 +29,7 @@ from management.models import (
     RoleV2,
 )
 from management.principal.model import Principal
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 from management.role_binding.model import RoleBindingPrincipal
 from tests.identity_request import IdentityRequest
 

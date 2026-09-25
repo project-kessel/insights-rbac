@@ -1428,7 +1428,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Should return all 15 direct bindings (Relations API not mocked, so no inherited)
+        # Should return all 15 direct bindings (Inventory API not mocked, so no inherited)
         self.assertEqual(len(response.data["data"]), 15)
 
     @patch(
@@ -1440,7 +1440,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
         return_value=True,
     )
     def test_list_exclude_sources_direct_without_relations_server(self, mock_permission, mock_lookup):
-        """Test that exclude_sources=direct without RELATION_API_SERVER returns empty."""
+        """Test that exclude_sources=direct without INVENTORY_API_SERVER returns empty."""
         url = self._get_list_url()
         resource_id = str(self.workspace.id)
 
@@ -1450,7 +1450,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Cannot determine inherited bindings without Relations API, return empty
+        # Cannot determine inherited bindings without Inventory API, return empty
         self.assertEqual(len(response.data["data"]), 0)
 
     @patch(
@@ -1459,7 +1459,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
     )
     @patch("management.role_binding.service.RoleBindingService._lookup_binding_uuids_via_relations")
     def test_list_exclude_sources_direct_shows_inherited_only(self, mock_lookup, mock_permission):
-        """Test that exclude_sources=direct shows only inherited bindings from Relations API."""
+        """Test that exclude_sources=direct shows only inherited bindings from Inventory API."""
         # Create a binding on parent workspace
         parent_role = RoleV2.objects.create(
             name="parent_role_list",
@@ -1480,7 +1480,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
             binding=parent_binding,
         )
 
-        # Mock Relations API to return the parent binding UUID
+        # Mock Inventory API to return the parent binding UUID
         mock_lookup.return_value = [str(parent_binding.uuid)]
 
         url = self._get_list_url()
@@ -1535,7 +1535,7 @@ class RoleBindingListViewSetTest(IdentityRequest):
             binding=parent_binding,
         )
 
-        # Mock Relations API to return the parent binding UUID
+        # Mock Inventory API to return the parent binding UUID
         mock_lookup.return_value = [str(parent_binding.uuid)]
 
         url = self._get_list_url()
@@ -2749,7 +2749,7 @@ class RoleBindingViewSetTest(IdentityRequest):
         return_value=True,
     )
     def test_by_subject_without_exclude_sources_defaults_to_none(self, mock_permission):
-        """Test that omitting exclude_sources defaults to 'none' (shows all, falls back to direct without Relations API)."""
+        """Test that omitting exclude_sources defaults to 'none' (shows all, falls back to direct without Inventory API)."""
         url = self._get_by_subject_url()
         response = self.client.get(
             f"{url}?resource_id={self.workspace.id}&resource_type=workspace&limit=100",
@@ -2764,10 +2764,10 @@ class RoleBindingViewSetTest(IdentityRequest):
         "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission",
         return_value=True,
     )
-    @patch("management.role_binding.util.relations_api_client.settings")
+    @patch("management.role_binding.util.inventory_api_client.settings")
     def test_by_subject_exclude_sources_direct_without_relations_server(self, mock_settings, mock_permission):
-        """Test that exclude_sources=direct without RELATION_API_SERVER returns empty."""
-        mock_settings.RELATION_API_SERVER = None
+        """Test that exclude_sources=direct without INVENTORY_API_SERVER returns empty."""
+        mock_settings.INVENTORY_API_SERVER = None
 
         url = self._get_by_subject_url()
         response = self.client.get(
@@ -2776,7 +2776,7 @@ class RoleBindingViewSetTest(IdentityRequest):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Cannot determine inherited bindings without Relations API, return empty
+        # Cannot determine inherited bindings without Inventory API, return empty
         self.assertEqual(len(response.data["data"]), 0)
 
     @patch(
@@ -2785,7 +2785,7 @@ class RoleBindingViewSetTest(IdentityRequest):
     )
     @patch("management.role_binding.service.RoleBindingService._lookup_binding_uuids_via_relations")
     def test_by_subject_exclude_sources_direct_shows_inherited_only(self, mock_lookup, mock_permission):
-        """Test that exclude_sources=direct shows only inherited bindings from Relations API."""
+        """Test that exclude_sources=direct shows only inherited bindings from Inventory API."""
         # Create a binding on parent workspace
         parent_role = RoleV2.objects.create(
             name="parent_role",
@@ -2806,7 +2806,7 @@ class RoleBindingViewSetTest(IdentityRequest):
             binding=parent_binding,
         )
 
-        # Mock Relations API to return the parent binding UUID
+        # Mock Inventory API to return the parent binding UUID
         mock_lookup.return_value = [str(parent_binding.uuid)]
 
         url = self._get_by_subject_url()
@@ -2848,9 +2848,9 @@ class RoleBindingViewSetTest(IdentityRequest):
     def test_by_subject_exclude_sources_direct_excludes_direct_when_relations_returns_both(
         self, mock_lookup, mock_permission
     ):
-        """Test that exclude_sources=direct excludes direct bindings even when Relations API returns both.
+        """Test that exclude_sources=direct excludes direct bindings even when Inventory API returns both.
 
-        This tests the fix for a bug where the Relations API returns both direct and inherited
+        This tests the fix for a bug where the Inventory API returns both direct and inherited
         binding UUIDs, but exclude_sources=direct showed both binding types.
         """
         # Create an inherited binding on parent workspace
@@ -2876,7 +2876,7 @@ class RoleBindingViewSetTest(IdentityRequest):
         # Get a direct binding UUID from setUp (these are on self.workspace)
         direct_binding = self.bindings[0]
 
-        # Mock Relations API to return BOTH direct and inherited binding UUIDs
+        # Mock Inventory API to return BOTH direct and inherited binding UUIDs
         # This simulates real behavior where the "binding" relation returns all bindings
         mock_lookup.return_value = [str(direct_binding.uuid), str(inherited_binding.uuid)]
 
@@ -2913,7 +2913,7 @@ class RoleBindingViewSetTest(IdentityRequest):
     def test_by_subject_exclude_sources_direct_excludes_direct_for_users(self, mock_lookup, mock_permission):
         """Test that exclude_sources=direct excludes direct bindings for user subject type.
 
-        This tests the fix for a bug where the Relations API returns both direct and inherited
+        This tests the fix for a bug where the Inventory API returns both direct and inherited
         binding UUIDs, but exclude_sources=direct showed both binding types.
         """
         # Create an inherited binding on parent workspace with a user
@@ -2941,7 +2941,7 @@ class RoleBindingViewSetTest(IdentityRequest):
         # Get a direct binding UUID from setUp (these are on self.workspace)
         direct_binding = self.bindings[0]
 
-        # Mock Relations API to return BOTH direct and inherited binding UUIDs
+        # Mock Inventory API to return BOTH direct and inherited binding UUIDs
         mock_lookup.return_value = [str(direct_binding.uuid), str(inherited_binding.uuid)]
 
         url = self._get_by_subject_url()
@@ -2973,7 +2973,7 @@ class RoleBindingViewSetTest(IdentityRequest):
     @patch("management.role_binding.service.RoleBindingService._lookup_binding_uuids_via_relations")
     def test_by_subject_exclude_sources_direct_with_empty_inherited(self, mock_lookup, mock_permission):
         """Test that exclude_sources=direct with no inherited bindings returns empty."""
-        # Mock Relations API to return empty list
+        # Mock Inventory API to return empty list
         mock_lookup.return_value = []
 
         url = self._get_by_subject_url()
@@ -2992,8 +2992,8 @@ class RoleBindingViewSetTest(IdentityRequest):
     )
     @patch("management.role_binding.service.RoleBindingService._lookup_binding_uuids_via_relations")
     def test_by_subject_exclude_sources_direct_with_relations_error(self, mock_lookup, mock_permission):
-        """Test that exclude_sources=direct returns empty when Relations API errors."""
-        # Mock Relations API to return None (error case)
+        """Test that exclude_sources=direct returns empty when Inventory API errors."""
+        # Mock Inventory API to return None (error case)
         mock_lookup.return_value = None
 
         url = self._get_by_subject_url()
@@ -3048,7 +3048,7 @@ class RoleBindingViewSetTest(IdentityRequest):
             binding=parent_binding,
         )
 
-        # Mock Relations API to return the parent binding UUID
+        # Mock Inventory API to return the parent binding UUID
         mock_lookup.return_value = [str(parent_binding.uuid)]
 
         url = self._get_by_subject_url()

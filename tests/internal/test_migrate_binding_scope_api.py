@@ -23,12 +23,12 @@ from django.test import TestCase, override_settings
 from management.group.definer import add_roles, clone_default_group_in_public_schema, seed_group
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
 from management.models import Access, BindingMapping, Permission, Workspace
 from management.permission.scope_service import ImplicitResourceService, Scope
 from management.policy.model import Policy
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.definer import seed_roles
 from management.role.model import ResourceDefinition, Role
 from management.role.v2_model import CustomRoleV2, RoleV2, SeededRoleV2
@@ -624,7 +624,7 @@ class SystemRoleBindingMigrationTest(TestCase):
         TENANT_SCOPE_PERMISSIONS="",
         REPLICATION_TO_RELATION_ENABLED=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_system_role_with_multiple_groups_consolidates_bindings(self, mock_replicate):
         """
         Test system role assigned to multiple groups with duplicate bindings.
@@ -886,7 +886,7 @@ class SystemRoleBindingMigrationTest(TestCase):
 
         replicator = InMemoryRelationReplicator(self.tuples)
 
-        dual_write = RelationApiDualWriteGroupHandler(
+        dual_write = InventoryApiDualWriteGroupHandler(
             group=group, event_type=ReplicationEventType.ASSIGN_ROLE, replicator=replicator
         )
 
@@ -1174,7 +1174,7 @@ class ComprehensiveBootstrapMigrationTest(DualWriteTestCase):
         REPLICATION_TO_RELATION_ENABLED=True,
         V2_BOOTSTRAP_TENANT=True,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_comprehensive_migration_with_bootstrap_and_custom_groups(self, mock_replicate):
         """
         Comprehensive end-to-end migration test.

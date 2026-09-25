@@ -3,7 +3,12 @@ import uuid
 from typing import Optional
 
 from google.protobuf import json_format
-from kessel.relations.v1beta1.common_pb2 import Relationship, ObjectReference, ObjectType, SubjectReference
+from kessel.inventory.v1beta2 import (
+    relationship_pb2,
+    relation_object_reference_pb2,
+    relation_subject_reference_pb2,
+    relation_object_type_pb2,
+)
 from migration_tool.in_memory_tuples import InMemoryTuples, RelationTuple
 from migration_tool.utils import create_relationship
 
@@ -19,7 +24,7 @@ def _make_tuple(
     subject_relation: Optional[str] = None,
 ) -> RelationTuple:
     """Build a RelationTuple from flat keyword arguments for test convenience."""
-    from management.relation_replicator.types import (
+    from management.inventory_replicator.types import (
         ObjectReference as ObjRef,
         ObjectType as ObjType,
         SubjectReference as SubRef,
@@ -130,22 +135,32 @@ class TestInMemoryTuples(unittest.TestCase):
         self.store = InMemoryTuples()
 
     def test_add_tuple(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
         self.assertEqual(len(self.store._tuples), 1)
 
     def test_remove_tuple(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
@@ -153,11 +168,16 @@ class TestInMemoryTuples(unittest.TestCase):
         self.assertEqual(len(self.store._tuples), 0)
 
     def test_clear_tuples(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
@@ -165,11 +185,16 @@ class TestInMemoryTuples(unittest.TestCase):
         self.assertEqual(len(self.store._tuples), 0)
 
     def test_count_tuples(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
@@ -177,11 +202,16 @@ class TestInMemoryTuples(unittest.TestCase):
         self.assertEqual(count, 1)
 
     def test_find_tuples(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
@@ -189,18 +219,28 @@ class TestInMemoryTuples(unittest.TestCase):
         self.assertEqual(len(tuples), 1)
 
     def test_find_group_finds_group_with_tuple_that_matches_predicate(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id1"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id1"
+                ),
+                relation="sub_rel",
             ),
         )
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id2"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id2"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)
@@ -212,18 +252,28 @@ class TestInMemoryTuples(unittest.TestCase):
         self.assertEqual(len(tuples), 1)
 
     def test_find_group_does_not_match_group_with_unmatched_predicate(self):
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id1"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id1"
+                ),
+                relation="sub_rel",
             ),
         )
-        relationship = Relationship(
-            resource=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="res_id"),
+        relationship = relationship_pb2.Relationship(
+            resource=relation_object_reference_pb2.RelationObjectReference(
+                type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="res_id"
+            ),
             relation="rel",
-            subject=SubjectReference(
-                subject=ObjectReference(type=ObjectType(namespace="ns", name="name"), id="sub_id2"), relation="sub_rel"
+            subject=relation_subject_reference_pb2.RelationSubjectReference(
+                subject=relation_object_reference_pb2.RelationObjectReference(
+                    type=relation_object_type_pb2.RelationObjectType(namespace="ns", name="name"), id="sub_id2"
+                ),
+                relation="sub_rel",
             ),
         )
         self.store.add(relationship)

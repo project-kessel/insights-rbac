@@ -24,7 +24,12 @@ from django.http import Http404
 from management.authorization.invalid_token import InvalidTokenError
 from management.authorization.missing_authorization import MissingAuthorizationError
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
-from management.exceptions import InvalidFieldError, NotFoundError, RequiredFieldError
+from management.exceptions import (
+    InvalidFieldError,
+    InventoryAuthUnavailableError,
+    NotFoundError,
+    RequiredFieldError,
+)
 from management.role.v2_exceptions import RolesNotFoundError
 from management.utils import api_path_prefix, v2response_error_from_errors
 from rest_framework import status
@@ -143,6 +148,17 @@ def custom_exception_handler_v2(exc, context):
             content_type="application/json",
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    elif isinstance(exc, InventoryAuthUnavailableError):
+        response = Response(
+            data=_v2_generate_error_data_payload_response(
+                detail="Inventory authorization is temporarily unavailable. Please try again shortly.",
+                context=context,
+                http_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ),
+            content_type="application/problem+json",
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        response["Retry-After"] = "1"
     elif isinstance(exc, RolesNotFoundError):
         # Convert RolesNotFoundError to Http404 and let standard handler process it
         response = exception_handler(Http404(str(exc)), context)
@@ -230,5 +246,16 @@ def custom_exception_handler(exc, context):
             content_type="application/json",
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    elif isinstance(exc, InventoryAuthUnavailableError):
+        response = Response(
+            data=_generate_error_data_payload_response(
+                detail="Inventory authorization is temporarily unavailable. Please try again shortly.",
+                context=context,
+                http_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ),
+            content_type="application/json",
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        response["Retry-After"] = "1"
 
     return response

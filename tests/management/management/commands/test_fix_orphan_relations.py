@@ -11,7 +11,7 @@ from management.audit_log.model import AuditLog
 from management.group.model import Group
 from management.group.platform import GlobalPolicyIdService
 from management.permission.scope_service import Scope
-from management.relation_replicator.noop_replicator import NoopReplicator
+from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.role.definer import seed_roles
 from management.role.model import BindingMapping, Role
 from management.role.platform import platform_v2_role_uuid_for
@@ -53,7 +53,7 @@ class TestRemoveOrphanRelations(DualWriteTestCase):
         if args is None:
             args = ["--all"]
 
-        with patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate") as replicate_mock:
+        with patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate") as replicate_mock:
             replicate_mock.side_effect = self.replicator.replicate
 
             with patch("internal.migrations.remove_orphan_relations.iterate_tuples_from_kessel") as iterate_mock:

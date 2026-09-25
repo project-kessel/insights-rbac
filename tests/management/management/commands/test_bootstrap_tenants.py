@@ -7,7 +7,7 @@ from django.test.utils import override_settings
 
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
-from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_service import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
@@ -64,7 +64,7 @@ class TestBootstrapTenants(DualWriteTestCase):
         )
 
     def _do_test_simple_bootstrap(self, invocation: list[str], created_org_id="12345"):
-        with patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate") as replicate:
+        with patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate") as replicate:
             replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
 
             self.switch_tenant(self.fixture.new_unbootstrapped_tenant(org_id=created_org_id))
@@ -85,7 +85,7 @@ class TestBootstrapTenants(DualWriteTestCase):
     def test_single(self):
         self._do_test_simple_bootstrap(["--org-id=12345"], created_org_id="12345")
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bulk(self, replicate):
         replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
 
@@ -102,7 +102,7 @@ class TestBootstrapTenants(DualWriteTestCase):
                 for_groups=[str(tenant.tenant_mapping.default_group_uuid)],
             )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_bulk_fallback(self, replicate):
         replicate.side_effect = InMemoryRelationReplicator(self.tuples).replicate
 
@@ -133,7 +133,7 @@ class TestBootstrapTenants(DualWriteTestCase):
             "--org-id=nonexistent",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_force_required_if_bootstrapped(self, replicate):
         replicate.side_effect = self._tuples_replicate
         self.tuples.clear()
@@ -146,7 +146,7 @@ class TestBootstrapTenants(DualWriteTestCase):
         self._invoke(f"--org-id", self.tenant.org_id, "--force")
         self.assertGreater(len(self.tuples), 0)
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_fix_custom_default_group(self, replicate):
         replicate.side_effect = self._tuples_replicate
 
@@ -215,7 +215,7 @@ class TestBootstrapTenants(DualWriteTestCase):
         assert_default_access(1)
         self.assertEqual(initial_tuples, set(self.tuples))
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_add_org_level_permissions(self, replicate):
         replicate.side_effect = self._tuples_replicate
 

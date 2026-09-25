@@ -23,30 +23,28 @@ from typing import List, Optional, Union
 
 from django.conf import settings
 from google.protobuf import json_format
-from internal.jwt_utils import JWTManager, JWTProvider
 from kessel.inventory.v1beta2 import (
     inventory_service_pb2_grpc,
+    read_tuples_request_pb2,
+    relation_subject_filter_pb2,
+    relation_tuple_filter_pb2,
     reporter_reference_pb2,
     resource_reference_pb2,
     subject_reference_pb2,
+    tuple_service_pb2_grpc,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
-from kessel.relations.v1beta1 import relation_tuples_pb2, relation_tuples_pb2_grpc
-from management.cache import JWTCache
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.inventory_replicator.types import RelationTuple
 from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, Scope
-from management.relation_replicator.types import RelationTuple
 from management.role.platform import admin_platform_parent_scopes_for_seeded_system_role, platform_v2_role_uuid_for
 from management.role.relations import role_child_relationship
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
-from management.utils import create_client_channel_inventory, create_client_channel_relation
+from management.utils import create_client_channel_inventory, get_inventory_auth_metadata
 from migration_tool.utils import create_relationship
 
 from api.models import Tenant
 
-jwt_cache = JWTCache()
-jwt_provider = JWTProvider()
-jwt_manager = JWTManager(jwt_provider, jwt_cache)
 logger = logging.getLogger(__name__)
 
 
@@ -92,14 +90,16 @@ class InventoryApiBaseChecker:
         with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
             stub = inventory_service_pb2_grpc.KesselInventoryServiceStub(channel)
 
-            responses = [stub.Check(req) for req in checks]
+            # Fetch metadata per-call, not once for the whole batch: a long-running batch
+            # could otherwise outlast the token and start failing partway through.
+            responses = [stub.Check(req, metadata=get_inventory_auth_metadata()) for req in checks]
             return all(self._is_allowed(res) for res in responses)
 
     def _check_inventory_batch(self, checks: List[CheckRequest]) -> list[bool]:
         """Check multiple relations via a single gRPC channel, returning per-request results."""
         with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
             stub = inventory_service_pb2_grpc.KesselInventoryServiceStub(channel)
-            return [self._is_allowed(stub.Check(req)) for req in checks]
+            return [self._is_allowed(stub.Check(req, metadata=get_inventory_auth_metadata())) for req in checks]
 
     def _is_allowed(self, response):
         response_dict = json_format.MessageToDict(response)
@@ -470,32 +470,28 @@ class CustomRolePermissionChecker(InventoryApiBaseChecker):
         All custom role permission tuples use wildcard subjects (rbac/principal:*) by SpiceDB
         schema design. The Check API rejects wildcards, so we use ReadTuples which queries
         stored relationships directly.
-
-        Uses JWT metadata for auth because the Relations API channel does not bundle
-        call credentials (unlike the Inventory API channel used by check_inventory_core).
         """
-        token = jwt_manager.get_jwt_from_redis()
-        metadata = [("authorization", f"Bearer {token}")] if token else []
         all_present = True
 
-        with create_client_channel_relation(settings.RELATION_API_SERVER) as channel:
-            stub = relation_tuples_pb2_grpc.KesselTupleServiceStub(channel)
+        with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
+            stub = tuple_service_pb2_grpc.KesselTupleServiceStub(channel)
 
             for t in tuples:
-                request = relation_tuples_pb2.ReadTuplesRequest(
-                    filter=relation_tuples_pb2.RelationTupleFilter(
+                request = read_tuples_request_pb2.ReadTuplesRequest(
+                    filter=relation_tuple_filter_pb2.RelationTupleFilter(
                         resource_namespace=t.resource.type.namespace,
                         resource_type=t.resource.type.name,
                         resource_id=t.resource.id,
                         relation=t.relation,
-                        subject_filter=relation_tuples_pb2.SubjectFilter(
+                        subject_filter=relation_subject_filter_pb2.RelationSubjectFilter(
                             subject_namespace=t.subject.subject.type.namespace,
                             subject_type=t.subject.subject.type.name,
                             subject_id=t.subject.subject.id,
                         ),
                     )
                 )
-                responses = list(stub.ReadTuples(request, metadata=metadata))
+                # Fetch metadata per-call: a long-running batch could otherwise outlast the token.
+                responses = list(stub.ReadTuples(request, metadata=get_inventory_auth_metadata()))
                 if not responses:
                     logger.warning(
                         f"CustomRole: {role_uuid} missing relation "
@@ -538,7 +534,7 @@ def generate_seeded_role_hierarchy_tuples(
 ) -> list[RelationTuple]:
     """Generate expected parent-child tuples for a seeded role.
 
-    Replicates the logic from SeedingRelationApiDualWriteHandler._check_create_admin_platform_relation()
+    Replicates the logic from SeedingInventoryApiDualWriteHandler._check_create_admin_platform_relation()
     to determine what parent-child relationships should exist in Kessel for a given seeded role.
 
     Args:

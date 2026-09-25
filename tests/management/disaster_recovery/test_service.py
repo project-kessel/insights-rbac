@@ -10,9 +10,9 @@ from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
 from management.disaster_recovery.service import reconcile
 from management.group.model import Group
 from management.principal.model import Principal
-from management.relation_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType
-from management.relation_replicator.types import (
+from management.inventory_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.types import (
     ObjectReference,
     ObjectType,
     RelationTuple,

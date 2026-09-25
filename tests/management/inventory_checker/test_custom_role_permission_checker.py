@@ -22,9 +22,9 @@ from management.inventory_checker.inventory_api_check import CustomRolePermissio
 from management.models import CustomRoleV2, Permission
 from tests.identity_request import IdentityRequest
 
-RELATIONS_CHANNEL_PATH = "management.inventory_checker.inventory_api_check.create_client_channel_relation"
+RELATIONS_CHANNEL_PATH = "management.inventory_checker.inventory_api_check.create_client_channel_inventory"
 RELATIONS_STUB_PATH = (
-    "management.inventory_checker.inventory_api_check.relation_tuples_pb2_grpc.KesselTupleServiceStub"  # noqa: E501
+    "management.inventory_checker.inventory_api_check.tuple_service_pb2_grpc.KesselTupleServiceStub"  # noqa: E501
 )
 
 
@@ -69,7 +69,7 @@ class CustomRolePermissionCheckerTest(IdentityRequest):
         """Helper to set up Relations API mocks for ReadTuples.
 
         Args:
-            mock_create_channel: Mock for create_client_channel_relation
+            mock_create_channel: Mock for create_client_channel_inventory
             read_tuples_responses: List of iterables -- one per ReadTuples call.
                 Each iterable yields response objects (non-empty = tuple exists).
 

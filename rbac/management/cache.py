@@ -290,58 +290,6 @@ class JWKSCache(BasicCache):
         super().save(self.JWKS_CACHE_KEY, response, "JWKS response")
 
 
-class JWTCache(BasicCache):
-    """Redis-based caching for the storage of JWT token."""
-
-    JWT_CACHE_KEY = "rbac::jwt::relations"
-
-    def key_for(self):
-        """Redis key for the JWT token response."""
-        return "rbac::jwt::relations"
-
-    def set_cache(self, pipe, key, item):
-        """Set cache to redis."""
-        pipe.set(name=key, value=item)
-        pipe.expire(name=key, time=settings.IT_TOKEN_JKWS_CACHE_LIFETIME)
-        pipe.execute()
-
-    def get_from_redis(self, key):
-        """Get object from redis based on key."""
-        obj = self.connection.get(name=key)
-        if obj:
-            return obj.decode("utf-8") if isinstance(obj, bytes) else obj
-        return None
-
-    def get_jwt_response(self):
-        """Get the JWT token response from Redis."""
-        return super().get_cached(self.JWT_CACHE_KEY, "Unable to fetch the JWT response from Redis")
-
-    def set_jwt_response(self, response):
-        """Save the JWT token response in Redis."""
-        super().save(self.JWT_CACHE_KEY, response, "JWT response")
-
-
-class JWTCacheOptimized(JWTCache):
-    """Optimized JWT cache for high-throughput consumers (Kafka).
-
-    This cache skips redundant health checks for performance in message processing scenarios.
-    Use this instead of JWTCache for consumers that process many messages per second.
-    """
-
-    def get_jwt_response(self):
-        """Get the JWT token response from Redis without health check overhead."""
-        if self._redis_mocked or not self.use_caching:
-            return None
-
-        try:
-            return self.get_from_redis(self.JWT_CACHE_KEY)
-        except exceptions.RedisError:
-            logger.exception("Unable to fetch the JWT response from Redis")
-            # Disable caching temporarily on error
-            self.disable_caching()
-        return None
-
-
 class PrincipalCache(BasicCache):
     """Redis-based caching for storing the principals."""
 

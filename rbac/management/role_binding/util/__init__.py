@@ -16,6 +16,6 @@
 #
 """Utility modules for role binding management."""
 
-from management.role_binding.util.relations_api_client import lookup_binding_subjects, parse_resource_type
+from management.role_binding.util.inventory_api_client import lookup_binding_subjects, parse_resource_type
 
 __all__ = ["lookup_binding_subjects", "parse_resource_type"]
