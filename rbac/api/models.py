@@ -33,13 +33,23 @@ logger = logging.getLogger(__name__)
 class TenantModifiedQuerySet(models.QuerySet):
     """Queryset for modified tenants."""
 
-    def modified_only(self):
-        """Return only modified tenants."""
-        return (
-            self.filter(Q(group__system=False) | Q(role__system=False))
-            .prefetch_related("group_set", "role_set")
-            .distinct()
-        )
+    def modified_only(self, *, use_v2=False):
+        """Return only modified tenants.
+
+        When *use_v2* is ``False`` (default), a tenant is considered modified
+        when it contains at least one non-system group **or** at least one
+        non-system V1 role — this preserves the legacy behaviour.
+
+        When *use_v2* is ``True``, V1 role detection is replaced by custom
+        V2 role detection while non-system group detection is unchanged.
+        """
+        if use_v2:
+            q = Q(group__system=False) | Q(rolev2__type="custom")
+            prefetch = ("group_set", "rolev2_set")
+        else:
+            q = Q(group__system=False) | Q(role__system=False)
+            prefetch = ("group_set", "role_set")
+        return self.filter(q).prefetch_related(*prefetch).distinct()
 
 
 class Tenant(models.Model):

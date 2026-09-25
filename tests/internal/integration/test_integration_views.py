@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from api.models import User, Tenant
 from management.models import Group, Policy, Principal, Role
+from management.role.v2_model import RoleV2
 from tests.identity_request import IdentityRequest
 
 
@@ -88,14 +89,18 @@ class IntegrationViewsTests(IdentityRequest):
             system=False, name="modifiedTenant1Group", tenant=self.modifiedTenant1
         )
         self.modifiedTenant2 = Tenant.objects.create(tenant_name="Modified Role", org_id=1212)
-        modifiedTenant2Role = Role.objects.create(
+        self.modifiedTenant2V1Role = Role.objects.create(
             system=False, name="modifiedTenant2Role", tenant=self.modifiedTenant2
+        )
+        self.modifiedTenant2Role = RoleV2.objects.create(
+            name="modifiedTenant2RoleV2", type=RoleV2.Types.CUSTOM, tenant=self.modifiedTenant2
         )
 
     def tearDown(self):
         """Tear down internal viewset tests."""
         Group.objects.all().delete()
         Role.objects.all().delete()
+        RoleV2.objects.all().delete()
         Policy.objects.all().delete()
         # Clear the principal cache to avoid test isolation issues
         from management.utils import PRINCIPAL_CACHE
@@ -461,10 +466,11 @@ class IntegrationViewsTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data.get("meta").get("count"), 4)
 
-    def test_tenants_modified(self):
-        """Test that we get tenants back on /tenant/"""
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=False)
+    def test_tenants_modified_v1_flag_disabled(self, mock_flag):
+        """Test that modified_only returns tenants with non-system groups or V1 roles when flag is disabled."""
         response = self.client.get(
-            f"/_private/api/v1/integrations/tenant/?modified_only=true",
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
             **self.request.META,
             follow=True,
         )
@@ -473,6 +479,149 @@ class IntegrationViewsTests(IdentityRequest):
         expected_org_ids = [t.org_id for t in [self.modifiedTenant1, self.modifiedTenant2]]
         actual_org_ids = [t["org_id"] for t in response.data.get("data")]
         self.assertEqual(sorted(expected_org_ids), sorted(actual_org_ids))
+        mock_flag.assert_called_once_with()
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_v2_flag_enabled(self, mock_flag):
+        """Test that modified_only returns tenants with non-system groups or custom V2 roles when flag is enabled."""
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("meta").get("count"), 2)
+        expected_org_ids = [t.org_id for t in [self.modifiedTenant1, self.modifiedTenant2]]
+        actual_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertEqual(sorted(expected_org_ids), sorted(actual_org_ids))
+        mock_flag.assert_called_once_with()
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=False)
+    def test_tenants_modified_v1_only_role_detected(self, mock_flag):
+        """Test that a V1-only non-system role is detected when flag is disabled."""
+        v1_tenant = Tenant.objects.create(tenant_name="V1 Only", org_id=5555)
+        Role.objects.create(system=False, name="v1OnlyRole", tenant=v1_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertIn(int(v1_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_v1_only_role_excluded_when_v2(self, mock_flag):
+        """Test that a V1-only non-system role is NOT detected when flag is enabled."""
+        v1_tenant = Tenant.objects.create(tenant_name="V1 Only No V2", org_id=6666)
+        Role.objects.create(system=False, name="v1OnlyRoleExcluded", tenant=v1_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertNotIn(int(v1_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_seeded_role_excluded(self, mock_flag):
+        """Test that tenants with only seeded V2 roles are not considered modified."""
+        seeded_tenant = Tenant.objects.create(tenant_name="Seeded Only", org_id=3333)
+        RoleV2.objects.create(name="seededRole", type=RoleV2.Types.SEEDED, tenant=seeded_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertNotIn(int(seeded_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_custom_v2_role_detected(self, mock_flag):
+        """Test that a tenant with a custom V2 role is detected as modified when flag is enabled."""
+        custom_tenant = Tenant.objects.create(tenant_name="Custom V2", org_id=4444)
+        RoleV2.objects.create(name="customRole", type=RoleV2.Types.CUSTOM, tenant=custom_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertIn(int(custom_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=False)
+    def test_tenants_modified_non_system_group_always_detected(self, mock_flag):
+        """Test that non-system groups are detected regardless of flag state."""
+        group_tenant = Tenant.objects.create(tenant_name="Group Only", org_id=7777)
+        Group.objects.create(system=False, name="nonSystemGroup", tenant=group_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertIn(int(group_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_pagination_unchanged(self, mock_flag):
+        """Test that pagination and response schema are correct with V2 flag."""
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true&limit=1&offset=0",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data.get("data")), 1)
+        self.assertEqual(response.data.get("meta").get("count"), 2)
+        self.assertIn("links", response.data)
+        self.assertIn("next", response.data.get("links"))
+
+        # Assert tenant response fields and types
+        tenant_data = response.data["data"][0]
+        self.assertIn("id", tenant_data)
+        self.assertIn("org_id", tenant_data)
+        self.assertIn("account_id", tenant_data)
+        self.assertIsInstance(tenant_data["id"], int)
+        self.assertIsInstance(tenant_data["org_id"], int)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=False)
+    def test_tenants_modified_platform_only_excluded_v1(self, mock_flag):
+        """Test that tenants with only system/platform roles are excluded in V1 mode."""
+        platform_tenant = Tenant.objects.create(tenant_name="Platform Only", org_id=8888)
+        Role.objects.create(system=True, name="platformRole", tenant=platform_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertNotIn(int(platform_tenant.org_id), returned_org_ids)
+
+    @patch("internal.integration.views.FEATURE_FLAGS.is_ocm_v2_enabled_global", return_value=True)
+    def test_tenants_modified_platform_v2_excluded(self, mock_flag):
+        """Test that tenants with only V2 platform default roles are excluded when flag is enabled."""
+        platform_tenant = Tenant.objects.create(tenant_name="Platform V2 Only", org_id=9999)
+        RoleV2.objects.create(name="platformDefaultRole", type=RoleV2.Types.PLATFORM, tenant=platform_tenant)
+
+        response = self.client.get(
+            "/_private/api/v1/integrations/tenant/?modified_only=true",
+            **self.request.META,
+            follow=True,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_org_ids = [t["org_id"] for t in response.data.get("data")]
+        self.assertNotIn(int(platform_tenant.org_id), returned_org_ids)
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",

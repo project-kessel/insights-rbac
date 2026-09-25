@@ -23,6 +23,8 @@ from unittest.mock import MagicMock, patch
 from django.conf import settings
 from django.test import TestCase, override_settings
 
+from tests.identity_request import IdentityRequest
+
 from feature_flags import FEATURE_FLAGS, FeatureFlags, rbac_unleash_fetch_total, rbac_unleash_last_fetch_timestamp
 
 
@@ -167,6 +169,63 @@ class FeatureFlagsTest(TestCase):
         call_kwargs = mock_unleash_cls.call_args[1]
         self.assertEqual(call_kwargs["refresh_interval"], 30)
         self.assertEqual(call_kwargs["request_timeout"], 30)
+
+
+class OCMV2FeatureFlagsTest(IdentityRequest):
+    """Exercise the independent OCM rollout without external services."""
+
+    def test_target_org_and_unleash_result(self):
+        """Respect Unleash for either flag state and pass the target org as a string."""
+        flags = FeatureFlags()
+        flags.client = MagicMock()
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled), override_settings(OCM_V2_ENABLED=not enabled):
+                flags.client.is_enabled.return_value = enabled
+                self.assertIs(flags.is_ocm_v2_enabled(12345), enabled)
+                args, kwargs = flags.client.is_enabled.call_args
+                self.assertEqual(args, ("rbac.ocm-v2.enabled", {"orgId": "12345"}))
+                self.assertIs(kwargs["fallback_function"](*args), not enabled)
+
+    def test_unavailable_client_fallback_is_independent(self):
+        """Workspace activation settings do not control OCM's fallback."""
+        flags = FeatureFlags()
+        with patch.object(flags, "initialize") as mock_initialize:
+            for enabled in (True, False):
+                with (
+                    self.subTest(enabled=enabled),
+                    override_settings(
+                        OCM_V2_ENABLED=enabled, V2_EDIT_API_ENABLED=not enabled, V2_APIS_ENABLED=not enabled
+                    ),
+                ):
+                    self.assertIs(flags.is_ocm_v2_enabled("12345"), enabled)
+            self.assertEqual(mock_initialize.call_count, 2)
+
+    @override_settings(OCM_V2_ENABLED=False, V2_EDIT_API_ENABLED=True)
+    def test_missing_flag_defaults_off(self):
+        """A missing Unleash flag leaves OCM on V1 even when workspace writes are enabled."""
+        flags = FeatureFlags()
+        flags.client = MagicMock()
+        flags.client.is_enabled.side_effect = lambda name, context, fallback_function: fallback_function(name, context)
+        self.assertFalse(flags.is_ocm_v2_enabled("12345"))
+
+    def test_global_method_omits_org_context(self):
+        """is_ocm_v2_enabled_global evaluates without orgId context."""
+        flags = FeatureFlags()
+        flags.client = MagicMock()
+        flags.client.is_enabled.return_value = True
+        self.assertTrue(flags.is_ocm_v2_enabled_global())
+        args, kwargs = flags.client.is_enabled.call_args
+        # context is passed as None (no org) vs per-org which passes {"orgId": ...}
+        self.assertEqual(args, ("rbac.ocm-v2.enabled", None))
+        self.assertNotIn("orgId", (args[1] or {}))
+
+    @override_settings(OCM_V2_ENABLED=True)
+    def test_global_fallback_uses_env(self):
+        """is_ocm_v2_enabled_global falls back to OCM_V2_ENABLED when client unavailable."""
+        flags = FeatureFlags()
+        with patch.object(flags, "initialize") as mock_initialize:
+            self.assertTrue(flags.is_ocm_v2_enabled_global())
+            mock_initialize.assert_called_once_with()
 
     def test_on_unleash_event_tracks_fetched(self):
         """Test that _on_unleash_event increments poll counter on FETCHED events."""

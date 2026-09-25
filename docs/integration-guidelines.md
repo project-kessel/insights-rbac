@@ -182,6 +182,7 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | Flag | Default | Effect |
 |------|---------|--------|
 | `V2_APIS_ENABLED` | `False` | Registers v2 URL routes |
+| `OCM_V2_ENABLED` | `False` | Fallback setting for V2-backed OCM integration reads |
 | `KAFKA_ENABLED` | `False` | Enables Kafka producer/consumer |
 | `NOTIFICATIONS_ENABLED` | `False` | Enables custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enables RH system notifications |
@@ -193,6 +194,37 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
 | `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
+
+### Modified-tenants and OCM V2
+
+The Unleash flag `rbac.ocm-v2.enabled` controls whether the modified-tenants endpoint
+(`/_private/api/v1/integrations/tenant/?modified_only=true`) detects tenant modification
+through V1 roles (`Role.system=False`) or V2 roles (`RoleV2.type=custom`). Non-system
+group detection is unchanged regardless of flag state. Only `custom` V2 roles count as
+modifications — `platform` and `seeded` roles are excluded.
+
+The team has agreed on an **all-or-nothing global rollout**: the flag applies uniformly
+to all organizations without org-specific constraints or percentage-based targeting.
+The Unleash flag result always takes precedence; the `OCM_V2_ENABLED` Django setting
+serves **only as a fallback** when Unleash is unavailable (client not initialized,
+network failure, etc.).
+
+Because the modified-tenants endpoint returns tenants across all organizations, the flag
+is evaluated **without an org context** via `is_ocm_v2_enabled_global()`. This aligns
+with the roles-for-group endpoint (#3421), which also uses `is_ocm_v2_enabled_global()`
+without organization context — both endpoints switch detection consistently.
+
+**Precedence chain**: Unleash default strategy → `OCM_V2_ENABLED` env fallback (default
+`False`).
+
+The `is_ocm_v2_enabled_global()` helper and the `OCM_V2_ENABLED` setting are shared
+between this PR and #3421. Whichever PR merges second should reconcile any duplicate
+definitions of the shared flag helper, setting, and tests.
+
+| Flag state | Role detection | Group detection |
+|------------|---------------|-----------------|
+| Disabled (default) | V1 non-system roles (`Role.system=False`) | Non-system groups (unchanged) |
+| Enabled | V2 custom roles (`RoleV2.type=custom`) | Non-system groups (unchanged) |
 
 ## 12. Prometheus Metrics Conventions
 

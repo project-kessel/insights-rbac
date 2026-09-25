@@ -20,6 +20,7 @@
 import logging
 
 from django_filters import rest_framework as filters
+from feature_flags import FEATURE_FLAGS
 from internal.integration.serializers import TenantSerializer
 from management.cache import TenantCache
 from management.filters import CommonFilters
@@ -38,9 +39,15 @@ class TenantFilter(CommonFilters):
     """Filter for tenant."""
 
     def modified_only_filter(self, queryset, field, modified_only):
-        """Filter to return only modified tenants."""
+        """Filter to return only modified tenants.
+
+        The ``rbac.ocm-v2.enabled`` flag is evaluated without an org context
+        because this endpoint returns tenants across all organizations.
+        Per-org Unleash strategies still apply (the default strategy result is
+        used); the ``OCM_V2_ENABLED`` env var serves as the global fallback.
+        """
         if modified_only:
-            queryset = queryset.modified_only()
+            queryset = queryset.modified_only(use_v2=FEATURE_FLAGS.is_ocm_v2_enabled_global())
         return queryset
 
     modified_only = filters.BooleanFilter(field_name="modified_only", method="modified_only_filter")
