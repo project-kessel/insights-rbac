@@ -16,6 +16,8 @@
 #
 """Application service for Permission operations."""
 
+from django.conf import settings
+from management.models import Access, Role
 from management.permission.model import Permission, PermissionValue
 
 
@@ -29,3 +31,22 @@ class PermissionService:
 
         permission_strings = [PermissionValue.from_v2_dict(perm_dict).v1_string() for perm_dict in permission_data]
         return list(Permission.objects.filter(permission__in=permission_strings))
+
+    def restrict_to_role_creation_allowed(self, queryset):
+        """Restrict a permission queryset to applications allowed for role creation."""
+        return queryset.filter(application__in=settings.ROLE_CREATE_ALLOW_LIST)
+
+    def exclude_permissions_for_roles(self, queryset, role_uuids, tenant):
+        """Exclude permissions already assigned to the given role(s) within a tenant.
+
+        Args:
+            queryset: A Permission queryset to filter.
+            role_uuids: List of validated role UUID strings.
+            tenant: The tenant to scope role lookups to.
+
+        Returns:
+            The queryset with assigned permissions excluded.
+        """
+        roles = Role.objects.filter(uuid__in=role_uuids, tenant=tenant)
+        permission_ids_to_exclude = Access.objects.filter(role__in=roles).values_list("permission_id", flat=True)
+        return queryset.exclude(id__in=permission_ids_to_exclude)
