@@ -58,7 +58,7 @@ from management.notifications.notification_handlers import (
 )
 from management.permissions import GroupAccessPermission
 from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
-from management.principal.backfill import backfill_remote_principals
+from management.principal.backfill import backfill_atomic, backfill_remote_principals
 from management.principal.it_service import ITService
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
@@ -86,7 +86,7 @@ from api.common.pagination import StandardResultsSetPagination
 from api.models import Tenant, User
 from .insufficient_privileges import InsufficientPrivilegesError
 from .service_account_not_found_error import ServiceAccountNotFoundError
-from ..atomic_transactions import _is_serialization_or_deadlock, atomic_with_retry
+from ..atomic_transactions import _is_serialization_or_deadlock
 from ..principal.unexpected_status_code_from_it import UnexpectedStatusCodeFromITError
 
 USERNAMES_KEY = "usernames"
@@ -961,7 +961,7 @@ class GroupViewSet(
                 )
             raise
 
-    @atomic_with_retry(retries=8)
+    @backfill_atomic(retries=8)
     def _write_group_principals(
         self,
         request: Request,

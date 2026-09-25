@@ -103,8 +103,6 @@ objects:
           name: default-role-config
         - mountPath: /opt/rbac/rbac/management/role/permissions
           name: model-access-permissions
-        - mountPath: /opt/rbac/rbac/management/principal/umb_certificates
-          name: umb-certificates
         volumes:
         - configMap:
             name: ${CONFIG_MAP_NAME}
@@ -112,10 +110,6 @@ objects:
         - configMap:
             name: ${MODEL_ACCESS_PERMISSIONS}
           name: model-access-permissions
-        - name: umb-certificates
-          secret:
-            optional: true
-            secretName: it-umb-key-pair
         - name: tmp
           emptyDir: {}
         resources:
@@ -240,10 +234,6 @@ objects:
             value: ${EXTERNAL_CHROME_TOPIC}
           - name: MIGRATE_AND_SEED_ON_INIT
             value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
-          - name: UMB_HOST
-            value: ${UMB_HOST}
-          - name: UMB_PORT
-            value: ${UMB_PORT}
           - name: SA_NAME
             value: ${SA_NAME}
           - name: RELATION_API_SERVER
@@ -282,8 +272,6 @@ objects:
             value: ${REPLICATION_TO_RELATION_ENABLED}
           - name: EPH_ENV
             value: ${EPH_ENV}
-          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
-            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
@@ -298,6 +286,10 @@ objects:
             value: ${KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
             value: ${KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED}
+          - name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
+            value: ${KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS}
+          - name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
+            value: ${KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE}
           - name: IT_KAFKA_BOOTSTRAP_SERVERS
             valueFrom:
               secretKeyRef:
@@ -361,10 +353,6 @@ objects:
           - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
             value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
           ####### Following envs are for scheduler, doesn't hurt to put in worker
-          - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
-            value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB}
-          - name: UMB_JOB_ENABLED
-            value: ${UMB_JOB_ENABLED}
           - name: PARITY_CHECK_ENABLED
             value: ${PARITY_CHECK_ENABLED}
           - name: PARITY_CHECK_ORG_IDS
@@ -660,18 +648,12 @@ objects:
             value: ${EXTERNAL_CHROME_TOPIC}
           - name: MIGRATE_AND_SEED_ON_INIT
             value: ${SERVICE_MIGRATE_AND_SEED_ON_INIT}
-          - name: UMB_HOST
-            value: ${UMB_HOST}
-          - name: UMB_PORT
-            value: ${UMB_PORT}
           - name: SA_NAME
             value: ${SA_NAME}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
           - name: EPH_ENV
             value: ${EPH_ENV}
-          - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
-            value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
           - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
             value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
           - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -1190,14 +1172,8 @@ objects:
               value: ${EXTERNAL_CHROME_TOPIC}
             - name: MIGRATE_AND_SEED_ON_INIT
               value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
-            - name: UMB_HOST
-              value: ${UMB_HOST}
-            - name: UMB_PORT
-              value: ${UMB_PORT}
             - name: SA_NAME
               value: ${SA_NAME}
-            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
-              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -1427,14 +1403,8 @@ objects:
               value: ${EXTERNAL_CHROME_TOPIC}
             - name: MIGRATE_AND_SEED_ON_INIT
               value: ${WORKER_MIGRATE_AND_SEED_ON_INIT}
-            - name: UMB_HOST
-              value: ${UMB_HOST}
-            - name: UMB_PORT
-              value: ${UMB_PORT}
             - name: SA_NAME
               value: ${SA_NAME}
-            - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
-              value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB}
             - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
               value: ${PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA}
             - name: V2_MIGRATION_APP_EXCLUDE_LIST
@@ -1998,27 +1968,15 @@ parameters:
     or from a single identity infrastructure domain (identity header, SSO, BOP).
     This defines that single domain.
   value: 'redhat'
-- name: PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB
-  description: Allow cleanup job to delete principals via messages from UMB
 - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
   description: Allow cleanup job to delete principals via messages from Kafka
   value: 'False'
-- name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB
-  description: Allow cleanup job to update principals via messages from UMB
 - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
   description: Allow cleanup job to update principals via messages from Kafka
   value: 'False'
-- name: UMB_JOB_ENABLED
-  description: Temp env to enable the UMB job
 - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
   description: Enable the Kafka-based principal cleanup job
   value: 'True'
-- name: UMB_HOST
-  description: Host of the UMB service
-  value: 'localhost'
-- name: UMB_PORT
-  description: Port of the UMB service
-  value: '61612'
 - name: PARITY_CHECK_ENABLED
   description: Enable Kessel-RBAC parity checks background job
   value: 'False'
@@ -2179,7 +2137,7 @@ parameters:
   description: Kafka Dead Letter Queue topic for failed principal cleanup messages (optional, prevents infinite retry loops)
   value: ''
 - name: KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS
-  description: Kafka consumer session timeout (ms) for the principal-cleanup consumer group; sized so the ~60s beat + 15s drain cycle does not trigger LeaveGroup timeouts.
+  description: Kafka consumer session timeout (ms) for the principal-cleanup consumer group; sized so the ~60s beat + drain cycle does not trigger LeaveGroup timeouts.
   value: '45000'
 - name: KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS
   description: Kafka consumer heartbeat interval (ms) for the principal-cleanup consumer group.
@@ -2190,6 +2148,12 @@ parameters:
 - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
   description: Enable static consumer-group membership (group.instance.id) for the principal-cleanup consumer to avoid full rebalance on each periodic rejoin.
   value: 'True'
+- name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
+  description: Wall-clock budget (ms) per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval with headroom for consumer setup and shutdown.
+  value: '50000'
+- name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
+  description: Max Kafka messages per BOP user lookup for principal cleanup. Duplicate user_ids within a batch are deduplicated before the call.
+  value: '100'
 - name: ROOT_SCOPE_PERMISSIONS
   description: Comma-separated list of permissions that bind to root workspace scope (supports wildcards like rbac:*:read)
   value: ''

@@ -301,12 +301,13 @@ KAFKA_MESSAGE_SPECIAL = json.dumps(
 )
 
 
-def create_mock_kafka_message(message_body, partition=0, offset=0):
+def create_mock_kafka_message(message_body, partition=0, offset=0, topic="test-topic"):
     """Create a mock Kafka message."""
     mock_message = Mock()
     mock_message.value = message_body
     mock_message.partition = partition
     mock_message.offset = offset
+    mock_message.topic = topic
     return mock_message
 
 
@@ -356,11 +357,16 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue(before == after or before is None and after is None)
         consumer_instance.close.assert_called_once()
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.process_kafka_message")
     @patch("management.principal.cleaner.time.monotonic")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_kafka_consumer_stops_after_drain_window(self, consumer_mock, monotonic_mock, process_mock):
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", 15000)
+    def test_kafka_consumer_stops_after_drain_window(self, consumer_mock, monotonic_mock, process_mock, proxy_mock):
         """Busy topics must still stop after the wall-clock drain budget so Celery can re-check Unleash."""
         process_mock.return_value = MessageProcessingResult(should_continue=True, success=True)
 
@@ -557,10 +563,14 @@ class PrincipalKafkaTests(IdentityRequest):
         self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
         self.assertTrue(Principal.objects.filter(user_id=self.principal_user_id).exists())
 
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": []},
+    )
     @patch("management.principal.cleaner.retrieve_user_info_kafka")
     @patch("management.principal.cleaner.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_failure_processing_message(self, consumer_mock, retrieve_user_mock):
+    def test_failure_processing_message(self, consumer_mock, retrieve_user_mock, proxy_mock):
         """Test failure handling when processing message."""
         principal_name = "principal-test"
         principal = Principal.objects.create(username=principal_name, tenant=self.tenant)
@@ -618,6 +628,9 @@ class PrincipalKafkaTests(IdentityRequest):
         before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
         process_principal_events_from_kafka(dry_run=True)
         after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
+
+        # Dry-run must not call BOP (payload-only validation)
+        proxy_mock.assert_not_called()
 
         # Verify principal still exists (dry-run didn't delete it)
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
@@ -786,9 +799,9 @@ class PrincipalKafkaTests(IdentityRequest):
         mock_service = MagicMock()
         bootstrap_mock.return_value = mock_service
 
-        # Patch retrieve_user_info_kafka and retrieve_user_info_umb to track which is called
+        # Patch retrieve_user_info_kafka and retrieve_user_info_xml to track which is called
         with patch("management.principal.cleaner.retrieve_user_info_kafka") as kafka_retrieve_mock:
-            with patch("management.principal.cleaner.retrieve_user_info_umb") as umb_retrieve_mock:
+            with patch("management.principal.cleaner.retrieve_user_info_xml") as xml_retrieve_mock:
                 # Set up mock to return a user
                 from api.models import User
 
@@ -802,9 +815,9 @@ class PrincipalKafkaTests(IdentityRequest):
                 # Run in normal mode
                 process_principal_events_from_kafka(dry_run=False)
 
-                # Verify JSON retrieval was called (not UMB/XML retrieval)
+                # Verify JSON retrieval was called (not XML retrieval)
                 kafka_retrieve_mock.assert_called_once()
-                umb_retrieve_mock.assert_not_called()
+                xml_retrieve_mock.assert_not_called()
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
@@ -905,6 +918,8 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Verify update_user was NOT called
         mock_service.update_user.assert_not_called()
+        # Dry-run skips BOP as well
+        proxy_mock.assert_not_called()
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
@@ -933,6 +948,104 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Verify update_user WAS called
         mock_service.update_user.assert_called()
+
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=100, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
+    def test_bop_batch_dedupes_duplicate_user_ids(self, consumer_mock, proxy_mock, bootstrap_mock):
+        """Duplicate user_ids: one BOP call; each message still runs update_user; all offsets commit."""
+        proxy_mock.return_value = {
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "is_org_admin": False,
+                    "is_active": False,
+                }
+            ],
+        }
+        mock_service = MagicMock()
+        bootstrap_mock.return_value = mock_service
+
+        # Three messages for the same user_id
+        messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(3)]
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        proxy_mock.assert_called_once()
+        called_user_ids = proxy_mock.call_args[0][0]
+        self.assertEqual(called_user_ids, ["56780000"])
+        # BOP is deduped; DB apply still runs per message for safe at-least-once semantics
+        self.assertEqual(mock_service.update_user.call_count, 3)
+        self.assertEqual(consumer_instance.commit.call_count, 3)
+        # Commits must be per-message offsets (not a bare commit of the batch position)
+        for i, call in enumerate(consumer_instance.commit.call_args_list):
+            committed = call[0][0]
+            tp = next(iter(committed.keys()))
+            self.assertEqual(tp.partition, 0)
+            self.assertEqual(committed[tp].offset, i + 1)
+
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=100, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
+    def test_bop_batch_dedupes_cross_partition_user_ids(self, consumer_mock, proxy_mock, bootstrap_mock):
+        """Same user_id on different partitions: one BOP call; update_user once per message."""
+        proxy_mock.return_value = {
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "is_org_admin": False,
+                    "is_active": False,
+                }
+            ],
+        }
+        mock_service = MagicMock()
+        bootstrap_mock.return_value = mock_service
+
+        messages = [
+            create_mock_kafka_message(KAFKA_MESSAGE_BODY, partition=0, offset=10),
+            create_mock_kafka_message(KAFKA_MESSAGE_BODY, partition=1, offset=5),
+        ]
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        proxy_mock.assert_called_once()
+        self.assertEqual(mock_service.update_user.call_count, 2)
+        self.assertEqual(consumer_instance.commit.call_count, 2)
+
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=2, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
+    def test_bop_batch_flushes_at_batch_size(self, consumer_mock, proxy_mock):
+        """BOP should be called once per batch when messages exceed batch size."""
+        proxy_mock.return_value = {"status_code": 200, "data": []}
+
+        messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(3)]
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_mock.return_value = consumer_instance
+
+        process_principal_events_from_kafka()
+
+        # batch_size=2 -> first flush at 2 msgs, then flush remaining 1
+        self.assertEqual(proxy_mock.call_count, 2)
+        self.assertEqual(consumer_instance.commit.call_count, 3)
 
 
 @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)

@@ -111,8 +111,10 @@ Set `ATOMIC_RETRY_DISABLED=True` in test settings to skip `pgtransaction` wrappe
 |---|---|---|
 | `cross_account_cleanup` | Daily at midnight | Expire cross-account requests |
 | `run_redis_cache_health` | Every 30 seconds | Toggle caching on Redis failure |
-| `principal_cleanup_via_umb` | Every 60 seconds (if UMB enabled) | Process principal events from UMB |
-| `principal_cleanup` | Every 7 days (if UMB disabled) | Clean stale principals via BOP |
+| `principal_cleanup_via_kafka` | Every 60 seconds (if `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED`) | Process principal events from Kafka |
+| `principal_cleanup` | Every 7 days (if Kafka cleanup disabled) | Clean stale principals via BOP |
+
+The `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` setting (default 50 000 ms) caps the wall-clock budget per Kafka cycle, leaving headroom for consumer setup and shutdown within the 60-second beat interval.
 
 ### Task Guidelines
 
@@ -122,16 +124,18 @@ Set `ATOMIC_RETRY_DISABLED=True` in test settings to skip `pgtransaction` wrappe
 
 ## Pagination
 
+See the full per-endpoint matrix and rationale in [api-contracts-guidelines.md](api-contracts-guidelines.md#pagination).
+
 ### v1: LimitOffsetPagination
 
 `StandardResultsSetPagination` -- default limit 10, max 1000. Provides `first`/`next`/`previous`/`last` links.
 
 ### v2: Dual Strategy
 
-- **`V2ResultsSetPagination`** (LimitOffset) for workspaces and simple lists. Supports `limit=-1` to disable pagination (fetches count first).
-- **`V2CursorPagination`** for role-bindings and roles. Better for large datasets -- no COUNT query. Default page size 10, max 1000. Dynamic ordering via `order_by` query param with dot notation (`role.name`, `group.modified`).
+- **`V2ResultsSetPagination`** (LimitOffset) for workspaces, principals, and other bounded lists. Default limit 10, max 1000. `WorkspacePagination` subclass raises max to 3000 for workspace endpoints. Supports `limit=-1` to disable pagination (fetches count first).
+- **`V2CursorPagination`** for role-bindings and **`RoleV2CursorPagination`** for roles. Better for large datasets -- no COUNT query. Default page size 10, max 1000. Role bindings use dot-notation `order_by` for cross-relation ordering (`role.name`, `group.modified`). Roles use plain field names (`name`, `last_modified`).
 
-When using `limit=-1`, `V2ResultsSetPagination` calls `queryset.count()` to set `default_limit`. This is an extra query -- acceptable for small datasets but avoid for large ones.
+When using `limit=-1`, `V2ResultsSetPagination` calls `queryset.count()` to set `default_limit`. This is an extra query -- acceptable for small/bounded datasets (workspaces, principals) but avoid for large ones (roles, role-bindings).
 
 ## Gunicorn Configuration
 

@@ -33,6 +33,7 @@ class AuditLog(TenantAwareModel):
     """An audit log."""
 
     GROUP = "group"
+    GROUP_V2 = "group_v2"
     ROLE = "role"
     ROLE_V2 = "role_v2"
     USER = "user"
@@ -41,6 +42,7 @@ class AuditLog(TenantAwareModel):
     ROLE_BINDING = "role_binding"
     RESOURCE_CHOICES = (
         (GROUP, "Group"),
+        (GROUP_V2, "V2 Group"),
         (ROLE, "Role"),
         (ROLE_V2, "V2 Role"),
         (USER, "User"),
@@ -107,6 +109,9 @@ class AuditLog(TenantAwareModel):
         if resource_type == AuditLog.ROLE_V2:
             return "V2 role"
 
+        if resource_type == AuditLog.GROUP_V2:
+            return "V2 group"
+
         if resource_type == AuditLog.WORKSPACE:
             return "workspace"
 
@@ -169,6 +174,21 @@ class AuditLog(TenantAwareModel):
 
         return resource_name + ":\n" + "\n".join(annotations)
 
+    def _v2_group_edited_field(self, resource_name, request, object):
+        # PUT replaces the whole group, so an omitted or null description clears the existing one.
+        annotations = []
+
+        if request.data.get("name") != object.name:
+            annotations.append("Edited name")
+
+        if (request.data.get("description") or "") != (object.description or ""):
+            annotations.append("Edited description")
+
+        if not annotations:
+            return resource_name
+
+        return resource_name + ":\n" + "\n".join(annotations)
+
     def find_edited_field(self, resource, resource_name, request, object):
         """Add additional information when group/role is edited."""
         # We can't fix the usual format because of backwards-compatibility concerns, but we can use a fixed format
@@ -178,6 +198,9 @@ class AuditLog(TenantAwareModel):
 
         if resource == AuditLog.WORKSPACE:
             return self._workspace_edited_field(resource_name, request, object)
+
+        if resource == AuditLog.GROUP_V2:
+            return self._v2_group_edited_field(resource_name, request, object)
 
         description = resource_name + ": " + "\n "
         if request.data.get("name") != object.name:

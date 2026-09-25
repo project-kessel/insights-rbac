@@ -2,7 +2,7 @@
 
 ## External Services Overview
 
-RBAC integrates with seven external services: Kessel Relations (gRPC), Kessel Inventory (gRPC), Kafka (producer + consumer), BOP (HTTP), IT Service (HTTP), UMB (STOMP), and Redis (Celery broker + cache). All connections are configured via environment variables with local-dev bypass modes.
+RBAC integrates with six external services: Kessel Relations (gRPC), Kessel Inventory (gRPC), Kafka (producer + consumer), BOP (HTTP), IT Service (HTTP), and Redis (Celery broker + cache). All connections are configured via environment variables with local-dev bypass modes.
 
 ## 1. Kessel Relations API (gRPC) -- Relation Replication
 
@@ -137,14 +137,15 @@ Metrics: `rbac_proxy_request_processing_seconds` (histogram), `bop_request_statu
 
 Env vars: `IT_SERVICE_HOST`, `IT_SERVICE_PORT`, `IT_SERVICE_BASE_PATH`, `IT_SERVICE_PROTOCOL_SCHEME`, `IT_SERVICE_TIMEOUT_SECONDS`.
 
-## 7. UMB (Unified Message Bus) -- Principal Lifecycle Events
+## 7. Principal Lifecycle Events (Kafka)
 
-STOMP-based consumer in `management/principal/cleaner.py`. Processes principal create/update/disable events.
+Principal create/update/disable events are consumed from Kafka in `management/principal/cleaner.py`. UMB (STOMP) was the original transport; it has been fully decommissioned. Kafka is now the sole message bus.
 
-- Controlled by `PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB` and `UMB_JOB_ENABLED` feature flags
+- Controlled by `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED` and `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` flags
 - Runs as a Celery beat task every 60 seconds when enabled
-- Uses `StompSpec.ACK_CLIENT_INDIVIDUAL` for per-message acknowledgment
-- Falls back to BOP-based cleanup (`clean_tenants_principals`) when UMB is disabled (runs every 7 days)
+- XML messages bridged from the former UMB path are still supported (`retrieve_user_info_xml`)
+- Falls back to BOP-based cleanup (`clean_tenants_principals`) every 7 days when Kafka cleanup is disabled
+- `dry_run=True` mode is available for manual validation of the Kafka consumer without side effects
 
 ## 8. Notifications Service
 
@@ -165,8 +166,8 @@ Broker: Redis (`CELERY_BROKER_URL`). Config namespace: `CELERY_`.
 Scheduled tasks in `rbac/rbac/celery.py`:
 - `cross_account_cleanup` -- daily at midnight
 - `run_redis_cache_health` -- every 30 seconds
-- `principal_cleanup_via_umb` -- every 60 seconds (when UMB enabled)
-- `principal_cleanup` -- every 7 days (when UMB disabled)
+- `principal_cleanup_via_kafka` -- every 60 seconds (when `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True`)
+- `principal_cleanup` -- every 7 days (fallback when Kafka cleanup is disabled)
 
 Worker starts a Prometheus metrics server on Clowder's `metricsPort` (default 9000). Failure to start metrics server exits the process.
 
@@ -187,7 +188,10 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `BYPASS_BOP_VERIFICATION` | `False` | Skips BOP calls, uses local DB |
 | `IT_BYPASS_IT_CALLS` | `False` | Mocks IT service responses |
 | `MOCK_KAFKA` | `False` | Uses FakeKafkaProducer |
-| `PRINCIPAL_CLEANUP_DELETION_ENABLED_UMB` | `False` | UMB-based principal cleanup |
+| `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` | `False` | Kafka-based principal cleanup |
+| `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED` | `True` | Enables Kafka principal cleanup beat task (requires `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA`) |
+| `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
+| `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
 
 ## 12. Prometheus Metrics Conventions

@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+import contextlib
 from typing import Optional
 from unittest.mock import ANY
 
@@ -21,6 +22,12 @@ from django.test import override_settings
 from django.urls import reverse
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_mapping.v2_activation import is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_opt_in_view import (
+    rbac_v2_optin_eligibility_requests_total,
+    rbac_v2_optin_status_requests_total,
+    rbac_v2_optin_total,
+)
+from prometheus_client import Counter
 from rest_framework import status
 from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
@@ -65,16 +72,30 @@ class OptInViewSetTest(IdentityRequest):
         return self.client.get(self.eligibility_url, **headers)
 
     def _assert_status(self, opted_in: bool):
-        response = self.client.get(self.status_url, **self.non_admin_headers)
+        metric_result = "opted-in" if opted_in else "not-opted-in"
+
+        with self._assert_increment(rbac_v2_optin_status_requests_total, result=metric_result):
+            response = self.client.get(self.status_url, **self.non_admin_headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {"v2_opted_in": opted_in})
         self.assertEqual(response.headers["Cache-Control"], "max-age=120, private")
 
     def _opt_in_and_assert_success(self):
-        response = self._send_opt_in_request()
+        with self._assert_increment(rbac_v2_optin_total, result="success"):
+            response = self._send_opt_in_request()
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {"v2_opted_in": True})
+
+    @contextlib.contextmanager
+    def _assert_increment(self, metric: Counter, **labels: str):
+        labelled = metric.labels(**labels)
+        labelled.reset()
+
+        self.assertEqual(0, list(labelled.collect())[0].samples[0].value)
+        yield
+        self.assertEqual(1, list(labelled.collect())[0].samples[0].value)
 
     def test_unbootstrapped_status(self):
         self._debootstrap()
@@ -94,7 +115,9 @@ class OptInViewSetTest(IdentityRequest):
     def test_unbootstrapped_opt_in(self):
         self._debootstrap()
 
-        response = self._send_opt_in_request()
+        with self._assert_increment(rbac_v2_optin_total, result="ineligible"):
+            response = self._send_opt_in_request()
+
         self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
         self.assertEqual(
             response.data,
@@ -169,7 +192,8 @@ class OptInViewSetTest(IdentityRequest):
         self._assert_status(False)
 
     def test_opt_in_empty_body(self):
-        response = self._send_opt_in_request(body={})
+        with self._assert_increment(rbac_v2_optin_total, result="noop-request"):
+            response = self._send_opt_in_request(body={})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {"v2_opted_in": False})
@@ -177,7 +201,8 @@ class OptInViewSetTest(IdentityRequest):
         self._assert_status(False)
 
     def test_opt_out_prohibited(self):
-        response = self._send_opt_in_request(body={"v2_opted_in": False})
+        with self._assert_increment(rbac_v2_optin_total, result="invalid-request"):
+            response = self._send_opt_in_request(body={"v2_opted_in": False})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("v2_opted_in, if present, can only be set to true", response.content.decode())
@@ -185,7 +210,8 @@ class OptInViewSetTest(IdentityRequest):
         self._assert_status(False)
 
     def test_opt_in_null_prohibited(self):
-        response = self._send_opt_in_request(body={"v2_opted_in": None})
+        with self._assert_increment(rbac_v2_optin_total, result="invalid-request"):
+            response = self._send_opt_in_request(body={"v2_opted_in": None})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("v2_opted_in, if present, can only be set to true", response.content.decode())
@@ -197,18 +223,24 @@ class OptInViewSetTest(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_eligibility_eligible(self):
-        response = self._get_eligibility()
+        with self._assert_increment(rbac_v2_optin_eligibility_requests_total, result="eligible"):
+            response = self._get_eligibility()
+
         self.assertEqual(response.data, {"eligible": True})
         self.assertNotIn("Cache-Control", response.headers)
 
     def test_eligibility_opted_in(self):
         self._opt_in_and_assert_success()
 
-        response = self._get_eligibility()
+        with self._assert_increment(rbac_v2_optin_eligibility_requests_total, result="eligible"):
+            response = self._get_eligibility()
+
         self.assertEqual(response.data, {"eligible": True})
         self.assertNotIn("Cache-Control", response.headers)
 
     def test_eligibility_ineligible(self):
-        response = self._assert_ineligible_response(self._get_eligibility, status.HTTP_200_OK)
+        with self._assert_increment(rbac_v2_optin_eligibility_requests_total, result="ineligible"):
+            response = self._assert_ineligible_response(self._get_eligibility, status.HTTP_200_OK)
+
         self._assert_status(False)
         self.assertNotIn("Cache-Control", response.headers)

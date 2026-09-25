@@ -27,6 +27,8 @@ from django.db import transaction
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
+
+from management.atomic_transactions import atomic_with_retry
 from management.cache import TenantCache
 from management.group.definer import add_roles
 from management.group.serializer import GroupInputSerializer
@@ -4653,6 +4655,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         # get_object called inside _write_group_principals (re-fetch under transaction)
         mock_get_object.assert_called()
 
+    @override_settings(PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED=True)  # SERIALIZABLE only for authoritative backfill
     @patch("management.group.view.backfill_remote_principals")
     @patch("management.relation_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
     @patch(
@@ -4733,9 +4736,10 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         initial_principal_count = self.group.principals.count()
 
         with patch("management.atomic_transactions.pgtransaction", mock_pgtransaction):
-            with patch("management.atomic_transactions.is_atomic_disabled", return_value=False):
-                with patch("management.group.view.GroupViewSet.add_users", failing_add_users):
-                    response = client.post(url, test_data, format="json", **self.headers)
+            with self.settings(ATOMIC_RETRY_DISABLED=False):
+                with patch("management.group.view.backfill_atomic", atomic_with_retry):
+                    with patch("management.group.view.GroupViewSet.add_users", failing_add_users):
+                        response = client.post(url, test_data, format="json", **self.headers)
 
         # Verify 503 with correct error payload
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)

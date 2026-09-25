@@ -20,8 +20,6 @@
 import base64
 import json
 import logging
-import os
-import ssl
 import time
 from typing import NamedTuple, Optional
 from xml.parsers.expat import ExpatError
@@ -30,8 +28,9 @@ import xmltodict
 from core.kafka import RBACProducer, get_cluster_config
 from django.conf import settings
 from django.db import connection
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
+from kafka.structs import OffsetAndMetadata
 from management.atomic_transactions import run_atomic_with_retry
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
@@ -41,10 +40,6 @@ from management.tenant_service.tenant_service import TenantBootstrapService
 from prometheus_client import Counter
 from rest_framework import status
 from sentry_sdk import capture_exception
-from stompest.config import StompConfig
-from stompest.error import StompConnectionError
-from stompest.protocol import StompSpec
-from stompest.sync import Stomp
 
 from api.models import Tenant, User
 
@@ -52,30 +47,8 @@ logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 PROXY = PrincipalProxy()  # pylint: disable=invalid-name
 
-# Location of the CA, certificate and key files as defined in the
-# "it-umb-key-pair" secret and the "umb-certificates" volume mount.
-CA_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/ca.crt"
-CERT_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/tls.crt"
-KEY_LOC = "/opt/rbac/rbac/management/principal/umb_certificates/tls.key"
-
-
 LOCK_ID = 42  # For Keith, with Love
 KAFKA_CONSUMER_LOCK_ID = 43  # Guards Kafka consumer construction to prevent multi-worker join thrash
-# Per-cycle drain budget. consumer_timeout_ms alone only stops after idle polls; a busy/backlogged
-# topic would otherwise keep the Celery task running indefinitely and block Unleash re-checks.
-KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS = 15000
-
-# UMB Metric Messages
-METRIC_STOMP_MESSAGES_ACK_TOTAL = "stomp_messages_ack_total"
-METRIC_STOMP_MESSAGES_NACK_TOTAL = "stomp_messages_nack_total"
-stomp_messages_ack_total = Counter(
-    METRIC_STOMP_MESSAGES_ACK_TOTAL,
-    "Number of stomp UMB messages processed",
-)
-stomp_messages_nack_total = Counter(
-    METRIC_STOMP_MESSAGES_NACK_TOTAL,
-    "Number of stomp UMB messages that failed to be processed",
-)
 
 # KAFKA Metric Messages
 METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL = "kafka_messages_success_total"
@@ -99,18 +72,6 @@ kafka_dry_run_messages_total = Counter(
 kafka_dry_run_errors_total = Counter(
     METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL,
     "Number of Kafka messages that would have failed if not in dry-run mode",
-)
-
-# KAFKA Validation Mode Metrics
-METRIC_KAFKA_VALIDATION_SUCCESS_TOTAL = "kafka_validation_success_total"
-METRIC_KAFKA_VALIDATION_FALLBACK_TOTAL = "kafka_validation_fallback_total"
-kafka_validation_success_total = Counter(
-    METRIC_KAFKA_VALIDATION_SUCCESS_TOTAL,
-    "Number of times Kafka succeeded in validation mode (no UMB fallback needed)",
-)
-kafka_validation_fallback_total = Counter(
-    METRIC_KAFKA_VALIDATION_FALLBACK_TOTAL,
-    "Number of times UMB fallback was triggered in validation mode",
 )
 
 
@@ -179,42 +140,14 @@ def clean_tenants_principals():
     logger.info("clean_tenant_principals: Principal cleanup complete for all tenants.")
 
 
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-# Cert verification of IT host is failing complains about self-signed cert
-# Since hot umb host it is within Red Hat network, we can trust the host
-ssl_context.verify_mode = ssl.CERT_NONE
-if os.path.isfile(CERT_LOC):
-    ssl_context.load_cert_chain(certfile=CERT_LOC, keyfile=KEY_LOC)
-
-# Load the CA's certificate in the context.
-if os.path.isfile(CA_LOC):
-    ssl_context.load_verify_locations(cafile=CA_LOC)
-
-CONFIG = StompConfig(
-    f"ssl://{settings.UMB_HOST}:{settings.UMB_PORT}", sslContext=ssl_context, version=StompSpec.VERSION_1_2
-)
-QUEUE = f"/queue/Consumer.{settings.SA_NAME}.users-subscription.VirtualTopic.canonical.user"
-UMB_CLIENT = Stomp(CONFIG)
-
-
-def retrieve_user_info_umb(message) -> User:
-    """
-    Retrieve user info from the message.
-
-    returns:
-        user: User object as of latest known state.
-    """
+def _extract_user_id_from_xml_canonical(message) -> str:
+    """Extract WEB User id from a parsed XML CanonicalMessage."""
     instance_id: Optional[str] = None
-
     if (header := message.get("Header")) is not None:
         if (id := header.get("InstanceId")) is not None:
             instance_id = id
 
-    logger.debug("retrieve_user_info_UMB: Processing message with instance_id=%s", instance_id)
-
-    message_user = message["Payload"]["Sync"]["User"]
-    identifiers = message_user["Identifiers"]
+    identifiers = message["Payload"]["Sync"]["User"]["Identifiers"]
     user_id: Optional[str] = None
 
     if isinstance((ids := identifiers["Identifier"]), list):
@@ -226,42 +159,113 @@ def retrieve_user_info_umb(message) -> User:
         user_id = identifiers["Identifier"]["#text"]
 
     if user_id is None:
-        raise ValueError("User id not found in message. instance_id=%s", instance_id)
+        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    return str(user_id)
+
+
+def _extract_user_id_from_kafka_canonical(message) -> str:
+    """Extract WEB User id from a parsed Kafka JSON CanonicalMessage."""
+    instance_id: Optional[str] = None
+    if (header := message.get("Header")) is not None:
+        if (id := header.get("InstanceId")) is not None:
+            instance_id = id
+
+    identifiers = message["Payload"]["Sync"]["User"]["Identifiers"]
+    user_id: Optional[str] = None
+
+    identifier_list = identifiers.get("Identifier", [])
+    if not isinstance(identifier_list, list):
+        identifier_list = [identifier_list]
+
+    for identifier in identifier_list:
+        is_web_user_id = (
+            identifier.get("system") == "WEB"
+            and identifier.get("entity-name") == "User"
+            and identifier.get("qualifier") == "id"
+        )
+        if is_web_user_id:
+            user_id = identifier.get("text") or identifier.get("value")
+            break
+
+    if user_id is None:
+        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    return str(user_id)
+
+
+def retrieve_user_info_xml(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None) -> User:
+    """
+    Retrieve user info from an XML message.
+
+    Args:
+        message: Parsed XML CanonicalMessage dict
+        skip_bop: If True, build User from the message payload only (no BOP call).
+            Used by Kafka dry-run/shadow mode for fast consume validation.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
+            When provided, skips the per-message BOP call and uses this map
+            (missing key = user not found / deleted).
+
+    returns:
+        user: User object as of latest known state.
+    """
+    instance_id: Optional[str] = None
+
+    if (header := message.get("Header")) is not None:
+        if (id := header.get("InstanceId")) is not None:
+            instance_id = id
+
+    logger.debug("retrieve_user_info_xml: Processing message with instance_id=%s", instance_id)
+
+    message_user = message["Payload"]["Sync"]["User"]
+    identifiers = message_user["Identifiers"]
+    user_id = _extract_user_id_from_xml_canonical(message)
+
+    if skip_bop:
+        return _user_from_xml_message_payload(user_id, message_user, identifiers)
+
+    if bop_user_by_id is not None:
+        user_data = bop_user_by_id.get(str(user_id))
+        if not user_data:
+            return _user_from_xml_message_payload(user_id, message_user, identifiers)
+        return external_principal_to_user(user_data)
 
     bop_resp = PROXY.request_filtered_principals([user_id], options={"query_by": "user_id", "return_id": True})
 
     if not bop_resp["data"]:  # User has been deleted
-        # Get data from message instead.
-        user = User()
-        user.user_id = user_id
-        user.is_active = False
-        user.username = message_user["Person"]["Credentials"]["Login"]
-        # identifiers["Reference"] might be a dict
-        if not isinstance((refs := identifiers["Reference"]), list):
-            refs = [identifiers["Reference"]]
-        # Preserve original UMB behavior: use first matching reference and stop
-        # This maintains production behavior where messages typically have one of each reference type
-        # If multiple WEB/Customer or EBS/Account references exist, use the first one
-        for ref in refs:
-            if ref["@system"] == "WEB" and ref["@entity-name"] == "Customer" and ref["@qualifier"] == "id":
-                user.org_id = ref["#text"]
-                break
-            if ref["@system"] == "EBS" and ref["@entity-name"] == "Account" and ref["@qualifier"] == "number":
-                user.account = ref["#text"]
-                break
-
-        return user
+        return _user_from_xml_message_payload(user_id, message_user, identifiers)
 
     user_data = bop_resp["data"][0]
     return external_principal_to_user(user_data)
 
 
-def retrieve_user_info_kafka(message) -> User:
+def _user_from_xml_message_payload(user_id: str, message_user: dict, identifiers: dict) -> User:
+    """Build a User from XML message fields when BOP has no data (or is skipped)."""
+    user = User()
+    user.user_id = user_id
+    user.is_active = False
+    user.username = message_user["Person"]["Credentials"]["Login"]
+    if not isinstance((refs := identifiers["Reference"]), list):
+        refs = [identifiers["Reference"]]
+    for ref in refs:
+        if ref["@system"] == "WEB" and ref["@entity-name"] == "Customer" and ref["@qualifier"] == "id":
+            user.org_id = ref["#text"]
+            break
+        if ref["@system"] == "EBS" and ref["@entity-name"] == "Account" and ref["@qualifier"] == "number":
+            user.account = ref["#text"]
+            break
+    return user
+
+
+def retrieve_user_info_kafka(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None) -> User:
     """
     Retrieve user info from the Kafka message.
 
     Args:
         message: JSON message from Kafka containing user event data
+        skip_bop: If True, build User from the message payload only (no BOP call).
+            Used by Kafka dry-run/shadow mode for fast consume validation.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
+            When provided, skips the per-message BOP call and uses this map
+            (missing key = user not found / deleted).
 
     returns:
         user: User object as of latest known state.
@@ -278,124 +282,59 @@ def retrieve_user_info_kafka(message) -> User:
     # Navigate through JSON structure (similar to XML but without @ and # prefixes)
     message_user = message["Payload"]["Sync"]["User"]
     identifiers = message_user["Identifiers"]
-    user_id: Optional[str] = None
+    user_id = _extract_user_id_from_kafka_canonical(message)
 
-    # Handle both list and single identifier cases
-    identifier_list = identifiers.get("Identifier", [])
-    if not isinstance(identifier_list, list):
-        identifier_list = [identifier_list]
+    if skip_bop:
+        return _user_from_kafka_message_payload(user_id, message_user, identifiers)
 
-    # Find the user ID from identifiers
-    for identifier in identifier_list:
-        is_web_user_id = (
-            identifier.get("system") == "WEB"
-            and identifier.get("entity-name") == "User"
-            and identifier.get("qualifier") == "id"
-        )
-        if is_web_user_id:
-            user_id = identifier.get("text") or identifier.get("value")
-            break
-
-    if user_id is None:
-        raise ValueError(f"User id not found in message. instance_id={instance_id}")
+    if bop_user_by_id is not None:
+        user_data = bop_user_by_id.get(str(user_id))
+        if not user_data:
+            return _user_from_kafka_message_payload(user_id, message_user, identifiers)
+        return external_principal_to_user(user_data)
 
     # Query BOP for user information
     bop_resp = PROXY.request_filtered_principals([user_id], options={"query_by": "user_id", "return_id": True})
 
     if not bop_resp["data"]:  # User has been deleted
-        # Get data from message instead
-        user = User()
-        user.user_id = user_id
-        user.is_active = False
-        user.username = message_user["Person"]["Credentials"]["Login"]
-
-        # Handle references (might be a dict or list)
-        references = identifiers.get("Reference", [])
-        if not isinstance(references, list):
-            references = [references]
-
-        # Match UMB behavior: use first matching reference and stop (preserve production semantics)
-        # Kafka receives the same messages as UMB (just different transport), so behavior should be identical
-        # Messages typically have one WEB/Customer reference (org_id) and one EBS/Account reference (account)
-        for ref in references:
-            is_web_customer = (
-                ref.get("system") == "WEB" and ref.get("entity-name") == "Customer" and ref.get("qualifier") == "id"
-            )
-            is_ebs_account = (
-                ref.get("system") == "EBS" and ref.get("entity-name") == "Account" and ref.get("qualifier") == "number"
-            )
-            if is_web_customer:
-                user.org_id = ref.get("text") or ref.get("value")
-                break
-            if is_ebs_account:
-                user.account = ref.get("text") or ref.get("value")
-                break
-
-        return user
+        return _user_from_kafka_message_payload(user_id, message_user, identifiers)
 
     user_data = bop_resp["data"][0]
     return external_principal_to_user(user_data)
+
+
+def _user_from_kafka_message_payload(user_id: str, message_user: dict, identifiers: dict) -> User:
+    """Build a User from Kafka message fields when BOP has no data (or is skipped)."""
+    user = User()
+    user.user_id = user_id
+    user.is_active = False
+    user.username = message_user["Person"]["Credentials"]["Login"]
+
+    references = identifiers.get("Reference", [])
+    if not isinstance(references, list):
+        references = [references]
+
+    for ref in references:
+        is_web_customer = (
+            ref.get("system") == "WEB" and ref.get("entity-name") == "Customer" and ref.get("qualifier") == "id"
+        )
+        is_ebs_account = (
+            ref.get("system") == "EBS" and ref.get("entity-name") == "Account" and ref.get("qualifier") == "number"
+        )
+        if is_web_customer:
+            user.org_id = ref.get("text") or ref.get("value")
+            break
+        if is_ebs_account:
+            user.account = ref.get("text") or ref.get("value")
+            break
+
+    return user
 
 
 class _LockContention(Exception):
     """Raised when the advisory listener lock cannot be acquired."""
 
     pass
-
-
-def process_umb_event(frame, umb_client: Stomp, bootstrap_service: TenantBootstrapService) -> bool:
-    """
-    Process each umb frame.
-
-    If the process should continue to listen for more frames, return True. Otherwise, return False.
-
-    Message parsing happens outside the transaction (pure computation).  The DB
-    work (advisory lock + update_user) runs inside ``run_atomic_with_retry`` so
-    that serialization conflicts with concurrent API traffic are retried at the
-    correct (outermost) transaction boundary.
-    """
-    # --- Parse outside the transaction (no DB needed) ---
-    try:
-        body = frame.body.decode("utf-8", errors="ignore")
-        data_dict = xmltodict.parse(body)
-        canonical_message = data_dict.get("CanonicalMessage")
-        user = retrieve_user_info_umb(canonical_message)
-    except Exception as e:
-        logger.error("process_umb_event: Error parsing umb message: %s", str(e))
-        capture_exception(e)
-        umb_client.nack(frame)
-        stomp_messages_nack_total.inc()
-        return True
-
-    # --- DB work with proper outer retry ---
-    try:
-
-        def _db_work():
-            if not _lock_listener():
-                raise _LockContention()
-            if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_UMB:
-                bootstrap_service.update_user(user, ready_tenant=False)
-
-        run_atomic_with_retry(5, _db_work)
-        umb_client.ack(frame)
-        stomp_messages_ack_total.inc()
-    except _LockContention:
-        logger.info("process_umb_event: Another listener is running. Aborting.")
-        return False
-    except Exception as e:
-        logger.error("process_umb_event: Error processing umb message: %s", str(e))
-        capture_exception(e)
-        # Nack sends back to the broker that we failed to process this message.
-        # The broker may redeliver the message up to a certain number of retries.
-        # Eventually, the message is discarded, usually logged and sent to a DLQ.
-        # In other words, nacking is appropriate for messages which *may* be processable
-        # if retried.
-        # Either way, this lets us eventually proceed further in the queue,
-        # and should mark the message so it can be debugged later if needed.
-        umb_client.nack(frame)
-        stomp_messages_nack_total.inc()
-
-    return True
 
 
 class MessageProcessingResult(NamedTuple):
@@ -411,12 +350,17 @@ class MessageProcessingResult(NamedTuple):
     success: bool
 
 
-def _parse_kafka_message_to_user(message):
+def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None):
     """Parse a Kafka message into a User object.
 
     Handles tombstones, JSON and XML formats.
     Returns (user, None) on success or (None, 'tombstone') for tombstones.
     Raises on parse failure.
+
+    Args:
+        message: Kafka message
+        skip_bop: If True, do not call BOP (message-payload User only). Used for dry-run.
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
     """
     if message.value is None:
         return None, "tombstone"
@@ -426,16 +370,172 @@ def _parse_kafka_message_to_user(message):
     try:
         message_data = json.loads(message_value)
         canonical_message = message_data.get("CanonicalMessage", message_data)
-        return retrieve_user_info_kafka(canonical_message), None
+        return (
+            retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
+            None,
+        )
     except json.JSONDecodeError as json_error:
         try:
             data_dict = xmltodict.parse(message_value)
             canonical_message = data_dict.get("CanonicalMessage")
-            return retrieve_user_info_umb(canonical_message), None
+            return (
+                retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
+                None,
+            )
         except ExpatError as xml_error:
             raise Exception(
                 f"Message is neither valid JSON nor valid XML. " f"JSON error: {json_error}. XML error: {xml_error}"
             ) from xml_error
+
+
+def _try_extract_user_id_from_kafka_message(message) -> Optional[str]:
+    """Best-effort user_id extraction for BOP batching. Returns None for tombstones/unparseable."""
+    if message.value is None:
+        return None
+
+    message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
+
+    try:
+        message_data = json.loads(message_value)
+        canonical_message = message_data.get("CanonicalMessage", message_data)
+        return _extract_user_id_from_kafka_canonical(canonical_message)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError):
+        try:
+            data_dict = xmltodict.parse(message_value)
+            canonical_message = data_dict.get("CanonicalMessage")
+            if canonical_message is None:
+                return None
+            return _extract_user_id_from_xml_canonical(canonical_message)
+        except Exception:
+            return None
+
+
+def _fetch_bop_users_by_ids(user_ids: list[str]) -> dict:
+    """
+    Fetch BOP user data for the given user_ids in one call.
+
+    Dedupes while preserving order. Returns a map of user_id (str) -> principal dict
+    for users found in BOP. Missing keys mean the user was not returned (deleted/inactive).
+    """
+    unique_ids = list(dict.fromkeys(user_ids))
+    if not unique_ids:
+        return {}
+
+    logger.info(
+        "process_principal_events_from_kafka: Batch BOP lookup for %d unique user_id(s) (from %d message(s))",
+        len(unique_ids),
+        len(user_ids),
+    )
+    bop_resp = PROXY.request_filtered_principals(unique_ids, options={"query_by": "user_id", "return_id": True})
+
+    if "data" not in bop_resp:
+        raise KeyError(f"BOP response missing 'data' key: status_code={bop_resp.get('status_code')}")
+
+    result = {}
+    for item in bop_resp["data"] or []:
+        uid = item.get("user_id")
+        if uid is not None:
+            result[str(uid)] = item
+    return result
+
+
+def _collect_user_ids_from_kafka_messages(messages) -> list[str]:
+    """Collect user_ids from messages for BOP batching (duplicates preserved for logging)."""
+    user_ids = []
+    for message in messages:
+        user_id = _try_extract_user_id_from_kafka_message(message)
+        if user_id is not None:
+            user_ids.append(user_id)
+    return user_ids
+
+
+def _commit_kafka_message(consumer, message) -> None:
+    """
+    Commit the offset for a single message.
+
+    Must use an explicit offset: messages are buffered into a batch before processing,
+    so the consumer position already points past the whole batch. A bare ``commit()``
+    would incorrectly mark unprocessed messages as done.
+    """
+    tp = TopicPartition(message.topic, message.partition)
+    consumer.commit({tp: OffsetAndMetadata(message.offset + 1, "")})
+
+
+def _process_kafka_message_batch(
+    consumer,
+    messages,
+    bootstrap_service: TenantBootstrapService,
+    dlq_producer,
+    dry_run: bool,
+) -> bool:
+    """
+    Process a batch of Kafka messages with a single deduped BOP call.
+
+    Prefetches BOP data for unique user_ids in the batch, then processes and commits
+    each message in order (each message still runs ``update_user``; only the BOP
+    lookup is deduped). Returns False if the consumer should stop.
+    """
+    if not messages:
+        return True
+
+    bop_user_by_id = None
+    if not dry_run:
+        user_ids = _collect_user_ids_from_kafka_messages(messages)
+        try:
+            bop_user_by_id = _fetch_bop_users_by_ids(user_ids)
+        except Exception as e:
+            logger.error(
+                "process_principal_events_from_kafka: Batch BOP lookup failed: %s. "
+                "Stopping consumer without committing batch offsets.",
+                str(e),
+            )
+            capture_exception(e)
+            return False
+
+    for message in messages:
+        mode_suffix = " (DRY RUN)" if dry_run else ""
+        logger.info(
+            "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
+            message.partition,
+            message.offset,
+            mode_suffix,
+        )
+        result = process_kafka_message(
+            message,
+            bootstrap_service,
+            dlq_producer,
+            dry_run=dry_run,
+            bop_user_by_id=bop_user_by_id,
+        )
+        if not result.should_continue:
+            logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
+            return False
+
+        if not result.success:
+            logger.warning(
+                "process_principal_events_from_kafka: Message processing failed at offset %d. "
+                "Stopping consumer to preserve at-least-once semantics. "
+                "Consumer will retry from this offset on restart.",
+                message.offset,
+            )
+            return False
+
+        try:
+            _commit_kafka_message(consumer, message)
+            logger.debug(
+                "process_principal_events_from_kafka: Committed offset %d for partition %d",
+                message.offset,
+                message.partition,
+            )
+        except Exception as commit_error:
+            logger.error(
+                "process_principal_events_from_kafka: Failed to commit offset %d: %s",
+                message.offset,
+                commit_error,
+            )
+            return False
+
+    return True
 
 
 def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResult:
@@ -504,7 +604,11 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
 
 
 def process_kafka_message(
-    message, bootstrap_service: TenantBootstrapService, dlq_producer=None, dry_run: bool = False
+    message,
+    bootstrap_service: TenantBootstrapService,
+    dlq_producer=None,
+    dry_run: bool = False,
+    bop_user_by_id: Optional[dict] = None,
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -518,17 +622,23 @@ def process_kafka_message(
         message: Kafka message containing user event data
         bootstrap_service: Service for updating user/tenant state
         dlq_producer: Optional RBACProducer instance for sending failed messages to DLQ
-        dry_run: If True, validate message but don't write to database (shadow mode)
+        dry_run: If True, validate message structure and commit without BOP or DB writes (shadow mode)
+        bop_user_by_id: Optional prefetched BOP results keyed by user_id (str). When provided
+            (including empty dict), skips per-message BOP calls.
 
     Returns:
         MessageProcessingResult with:
         - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
-    # --- 1. Parse message + resolve user outside the transaction ---
-    # This calls BOP (network I/O) so can raise transient errors too.
+    # --- 1. Parse message (+ resolve user via BOP unless dry-run / prefetched) ---
+    # Live mode calls BOP (network I/O) so can raise transient errors too.
+    # Dry-run skips BOP and builds User from the payload only for structural validation.
+    # When bop_user_by_id is provided, BOP was already fetched for the batch.
     try:
-        user, marker = _parse_kafka_message_to_user(message)
+        user, marker = _parse_kafka_message_to_user(
+            message, skip_bop=dry_run, bop_user_by_id=None if dry_run else bop_user_by_id
+        )
     except Exception as e:
         mode_msg = " (DRY RUN)" if dry_run else ""
         logger.error("process_kafka_message: Error parsing Kafka message%s: %s", mode_msg, str(e))
@@ -577,11 +687,12 @@ def process_kafka_message(
         kafka_messages_success_total.inc()
         return MessageProcessingResult(should_continue=True, success=True)
 
-    # --- 3. Dry-run mode: validate only, no DB writes ---
+    # --- 3. Dry-run mode: structure validated above (no BOP, no DB writes) ---
     if dry_run:
-        logger.debug("DRY RUN: Would process user")
-        if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
-            logger.debug("DRY RUN: Would call bootstrap_service.update_user()")
+        logger.debug(
+            "DRY RUN: Validated message without BOP (user_id=%s); skipping DB writes",
+            getattr(user, "user_id", None),
+        )
         kafka_messages_success_total.inc()
         kafka_dry_run_messages_total.inc()
         return MessageProcessingResult(should_continue=True, success=True)
@@ -630,35 +741,6 @@ def process_kafka_message(
         return _send_to_dlq(message, e, dlq_producer, dry_run=False)
 
 
-def process_principal_events_from_umb(bootstrap_service: Optional[TenantBootstrapService] = None):
-    """Process principals events from UMB."""
-    logger.info("process_tenant_principal_events: Start processing principal events from umb.")
-    bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
-    try:
-        # 1.1 or greater is required to support NACK, used when messages fail.
-        UMB_CLIENT.connect(versions=[StompSpec.VERSION_1_1, StompSpec.VERSION_1_2])
-        # We only have one subscription for this connection, so using a static ID header.
-        UMB_CLIENT.subscribe(QUEUE, {StompSpec.ACK_HEADER: StompSpec.ACK_CLIENT_INDIVIDUAL, StompSpec.ID_HEADER: "0"})
-    except StompConnectionError as e:
-        # Skip if already connected/subscribed
-        if not str(e).startswith(("Already connected", "Already subscribed")):
-            raise e
-
-    try:
-        while UMB_CLIENT.canRead(15):  # Check if queue is empty, 15 sec timeout
-            frame = UMB_CLIENT.receiveFrame()
-            logger.info(
-                "process_tenant_principal_events: Processing frame for %s",
-                frame.headers.get("esbWebUserId", "unknown"),
-            )
-            logger.debug("process_tenant_principal_events: Processing frame. info=%s", frame.info())
-            if not process_umb_event(frame, UMB_CLIENT, bootstrap_service):
-                break
-    finally:
-        UMB_CLIENT.disconnect()
-        logger.info("process_tenant_principal_events: Principal event processing finished.")
-
-
 def process_principal_events_from_kafka(
     bootstrap_service: Optional[TenantBootstrapService] = None, dry_run: bool = False
 ):
@@ -674,8 +756,8 @@ def process_principal_events_from_kafka(
 
     if dry_run:
         logger.warning(
-            "KAFKA SHADOW MODE: Messages will be processed but NO database writes will occur. "
-            "This is for validation only."
+            "KAFKA SHADOW MODE: Messages will be parsed without BOP and with NO database writes. "
+            "This is for consume/commit validation only."
         )
     bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
 
@@ -690,10 +772,10 @@ def process_principal_events_from_kafka(
 
     # Build Kafka consumer configuration
     # NOTE: This consumer runs periodically via Celery beat (every 60s) and consumes for 15s,
-    # creating a 45-second gap between consumption periods. This matches the UMB behavior
-    # where the consumer also ran periodically. For continuous consumption, a persistent
+    # creating a 45-second gap between consumption periods. This matches the historical
+    # message-bus consumption pattern. For continuous consumption, a persistent
     # consumer (like launch-rbac-kafka-consumer) would be more appropriate, but this
-    # approach maintains compatibility with the existing UMB-based architecture.
+    # approach maintains compatibility with the existing periodic architecture.
 
     # Include ENV_NAME in group_id to prevent offset interference across environments
     # In multi-env setups (staging, ephemeral, CI) that share a Kafka cluster, environments
@@ -717,8 +799,9 @@ def process_principal_events_from_kafka(
         "auto_offset_reset": "earliest",
         "enable_auto_commit": False,  # Manual commit for at-least-once semantics
         # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
-        "consumer_timeout_ms": KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS,  # idle-poll stop; matches UMB
-        # Timeout tuning: 60s beat cycle + 15s drain must fit in session_timeout_ms without causing LeaveGroup
+        # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
+        "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS,
+        # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
         "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,
         "heartbeat_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS,
         "max_poll_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS,
@@ -763,53 +846,31 @@ def process_principal_events_from_kafka(
 
         # Wall-clock budget so a busy topic cannot keep this Celery task alive past the drain window.
         # consumer_timeout_ms alone only ends the iterator after idle polls.
-        drain_deadline = time.monotonic() + (KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS / 1000.0)
+        drain_timeout_ms = settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
+        drain_deadline = time.monotonic() + (drain_timeout_ms / 1000.0)
+        batch_size = settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
+        batch = []
 
-        # Process messages
+        # Process messages in batches so we can dedupe user_ids and make one BOP call per batch.
         for message in consumer:
             if time.monotonic() >= drain_deadline:
                 logger.info(
                     "process_principal_events_from_kafka: Drain window of %dms elapsed, stopping cycle.",
-                    KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS,
+                    drain_timeout_ms,
                 )
                 break
 
-            mode_suffix = " (DRY RUN)" if dry_run else ""
-            logger.info(
-                "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
-                message.partition,
-                message.offset,
-                mode_suffix,
-            )
-            result = process_kafka_message(message, bootstrap_service, dlq_producer, dry_run=dry_run)
-            if not result.should_continue:
-                # Lock contention - another listener is running, abort this consumer
-                logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
-                break
+            batch.append(message)
+            if len(batch) >= batch_size:
+                if not _process_kafka_message_batch(consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run):
+                    batch = []
+                    break
+                batch = []
 
-            if not result.success:
-                logger.warning(
-                    "process_principal_events_from_kafka: Message processing failed at offset %d. "
-                    "Stopping consumer to preserve at-least-once semantics. "
-                    "Consumer will retry from this offset on restart.",
-                    message.offset,
-                )
-                break
-
-            try:
-                consumer.commit()
-                logger.debug(
-                    "process_principal_events_from_kafka: Committed offset %d for partition %d",
-                    message.offset,
-                    message.partition,
-                )
-            except Exception as commit_error:
-                logger.error(
-                    "process_principal_events_from_kafka: Failed to commit offset %d: %s",
-                    message.offset,
-                    commit_error,
-                )
-                break
+        if batch and not _process_kafka_message_batch(
+            consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run
+        ):
+            logger.info("process_principal_events_from_kafka: Final batch processing stopped the consumer.")
 
     except KafkaError as e:
         logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))

@@ -170,7 +170,7 @@ Authorization engine for v2 APIs. RBAC replicates its data model to Kessel as re
 
 - **BOP (Backoffice Proxy)**: Principal/user lookup (org admin status, service accounts).
 - **IT Service**: Extended user attributes for compliance.
-- **UMB (Unified Message Bus)**: STOMP-based messaging for cross-system notifications.
+- **Kafka principal cleanup**: Consumes principal lifecycle events (create/update/disable) from Kafka, with XML bridge support for legacy message formats.
 - **Notifications service**: Platform notification delivery.
 
 ## Async Processing

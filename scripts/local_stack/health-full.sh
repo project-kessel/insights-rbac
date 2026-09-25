@@ -22,6 +22,9 @@ container_names() {
 }
 
 check_containers() {
+  # Verify that all containers matching a name pattern are running and
+  # healthy. Treats exited one-shot jobs (migrate, init, setup) with
+  # exit code 0 as successfully completed.
   local pattern="$1"
   local label="$2"
   local names name state health exit_code
@@ -38,7 +41,9 @@ check_containers() {
     health=$("${CONTAINER_RUNTIME}" inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${name}")
     exit_code=$("${CONTAINER_RUNTIME}" inspect --format '{{.State.ExitCode}}' "${name}")
 
-    if [[ "${state}" == exited && "${exit_code}" == 0 && "${name}" =~ (migrate|init)-[0-9]+$ ]]; then
+    # Compose setup containers are one-shot jobs. A clean exit means the
+    # initialization completed successfully and is not a failed runtime.
+    if [[ "${state}" == exited && "${exit_code}" == 0 && "${name}" =~ (migrate|init|setup)-[0-9]+$ ]]; then
       log-info "${name}: completed successfully"
       continue
     fi

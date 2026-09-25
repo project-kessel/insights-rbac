@@ -18,16 +18,40 @@
 
 from typing import Optional
 
-from management.atomic_transactions import atomic_with_retry
+from management.atomic_transactions import atomic_with_retry, run_atomic_with_retry
+from management.metric_utils import track_result_metric
 from management.permissions import AdminAccessPermission
-from management.tenant_mapping.model import TenantMapping
-from management.tenant_mapping.v2_activation import set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import is_v2_opted_in, set_v2_opt_in_state
 from management.tenant_mapping.v2_eligibility import OptInEligibleState, OptInIneligibleState, check_v2_eligibility
+from prometheus_client import Counter, Histogram
 from rest_framework import permissions, serializers, status
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
 from api.models import Tenant
+
+rbac_v2_optin_total = Counter(
+    "rbac_v2_optin_total",
+    "The total number of (authorized) requests made to opt a tenant into V2",
+    labelnames=["result"],
+)
+
+rbac_v2_optin_status_requests_total = Counter(
+    "rbac_v2_optin_status_requests_total",
+    "The total number of requests made to the opt-in status endpoint",
+    labelnames=["result"],
+)
+
+rbac_v2_optin_status_latency_seconds = Histogram(
+    "rbac_v2_optin_status_latency_seconds",
+    "The amount of time taken to read a tenant's opt-in status",
+)
+
+rbac_v2_optin_eligibility_requests_total = Counter(
+    "rbac_v2_optin_eligibility_requests_total",
+    "The total number of (authorized) requests made to the opt-in eligibility endpoint",
+    labelnames=["result"],
+)
 
 
 class _OptInPermission(permissions.BasePermission):
@@ -99,16 +123,7 @@ class OptInViewSet(ViewSet):
     permission_classes = (_OptInPermission,)
 
     def _state_response_for(self, tenant: Tenant, headers: Optional[dict[str, str]] = None):
-        tenant_mapping = TenantMapping.objects.filter(tenant=tenant).first()
-
-        if headers is None:
-            headers = {}
-
-        # A non-bootstrapped tenant cannot be opted into V2.
-        if tenant_mapping is None:
-            return Response({"v2_opted_in": False}, headers=headers)
-
-        return Response({"v2_opted_in": tenant_mapping.v2_opted_in_at is not None}, headers=headers)
+        return Response({"v2_opted_in": is_v2_opted_in(tenant)}, headers=headers)
 
     def _format_eligibility_data(self, eligibility: OptInEligibleState | OptInIneligibleState):
         if isinstance(eligibility, OptInEligibleState):
@@ -119,35 +134,53 @@ class OptInViewSet(ViewSet):
 
         return _OptInIneligibilitySerializer(eligibility).data
 
+    @rbac_v2_optin_status_latency_seconds.time()
     def status(self, request):
         """Get the current opt-in state of the requestor's tenant."""
-        return self._state_response_for(request.tenant, headers={"Cache-Control": "max-age=120, private"})
+        with track_result_metric(rbac_v2_optin_status_requests_total) as result:
+            response = self._state_response_for(request.tenant, headers={"Cache-Control": "max-age=120, private"})
+            result("opted-in" if response.data["v2_opted_in"] else "not-opted-in")
 
-    @atomic_with_retry(retries=5)
+            return response
+
     def partial_update(self, request):
         """(Possibly) update the requestor's tenant's V2 opt-in state."""
-        serializer = _OptInRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        with track_result_metric(rbac_v2_optin_total) as result:
+            serializer = _OptInRequestSerializer(data=request.data)
 
-        requested_state = serializer.validated_data.get("v2_opted_in")
+            with result.exceptionally("invalid-request"):
+                serializer.is_valid(raise_exception=True)
 
-        if requested_state is None:
-            # We've not been asked to opt the tenant in, so we have nothing to do.
-            return self._state_response_for(request.tenant)
+            requested_state = serializer.validated_data.get("v2_opted_in")
 
-        if requested_state is not True:
-            raise AssertionError("Validation should have rejected v2_opted_in being false")
+            if requested_state is None:
+                # We've not been asked to opt the tenant in, so we have nothing to do.
+                result("noop-request")
+                return self._state_response_for(request.tenant)
 
-        eligibility_result = check_v2_eligibility(request.tenant)
+            if requested_state is not True:
+                raise AssertionError("Validation should have rejected v2_opted_in being false")
 
-        if not isinstance(eligibility_result, OptInEligibleState):
-            return Response(self._format_eligibility_data(eligibility_result), status.HTTP_422_UNPROCESSABLE_ENTITY)
+            @atomic_with_retry(retries=5)
+            def do_process():
+                eligibility_result = check_v2_eligibility(request.tenant)
 
-        set_v2_opt_in_state(request.tenant, True)
-        return self._state_response_for(request.tenant)
+                if not isinstance(eligibility_result, OptInEligibleState):
+                    result("ineligible")
+                    return Response(
+                        self._format_eligibility_data(eligibility_result), status.HTTP_422_UNPROCESSABLE_ENTITY
+                    )
 
-    @atomic_with_retry(retries=5)
+                set_v2_opt_in_state(request.tenant, True)
+                result("success")
+                return self._state_response_for(request.tenant)
+
+            return do_process()
+
     def eligibility(self, request):
         """Determine whether the requestor's tenant can be opted into V2."""
-        result = check_v2_eligibility(request.tenant)
-        return Response(self._format_eligibility_data(result), status.HTTP_200_OK)
+        with track_result_metric(rbac_v2_optin_eligibility_requests_total) as result:
+            check_result = run_atomic_with_retry(5, lambda: check_v2_eligibility(request.tenant))
+            response_data = self._format_eligibility_data(check_result)
+            result("eligible" if response_data["eligible"] else "ineligible")
+            return Response(response_data, status.HTTP_200_OK)

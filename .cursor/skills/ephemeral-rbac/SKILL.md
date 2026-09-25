@@ -134,9 +134,9 @@ print('RELATION_API_SERVER=', os.environ.get('RELATION_API_SERVER'))
 
 ## Symptom: Principal / user_id / permissions in ephemeral
 
-### No UMB in ephemeral
+### No Kafka principal cleanup in ephemeral
 
-UMB (`principal_cleanup_via_umb`) does not run. `user_id` on `Principal` is **not** set by normal API calls when the tenant already exists.
+The Kafka principal cleanup consumer (`principal_cleanup_via_kafka`) does not run in ephemeral environments. `user_id` on `Principal` is **not** set by normal API calls when the tenant already exists.
 
 Paths that **persist** `user_id`:
 - First request that **bootstraps a new tenant** (`IdentityHeaderMiddleware` → `update_user(upsert=True)`) with `user_id` in `x-rh-identity`
