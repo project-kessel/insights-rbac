@@ -37,6 +37,7 @@ from migration_tool.in_memory_tuples import (
 )
 
 from management.models import Group, Permission, Principal, Role, Workspace
+from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
 from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_service import RoleV2Service
 from management.exceptions import InvalidFieldError, NotFoundError, RequiredFieldError
@@ -2861,6 +2862,111 @@ class UpdateRoleBindingsForSubjectTests(_ReplicationAssertionsMixin, IdentityReq
                 role_ids=[str(explicit_role.uuid)],
             )
         self.assertEqual({r.uuid for r in result.roles}, {explicit_role.uuid})
+
+    def _all_scope_service_and_cache(self):
+        """Return (scope_service, scope_cache) configured with only an ALL-scoped permission."""
+        scope_service = ImplicitResourceService(
+            tenant_scope_permissions=[],
+            root_scope_permissions=[],
+            all_scope_permissions=["all_app:*:*"],
+        )
+        return scope_service, PermissionScopeCache(scope_service)
+
+    def _create_all_scope_role(self, name="all_scope_role"):
+        """Create and return a role with a single ALL-scoped permission."""
+        all_perm = Permission.objects.create(permission="all_app:resource:read", tenant=self.tenant)
+        role = RoleV2.objects.create(name=name, description="Scope-agnostic", tenant=self.tenant)
+        role.permissions.add(all_perm)
+        return role
+
+    def test_update_allows_all_scope_only_role_on_standard_workspace(self):
+        """Binding a role with only Scope.ALL permissions to a standard workspace should succeed."""
+        scope_service, scope_cache = self._all_scope_service_and_cache()
+        all_role = self._create_all_scope_role()
+
+        with (
+            patch("management.role_binding.service.default_implicit_resource_service", scope_service),
+            patch("management.role_binding.service.permission_scope_cache", scope_cache),
+        ):
+            result = self.service.update_role_bindings_for_subject(
+                resource_type="workspace",
+                resource_id=str(self.workspace.id),
+                subject_type="group",
+                subject_id=str(self.group.uuid),
+                role_ids=[str(all_role.uuid)],
+            )
+        self.assertEqual({r.uuid for r in result.roles}, {all_role.uuid})
+        binding = RoleBinding.objects.get(
+            role=all_role,
+            resource_type="workspace",
+            resource_id=str(self.workspace.id),
+            tenant=self.tenant,
+        )
+        self.assertTrue(RoleBindingGroup.objects.filter(binding=binding, group=self.group).exists())
+
+    def test_update_allows_all_scope_only_role_on_root_workspace(self):
+        """Binding a role with only Scope.ALL permissions to the root workspace should succeed."""
+        scope_service, _ = self._all_scope_service_and_cache()
+        all_role = self._create_all_scope_role()
+
+        with patch("management.role_binding.service.default_implicit_resource_service", scope_service):
+            result = self.service.update_role_bindings_for_subject(
+                resource_type="workspace",
+                resource_id=str(self.root_workspace.id),
+                subject_type="group",
+                subject_id=str(self.group.uuid),
+                role_ids=[str(all_role.uuid)],
+            )
+        self.assertEqual({r.uuid for r in result.roles}, {all_role.uuid})
+        binding = RoleBinding.objects.get(
+            role=all_role,
+            resource_type="workspace",
+            resource_id=str(self.root_workspace.id),
+            tenant=self.tenant,
+        )
+        self.assertTrue(RoleBindingGroup.objects.filter(binding=binding, group=self.group).exists())
+
+    def test_update_allows_all_scope_only_role_on_tenant(self):
+        """Binding a role with only Scope.ALL permissions to the tenant should succeed."""
+        scope_service, _ = self._all_scope_service_and_cache()
+        all_role = self._create_all_scope_role()
+
+        with patch("management.role_binding.service.default_implicit_resource_service", scope_service):
+            result = self.service.update_role_bindings_for_subject(
+                resource_type="tenant",
+                resource_id=self.tenant.tenant_resource_id(),
+                subject_type="group",
+                subject_id=str(self.group.uuid),
+                role_ids=[str(all_role.uuid)],
+            )
+        self.assertEqual({r.uuid for r in result.roles}, {all_role.uuid})
+        binding = RoleBinding.objects.get(
+            role=all_role,
+            resource_type="tenant",
+            resource_id=self.tenant.tenant_resource_id(),
+            tenant=self.tenant,
+        )
+        self.assertTrue(RoleBindingGroup.objects.filter(binding=binding, group=self.group).exists())
+
+    def test_update_rejects_permissionless_role_still_validated(self):
+        """A permissionless role (empty permissions) is not treated as all-scope-only and is still validated."""
+        scope_service, scope_cache = self._all_scope_service_and_cache()
+
+        permissionless_role = RoleV2.objects.create(name="no_perms", description="No permissions", tenant=self.tenant)
+
+        with (
+            patch("management.role_binding.service.default_implicit_resource_service", scope_service),
+            patch("management.role_binding.service.permission_scope_cache", scope_cache),
+        ):
+            with self.assertRaises(InvalidFieldError) as ctx:
+                self.service.update_role_bindings_for_subject(
+                    resource_type="workspace",
+                    resource_id=str(self.workspace.id),
+                    subject_type="group",
+                    subject_id=str(self.group.uuid),
+                    role_ids=[str(permissionless_role.uuid)],
+                )
+            self.assertIn("not scoped", str(ctx.exception))
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

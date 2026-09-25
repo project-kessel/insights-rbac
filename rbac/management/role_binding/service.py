@@ -1169,6 +1169,8 @@ class RoleBindingService:
         for role in roles:
             perm_rows = list(role.permissions.values_list("id", "permission"))
             perm_strings = [row[1] for row in perm_rows]
+            if default_implicit_resource_service.is_all_scope_only(perm_strings):
+                continue
             role_scope = default_implicit_resource_service.highest_scope_for_permissions(perm_strings)
             if role_scope != expected:
                 mismatched.append(f"{role.name} ({role.uuid})")

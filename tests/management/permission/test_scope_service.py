@@ -428,6 +428,38 @@ class MaxPermissionTest(TestCase):
         )
 
 
+class IsAllScopeOnlyTest(TestCase):
+    def test_empty(self):
+        """Test that an empty list of permissions is not considered all-scope-only."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[], tenant_scope_permissions=[], all_scope_permissions=["app:*:*"]
+        )
+        self.assertFalse(service.is_all_scope_only([]))
+
+    def test_all_scope_only_true(self):
+        """Test that permissions that all resolve to Scope.ALL return True."""
+        service = ImplicitResourceService(
+            root_scope_permissions=[],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["app:resource:verb", "app:other_resource:other_verb"],
+        )
+        self.assertTrue(service.is_all_scope_only(["app:resource:verb", "app:other_resource:other_verb"]))
+
+    def test_mixed_scopes_false(self):
+        """Test that a mix of ALL-scope and concrete-scope permissions returns False."""
+        service = ImplicitResourceService(
+            root_scope_permissions=["root_app:*:*"],
+            tenant_scope_permissions=[],
+            all_scope_permissions=["all_app:*:*"],
+        )
+        self.assertFalse(service.is_all_scope_only(["root_app:resource:verb", "all_app:resource:verb"]))
+
+    def test_no_all_scope_permissions_false(self):
+        """Test that permissions with no ALL scope configured are not all-scope-only."""
+        service = ImplicitResourceService(root_scope_permissions=["root_app:*:*"], tenant_scope_permissions=[])
+        self.assertFalse(service.is_all_scope_only(["root_app:resource:verb"]))
+
+
 class ResourceTest(TestCase):
     org_id = "an_org"
     root_id = "root_workspace"
