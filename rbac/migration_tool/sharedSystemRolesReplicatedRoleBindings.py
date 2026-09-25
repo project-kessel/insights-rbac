@@ -49,7 +49,9 @@ def constant_bound_resource(resource: V2boundresource) -> ScopeBoundResourceReso
     return lambda _scope: resource
 
 
-def with_workspace_scope_inheritance(resource_map: dict[Scope, V2boundresource]) -> dict[Scope, V2boundresource]:
+def with_workspace_scope_inheritance(
+    resource_map: dict[Scope, V2boundresource],
+) -> dict[Scope, V2boundresource]:
     """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT when needed.
 
     Workspace bindings at ROOT cover the default workspace via parent inheritance,
@@ -62,7 +64,9 @@ def with_workspace_scope_inheritance(resource_map: dict[Scope, V2boundresource])
     return result
 
 
-def bound_resource_resolver_from_map(resource_map: dict[Scope, V2boundresource]) -> ScopeBoundResourceResolver:
+def bound_resource_resolver_from_map(
+    resource_map: dict[Scope, V2boundresource],
+) -> ScopeBoundResourceResolver:
     """Return a resolver that maps scope to resource.
 
     ``resource_map`` must contain an entry for every scope returned by
@@ -159,6 +163,14 @@ def v1_role_to_v2_bindings(
 
     _scope_service = ImplicitResourceService.from_settings()
 
+    is_ocm_role = (v1_role.external_tenant_name() or "").lower() == "ocm"
+    _default_ws_id: Optional[str] = None
+    if is_ocm_role:
+        try:
+            _default_ws_id = str(Workspace.objects.default(tenant=v1_role.tenant).id)
+        except Workspace.DoesNotExist:
+            _default_ws_id = None
+
     def _resolve_default(permission: Permission) -> V2boundresource:
         scope = _scope_service.scope_for_permission(permission.permission)
         return resource_for_scope(scope)
@@ -218,11 +230,25 @@ def v1_role_to_v2_bindings(
                         continue
                 elif resource_id == "":
                     continue
-                add_element(perm_groupings, V2boundresource(resource_type, resource_id), permission, collection=set)
+                if is_ocm_role and resource_type == ("rbac", "workspace") and str(resource_id) != _default_ws_id:
+                    continue
+                add_element(
+                    perm_groupings,
+                    V2boundresource(resource_type, resource_id),
+                    permission,
+                    collection=set,
+                )
         if default:
+            resolved = _resolve_default(permission)
+            if (
+                is_ocm_role
+                and resolved.resource_type == ("rbac", "workspace")
+                and str(resolved.resource_id) != _default_ws_id
+            ):
+                continue
             add_element(
                 perm_groupings,
-                _resolve_default(permission),
+                resolved,
                 permission,
                 collection=set,
             )
@@ -443,7 +469,9 @@ def v1_perm_to_v2_perm(v1_permission: Permission):
 V2_RESOURCE_BY_ATTRIBUTE = {"group.id": ("rbac", "workspace")}
 
 
-def attribute_key_to_v2_related_resource_type(resourceType: str) -> Optional[Tuple[str, str]]:
+def attribute_key_to_v2_related_resource_type(
+    resourceType: str,
+) -> Optional[Tuple[str, str]]:
     """Convert a V1 resource type to a V2 resource type."""
     if resourceType in V2_RESOURCE_BY_ATTRIBUTE:
         return V2_RESOURCE_BY_ATTRIBUTE[resourceType]

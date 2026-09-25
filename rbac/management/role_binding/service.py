@@ -49,6 +49,7 @@ from management.relation_replicator.relation_replicator import (
 from management.relation_replicator.types import RelationTuple
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2
+from management.role.v2_service import is_ocm_v2_role, ocm_roles_allowed_for_workspace_binding
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.role_binding.util import lookup_binding_subjects
 from management.subject import Subject, SubjectType
@@ -315,8 +316,12 @@ class RoleBindingService:
         for resource_type, resource_id in {(r.resource_type, r.resource_id) for r in requests}:
             self._validate_resource(resource_type, resource_id)
 
+        scope_groups: dict[tuple[str, str], dict[str, RoleV2]] = {}
         for req in requests:
-            self._validate_role_scopes([roles_by_uuid[req.role_id]], req.resource_type, req.resource_id)
+            key = (req.resource_type, req.resource_id)
+            scope_groups.setdefault(key, {})[req.role_id] = roles_by_uuid[req.role_id]
+        for (resource_type, resource_id), grouped in scope_groups.items():
+            self._validate_role_scopes(list(grouped.values()), resource_type, resource_id)
 
         access_groups = self._group_by_subject_resource(requests, roles_by_uuid)
         all_tuples_to_add: list[RelationTuple] = []
@@ -1116,7 +1121,12 @@ class RoleBindingService:
         if not role_ids:
             return []
 
-        roles = list(RoleV2.objects.filter(uuid__in=role_ids).assignable().excluding_out_of_scope_v2_roles())
+        roles = list(
+            RoleV2.objects.filter(uuid__in=role_ids)
+            .assignable()
+            .excluding_out_of_scope_v2_roles()
+            .select_related("v1_source__ext_relation__ext_tenant")
+        )
 
         found_ids = {str(r.uuid) for r in roles}
         requested_ids = set(role_ids)
@@ -1147,6 +1157,15 @@ class RoleBindingService:
         """
         if self._skip_scope_validation or not roles:
             return
+
+        if not ocm_roles_allowed_for_workspace_binding(resource_type, resource_id, self.tenant):
+            ocm_mismatched = [f"{role.name} ({role.uuid})" for role in roles if is_ocm_v2_role(role)]
+            if ocm_mismatched:
+                raise InvalidFieldError(
+                    "roles",
+                    "The following OCM roles can only be assigned at the Default Workspace: "
+                    + ", ".join(ocm_mismatched),
+                )
 
         is_standard_workspace = False
         expected: Scope

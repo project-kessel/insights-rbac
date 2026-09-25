@@ -24,7 +24,7 @@ from typing import Iterable, Optional
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from management.atomic_transactions import atomic
 from management.exceptions import NotFoundError, RequiredFieldError
 from management.permission.exceptions import InvalidPermissionDataError
@@ -59,6 +59,7 @@ from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role.v2_role_scope import v2_role_excluded_applications
 from management.role_binding.model import RoleBinding
 from management.utils import as_uuid
+from management.workspace.model import Workspace
 
 from api.models import Tenant
 
@@ -265,7 +266,17 @@ class RoleV2Service:
             raise RoleDatabaseError()
 
     def list(self, params: dict) -> QuerySet:
-        """Get a list of roles for the tenant, including seeded roles from the public tenant."""
+        """Get a list of roles for the tenant, including seeded roles from the public tenant.
+
+        OCM (OpenCluster Manager) visibility rules:
+        - When ``resource_type`` is absent, OCM external roles are excluded
+          from the listing so that callers without a workspace context never
+          see roles they cannot bind.
+        - When ``resource_type="workspace"`` with the default workspace's
+          ``resource_id``, OCM roles are included.
+        - For any other workspace (standard or root) or for ``resource_type="tenant"``,
+          OCM roles are excluded via ``_filter_by_resource_type``.
+        """
         fields = params.get("fields")
         queryset = RoleV2.objects.for_tenant(self.tenant).assignable().excluding_out_of_scope_v2_roles()
         if fields:
@@ -274,6 +285,8 @@ class RoleV2Service:
         resource_type = params.get("resource_type")
         if resource_type:
             queryset = self._filter_by_resource_type(queryset, resource_type, resource_id=params.get("resource_id"))
+        elif self.tenant is not None:
+            queryset = queryset.exclude(OCM_V2_ROLE_Q)
 
         name = params.get("name")
         if name:
@@ -305,6 +318,9 @@ class RoleV2Service:
 
         Uses DB-level filtering with cached Permission-ID-to-Scope mappings to
         avoid loading all roles and their permissions into Python memory.
+
+        OCM external roles are additionally excluded unless the target is the
+        tenant's default workspace (see ``ocm_roles_allowed_for_workspace_binding``).
         """
         matching_scopes = scopes_for_resource_type(resource_type)
         if not matching_scopes:
@@ -338,6 +354,11 @@ class RoleV2Service:
             if explicit_default_ids:
                 queryset = queryset.exclude(permissions__id__in=explicit_default_ids)
             queryset = queryset.filter(permissions__isnull=False).distinct()
+
+        if self.tenant is not None and not ocm_roles_allowed_for_workspace_binding(
+            resource_type, resource_id, self.tenant
+        ):
+            queryset = queryset.exclude(OCM_V2_ROLE_Q)
 
         return queryset
 
@@ -406,3 +427,31 @@ class RoleV2Service:
         CustomRoleV2.objects.filter(pk__in=(r.pk for r in roles_to_remove)).delete()
 
         return roles_to_remove
+
+
+OCM_EXTERNAL_TENANT = "ocm"
+
+OCM_V2_ROLE_Q = Q(v1_source__ext_relation__ext_tenant__name__iexact=OCM_EXTERNAL_TENANT)
+
+
+def is_ocm_v2_role(role: RoleV2) -> bool:
+    """Return True when the V2 role is a seeded OCM external role."""
+    v1_source = getattr(role, "v1_source", None)
+    if v1_source is None:
+        return False
+    ext_relation = getattr(v1_source, "ext_relation", None)
+    if ext_relation is None:
+        return False
+    ext_tenant = getattr(ext_relation, "ext_tenant", None)
+    if ext_tenant is None:
+        return False
+    return ext_tenant.name.lower() == OCM_EXTERNAL_TENANT
+
+
+def ocm_roles_allowed_for_workspace_binding(resource_type: str, resource_id: str | None, tenant: Tenant) -> bool:
+    """Return True when OCM roles may appear in list or be bound for the given resource."""
+    if resource_type != "workspace":
+        return False
+    if resource_id is None:
+        return True
+    return str(Workspace.objects.default(tenant=tenant).id) == str(resource_id)
