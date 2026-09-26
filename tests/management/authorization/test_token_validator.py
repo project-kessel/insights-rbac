@@ -841,3 +841,34 @@ class TokenValidatorTests(IdentityRequest):
 
         with self.assertRaises(InvalidTokenError):
             self.token_validator.get_user_from_bearer_token(request)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    def test_validate_token_and_org_id_bypass_validation(self) -> None:
+        """Test that bypassing token validation returns a hardcoded bearer token and no org ID."""
+        self.assertEqual(
+            ("mocked-invalid-bearer-token-because-token-validation-is-disabled", None),
+            self.token_validator.validate_token_and_org_id(request=mock.Mock(), additional_scopes_to_validate=set()),
+            "a hard coded bearer token and no org ID should have been returned since token validation is bypassed",
+        )
+
+    def test_validate_token_and_org_id_returns_org_claim(self) -> None:
+        """Test that the organization ID claim is extracted alongside the bearer token."""
+        issuer = InMemoryIssuer.generate()
+        self.token_validator.set_jwks_source(issuer, issuer.iss)
+
+        token = issuer.issue_jwt(
+            {},
+            {
+                "sub": "u1",
+                "preferred_username": "user1",
+                "organization": {"id": "org1"},
+            },
+        )
+
+        request_factory = RequestFactory()
+        request = request_factory.get("/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(
+            (token, "org1"),
+            self.token_validator.validate_token_and_org_id(request=request, additional_scopes_to_validate=set()),
+        )

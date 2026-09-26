@@ -35,27 +35,36 @@ class GroupV2KesselAccessPermission(permissions.BasePermission):
     Checks if the principal has rbac_groups_read or rbac_groups_write permission
     on the org resource via the Inventory API's CheckForUpdate gRPC call.
 
-    Read actions (list, retrieve) require rbac_groups_read.
-    Write actions (create, update, destroy) require rbac_groups_write.
+    Read actions (list, retrieve) and read methods on the principals action require rbac_groups_read.
+    Everything else, including any method or action not explicitly classified as a read, requires
+    rbac_groups_write.
     """
 
     RESOURCE_TYPE = "tenant"
     GROUPS_READ_RELATION = "rbac_groups_read"
     GROUPS_WRITE_RELATION = "rbac_groups_write"
-    WRITE_ACTIONS = {"create", "update", "destroy", "remove_principal"}
-    # The "principals" action serves GET (read), POST and DELETE (write) on the same route,
-    # so it cannot be classified by action name alone.
-    MIXED_METHOD_WRITE_ACTIONS = {"principals": {"POST", "DELETE"}}
+    # Only actions in this explicit allowlist get rbac_groups_read. Any action name not listed here --
+    # including ones added later without updating this file -- fails closed to rbac_groups_write.
+    READ_ACTIONS = {"list", "retrieve"}
+    # Actions serving both read and write HTTP methods on the same route cannot be classified by action
+    # name alone. Only an explicit allowlist of read methods gets rbac_groups_read, so any other method
+    # (including ones DRF routes implicitly, like HEAD, or ones added later) fails closed to rbac_groups_write.
+    MIXED_METHOD_ACTIONS = {"principals"}
+    READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
     def _get_relation(self, view, request=None) -> str:
         """Get the relation to check based on the view action (and, for mixed-method actions, the HTTP method)."""
-        action = getattr(view, "action", "") or ""
-        if action in self.WRITE_ACTIONS:
+        action = getattr(view, "action", None)
+        if action in self.MIXED_METHOD_ACTIONS:
+            if getattr(request, "method", None) in self.READ_METHODS:
+                return self.GROUPS_READ_RELATION
             return self.GROUPS_WRITE_RELATION
-        write_methods = self.MIXED_METHOD_WRITE_ACTIONS.get(action)
-        if write_methods and getattr(request, "method", None) in write_methods:
-            return self.GROUPS_WRITE_RELATION
-        return self.GROUPS_READ_RELATION
+        if action in self.READ_ACTIONS:
+            return self.GROUPS_READ_RELATION
+        # DRF leaves the action unset for methods the route does not map (e.g. PUT on "principals"). Such
+        # requests end in a 405, but the permission check runs first, so fail closed. Any action name not
+        # explicitly allowlisted above (present or future) also falls here, closed to rbac_groups_write.
+        return self.GROUPS_WRITE_RELATION
 
     def has_permission(self, request, view):
         """
