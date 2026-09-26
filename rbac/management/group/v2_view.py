@@ -175,12 +175,24 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
     @action(detail=True, methods=["get", "post", "delete"], url_path="principals")
     def principals(self, request, uuid=None):
-        """List, bulk-add, or bulk-remove a group's member principals, dispatched by HTTP method."""
-        if request.method == "GET":
+        """List, bulk-add, or bulk-remove a group's member principals, dispatched by HTTP method.
+
+        Every method is matched explicitly: DRF routes HEAD to this action too (since it serves GET), so a
+        catch-all branch would let HEAD requests fall through to a mutation. GET/HEAD/POST/DELETE are the
+        only methods DRF binds to this route (per the ``methods`` list above); any other method never
+        reaches this body -- DRF's dispatch() resolves straight to its own 405 handler beforehand.
+        """
+        if request.method in ("GET", "HEAD"):
             return self._list_principals(request, uuid)
         if request.method == "POST":
             return self._add_principals_to_group(request, uuid)
-        return self._atomic_action(self._perform_remove_principals_bulk, "remove_principals_bulk", request, uuid=uuid)
+        if request.method == "DELETE":
+            return self._atomic_action(
+                self._perform_remove_principals_bulk, "remove_principals_bulk", request, uuid=uuid
+            )
+        # Unreachable: DRF only binds GET/HEAD/POST/DELETE to this route (per the ``methods`` list above);
+        # any other method is rejected by DRF's dispatch() with a 405 before this body ever runs.
+        raise AssertionError(f"Unexpected HTTP method {request.method!r} routed to principals()")
 
     @action(detail=True, methods=["delete"], url_path=r"principals/(?P<principal_uuid>[0-9a-f-]+)")
     def remove_principal(self, request, uuid=None, principal_uuid=None):

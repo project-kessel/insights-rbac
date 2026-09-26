@@ -1405,6 +1405,41 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.mock_backfill.assert_not_called()
 
 
+class GroupV2PrincipalsMethodDispatchTest(GroupV2ViewTestBase):
+    """Tests that the mixed-method principals route dispatches strictly by HTTP method."""
+
+    def _url(self, **params):
+        return self._principals_url(self.group_a.uuid) + "?" + urlencode(params)
+
+    def test_head_with_removal_params_removes_nothing(self):
+        """HEAD is a read even with write permission and removal-style query params."""
+        response = self.client.head(self._url(usernames="user_1", service_accounts="abc"), **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.mock_check_access.call_args.kwargs["relation"], "rbac_groups_read")
+        self.assertCountEqual(self.group_a.principals.all(), [self.user_1, self.user_2, self.service_account])
+        self.mock_dual_write.assert_not_called()
+        self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2, action=AuditLog.REMOVE).exists())
+
+    def test_unsupported_methods_not_allowed(self):
+        """Methods other than GET/HEAD/POST/DELETE return 405, are checked as writes, and change nothing.
+
+        DRF resolves these straight to its own 405 handler before the `principals()` body runs (only
+        GET/HEAD/POST/DELETE are bound for this route), so this exercises the permission class's fail-closed
+        handling of an unset `view.action`, not a branch inside `principals()` itself.
+        """
+        for method in ("put", "patch"):
+            with self.subTest(method=method):
+                response = getattr(self.client, method)(
+                    self._url(usernames="user_1"), {"usernames": ["user_1"]}, format="json", **self.headers
+                )
+
+                self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+                self.assertEqual(self.mock_check_access.call_args.kwargs["relation"], "rbac_groups_write")
+                self.assertCountEqual(self.group_a.principals.all(), [self.user_1, self.user_2, self.service_account])
+                self.mock_dual_write.assert_not_called()
+
+
 class GroupV2RemovePrincipalsBulkViewTest(GroupV2ViewTestBase):
     """Tests for bulk-removing principals from a group."""
 
@@ -1594,9 +1629,15 @@ class GroupV2AccessPermissionTest(IdentityRequest):
             ("update", "PUT", "rbac_groups_write"),
             ("destroy", "DELETE", "rbac_groups_write"),
             ("principals", "GET", "rbac_groups_read"),
+            ("principals", "HEAD", "rbac_groups_read"),
+            ("principals", "OPTIONS", "rbac_groups_read"),
             ("principals", "POST", "rbac_groups_write"),
             ("principals", "DELETE", "rbac_groups_write"),
+            ("principals", "PUT", "rbac_groups_write"),
+            ("principals", "PATCH", "rbac_groups_write"),
+            ("principals", None, "rbac_groups_write"),
             ("remove_principal", "DELETE", "rbac_groups_write"),
+            (None, "PATCH", "rbac_groups_write"),
         ):
             with self.subTest(action=action, method=method):
                 view = type("View", (), {"action": action})()
