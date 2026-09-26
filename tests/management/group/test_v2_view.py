@@ -21,6 +21,7 @@ from importlib import reload
 from unittest.mock import patch
 from urllib.parse import urlencode
 
+import requests
 from django.db.models import ProtectedError
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
@@ -29,12 +30,16 @@ from rest_framework.test import APIClient
 
 from management import v2_urls
 from management.audit_log.model import AuditLog
+from management.authorization.invalid_token import InvalidTokenError
+from management.authorization.missing_authorization import MissingAuthorizationError
+from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 from management.group.model import Group
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.group.v2_service import GroupV2Service
 from management.permissions.group_v2_access import GroupV2KesselAccessPermission
 from management.policy.model import Policy
 from management.principal.model import Principal
+from management.principal.unexpected_status_code_from_it import UnexpectedStatusCodeFromITError
 from management.relation_replicator.relation_replicator import ReplicationEventType
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
@@ -44,6 +49,8 @@ from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 ACCESS_CHECK_TARGET = "management.permissions.group_v2_access.WorkspaceInventoryAccessChecker.check_resource_access"
+TOKEN_VALIDATION_TARGET = "management.authorization.token_validator.ITSSOTokenValidator.validate_token_and_org_id"
+IT_SERVICE_ACCOUNTS_TARGET = "management.principal.it_service.ITService.request_service_accounts"
 
 
 @override_settings(V2_APIS_ENABLED=True, V2_EDIT_API_ENABLED=True, ATOMIC_RETRY_DISABLED=True)
@@ -1225,6 +1232,22 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         )
         self.mock_backfill = self.enterContext(patch("management.group.v2_view.backfill_remote_principals"))
 
+        # Mock IT: return the requested client IDs that IT knows about, each with a user ID.
+        self.it_client_ids = {"abc", "xyz"}
+        self.it_user_ids = {client_id: f"sa-{uuid.uuid4()}" for client_id in ("abc", "xyz", "new-sa")}
+
+        def _mock_it(bearer_token, client_ids=None):
+            return [
+                {"clientId": client_id, "userId": self.it_user_ids[client_id]}
+                for client_id in client_ids
+                if client_id in self.it_client_ids
+            ]
+
+        self.mock_validate_token = self.enterContext(
+            patch(TOKEN_VALIDATION_TARGET, return_value=("bearer-token", self.tenant.org_id))
+        )
+        self.mock_it = self.enterContext(patch(IT_SERVICE_ACCOUNTS_TARGET, side_effect=_mock_it))
+
     def _add(self, group_uuid, body):
         return self.client.post(self._principals_url(group_uuid), body, format="json", **self.headers)
 
@@ -1403,6 +1426,140 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.mock_proxy.assert_not_called()
         self.mock_backfill.assert_not_called()
+
+    def test_add_service_account_validated_via_it(self):
+        """Service accounts are validated against IT with the caller's validated bearer token."""
+        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.mock_validate_token.assert_called_once()
+        self.mock_it.assert_called_once_with(bearer_token="bearer-token", client_ids=["xyz"])
+
+    def test_add_service_account_token_org_mismatch_not_found(self):
+        """A bearer token scoped to a different org than the tenant is rejected like an unknown client ID."""
+        self.mock_validate_token.return_value = ("bearer-token", "some-other-org")
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(self.group_b.principals.filter(pk=self.service_account_2.pk).exists())
+        self.mock_it.assert_not_called()
+
+    def test_add_duplicate_service_accounts_validated_once(self):
+        """Duplicate client IDs are deduplicated before the single IT call."""
+        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz", "xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.mock_it.assert_called_once_with(bearer_token="bearer-token", client_ids=["xyz"])
+        added = self.mock_dual_write.return_value.replicate_new_principals.call_args.args[0]
+        self.assertEqual(added, [self.service_account_2])
+
+    def test_add_username_only_skips_it(self):
+        """Username-only requests neither require a bearer token nor call IT."""
+        response = self._add(self.group_b.uuid, {"usernames": ["user_3"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.mock_validate_token.assert_not_called()
+        self.mock_it.assert_not_called()
+
+    def test_add_unknown_service_account_not_found(self):
+        """A client ID unknown to IT fails the whole request with 404 and mutates nothing."""
+        response = self._add(self.group_b.uuid, {"usernames": ["user_3"], "service_accounts": ["xyz", "unknown"]})
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["detail"], "Principal(s) not found: unknown.")
+        self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
+        self.assertFalse(Principal.objects.filter(tenant=self.tenant, service_account_id="unknown").exists())
+        self.mock_dual_write.assert_not_called()
+
+    def test_add_unknown_username_and_unknown_service_account_reported_together(self):
+        """An unknown username and an unknown client ID in the same request both surface in one 404."""
+        response = self._add(
+            self.group_b.uuid, {"usernames": ["user_3", "no-such-user"], "service_accounts": ["xyz", "unknown"]}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["detail"], "Principal(s) not found: no-such-user, unknown.")
+        self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
+        self.mock_dual_write.assert_not_called()
+
+    def test_add_service_account_backfills_missing_principal(self):
+        """A client ID known to IT but not to RBAC gets a local Principal created with IT's user ID."""
+        self.it_client_ids.add("new-sa")
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["new-sa"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="new-sa")
+        self.assertEqual(principal.username, "service-account-new-sa")
+        self.assertEqual(principal.type, Principal.Types.SERVICE_ACCOUNT)
+        self.assertEqual(principal.user_id, self.it_user_ids["new-sa"])
+        self.assertTrue(self.group_b.principals.filter(pk=principal.pk).exists())
+
+    def test_add_service_account_populates_missing_user_id(self):
+        """An existing service account Principal without a user ID gets it from IT; nothing else changes."""
+        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.service_account_2.refresh_from_db()
+        self.assertEqual(self.service_account_2.user_id, self.it_user_ids["xyz"])
+        self.assertEqual(self.service_account_2.username, "service-account-xyz")
+        self.assertEqual(self.service_account_2.service_account_id, "xyz")
+        self.assertEqual(self.service_account_2.type, Principal.Types.SERVICE_ACCOUNT)
+
+    def test_add_service_account_keeps_existing_user_id(self):
+        """An existing service account Principal's user ID is never overwritten."""
+        self.service_account_2.user_id = "existing-user-id"
+        self.service_account_2.save()
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.service_account_2.refresh_from_db()
+        self.assertEqual(self.service_account_2.user_id, "existing-user-id")
+
+    @override_settings(IT_BYPASS_IT_CALLS=True)
+    def test_add_service_account_it_bypass_backfills_locally(self):
+        """With IT calls bypassed, IT is not called but unknown client IDs are still backfilled and added."""
+        response = self._add(self.group_b.uuid, {"service_accounts": ["not-in-it"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.mock_it.assert_not_called()
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="not-in-it")
+        self.assertEqual(principal.username, "service-account-not-in-it")
+        self.assertIsNone(principal.user_id)
+        self.assertTrue(self.group_b.principals.filter(pk=principal.pk).exists())
+
+    def test_add_service_account_token_errors(self):
+        """Token errors propagate to the V2 exception handler and nothing is added."""
+        for error, expected_status in (
+            (MissingAuthorizationError(), status.HTTP_401_UNAUTHORIZED),
+            (InvalidTokenError("bad token"), status.HTTP_401_UNAUTHORIZED),
+            (UnableMeetPrerequisitesError("no jwks"), status.HTTP_500_INTERNAL_SERVER_ERROR),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.mock_validate_token.side_effect = error
+
+                response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+                self.assertEqual(response.status_code, expected_status)
+                self.assertEqual(response.json()["status"], expected_status)
+                self.assertFalse(self.group_b.principals.filter(pk=self.service_account_2.pk).exists())
+                self.mock_it.assert_not_called()
+
+    def test_add_service_account_it_unavailable(self):
+        """IT connection errors and unexpected IT statuses return 502 and nothing is added."""
+        for error in (requests.exceptions.ConnectionError(), UnexpectedStatusCodeFromITError()):
+            with self.subTest(error=type(error).__name__):
+                self.mock_it.side_effect = error
+
+                response = self._add(self.group_b.uuid, {"usernames": ["user_3"], "service_accounts": ["xyz"]})
+
+                self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+                self.assertEqual(response.json()["detail"], "Unable to validate service accounts.")
+                self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
+                self.mock_proxy.assert_not_called()
+                self.mock_dual_write.assert_not_called()
 
 
 class GroupV2PrincipalsMethodDispatchTest(GroupV2ViewTestBase):

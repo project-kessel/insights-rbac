@@ -208,6 +208,21 @@ class ITSSOTokenValidator(TokenValidator):
 
         return super().validate_token(request, additional_scopes_to_validate)
 
+    def validate_token_and_org_id(
+        self, request: HttpRequest, additional_scopes_to_validate: set[ScopeClaims]
+    ) -> Tuple[str, Optional[str]]:
+        """Validate the JWT token and return the bearer token along with its "organization.id" claim.
+
+        Used by callers that must confirm the bearer token belongs to the same organization as the tenant
+        resolved from the request's identity header, so that a caller cannot combine an identity header for
+        one tenant with a bearer token scoped to a different tenant's IT resources.
+        """
+        if settings.IT_BYPASS_TOKEN_VALIDATION:
+            return "mocked-invalid-bearer-token-because-token-validation-is-disabled", None
+
+        bearer_token, token = self._validate_token(request, additional_scopes_to_validate)
+        return bearer_token, token.claims.get("organization", {}).get("id")
+
     def _parse_claims(self, user: User, jwt: Token) -> None:
         super()._parse_claims(user, jwt)
         # Assumes a particular token shape

@@ -60,7 +60,7 @@ from management.permissions import GroupAccessPermission
 from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
 from management.principal.backfill import backfill_atomic, backfill_remote_principals
 from management.principal.it_service import ITService
-from management.principal.model import Principal
+from management.principal.model import Principal, SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
 from management.principal.serializer import ServiceAccountSerializer
 from management.principal.view import ADMIN_ONLY_KEY, USERNAME_ONLY_KEY, VALID_BOOLEAN_VALUE
@@ -102,7 +102,6 @@ ROLE_DISCRIMINATOR_KEY = "role_discriminator"
 SERVICE_ACCOUNT_CLIENT_IDS_KEY = "service_account_client_ids"
 SERVICE_ACCOUNT_DESCRIPTION_KEY = "service_account_description"
 SERVICE_ACCOUNT_NAME_KEY = "service_account_name"
-SERVICE_ACCOUNT_USERNAME_FORMAT = "service-account-{clientId}"
 VALID_EXCLUDE_VALUES = ["true", "false"]
 VALID_GROUP_ROLE_FILTERS = [
     "role_name",

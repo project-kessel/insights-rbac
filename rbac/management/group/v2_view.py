@@ -19,9 +19,13 @@
 import logging
 from functools import wraps
 
+import requests
+from django.conf import settings
 from django.db import transaction
 from management.atomic_transactions import atomic_block
 from management.audit_log.model import AuditLog
+from management.authorization.scope_claims import ScopeClaims
+from management.authorization.token_validator import ITSSOTokenValidator
 from management.base_viewsets import BaseV2ViewSet
 from management.group.v2_exceptions import (
     GroupAlreadyExistsError,
@@ -42,7 +46,10 @@ from management.notifications.notification_handlers import group_obj_change_noti
 from management.permissions.group_v2_access import GroupV2KesselAccessPermission
 from management.permissions.v2_edit_api_access import V2WriteRequiresWorkspacesEnabled
 from management.principal.backfill import backfill_remote_principals
+from management.principal.it_service import ITService
+from management.principal.model import Principal, SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
+from management.principal.unexpected_status_code_from_it import UnexpectedStatusCodeFromITError
 from management.principal.v2_serializer import PrincipalV2OutputSerializer
 from management.relation_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import get_tenant_bootstrap_service
@@ -215,23 +222,38 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         return self.get_paginated_response(serializer.data)
 
     def _add_principals_to_group(self, request, uuid=None):
-        """Add principals to a group, validating user principals via BOP before persisting.
+        """Add principals to a group, validating service accounts via IT and user principals via BOP first.
 
-        Follows the V1 parity pattern: validate user principals against the BOP proxy *outside*
-        the SERIALIZABLE transaction (to avoid holding open a long transaction during the external
-        call), backfill any missing local Principal records, and then persist the group membership
-        change inside the retryable atomic block.
+        Follows the V1 parity pattern: validate service accounts against IT and user principals against
+        the BOP proxy *outside* the SERIALIZABLE transaction (to avoid holding open a long transaction
+        during the external calls), backfill any missing local Principal records, and then persist the
+        group membership change inside the retryable atomic block.
         """
         serializer = GroupV2AddPrincipalsInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         usernames = set(serializer.validated_data.get("usernames") or [])
         service_account_client_ids = set(serializer.validated_data.get("service_accounts") or [])
 
-        # Validate user principals against BOP before opening the DB transaction (V1 parity).
-        if usernames:
-            error_response = self._validate_and_backfill_users(request, usernames)
+        # Validate all identifiers before opening the DB transaction (V1 parity), so that any unknown
+        # identifier fails the whole request before the group is modified. Both passes run (unless one
+        # hits a hard failure like an unreachable backend) so a request with both an unknown username and
+        # an unknown client ID reports every invalid identifier in a single response, instead of only the
+        # first one found.
+        missing_identifiers = set()
+        if service_account_client_ids:
+            error_response, missing = self._validate_and_backfill_service_accounts(request, service_account_client_ids)
             if error_response is not None:
                 return error_response
+            missing_identifiers |= missing
+
+        if usernames:
+            error_response, missing = self._validate_and_backfill_users(request, usernames)
+            if error_response is not None:
+                return error_response
+            missing_identifiers |= missing
+
+        if missing_identifiers:
+            return self._error_response(PrincipalNotFoundError(sorted(missing_identifiers)), status.HTTP_404_NOT_FOUND)
 
         return self._atomic_action(
             self._perform_add_principals,
@@ -245,7 +267,10 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
     def _validate_and_backfill_users(self, request, usernames):
         """Validate usernames against BOP and backfill local Principal records.
 
-        Returns an error Response if validation fails, or None on success.
+        Returns a tuple of ``(error_response, missing_usernames)``. ``error_response`` is set -- and must be
+        returned by the caller immediately -- only for hard failures such as BOP being unreachable.
+        ``missing_usernames`` is the subset of ``usernames`` BOP could not resolve, left for the caller to
+        combine with any missing service-account IDs into a single 404 covering every invalid identifier.
         """
         proxy = PrincipalProxy()
         proxy_response = proxy.request_filtered_principals(
@@ -256,26 +281,110 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         )
         if isinstance(proxy_response, dict) and "errors" in proxy_response:
             detail = proxy_response["errors"][0].get("detail", "Principal proxy validation failed")
-            return self._error_response(
-                Exception(detail),
-                proxy_response.get("status_code", status.HTTP_502_BAD_GATEWAY),
+            return (
+                self._error_response(
+                    Exception(detail),
+                    proxy_response.get("status_code", status.HTTP_502_BAD_GATEWAY),
+                ),
+                set(),
             )
 
         bop_data = proxy_response.get("data", [])
         found_usernames = {u["username"].lower() for u in bop_data}
         missing = usernames - found_usernames
         if missing:
-            return self._error_response(
-                PrincipalNotFoundError(sorted(missing)),
-                status.HTTP_404_NOT_FOUND,
-            )
+            return None, missing
 
         # Backfill: ensure all BOP-validated users have local Principal records.
         users = [external_principal_to_user(item) for item in bop_data]
         bootstrap_service = get_tenant_bootstrap_service(OutboxReplicator())
         backfill_remote_principals(bootstrap_service, users, request.tenant)
 
-        return None
+        return None, set()
+
+    def _validate_and_backfill_service_accounts(self, request, client_ids):
+        """Validate service account client IDs against IT and backfill local Principal records.
+
+        Token errors propagate to the V2 exception handler. Returns a tuple of ``(error_response,
+        missing_client_ids)``. ``error_response`` is set -- and must be returned by the caller immediately --
+        only for hard failures such as IT being unreachable. ``missing_client_ids`` is the subset of
+        ``client_ids`` not visible to the caller in IT (or the whole set, if the bearer token belongs to a
+        different tenant), left for the caller to combine with any missing usernames into a single 404
+        covering every invalid identifier.
+        """
+        bearer_token, token_org_id = ITSSOTokenValidator().validate_token_and_org_id(
+            request=request,
+            additional_scopes_to_validate=set[ScopeClaims]([ScopeClaims.SERVICE_ACCOUNTS_CLAIM]),
+        )
+
+        # A bearer token scoped to a different organization than the tenant resolved from the identity
+        # header must not be used to look up or create service-account principals in this tenant. Report
+        # it the same way as an unknown client ID, to avoid leaking why validation failed. A missing
+        # "organization.id" claim on a real, validated token is treated as untrusted (fails closed) rather
+        # than skipped -- the "id is None means skip" behavior is reserved strictly for the
+        # IT_BYPASS_TOKEN_VALIDATION path, which returns the None sentinel without validating anything.
+        if not settings.IT_BYPASS_TOKEN_VALIDATION and token_org_id != request.tenant.org_id:
+            return None, set(client_ids)
+
+        # Development and testing environments may skip IT, in which case the local backfill still runs.
+        user_ids_by_client_id: dict[str, str | None] = dict.fromkeys(client_ids)
+        if not settings.IT_BYPASS_IT_CALLS:
+            try:
+                it_service_accounts = ITService().request_service_accounts(
+                    bearer_token=bearer_token, client_ids=sorted(client_ids)
+                )
+            except (requests.exceptions.RequestException, UnexpectedStatusCodeFromITError):
+                logger.exception("Failed to validate service accounts against IT for org_id %s.", request.user.org_id)
+                return (
+                    self._error_response(
+                        Exception("Unable to validate service accounts."), status.HTTP_502_BAD_GATEWAY
+                    ),
+                    set(),
+                )
+            it_user_ids = {sa["clientId"]: sa.get("userId") for sa in it_service_accounts}
+            missing = client_ids - it_user_ids.keys()
+            if missing:
+                return None, missing
+            user_ids_by_client_id = {client_id: it_user_ids[client_id] for client_id in client_ids}
+
+        # Bulk-fetch existing principals up front, so only genuinely new client IDs need a per-item
+        # get_or_create() call below. get_or_create() (not bulk_create()) survives two concurrent
+        # requests backfilling the same new service account: bulk_create() has no upsert semantics and
+        # raises an unhandled IntegrityError against the (username, tenant) unique constraint if a
+        # concurrent request wins the race.
+        existing_principals = {
+            p.service_account_id: p
+            for p in Principal.objects.filter(tenant=request.tenant, service_account_id__in=client_ids)
+        }
+        principals_to_update = []
+        for client_id, user_id in user_ids_by_client_id.items():
+            principal = existing_principals.get(client_id)
+            if principal is None:
+                principal, created = Principal.objects.get_or_create(
+                    username=SERVICE_ACCOUNT_USERNAME_FORMAT.format(clientId=client_id).lower(),
+                    tenant=request.tenant,
+                    defaults={
+                        "user_id": user_id,
+                        "service_account_id": client_id,
+                        "type": Principal.Types.SERVICE_ACCOUNT,
+                    },
+                )
+                if created:
+                    logger.info(
+                        "Created new service account %s for org_id %s.",
+                        principal.service_account_id,
+                        request.user.org_id,
+                    )
+                    continue
+            if principal.user_id is None and user_id is not None:
+                # The principal may have been lazily created without a user ID.
+                principal.user_id = user_id
+                principals_to_update.append(principal)
+
+        if principals_to_update:
+            Principal.objects.bulk_update(principals_to_update, ["user_id"])
+
+        return None, set()
 
     @_catch_principal_errors
     def _perform_add_principals(self, request, uuid=None, usernames=None, service_account_client_ids=None):

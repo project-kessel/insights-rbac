@@ -5,7 +5,6 @@ from django.db.utils import IntegrityError
 from django.test import TestCase
 
 from api.models import Tenant
-from management.group.view import SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.management.commands.utils import (
     populate_tenant_user_data,
     populate_service_account_data,
@@ -14,6 +13,7 @@ from management.management.commands.utils import (
     batch_import_workspace,
 )
 from management.models import Principal
+from management.principal.model import SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 

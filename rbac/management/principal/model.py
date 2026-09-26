@@ -25,6 +25,8 @@ from django.db import models
 
 from api.models import TenantAwareModel
 
+SERVICE_ACCOUNT_USERNAME_FORMAT = "service-account-{clientId}"
+
 
 class Principal(TenantAwareModel):
     """A principal."""
