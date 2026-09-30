@@ -6151,11 +6151,10 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         self.assertTrue(roles_check["dry_run"])
         # Should have at least one role checked (our custom role)
         self.assertGreaterEqual(len(roles_check["roles_checked"]), 1)
-        for role_result in roles_check["roles_checked"]:
-            if role_result["role_uuid"] == str(custom_role.uuid):
-                self.assertFalse(role_result["checked"])
-                self.assertIn("validation", role_result)
-                break
+        matches = [r for r in roles_check["roles_checked"] if r["role_uuid"] == str(custom_role.uuid)]
+        self.assertEqual(len(matches), 1)
+        self.assertFalse(matches[0]["checked"])
+        self.assertIn("validation", matches[0])
 
     @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
     @patch(
@@ -6260,7 +6259,7 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         body = response.json()
         ws_check = body["checks"]["workspaces"]
         self.assertTrue(ws_check["dry_run"])
-        self.assertLessEqual(len(ws_check["workspace_pairs_in_scope"]), 2)
+        self.assertEqual(len(ws_check["workspace_pairs_in_scope"]), 2)
 
     @override_settings(KAFKA_CONNECT_URL=None)
     def test_get_pipeline_health_no_kafka_url(self):

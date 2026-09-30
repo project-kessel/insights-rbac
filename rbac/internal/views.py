@@ -2998,13 +2998,13 @@ def get_pipeline_health_checks() -> tuple[dict, list[str]]:
             cursor.execute(slot_query)
             rows = cursor.fetchall()
         slots = [{"slot_name": row[0], "active": row[1]} for row in rows]
-        # Debezium's slot name isn't hardcoded here since it isn't fixed by config in this repo
-        # (Debezium defaults to "debezium" when unset) — report every pgoutput slot found rather
-        # than guessing a name and silently missing the real one.
-        slots_healthy = any(slot["active"] for slot in slots)
-        checks["replication_slots"] = {"slots": slots, "healthy": slots_healthy}
-        if not slots_healthy:
-            unhealthy.append("replication_slots")
+        if not slots:
+            checks["replication_slots"] = {"configured": False, "slots": []}
+        else:
+            slots_healthy = any(slot["active"] for slot in slots)
+            checks["replication_slots"] = {"configured": True, "slots": slots, "healthy": slots_healthy}
+            if not slots_healthy:
+                unhealthy.append("replication_slots")
     except Exception as e:
         checks["replication_slots"] = {"healthy": False, "error": str(e)}
         unhealthy.append("replication_slots")

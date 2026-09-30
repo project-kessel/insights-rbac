@@ -181,10 +181,13 @@ Celery handles background tasks with Redis as the broker:
 - Cross-account request expiration
 - Workspace hierarchy operations
 - Kessel parity checks
-- [Inventory migration verification](verify-migration-endpoint.md)
 - Cache invalidation
 
 The Celery worker and beat scheduler run as separate containers alongside the main application.
+
+## Internal Endpoints & Tooling
+
+- [Inventory migration verification](verify-migration-endpoint.md)
 
 ## Security Model
 

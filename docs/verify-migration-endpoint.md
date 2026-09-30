@@ -91,8 +91,12 @@ Always runs in both dry-run and live modes (no gRPC calls involved).
 
 ## Safety Properties
 
-- **Read-only**: All DB-touching sections run inside `transaction.atomic()` with
-  `set_rollback(True)`. Nothing is persisted.
+- **Read-only**: The role and cross-account request handler-replay sections run
+  inside `transaction.atomic()` with `set_rollback(True)` to prevent writes.
+  The remaining sections (bootstrap, workspaces, group principals, role
+  permissions) use plain read queries. The pipeline health check sends an
+  HTTP GET to the Debezium connector and a `SELECT` against
+  `pg_replication_slots`. Nothing is persisted.
 - **Per-item isolation**: A single failing item (e.g. transient gRPC error) is
   recorded for that item only; remaining items in the section continue.
 - **Audit logged**: Every call is logged as `VERIFY_INVENTORY_MIGRATION` admin
