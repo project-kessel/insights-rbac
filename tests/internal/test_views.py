@@ -6039,3 +6039,275 @@ class SendKafkaTestMessageTests(IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         self.assertEqual(data["message"], "Test message sent successfully")
+
+
+class InternalVerifyMigrationTests(BaseInternalViewsetTests):
+    """Tests for the /_private/api/inventory/verify_migration/<org_id>/ endpoint."""
+
+    def setUp(self):
+        super().setUp()
+        bootstrap_result = bootstrap_tenant_for_v2_test(tenant=self.tenant)
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+
+    def tearDown(self):
+        super().tearDown()
+
+    def _url(self, org_id, **params):
+        """Build the verify_migration URL with optional query params."""
+        base = f"/_private/api/inventory/verify_migration/{org_id}/"
+        if params:
+            query = "&".join(f"{k}={v}" for k, v in params.items())
+            return f"{base}?{query}"
+        return base
+
+    def test_verify_migration_unknown_org_returns_404(self):
+        """Test that a non-existent org_id returns 404."""
+        response = self.client.get(self._url("nonexistent_org"), **self.request.META)
+        self.assertEqual(response.status_code, 404)
+
+    def test_verify_migration_no_tenant_mapping_returns_404(self):
+        """Test that an org without tenant_mapping returns 404."""
+        orphan_tenant = Tenant.objects.create(tenant_name="orphan", org_id="orphan_org_id", ready=True)
+        response = self.client.get(self._url(orphan_tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 404)
+        body = response.json()
+        self.assertIn("No tenant mapping", body["detail"])
+        orphan_tenant.delete()
+
+    def test_verify_migration_invalid_negative_limit_returns_400(self):
+        """Test that a negative limit param returns 400."""
+        response = self.client.get(self._url(self.tenant.org_id, role_limit=-1), **self.request.META)
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertIn("role_limit", body["detail"])
+
+    def test_verify_migration_non_integer_limit_returns_400(self):
+        """Test that a non-integer limit param returns 400."""
+        response = self.client.get(self._url(self.tenant.org_id, binding_limit="abc"), **self.request.META)
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertIn("binding_limit", body["detail"])
+
+    def test_verify_migration_post_returns_405(self):
+        """Test that POST is not allowed."""
+        response = self.client.post(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 405)
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    def test_verify_migration_dry_run_basic(self, mock_pipeline):
+        """Test dry_run=true returns structured report with no real gRPC calls."""
+        response = self.client.get(self._url(self.tenant.org_id, dry_run="true"), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["dry_run"])
+        self.assertEqual(body["org_id"], self.tenant.org_id)
+        self.assertIn("checks", body)
+        self.assertIn("bootstrap", body["checks"])
+        self.assertIn("workspaces", body["checks"])
+        self.assertIn("roles", body["checks"])
+        self.assertIn("bindings", body["checks"])
+        self.assertIn("group_principals", body["checks"])
+        self.assertIn("role_permissions", body["checks"])
+        self.assertIn("cross_account_requests", body["checks"])
+        self.assertIn("pipeline_health", body["checks"])
+        # Bootstrap section in dry_run just reports workspace IDs
+        self.assertTrue(body["checks"]["bootstrap"]["dry_run"])
+        self.assertEqual(body["checks"]["bootstrap"]["root_workspace_id"], str(self.root_workspace.id))
+        self.assertEqual(body["checks"]["bootstrap"]["default_workspace_id"], str(self.default_workspace.id))
+        # No custom roles/bindings → sections should pass
+        self.assertEqual(body["overall_status"], "pass")
+        self.assertEqual(body["failed_checks"], [])
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    def test_verify_migration_dry_run_with_role(self, mock_pipeline):
+        """Test dry_run validates generated tuples for a custom role."""
+        custom_role = Role.objects.create(
+            name="Test Custom Role",
+            description="A test role.",
+            system=False,
+            tenant=self.tenant,
+        )
+        # Create a permission + access so the dual-write handler generates tuples
+        permission = Permission.objects.create(
+            permission="test:inventory:read",
+            tenant=self.tenant,
+        )
+        access = Access.objects.create(
+            role=custom_role,
+            permission=permission,
+            tenant=self.tenant,
+        )
+        ResourceDefinition.objects.create(
+            access=access,
+            attributeFilter={"key": "test.key", "value": ["*"], "operation": "in"},
+            tenant=self.tenant,
+        )
+
+        response = self.client.get(self._url(self.tenant.org_id, dry_run="true"), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        roles_check = body["checks"]["roles"]
+        self.assertTrue(roles_check["dry_run"])
+        # Should have at least one role checked (our custom role)
+        self.assertGreaterEqual(len(roles_check["roles_checked"]), 1)
+        for role_result in roles_check["roles_checked"]:
+            if role_result["role_uuid"] == str(custom_role.uuid):
+                self.assertFalse(role_result["checked"])
+                self.assertIn("validation", role_result)
+                break
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch(
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_verify_migration_live_bootstrap_pass(self, mock_ws_check, mock_bootstrap_check, mock_pipeline):
+        """Test live mode with mocked checkers returning pass."""
+        mock_bootstrap_check.return_value = (True, [{"name": "test", "exists": True}])
+        mock_ws_check.return_value = (True, [])
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["dry_run"])
+        self.assertTrue(body["checks"]["bootstrap"]["correct"])
+        self.assertEqual(body["overall_status"], "pass")
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch(
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_verify_migration_live_bootstrap_fail(self, mock_ws_check, mock_bootstrap_check, mock_pipeline):
+        """Test live mode reports failure when bootstrap check fails."""
+        mock_bootstrap_check.return_value = (False, [{"name": "test", "exists": False}])
+        mock_ws_check.return_value = (True, [])
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["overall_status"], "fail")
+        self.assertIn("bootstrap", body["failed_checks"])
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch(
+        "management.inventory_checker.inventory_api_check.BootstrappedTenantInventoryChecker.check_bootstrapped_tenant"
+    )
+    @patch(
+        "management.inventory_checker.inventory_api_check.WorkspaceRelationInventoryChecker.check_workspace_descendants"
+    )
+    def test_verify_migration_live_bootstrap_exception(self, mock_ws_check, mock_bootstrap_check, mock_pipeline):
+        """Test bootstrap section records error on exception without aborting other sections."""
+        mock_bootstrap_check.side_effect = Exception("gRPC unavailable")
+        mock_ws_check.return_value = (True, [])
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("error", body["checks"]["bootstrap"])
+        self.assertIn("bootstrap", body["failed_checks"])
+        # Other sections should still be present
+        self.assertIn("roles", body["checks"])
+        self.assertIn("bindings", body["checks"])
+
+    @patch("internal.views.get_pipeline_health_checks")
+    def test_verify_migration_pipeline_health_unhealthy(self, mock_pipeline):
+        """Test pipeline_health failure is reflected in overall_status."""
+        mock_pipeline.return_value = (
+            {"debezium_connector": {"healthy": False, "error": "Connection refused"}},
+            ["debezium_connector"],
+        )
+
+        response = self.client.get(self._url(self.tenant.org_id, dry_run="true"), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["overall_status"], "fail")
+        self.assertIn("pipeline_health", body["failed_checks"])
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    def test_verify_migration_summary_counts(self, mock_pipeline):
+        """Test that the summary section reports correct counts."""
+        response = self.client.get(self._url(self.tenant.org_id, dry_run="true"), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        summary = body["summary"]
+        total = summary["sections_checked"]
+        self.assertEqual(total, len(body["checks"]))
+        self.assertEqual(summary["sections_passed"], total - summary["sections_failed"])
+        self.assertEqual(summary["sections_failed"], len(body["failed_checks"]))
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    def test_verify_migration_workspace_limit_applied(self, mock_pipeline):
+        """Test that workspace_limit caps the number of workspace pairs checked in dry_run."""
+        # Create extra child workspaces
+        for i in range(5):
+            Workspace.objects.create(
+                tenant=self.tenant,
+                type=Workspace.Types.STANDARD,
+                name=f"ws-{i}",
+                parent=self.default_workspace,
+            )
+
+        response = self.client.get(
+            self._url(self.tenant.org_id, dry_run="true", workspace_limit=2), **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        ws_check = body["checks"]["workspaces"]
+        self.assertTrue(ws_check["dry_run"])
+        self.assertLessEqual(len(ws_check["workspace_pairs_in_scope"]), 2)
+
+    @override_settings(KAFKA_CONNECT_URL=None)
+    def test_get_pipeline_health_no_kafka_url(self):
+        """Test get_pipeline_health_checks when KAFKA_CONNECT_URL is not configured."""
+        from internal.views import get_pipeline_health_checks
+
+        checks, unhealthy = get_pipeline_health_checks()
+        self.assertFalse(checks["debezium_connector"]["configured"])
+        self.assertNotIn("debezium_connector", unhealthy)
+
+    @override_settings(KAFKA_CONNECT_URL="http://kafka-connect:8083")
+    @patch("internal.views.requests.get")
+    @patch("internal.views.connection")
+    def test_get_pipeline_health_healthy(self, mock_connection, mock_requests_get):
+        """Test get_pipeline_health_checks reports healthy when connector + slots are good."""
+        from internal.views import get_pipeline_health_checks
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "connector": {"state": "RUNNING"},
+            "tasks": [{"state": "RUNNING"}],
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_requests_get.return_value = mock_response
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("debezium", True)]
+        mock_connection.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        checks, unhealthy = get_pipeline_health_checks()
+        self.assertTrue(checks["debezium_connector"]["healthy"])
+        self.assertTrue(checks["replication_slots"]["healthy"])
+        self.assertEqual(unhealthy, [])
+
+    @override_settings(KAFKA_CONNECT_URL="http://kafka-connect:8083")
+    @patch("internal.views.requests.get", side_effect=Exception("Connection refused"))
+    @patch("internal.views.connection")
+    def test_get_pipeline_health_connector_error(self, mock_connection, mock_requests_get):
+        """Test get_pipeline_health_checks reports unhealthy on connector error."""
+        from internal.views import get_pipeline_health_checks
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("debezium", True)]
+        mock_connection.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        checks, unhealthy = get_pipeline_health_checks()
+        self.assertFalse(checks["debezium_connector"]["healthy"])
+        self.assertIn("debezium_connector", unhealthy)
