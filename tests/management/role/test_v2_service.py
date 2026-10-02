@@ -46,6 +46,7 @@ from migration_tool.in_memory_tuples import (
     subject,
 )
 from tests.identity_request import IdentityRequest
+from tests.v2_util import bootstrap_tenant_for_v2_test
 
 from api.models import Tenant
 
@@ -1151,23 +1152,9 @@ class RoleV2ServiceListAllScopeTests(IdentityRequest):
         super().setUp()
         self.service = RoleV2Service(tenant=self.tenant)
 
-        self._root_ws, _ = Workspace.objects.get_or_create(
-            tenant=self.tenant,
-            type=Workspace.Types.ROOT,
-            defaults={
-                "name": Workspace.SpecialNames.ROOT,
-                "description": Workspace.SpecialDescriptions.ROOT,
-            },
-        )
-        self._default_ws, _ = Workspace.objects.get_or_create(
-            tenant=self.tenant,
-            type=Workspace.Types.DEFAULT,
-            defaults={
-                "name": Workspace.SpecialNames.DEFAULT,
-                "description": Workspace.SpecialDescriptions.DEFAULT,
-                "parent": self._root_ws,
-            },
-        )
+        bootstrapped = bootstrap_tenant_for_v2_test(self.tenant)
+        self._root_ws = bootstrapped.root_workspace
+        self._default_ws = bootstrapped.default_workspace
 
         scope_service = ImplicitResourceService(
             tenant_scope_permissions=["tenant_app:*:*"],
@@ -1175,8 +1162,7 @@ class RoleV2ServiceListAllScopeTests(IdentityRequest):
             all_scope_permissions=["all_app:*:*"],
         )
         test_cache = PermissionScopeCache(scope_service)
-        self._cache_patcher = patch("management.role.v2_service.permission_scope_cache", test_cache)
-        self._cache_patcher.start()
+        self.enterContext(patch("management.role.v2_service.permission_scope_cache", test_cache))
 
         self.default_perm = Permission.objects.create(permission="default_app:resource:read", tenant=self.tenant)
         self.root_perm = Permission.objects.create(permission="root_app:resource:read", tenant=self.tenant)
@@ -1201,7 +1187,6 @@ class RoleV2ServiceListAllScopeTests(IdentityRequest):
         """Tear down resource_type filter tests."""
         from management.utils import PRINCIPAL_CACHE
 
-        self._cache_patcher.stop()
         RoleV2.objects.all().delete()
         Permission.objects.filter(tenant=self.tenant).delete()
         PRINCIPAL_CACHE.delete_all_principals_for_tenant(self.tenant.org_id)

@@ -52,24 +52,20 @@ def constant_bound_resource(resource: V2boundresource) -> ScopeBoundResourceReso
 def with_workspace_scope_inheritance(
     resource_map: dict[Scope, V2boundresource],
 ) -> dict[Scope, V2boundresource]:
-    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT, and ALL aliased to a concrete scope.
+    """Return a copy of ``resource_map`` with DEFAULT aliased to ROOT.
 
     Workspace bindings at ROOT cover the default workspace via parent inheritance,
     so callers building a map from ``binding_scopes_for_role`` should apply this
     before resolving per-permission scopes that may include DEFAULT.
 
-    ``Scope.ALL`` (scope-agnostic permissions) is aliased to the narrowest concrete
-    scope present in the map, so per-permission resolution of an ALL-scoped
-    permission (via ``scope_for_permission``) lands on a real resource.
+    ``Scope.ALL`` (scope-agnostic permissions) is **not** aliased here because
+    ALL-scoped permissions must be bound at every concrete scope present in the
+    role — not just a single scope.  ``v1_role_to_v2_bindings`` handles this
+    distribution in its per-permission loop.
     """
     result = dict(resource_map)
     if Scope.ROOT in result and Scope.DEFAULT not in result:
         result[Scope.DEFAULT] = result[Scope.ROOT]
-
-    if Scope.ALL not in result:
-        concrete_present = [scope for scope in CONCRETE_SCOPES if scope in result]
-        if concrete_present:
-            result[Scope.ALL] = result[min(concrete_present)]
 
     return result
 
@@ -182,8 +178,12 @@ def v1_role_to_v2_bindings(
             _default_ws_id = None
 
     def _resolve_default(permission: Permission) -> V2boundresource:
+        """Resolve a single permission to its bound resource."""
         scope = _scope_service.scope_for_permission(permission.permission)
         return resource_for_scope(scope)
+
+    # Binding scopes for distributing ALL-scoped permissions to every concrete scope.
+    _binding_scopes = _scope_service.binding_scopes_for_role(v1_role)
 
     perm_groupings: _PermissionGroupings = {}
 
@@ -249,19 +249,28 @@ def v1_role_to_v2_bindings(
                     collection=set,
                 )
         if default:
-            resolved = _resolve_default(permission)
-            if (
-                is_ocm_role
-                and resolved.resource_type == ("rbac", "workspace")
-                and str(resolved.resource_id) != _default_ws_id
-            ):
-                continue
-            add_element(
-                perm_groupings,
-                resolved,
-                permission,
-                collection=set,
-            )
+            scope = _scope_service.scope_for_permission(permission.permission)
+            if scope == Scope.ALL:
+                # ALL-scoped permissions bind at every concrete scope present in
+                # the role, consistent with split_permissions_by_binding_scope.
+                for s in _binding_scopes:
+                    resolved = resource_for_scope(s)
+                    if (
+                        is_ocm_role
+                        and resolved.resource_type == ("rbac", "workspace")
+                        and str(resolved.resource_id) != _default_ws_id
+                    ):
+                        continue
+                    add_element(perm_groupings, resolved, permission, collection=set)
+            else:
+                resolved = resource_for_scope(scope)
+                if (
+                    is_ocm_role
+                    and resolved.resource_type == ("rbac", "workspace")
+                    and str(resolved.resource_id) != _default_ws_id
+                ):
+                    continue
+                add_element(perm_groupings, resolved, permission, collection=set)
 
     # Project permission sets to roles per set of resources
     return permission_groupings_to_v2_role_bindings(

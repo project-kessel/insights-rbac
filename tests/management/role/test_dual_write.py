@@ -2977,11 +2977,12 @@ class DualWriteAllScopeTestCase(DualWriteTestCase):
         binding = mapping.get_role_binding()
         self.assertIn("agnostic_resource_read", binding.role.permissions)
 
-    def test_custom_role_tenant_root_and_all_scope_does_not_raise(self):
-        """TENANT + ROOT + ALL: the ALL-scoped permission aliases to the narrowest concrete scope (ROOT).
+    def test_custom_role_tenant_root_and_all_scope_binds_all_scopes(self):
+        """TENANT + ROOT + ALL: the ALL-scoped permission is bound at every concrete scope present.
 
-        This is a V1-migration-only combination (unreachable from V2 role creation, see #49776);
-        the narrowest-concrete-scope alias avoids a KeyError/DualWriteException during migration.
+        This is a V1-migration-only combination (unreachable from V2 role creation, see #49776).
+        ALL-scoped permissions are distributed to both tenant and workspace bindings,
+        consistent with split_permissions_by_binding_scope.
         """
         role = self.given_v1_role(
             "tenant_root_all",
@@ -3000,6 +3001,9 @@ class DualWriteAllScopeTestCase(DualWriteTestCase):
         root_ws = Workspace.objects.root(tenant=self.tenant)
         self.assertEqual(ws_mapping.resource_id, str(root_ws.id))
         self.assertIn("agnostic_resource_read", ws_mapping.get_role_binding().role.permissions)
+
+        tenant_mapping = mappings.filter(resource_type_name="tenant").first()
+        self.assertIn("agnostic_resource_read", tenant_mapping.get_role_binding().role.permissions)
 
     def test_system_role_all_scope_only_binds_default_workspace(self):
         """A system role with only ALL-scoped permissions binds at the default workspace (existing behavior)."""
