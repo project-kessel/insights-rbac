@@ -3000,10 +3000,15 @@ class DualWriteAllScopeTestCase(DualWriteTestCase):
         ws_mapping = mappings.filter(resource_type_name="workspace").first()
         root_ws = Workspace.objects.root(tenant=self.tenant)
         self.assertEqual(ws_mapping.resource_id, str(root_ws.id))
-        self.assertIn("agnostic_resource_read", ws_mapping.get_role_binding().role.permissions)
+        workspace_perms = ws_mapping.get_role_binding().role.permissions
+        self.assertIn("agnostic_resource_read", workspace_perms)
+        self.assertNotIn("subscriptions_organization_read", workspace_perms)
 
         tenant_mapping = mappings.filter(resource_type_name="tenant").first()
-        self.assertIn("agnostic_resource_read", tenant_mapping.get_role_binding().role.permissions)
+        tenant_perms = tenant_mapping.get_role_binding().role.permissions
+        self.assertIn("agnostic_resource_read", tenant_perms)
+        self.assertIn("subscriptions_organization_read", tenant_perms)
+        self.assertNotIn("advisor_recommendation_read", tenant_perms)
 
     def test_system_role_all_scope_only_binds_default_workspace(self):
         """A system role with only ALL-scoped permissions binds at the default workspace (existing behavior)."""

@@ -25,7 +25,7 @@ from django.db.models import F
 from feature_flags import FEATURE_FLAGS
 from management.models import BindingMapping, Workspace
 from management.permission.model import Permission
-from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService, Scope
+from management.permission.scope_service import ImplicitResourceService, Scope
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
