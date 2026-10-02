@@ -37,6 +37,16 @@ LABEL summary="$SUMMARY" \
       vendor="Red Hat, Inc."
 
 
+# Workaround for a base-image bug where OpenSSL 3's FIPS provider fails TLS 1.3
+# handshakes to the Pulp/S3 package mirror (curl error: "digital envelope
+# routines::unsupported"). Capping the system TLS ceiling at 1.2 avoids the
+# unsupported TLS 1.3 codepath. Remove once the base image is fixed upstream.
+RUN f=/etc/crypto-policies/back-ends/opensslcnf.config && \
+    if [ -f "$f" ]; then \
+      sed -i -E '/^(Min|Max)Protocol/d' "$f" && \
+      sed -i '/\[system_default_sect\]/a MinProtocol = TLSv1.2\nMaxProtocol = TLSv1.2' "$f"; \
+    fi
+
 # Very minimal set of packages
 # glibc-langpack-en is needed to set locale to en_US and disable warning about it
 # gcc to compile some python packages (e.g. ciso8601)
