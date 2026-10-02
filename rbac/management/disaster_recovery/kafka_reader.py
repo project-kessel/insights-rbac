@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 from kafka import KafkaConsumer, TopicPartition
-from management.relation_replicator.types import RelationTuple
+from management.inventory_replicator.types import RelationTuple
 
 logger = logging.getLogger(__name__)
 

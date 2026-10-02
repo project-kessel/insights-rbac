@@ -32,7 +32,7 @@ from management.models import (
     SeededRoleV2,
 )
 from management.principal.model import Principal
-from management.relation_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 from management.role.relations import role_owner_relationship
 from management.role_binding.model import RoleBindingPrincipal
 from migration_tool.models import role_permission_tuple

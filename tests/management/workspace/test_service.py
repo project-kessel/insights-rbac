@@ -27,11 +27,15 @@ from django.test.utils import override_settings
 from rest_framework import serializers
 
 from api.models import Tenant
-from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
+from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
+from management.inventory_replicator.inventory_replicator import (
+    PartitionKey,
+    ReplicationEventType,
+    WorkspaceEventStream,
+)
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import Access, BindingMapping, Group, Permission, Policy, ResourceDefinition, Role, Workspace
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import ReplicationEventType, WorkspaceEventStream, PartitionKey
-from management.role.relation_api_dual_write_handler import RelationApiDualWriteHandler
+from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.v2_model import RoleV2, CustomRoleV2
 from management.role_binding.model import RoleBinding
 from management.role_binding.service import RoleBindingService
@@ -232,8 +236,8 @@ class WorkspaceServiceUpdateTests(WorkspaceServiceTestBase):
         self.assertEqual(updated_instance.description, validated_data["description"])
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate_workspace")
     def test_update_standard_workspace_event(self, replicate_workspace, replicate):
         """Test the standard workspace update will create a Workspace Event."""
         replicate.side_effect = self.in_memory_replicator.replicate
@@ -251,7 +255,7 @@ class WorkspaceServiceUpdateTests(WorkspaceServiceTestBase):
         self.assertEqual(len(self.tuples), 0)
 
     @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_update_default_workspace_event(self, replicate):
         """Test the default workspace update sends both creation and update Workspace Events."""
         replicate.side_effect = self.in_memory_replicator.replicate
@@ -379,7 +383,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
     @override_settings(
         REMOVE_NULL_VALUE=False,
     )
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_destroy_updates_roles_referencing_workspace(self, mock_replicate):
         """Test that destroying a workspace updates roles that reference it"""
         # Setup: Create additional workspaces for testing
@@ -432,7 +436,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
         # Create bindings for the role using dual write handler
         mock_replicate.side_effect = self.in_memory_replicator.replicate
         role_for_binding = Role.objects.select_for_update().get(pk=role.pk)
-        dual_write = RelationApiDualWriteHandler(role_for_binding, ReplicationEventType.CREATE_CUSTOM_ROLE)
+        dual_write = InventoryApiDualWriteHandler(role_for_binding, ReplicationEventType.CREATE_CUSTOM_ROLE)
         dual_write.replicate_new_or_updated_role(role_for_binding)
 
         # Verify initial state: 2 bindings (one per workspace)
@@ -488,7 +492,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
             "Remaining binding should be for the kept workspace",
         )
 
-    @patch("management.relation_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_destroy_custom_role_v2(self, replicate):
         """Test that bindings from a V1 custom role are properly deleted in a tenant migrated to V2."""
         replicate.side_effect = self.in_memory_replicator.replicate
@@ -501,11 +505,11 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
         )
         group, _ = fixture.new_group("a group", self.tenant, ["p1"])
 
-        RelationApiDualWriteHandler(
+        InventoryApiDualWriteHandler(
             role=custom_role, event_type=ReplicationEventType.CREATE_CUSTOM_ROLE
         ).replicate_new_or_updated_role(custom_role)
 
-        group_handler = RelationApiDualWriteGroupHandler(group=group, event_type=ReplicationEventType.ASSIGN_ROLE)
+        group_handler = InventoryApiDualWriteGroupHandler(group=group, event_type=ReplicationEventType.ASSIGN_ROLE)
         group_handler.generate_relations_reset_roles([custom_role])
         group_handler.replicate()
 

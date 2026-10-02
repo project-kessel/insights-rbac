@@ -15,11 +15,11 @@ The pool's `max_connections` must match `GUNICORN_THREAD_LIMIT` (default 10).
 | `AccessCache` | `rbac::policy::tenant={org_id}::user={uuid}` | `ACCESS_CACHE_LIFETIME` (600s) | JSON (hset) |
 | `PrincipalCache` | `rbac::principal::{org_id}::{username}` | `PRINCIPAL_CACHE_LIFETIME` (3600s) | pickle |
 | `JWKSCache` | `rbac::jwks::response` | `IT_TOKEN_JKWS_CACHE_LIFETIME` (28800s) | JSON |
-| `JWTCache` | `rbac::jwt::relations` | `IT_TOKEN_JKWS_CACHE_LIFETIME` (28800s) | string |
 
 ### Cache Rules
 
-- **Every `get_cached()` call does a health check ping.** For high-throughput paths (Kafka consumers), use `JWTCacheOptimized` which skips the ping.
+- **Every `get_cached()` call does a health check ping.** For high-throughput paths (Kafka consumers), prefer a cache subclass that skips the ping where one exists.
+- **Inventory API OAuth2 tokens are cached in-process, not in Redis.** `management/utils.py`'s `inventory_auth_credentials` (a `kessel.auth.OAuth2ClientCredentials`) handles token fetch/refresh/caching internally (thread-safe, 300s refresh buffer). Build gRPC auth metadata via `get_inventory_auth_metadata()` rather than any Redis-backed JWT cache.
 - **Signal-driven invalidation** is the primary cache-busting mechanism. Changes to `Role`, `Access`, `ResourceDefinition`, `Policy`, `Group` membership all trigger cache deletes via Django signals. These signals are gated by `ACCESS_CACHE_ENABLED` and `ACCESS_CACHE_CONNECT_SIGNALS`.
 - **Platform-default group changes flush the entire tenant's policy cache** (`delete_all_policies_for_tenant`). Non-default changes only flush affected principal UUIDs. Be aware that `scan_iter` with `BATCH_DELETE_SIZE=1000` is used for tenant-wide deletes.
 - **PrincipalCache** is used in `management/utils.py:get_principal()`. Always call `cache_principal()` after creating or fetching a principal from the DB to keep the cache warm.

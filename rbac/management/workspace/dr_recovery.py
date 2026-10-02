@@ -35,13 +35,13 @@ from typing import TypedDict
 
 from core.kafka_dr import KafkaEvent
 from django.db import transaction
-from management.models import Outbox
-from management.relation_replicator.outbox_replicator import OutboxLog, OutboxWAL, WorkspaceEventPayload
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
     AggregateTypes,
     PartitionKey,
     ReplicationEventType,
 )
+from management.inventory_replicator.outbox_replicator import OutboxLog, OutboxWAL, WorkspaceEventPayload
+from management.models import Outbox
 from management.workspace.model import Workspace
 from management.workspace.serializer import WorkspaceEventSerializer
 

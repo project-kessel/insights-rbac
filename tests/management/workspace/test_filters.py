@@ -28,6 +28,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from api.models import Tenant
+from management.exceptions import InventoryAuthUnavailableError
 from management.models import Workspace
 from management.permissions.system_user_utils import SystemUserAccessResult
 from management.workspace.filters import WorkspaceAccessFilterBackend
@@ -145,6 +146,23 @@ class WorkspaceAccessFilterBackendUnitTests(TransactionTestCase):
 
         # Should return empty queryset on exception
         queryset.none.assert_called_once()
+
+    @patch("management.workspace.filters.is_user_allowed_v2")
+    @patch("management.workspace.filters.FEATURE_FLAGS")
+    def test_propagates_inventory_auth_unavailable(self, mock_flags, mock_is_user_allowed_v2):
+        """Inventory auth outages must reach the API exception handler instead of returning an empty list."""
+        mock_flags.is_workspace_access_check_v2_enabled.return_value = True
+        mock_is_user_allowed_v2.side_effect = InventoryAuthUnavailableError()
+
+        request = Mock()
+        request.method = "GET"
+        queryset = Mock()
+        view = Mock(action="list")
+
+        with self.assertRaises(InventoryAuthUnavailableError):
+            self.filter_backend.filter_queryset(request, queryset, view)
+
+        queryset.none.assert_not_called()
 
     @patch("management.workspace.filters.is_user_allowed_v2")
     @patch("management.workspace.filters.FEATURE_FLAGS")

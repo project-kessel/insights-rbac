@@ -32,10 +32,28 @@ from management.inventory_client import (
     make_resource_ref,
     make_subject_ref,
 )
+from management.utils import get_inventory_auth_metadata
 
 from rbac import settings
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+
+class _AuthenticatedStreamedListObjects:
+    """Wraps a stub so sdk_list_workspaces() gets authenticated calls.
+
+    kessel.rbac.v2.list_workspaces() calls inventory.StreamedListObjects(request)
+    with no metadata argument, relying on channel-level call credentials. Our
+    Inventory API channel attaches auth per-call instead (see
+    management.utils.create_client_channel_inventory), so this wrapper injects it.
+    """
+
+    def __init__(self, stub):
+        self._stub = stub
+
+    def StreamedListObjects(self, request):
+        """Delegate to the stub, attaching Inventory API auth metadata."""
+        return self._stub.StreamedListObjects(request, metadata=get_inventory_auth_metadata())
 
 
 class WorkspaceInventoryAccessChecker:
@@ -147,7 +165,7 @@ class WorkspaceInventoryAccessChecker:
         )
 
         def rpc(stub):
-            response = stub.CheckForUpdate(check_request)
+            response = stub.CheckForUpdate(check_request, metadata=get_inventory_auth_metadata())
             return self._log_and_return_allowed(
                 response.allowed,
                 resource_id,
@@ -222,7 +240,7 @@ class WorkspaceInventoryAccessChecker:
             t0 = time.perf_counter()
 
             for response in sdk_list_workspaces(
-                inventory=stub,
+                inventory=_AuthenticatedStreamedListObjects(stub),
                 subject=subject_ref,
                 relation=relation,
                 consistency=consistency,

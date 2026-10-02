@@ -6,13 +6,13 @@ from typing import NamedTuple, Optional, Protocol
 from django.db import IntegrityError
 from management.atomic_transactions import atomic
 from management.group.model import Group
-from management.principal.model import Principal
-from management.relation_replicator.relation_replicator import (
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     PartitionKey,
-    RelationReplicator,
     ReplicationEvent,
     ReplicationEventType,
 )
+from management.principal.model import Principal
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
@@ -80,7 +80,7 @@ def _assign_user_id_and_replicate_merge(
     obsolete_username: str,
     tuples_to_remove: list[RelationTuple],
     user_id: str,
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
 ) -> None:
     survivor.user_id = user_id
     survivor.save()
@@ -109,7 +109,7 @@ def merge_obsolete_principal_into_survivor(
     survivor: Principal,
     obsolete: Principal,
     user_id: str,
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
 ) -> None:
     """
     Merge an older principal (has user_id) into the current principal (no user_id).
@@ -168,7 +168,7 @@ def _group_member_tuples_for_principal(principal: Principal) -> list:
 def _resolve_user_id_conflict(
     survivor: Principal,
     user_id: str,
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
 ) -> None:
     normalized_user_id = _normalize_user_id(user_id)
     if normalized_user_id is None:
@@ -191,7 +191,7 @@ def _ensure_principal_with_user_id_in_tenant(
     tenant: Tenant,
     upsert: bool = False,
     *,
-    replicator: RelationReplicator,
+    replicator: InventoryReplicator,
 ):
     created = False
     principal = None

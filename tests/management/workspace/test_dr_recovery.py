@@ -22,8 +22,8 @@ from django.test import TestCase
 
 from api.models import Tenant
 from core.kafka_dr import KafkaEvent
-from management.relation_replicator.outbox_replicator import InMemoryLog
-from management.relation_replicator.relation_replicator import AggregateTypes, ReplicationEventType
+from management.inventory_replicator.outbox_replicator import InMemoryLog
+from management.inventory_replicator.inventory_replicator import AggregateTypes, ReplicationEventType
 from management.workspace.dr_recovery import (
     generate_corrective_workspace_events,
     parse_workspace_kafka_events,

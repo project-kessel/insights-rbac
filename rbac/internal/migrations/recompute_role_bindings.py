@@ -8,9 +8,9 @@ from django.db.models.lookups import In
 
 from api.models import Tenant
 from management.atomic_transactions import atomic, atomic_with_retry
-from management.relation_replicator.outbox_replicator import OutboxReplicator
-from management.relation_replicator.relation_replicator import (
-    RelationReplicator,
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.inventory_replicator import (
+    InventoryReplicator,
     ReplicationEvent,
     ReplicationEventType,
     PartitionKey,
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 @atomic
-def _do_tear_down_tenant(tenant: Tenant, replicator: RelationReplicator):
+def _do_tear_down_tenant(tenant: Tenant, replicator: InventoryReplicator):
     tenant_resource_id = tenant.tenant_resource_id()
 
     if tenant_resource_id is None:
@@ -95,7 +95,7 @@ def _do_tear_down_tenant(tenant: Tenant, replicator: RelationReplicator):
 
 
 @atomic_with_retry(retries=3)
-def _do_recreate_bindings(tenant: Tenant, replicator: RelationReplicator):
+def _do_recreate_bindings(tenant: Tenant, replicator: InventoryReplicator):
     tenant = Tenant.objects.get(pk=tenant.pk)
     tenant_version = lock_tenant_version(tenant)
 
@@ -107,7 +107,7 @@ def _do_recreate_bindings(tenant: Tenant, replicator: RelationReplicator):
     migrate_all_role_bindings(replicator=replicator, tenant=tenant)
 
 
-def recompute_tenant_role_bindings(tenant: Tenant, replicator: Optional[RelationReplicator] = None):
+def recompute_tenant_role_bindings(tenant: Tenant, replicator: Optional[InventoryReplicator] = None):
     """Recompute all BindingMappings and RoleBindings for a V1 tenant."""
     if replicator is None:
         replicator = OutboxReplicator()

@@ -169,7 +169,7 @@ from contextlib import nullcontext
 from django.db import transaction
 from api.models import Tenant, User
 from management.group.model import Group
-from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.principal.model import Principal
 from management.role.v2_model import RoleV2
 from management.role.v2_service import RoleV2Service

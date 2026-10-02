@@ -8,7 +8,7 @@ from typing import Optional
 from django.core.management import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import QuerySet
-from management.relation_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.tenant_service import V2TenantBootstrapService
 from management.tenant_service.tenant_service import BootstrappedTenant
 

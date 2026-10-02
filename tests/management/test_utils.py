@@ -18,11 +18,14 @@
 
 import uuid
 
+import requests
 from api.models import Tenant, User
 from management.models import Access, Group, Permission, Principal, Policy, Role
+from management.exceptions import InventoryAuthUnavailableError
 from management.principal.view import VALID_PRINCIPAL_TYPE_VALUE
 from management.utils import (
     access_for_principal,
+    get_inventory_auth_metadata,
     get_principal_for_auth,
     get_principal_from_request,
     groups_for_principal,
@@ -830,3 +833,155 @@ class ValidatePskTests(IdentityRequest):
         ):
             self.assertFalse(validate_psk("some-psk", "test-client"))
         warning.assert_called_once()
+
+
+class InventoryAuthTimeoutAdapterTests(IdentityRequest):
+    """Test _InventoryAuthTimeoutAdapter applies bounded timeouts correctly."""
+
+    def setUp(self):
+        """Set up test data."""
+        super().setUp()
+        from management.utils import _InventoryAuthTimeoutAdapter
+
+        self.adapter = _InventoryAuthTimeoutAdapter()
+
+    @mock.patch("requests.adapters.HTTPAdapter.send")
+    def test_applies_timeout_when_none_supplied(self, mock_super_send):
+        """Adapter injects bounded timeout when no timeout is supplied."""
+        mock_super_send.return_value = Mock()
+        self.adapter.send(Mock())
+        _, kwargs = mock_super_send.call_args
+        self.assertEqual(kwargs["timeout"], (5, 10))
+
+    @mock.patch("requests.adapters.HTTPAdapter.send")
+    def test_overrides_explicit_timeout_none(self, mock_super_send):
+        """Adapter replaces an explicit timeout=None with the bounded timeout tuple."""
+        mock_super_send.return_value = Mock()
+        self.adapter.send(Mock(), timeout=None)
+        _, kwargs = mock_super_send.call_args
+        self.assertEqual(kwargs["timeout"], (5, 10))
+
+    @mock.patch("requests.adapters.HTTPAdapter.send")
+    def test_preserves_caller_timeout(self, mock_super_send):
+        """Adapter does not override a caller-supplied non-None timeout."""
+        mock_super_send.return_value = Mock()
+        self.adapter.send(Mock(), timeout=30)
+        _, kwargs = mock_super_send.call_args
+        self.assertEqual(kwargs["timeout"], 30)
+
+
+class GetInventoryAuthMetadataTests(IdentityRequest):
+    """Test get_inventory_auth_metadata builds/fails auth metadata correctly."""
+
+    @override_settings(INVENTORY_API_CLIENT_ID="", INVENTORY_API_CLIENT_SECRET="")
+    def test_returns_empty_metadata_when_credentials_not_configured(self):
+        """Test that no credentials configured means unauthenticated (expected for local/ephemeral)."""
+        self.assertEqual(get_inventory_auth_metadata(), [])
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_returns_bearer_metadata_when_token_fetched(self, mock_credentials):
+        """Test that a fetched token is wrapped as gRPC bearer metadata."""
+        mock_credentials.get_token.return_value = Mock(access_token="the-token")
+        self.assertEqual(get_inventory_auth_metadata(), [("authorization", "Bearer the-token")])
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_raises_when_token_fetch_fails(self, mock_credentials):
+        """Test that a failed token fetch raises instead of silently returning unauthenticated metadata."""
+        mock_credentials.get_token.side_effect = Exception("SSO unreachable")
+        with self.assertRaises(Exception):
+            get_inventory_auth_metadata()
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.time.sleep")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_wraps_transient_token_fetch_failure(self, mock_credentials, mock_sleep):
+        """Transient OAuth connection failures become a service-unavailable domain error."""
+        mock_credentials.get_token.side_effect = requests.exceptions.ConnectionError("SSO reset connection")
+
+        with self.assertRaises(InventoryAuthUnavailableError) as context:
+            get_inventory_auth_metadata()
+
+        self.assertIsInstance(context.exception.__cause__, requests.exceptions.ConnectionError)
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.time.sleep")
+    @mock.patch("management.utils.inventory_auth_token_retries_total")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_retries_transient_token_fetch_failure(self, mock_credentials, mock_retries, mock_sleep):
+        """Transient token connection failures are retried and can recover."""
+        mock_credentials.get_token.side_effect = [
+            requests.exceptions.ConnectionError("SSO reset connection"),
+            Mock(access_token="the-token"),
+        ]
+
+        self.assertEqual(get_inventory_auth_metadata(), [("authorization", "Bearer the-token")])
+        self.assertEqual(mock_credentials.get_token.call_count, 2)
+        mock_retries.inc.assert_called_once_with()
+        mock_sleep.assert_called_once_with(0.25)
+        mock_credentials._session.close.assert_called_once_with()
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.time.sleep")
+    @mock.patch("management.utils.inventory_auth_token_failures_total")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_exhausts_transient_token_fetch_retries(self, mock_credentials, mock_failures, mock_sleep):
+        """Exhausted token connection retries preserve the service-unavailable error."""
+        error = requests.exceptions.ConnectionError("SSO reset connection")
+        mock_credentials.get_token.side_effect = [error, error, error]
+
+        with self.assertRaises(InventoryAuthUnavailableError):
+            get_inventory_auth_metadata()
+
+        self.assertEqual(mock_credentials.get_token.call_count, 3)
+        self.assertEqual(mock_credentials._session.close.call_count, 2)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_failures.inc.assert_called_once_with()
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_wraps_http_error_as_unavailable(self, mock_credentials):
+        """HTTPError (e.g. SSO returns 503) is wrapped as InventoryAuthUnavailableError."""
+        mock_credentials.get_token.side_effect = requests.exceptions.HTTPError("503 Server Error")
+
+        with self.assertRaises(InventoryAuthUnavailableError) as context:
+            get_inventory_auth_metadata()
+
+        self.assertIsInstance(context.exception.__cause__, requests.exceptions.HTTPError)
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_wraps_ssl_error_as_unavailable(self, mock_credentials):
+        """SSLError during token fetch is wrapped as InventoryAuthUnavailableError."""
+        mock_credentials.get_token.side_effect = requests.exceptions.SSLError("SSL handshake failed")
+
+        with self.assertRaises(InventoryAuthUnavailableError) as context:
+            get_inventory_auth_metadata()
+
+        self.assertIsInstance(context.exception.__cause__, requests.exceptions.SSLError)
+
+    @override_settings(
+        INVENTORY_API_CLIENT_ID="client-id",
+        INVENTORY_API_CLIENT_SECRET="client-secret",
+        INVENTORY_API_TOKEN_URL="https://user:pass@sso.example.com/token",
+    )
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_logs_hostname_not_netloc(self, mock_credentials):
+        """Log message must use .hostname (no userinfo) instead of .netloc."""
+        mock_credentials.get_token.side_effect = requests.exceptions.ConnectionError("down")
+
+        with self.assertRaises(InventoryAuthUnavailableError):
+            with mock.patch("management.utils.logger") as mock_logger:
+                get_inventory_auth_metadata()
+                # The warning call should log hostname ("sso.example.com"), never netloc ("user:pass@sso.example.com")
+                args = mock_logger.warning.call_args[0]
+                self.assertEqual(args[1], "sso.example.com")
+
+    @override_settings(INVENTORY_API_CLIENT_ID="client-id", INVENTORY_API_CLIENT_SECRET="client-secret")
+    @mock.patch("management.utils.inventory_auth_credentials")
+    def test_raises_when_access_token_missing(self, mock_credentials):
+        """Test that a token response without an access_token raises instead of sending 'Bearer None'."""
+        mock_credentials.get_token.return_value = Mock(access_token=None)
+        with self.assertRaises(Exception):
+            get_inventory_auth_metadata()

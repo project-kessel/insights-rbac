@@ -23,7 +23,12 @@ from django.test import TestCase
 from management.authorization.invalid_token import InvalidTokenError
 from management.authorization.missing_authorization import MissingAuthorizationError
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
-from management.exceptions import InvalidFieldError, NotFoundError, RequiredFieldError
+from management.exceptions import (
+    InvalidFieldError,
+    InventoryAuthUnavailableError,
+    NotFoundError,
+    RequiredFieldError,
+)
 from management.role.v2_exceptions import RolesNotFoundError
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -186,6 +191,17 @@ class ExceptionHandlerTest(TestCase):
             mocked_view.basename,
             str(response.data.get("errors")[0].get("source")),
             "unexpected source view in the response for the 'UnableMeetPrerequisitesError' exception handling",
+        )
+
+    def test_inventory_auth_unavailable_exception_handled(self):
+        """Inventory auth outages return a retryable 503 instead of an unhandled 500."""
+        response = custom_exception_handler(InventoryAuthUnavailableError(), context={})
+
+        self.assertEqual(status.HTTP_503_SERVICE_UNAVAILABLE, response.status_code)
+        self.assertEqual("1", response["Retry-After"])
+        self.assertEqual(
+            "Inventory authorization is temporarily unavailable. Please try again shortly.",
+            response.data["errors"][0]["detail"],
         )
 
     def test_generate_error_data_payload_with_view_response(self):
@@ -583,6 +599,19 @@ class V2ExceptionHandlerTests(TestCase):
                 "errors": [{"message": "Unable to validate the provided token."}],
             },
         )
+
+    def test_inventory_auth_unavailable_error_returns_503(self):
+        """Inventory auth outages produce a v2 Problem Details 503 response."""
+        response = custom_exception_handler_v2(InventoryAuthUnavailableError(), self._mock_v2_context())
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.content_type, "application/problem+json")
+        self.assertEqual(response.data["status"], 503)
+        self.assertEqual(
+            response.data["detail"],
+            "Inventory authorization is temporarily unavailable. Please try again shortly.",
+        )
+        self.assertEqual(response["Retry-After"], "1")
 
     # ── Branch: RolesNotFoundError ─────────────────────────────────────
 
