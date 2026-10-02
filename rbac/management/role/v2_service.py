@@ -343,7 +343,14 @@ class RoleV2Service:
 
         if Scope.DEFAULT not in matching_scopes:
             matching_ids = permission_scope_cache.ids_for_scopes(matching_scopes)
-            queryset = queryset.filter(permissions__id__in=matching_ids).distinct()
+            concrete_ids = permission_scope_cache.ids_for_scopes(set(CONCRETE_SCOPES))
+            all_scope_ids = permission_scope_cache.ids_for_scopes({Scope.ALL})
+            all_scope_only_roles = (
+                queryset.filter(permissions__id__in=all_scope_ids)
+                .exclude(permissions__id__in=concrete_ids)
+                .values_list("pk", flat=True)
+            )
+            queryset = queryset.filter(Q(permissions__id__in=matching_ids) | Q(pk__in=all_scope_only_roles)).distinct()
 
         if higher_non_matching:
             higher_ids = permission_scope_cache.ids_for_scopes(higher_non_matching)
