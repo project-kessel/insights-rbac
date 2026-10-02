@@ -34,8 +34,9 @@ from django.db import OperationalError, connection, transaction
 from google.protobuf import json_format
 from internal.migration_coordination import notify_migration_batch_completion
 from kafka import KafkaConsumer, TopicPartition
-from kafka.consumer.subscription_state import ConsumerRebalanceListener
+from kafka.consumer.subscription_state import AsyncConsumerRebalanceListener
 from kafka.errors import KafkaError
+from kafka.future import Future as KafkaFuture
 from kafka.structs import OffsetAndMetadata
 from kessel.relations.v1beta1 import common_pb2
 from management.relation_replicator.relations_api_replicator import (
@@ -624,11 +625,55 @@ class OffsetManager:
             self.stored_offsets.clear()
 
 
-class RebalanceListener(ConsumerRebalanceListener):
+class RebalanceListener(AsyncConsumerRebalanceListener):
     """Listen for Kafka consumer rebalance events.
 
-    Inherits from ConsumerRebalanceListener to properly integrate with kafka-python.
+    Uses AsyncConsumerRebalanceListener so that blocking IO (offset commits,
+    gRPC lock acquisition) runs in a worker thread, keeping the consumer's
+    IO / heartbeat loop responsive.
+
+    Note: kafka-python 3.x uses its own event loop (NetworkSelector), not
+    asyncio. Standard asyncio primitives like asyncio.to_thread() will raise
+    ``RuntimeError: no running event loop``. Instead, we bridge to worker
+    threads using kafka's own ``Future`` which the NetworkSelector can
+    ``await`` natively.
     """
+
+    def _run_in_thread(self, fn, *args):
+        """Run a blocking function in a daemon thread, returning a KafkaFuture.
+
+        The returned KafkaFuture is compatible with kafka-python's internal
+        event loop, so ``await future`` properly yields control back to the
+        NetworkSelector (keeping heartbeats alive) until the thread completes.
+
+        After the worker thread resolves the future, it wakes the
+        NetworkSelector so the suspended coroutine resumes immediately
+        rather than waiting for the next heartbeat / select timeout.
+        """
+        future = KafkaFuture()
+        # Capture the selector for cross-thread wakeup.  The selector's
+        # ``_poll_once`` registers ``call_soon(task)`` as the future callback,
+        # which only queues the task without waking the selector.  We call
+        # ``wakeup()`` explicitly so ``select()`` returns and processes the
+        # newly-ready task right away.
+        net = getattr(getattr(self.consumer_instance, "consumer", None), "_net", None)
+
+        def _target():
+            try:
+                result = fn(*args)
+                future.success(result)
+            except Exception as exc:
+                future.failure(exc)
+            finally:
+                if net is not None:
+                    try:
+                        net.wakeup()
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(target=_target, daemon=True)
+        thread.start()
+        return future
 
     def __init__(self, consumer_instance):
         """Initialize the rebalance listener.
@@ -638,22 +683,26 @@ class RebalanceListener(ConsumerRebalanceListener):
         """
         self.consumer_instance = consumer_instance
 
-    def on_partitions_revoked(self, revoked):
+    async def on_partitions_revoked(self, revoked):
         """Handle partition revocation during rebalance.
+
+        Runs the blocking offset commit in a worker thread to avoid
+        blocking the consumer IO thread.
 
         Args:
             revoked: List of TopicPartition objects being revoked
         """
-        self.consumer_instance._on_partitions_revoked(revoked)
+        await self._run_in_thread(self.consumer_instance._on_partitions_revoked, revoked)
 
-    def on_partitions_assigned(self, assigned):
+    async def on_partitions_assigned(self, assigned):
         """Handle partition assignment during rebalance.
+
+        Runs the blocking lock acquisition in a worker thread to avoid
+        blocking the consumer IO thread.
 
         Args:
             assigned: List of TopicPartition objects being assigned
         """
-        import time
-
         # Track rebalance event
         rebalance_events_total.labels(event_type="partitions_assigned").inc()
 
@@ -685,8 +734,9 @@ class RebalanceListener(ConsumerRebalanceListener):
             start_time = time.time()
 
             try:
-                # Acquire lock token from Relations API
-                lock_token = self.consumer_instance._acquire_lock_with_retry(lock_id)
+                # Acquire lock token from Relations API in a worker thread
+                # to avoid blocking the consumer IO / heartbeat loop
+                lock_token = await self._run_in_thread(self.consumer_instance._acquire_lock_with_retry, lock_id)
 
                 # Record successful acquisition
                 duration = time.time() - start_time
