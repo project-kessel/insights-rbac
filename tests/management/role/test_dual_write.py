@@ -3001,6 +3001,7 @@ class DualWriteAllScopeTestCase(DualWriteTestCase):
         root_ws = Workspace.objects.root(tenant=self.tenant)
         self.assertEqual(ws_mapping.resource_id, str(root_ws.id))
         workspace_perms = ws_mapping.get_role_binding().role.permissions
+        self.assertIn("advisor_recommendation_read", workspace_perms)
         self.assertIn("agnostic_resource_read", workspace_perms)
         self.assertNotIn("subscriptions_organization_read", workspace_perms)
 

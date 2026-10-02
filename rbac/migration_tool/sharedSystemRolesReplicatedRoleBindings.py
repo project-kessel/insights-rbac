@@ -61,7 +61,7 @@ def with_workspace_scope_inheritance(
     ``Scope.ALL`` (scope-agnostic permissions) is expanded to the set of all
     concrete-scope resources present in the map, so callers can resolve ANY
     scope—including ALL—to its target resources in a single lookup.  When no
-    concrete scopes are present, ALL falls back to DEFAULT's resource.
+    concrete scopes are present, ALL maps to an empty frozenset.
     """
     flat: dict[Scope, V2boundresource] = dict(resource_map)
     if Scope.ROOT in flat and Scope.DEFAULT not in flat:
@@ -70,8 +70,7 @@ def with_workspace_scope_inheritance(
     result: dict[Scope, frozenset[V2boundresource]] = {scope: frozenset({res}) for scope, res in flat.items()}
 
     # ALL-scoped permissions bind at every concrete scope present in the role.
-    all_resources = frozenset(flat.values())
-    result[Scope.ALL] = all_resources if all_resources else result.get(Scope.DEFAULT, frozenset())
+    result[Scope.ALL] = frozenset(flat.values())
 
     return result
 
