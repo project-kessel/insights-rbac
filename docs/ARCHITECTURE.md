@@ -185,6 +185,10 @@ Celery handles background tasks with Redis as the broker:
 
 The Celery worker and beat scheduler run as separate containers alongside the main application.
 
+## Internal Endpoints & Tooling
+
+- [Inventory migration verification](verify-migration-endpoint.md)
+
 ## Security Model
 
 Authentication is layered:
