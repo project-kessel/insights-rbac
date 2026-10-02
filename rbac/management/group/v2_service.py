@@ -21,7 +21,7 @@ from typing import List, Optional, Sequence
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, F, ProtectedError, Q, QuerySet
+from django.db.models import Count, Exists, F, ProtectedError, Q, QuerySet
 from management.group.model import Group
 from management.group.relation_api_dual_write_group_handler import RelationApiDualWriteGroupHandler
 from management.group.v2_exceptions import (
@@ -64,9 +64,23 @@ class GroupV2Service:
         """Initialize service with tenant context."""
         self.tenant = tenant
 
-    def queryset(self) -> QuerySet:
-        """Return the tenant's groups annotated with principal and role counts."""
-        return Group.objects.filter(tenant=self.tenant).annotate(
+    def queryset(self, *, include_public_defaults: bool = False, is_org_admin: Optional[bool] = None) -> QuerySet:
+        """Return the tenant's groups annotated with principal and role counts.
+
+        include_public_defaults also returns the public tenant's default groups the tenant has no own copy of
+        (V1 parity); the public admin default group is only included for org admins. is_org_admin must be
+        passed explicitly whenever include_public_defaults=True, to avoid silently omitting the admin default
+        group for an actual org admin.
+        """
+        groups = Q(tenant=self.tenant)
+        if include_public_defaults:
+            if is_org_admin is None:
+                raise ValueError("is_org_admin must be provided when include_public_defaults=True")
+            # A single OR-ed filter (not a queryset union) keeps the count annotations, filters, ordering and
+            # pagination applying uniformly to tenant-owned and public groups. This avoids materializing a large
+            # pk__in list; the tenant lookup and per-flag checks still use small, index-backed subqueries.
+            groups |= self._public_default_groups_filter(is_org_admin)
+        return Group.objects.filter(groups).annotate(
             principal_count_annotation=Count(
                 "principals", filter=Q(principals__type=Principal.Types.USER), distinct=True
             ),
@@ -77,12 +91,16 @@ class GroupV2Service:
             ),
         )
 
-    def list(self, params: dict, requester_username: Optional[str] = None) -> QuerySet:
+    def list(self, params: dict, requester_username: Optional[str] = None, is_org_admin: bool = False) -> QuerySet:
         """List groups with optional filtering and ordering.
 
         requester_username is required for scope=principal, which returns only the requester's groups.
+        is_org_admin decides whether the public admin default group is included.
         """
-        queryset = self.queryset()
+        exclude_username = params.get("exclude_username")
+        # exclude_username omits the public default groups, which can never gain members. V1's _filter_default_groups
+        # also drops tenant-owned default groups; those stay listed here since V2 allows adding members to them.
+        queryset = self.queryset(include_public_defaults=not exclude_username, is_org_admin=is_org_admin)
 
         name = params.get("name")
         if name:
@@ -107,7 +125,6 @@ class GroupV2Service:
                 extra_filters={"principals__type": Principal.Types.USER, "principals__tenant": F("tenant")},
             ).distinct()
 
-        exclude_username = params.get("exclude_username")
         if exclude_username:
             # exclude() on a multi-valued relation ANDs conditions across independently-matched rows
             # rather than requiring a single row to satisfy both (unlike filter()), so the type and
@@ -204,6 +221,18 @@ class GroupV2Service:
             raise GroupHasRoleBindingsError(len(e.protected_objects))
 
         dual_write_handler.replicate_removed_principals(principals)
+
+    def _public_default_groups_filter(self, is_org_admin: bool) -> Q:
+        """Match the public default groups for each default flag the tenant has no own group for.
+
+        A tenant-owned default group (e.g. the "Custom default group") fully replaces its public counterpart.
+        """
+        flags = ("platform_default", "admin_default") if is_org_admin else ("platform_default",)
+        missing_defaults = Q()
+        for flag in flags:
+            tenant_has_own = Exists(Group.objects.filter(tenant=self.tenant, **{flag: True}))
+            missing_defaults |= Q(**{flag: True}) & ~tenant_has_own
+        return Q(tenant=Tenant._get_public_tenant(), system=True) & missing_defaults
 
     def _filter_by_role_names(self, queryset: QuerySet, role_names: Sequence[str], discriminator: str) -> QuerySet:
         """Filter groups bound to any (default) or all of the given role names, matched case-insensitively."""

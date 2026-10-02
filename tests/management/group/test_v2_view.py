@@ -17,7 +17,9 @@
 """Test the GroupV2ViewSet."""
 
 import uuid
+from base64 import b64encode
 from importlib import reload
+from json import dumps as json_dumps
 from unittest.mock import patch
 from urllib.parse import urlencode
 
@@ -48,6 +50,9 @@ from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_
 from rbac import urls
 from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
+
+from api.common import RH_IDENTITY_HEADER
+from api.models import Tenant
 
 ACCESS_CHECK_TARGET = "management.permissions.group_v2_access.WorkspaceInventoryAccessChecker.check_resource_access"
 TOKEN_VALIDATION_TARGET = "management.authorization.token_validator.ITSSOTokenValidator.validate_token_and_org_id"
@@ -644,6 +649,246 @@ class GroupV2RetrieveViewTest(GroupV2ViewTestBase):
         response = self.client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class GroupV2PublicDefaultGroupsViewTest(GroupV2ViewTestBase):
+    """Tests for the public tenant's default groups falling back into list/retrieve (V1 parity)."""
+
+    def setUp(self):
+        """Create the public tenant's platform and admin default groups, and non-admin request headers."""
+        super().setUp()
+        public_tenant = Tenant.objects.get(tenant_name=Tenant.PUBLIC_TENANT_NAME)
+        self.public_platform_default = Group.objects.create(
+            name="default access", platform_default=True, system=True, tenant=public_tenant
+        )
+        self.public_admin_default = Group.objects.create(
+            name="default admin access", admin_default=True, system=True, tenant=public_tenant
+        )
+        non_admin_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
+        self.non_admin_headers = non_admin_context["request"].META
+        self.missing_org_admin_flag_headers = self._headers_missing_org_admin_flag()
+
+    def _headers_missing_org_admin_flag(self):
+        """Build headers whose identity.user block omits the is_org_admin key entirely.
+
+        This mirrors real identity headers where 'is_org_admin' is absent (middleware.py reads it with
+        .get(), leaving request.user.admin as None), as opposed to _create_request_context which always
+        sets an explicit True/False value.
+        """
+        identity = self._build_identity(
+            self.user_data, self.customer_data.get("account_id"), self.customer_data.get("org_id"), True, False
+        )
+        del identity["identity"]["user"]["is_org_admin"]
+        mock_header = b64encode(json_dumps(identity).encode("utf-8"))
+        return {RH_IDENTITY_HEADER: mock_header}
+
+    def _retrieve(self, group_uuid, headers=None):
+        return self.client.get(self._detail_url(group_uuid), **(headers or self.headers))
+
+    def test_list_includes_public_default_groups_for_org_admin(self):
+        """Org admins see both public default groups alongside the tenant's own groups, with counts unaffected."""
+        self._bind(self.group_a, self.role_1)
+
+        response = self._list()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertCountEqual(self._names(response), ["alpha", "beta", "default access", "default admin access"])
+        by_name = {g["name"]: g for g in response.json()["data"]}
+        group = by_name["default access"]
+        self.assertEqual(group["uuid"], str(self.public_platform_default.uuid))
+        self.assertTrue(group["system"])
+        self.assertTrue(group["platform_default"])
+        self.assertFalse(group["admin_default"])
+        self.assertEqual(group["principal_count"], 0)
+        self.assertEqual(group["role_count"], 0)
+        # The OR-ed public-fallback filter must not alter the Count annotations for tenant-owned groups.
+        self.assertEqual(by_name["alpha"]["principal_count"], 2)
+        self.assertEqual(by_name["alpha"]["role_count"], 1)
+        self.assertEqual(by_name["beta"]["principal_count"], 1)
+        self.assertEqual(by_name["beta"]["role_count"], 0)
+
+    def test_list_excludes_public_admin_default_group_for_non_admin(self):
+        """Non-admins see the public platform default group but never the public admin default group."""
+        response = self.client.get(self._list_url(), **self.non_admin_headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertCountEqual(self._names(response), ["alpha", "beta", "default access"])
+
+    def test_list_and_retrieve_treat_missing_org_admin_flag_as_non_admin(self):
+        """A missing is_org_admin key (request.user.admin is None) must not 500 -- treat it as non-admin."""
+        headers = self.missing_org_admin_flag_headers
+
+        response = self.client.get(self._list_url(), **headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertCountEqual(self._names(response), ["alpha", "beta", "default access"])
+
+        response = self._retrieve(self.public_platform_default.uuid, headers)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        response = self._retrieve(self.public_admin_default.uuid, headers)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_list_tenant_default_group_replaces_public_one(self):
+        """A tenant-owned default group fully replaces its public counterpart; the other flag still falls back."""
+        Group.objects.create(name="Custom default group", platform_default=True, tenant=self.tenant)
+
+        response = self._list()
+        self.assertCountEqual(self._names(response), ["alpha", "beta", "Custom default group", "default admin access"])
+
+        Group.objects.create(name="Custom admin group", admin_default=True, tenant=self.tenant)
+
+        response = self._list()
+        self.assertCountEqual(self._names(response), ["alpha", "beta", "Custom default group", "Custom admin group"])
+
+    def test_list_exclude_username_omits_public_default_groups(self):
+        """exclude_username drops the public default groups regardless of admin status (V1 parity)."""
+        for headers in (self.headers, self.non_admin_headers):
+            with self.subTest(org_admin=headers is self.headers):
+                response = self.client.get(self._list_url(), {"exclude_username": "user_2"}, **headers)
+
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(self._names(response), ["beta"])
+
+    def test_list_flag_filters_surface_public_default_groups(self):
+        """platform_default/admin_default filters return the public group when the tenant has no own copy."""
+        cases = [
+            (self.headers, {"platform_default": "true"}, ["default access"]),
+            (self.headers, {"admin_default": "true"}, ["default admin access"]),
+            (self.headers, {"system": "true"}, ["default access", "default admin access"]),
+            (self.non_admin_headers, {"admin_default": "true"}, []),
+        ]
+        for headers, params, expected in cases:
+            with self.subTest(params=params, org_admin=headers is self.headers):
+                response = self.client.get(self._list_url(), params, **headers)
+
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(self._names(response), expected)
+
+    def test_list_scope_principal_excludes_public_default_groups(self):
+        """scope=principal never matches public default groups, since they have no principal rows."""
+        requester = Principal.objects.create(username=self.user_data["username"], tenant=self.tenant)
+        self.group_b.principals.add(requester)
+
+        response = self._list(scope="principal")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._names(response), ["beta"])
+
+    def test_list_role_names_excludes_public_default_groups(self):
+        """role_names filters out public default groups, which have no role bindings, even when they'd fall back."""
+        self._bind(self.group_a, self.role_1)
+
+        response = self._list(role_names="role_1")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._names(response), ["alpha"])
+
+    def test_list_orders_filters_and_paginates_tenant_and_public_groups_together(self):
+        """Ordering, name filtering and pagination treat tenant and public groups as one combined set."""
+        Group.objects.create(name="gamma", tenant=self.tenant)
+        Group.objects.create(name="access-team", tenant=self.tenant)
+
+        response = self._list(order_by="name")
+        self.assertEqual(
+            self._names(response),
+            ["access-team", "alpha", "beta", "default access", "default admin access", "gamma"],
+        )
+
+        response = self._list(order_by="-name")
+        self.assertEqual(
+            self._names(response),
+            ["gamma", "default admin access", "default access", "beta", "alpha", "access-team"],
+        )
+
+        response = self._list(name="access")
+        self.assertEqual(self._names(response), ["access-team", "default access", "default admin access"])
+
+        response = self._list(order_by="name", limit=2, offset=2)
+        self.assertEqual(self._names(response), ["beta", "default access"])
+        self.assertEqual(response.json()["meta"]["count"], 6)
+
+    def test_list_with_public_default_groups_is_a_single_query(self):
+        """The public default group fallback is a subquery, so listing still runs a single query."""
+        service = GroupV2Service(tenant=self.tenant)
+
+        with self.assertNumQueries(1):
+            groups = list(service.list({}, is_org_admin=True))
+
+        self.assertIn(self.public_admin_default, groups)
+
+    def test_retrieve_public_default_groups(self):
+        """Org admins can retrieve both public default groups; non-admins only the platform default group."""
+        cases = [
+            (self.headers, self.public_platform_default, status.HTTP_200_OK),
+            (self.headers, self.public_admin_default, status.HTTP_200_OK),
+            (self.non_admin_headers, self.public_platform_default, status.HTTP_200_OK),
+            (self.non_admin_headers, self.public_admin_default, status.HTTP_404_NOT_FOUND),
+        ]
+        for headers, group, expected_status in cases:
+            with self.subTest(group=group.name, org_admin=headers is self.headers):
+                response = self._retrieve(group.uuid, headers)
+
+                self.assertEqual(response.status_code, expected_status)
+                if expected_status == status.HTTP_200_OK:
+                    data = response.json()
+                    self.assertEqual(data["uuid"], str(group.uuid))
+                    self.assertEqual(data["principal_count"], 0)
+                    self.assertEqual(data["role_count"], 0)
+
+    def test_retrieve_public_default_group_replaced_by_tenant_copy_not_found(self):
+        """Once the tenant owns a default group, its public counterpart is no longer retrievable."""
+        for flag, public_group in (
+            ("platform_default", self.public_platform_default),
+            ("admin_default", self.public_admin_default),
+        ):
+            with self.subTest(flag=flag):
+                Group.objects.create(name=f"custom {flag}", tenant=self.tenant, **{flag: True})
+
+                response = self._retrieve(public_group.uuid)
+
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_write_actions_on_public_default_group_not_found(self):
+        """Update, delete and every principals action return 404 for public default groups and change nothing."""
+        self.enterContext(
+            patch(
+                "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+                return_value={
+                    "status_code": 200,
+                    "data": [{"username": "user_1", "user_id": "u1", "org_id": self.tenant.org_id, "is_active": True}],
+                },
+            )
+        )
+        self.enterContext(patch("management.group.v2_view.backfill_remote_principals"))
+
+        for group in (self.public_platform_default, self.public_admin_default):
+            original_name = group.name
+            detail_url = self._detail_url(group.uuid)
+            principals_url = self._principals_url(group.uuid)
+            requests_by_action = {
+                "update": lambda: self.client.put(detail_url, {"name": "renamed"}, format="json", **self.headers),
+                "destroy": lambda: self.client.delete(detail_url, **self.headers),
+                "list principals": lambda: self.client.get(principals_url, **self.headers),
+                "add principals": lambda: self.client.post(
+                    principals_url, {"usernames": ["user_1"]}, format="json", **self.headers
+                ),
+                "remove principals": lambda: self.client.delete(principals_url + "?usernames=user_1", **self.headers),
+                "remove principal": lambda: self.client.delete(
+                    self._principal_detail_url(group.uuid, self.user_1.uuid), **self.headers
+                ),
+            }
+            for action_name, send in requests_by_action.items():
+                with self.subTest(group=group.name, action=action_name):
+                    response = send()
+
+                    self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+            group.refresh_from_db()
+            self.assertEqual(group.name, original_name)
+            self.assertFalse(group.principals.exists())
+
+        self.mock_dual_write.assert_not_called()
+        self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2).exists())
 
 
 class GroupV2CreateViewTest(GroupV2ViewTestBase):

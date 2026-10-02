@@ -88,8 +88,15 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
     http_method_names = ["get", "post", "put", "delete", "head", "options"]
 
     def get_queryset(self):
-        """Return annotated groups for the requesting tenant."""
-        return GroupV2Service(tenant=self.request.tenant).queryset()
+        """Return annotated groups for the requesting tenant.
+
+        Retrieve also resolves the public default groups the tenant has no own copy of (V1 parity). Every other
+        detail action (update, destroy, principals) stays tenant-only, so those public groups remain read-only.
+        """
+        service = GroupV2Service(tenant=self.request.tenant)
+        if self.action == "retrieve":
+            return service.queryset(include_public_defaults=True, is_org_admin=bool(self.request.user.admin))
+        return service.queryset()
 
     def get_serializer_class(self):
         """Return appropriate serializer based on action."""
@@ -103,7 +110,9 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         input_serializer.is_valid(raise_exception=True)
 
         queryset = GroupV2Service(tenant=request.tenant).list(
-            input_serializer.validated_data, requester_username=request.user.username
+            input_serializer.validated_data,
+            requester_username=request.user.username,
+            is_org_admin=bool(request.user.admin),
         )
 
         page = self.paginate_queryset(queryset)
