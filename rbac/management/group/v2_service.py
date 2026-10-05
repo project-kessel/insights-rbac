@@ -103,15 +103,25 @@ class GroupV2Service:
         requester_username is required for scope=principal, which returns only the requester's groups.
         is_org_admin decides whether the public admin default group is included.
 
-        self_access_only forces the result to the requester's own group memberships and ignores every
-        other filter param, by discarding them and forcing scope=principal below. It is set when access
-        was granted via the GroupV2KesselAccessPermission self-access exception rather than
-        rbac_groups_read -- without this override, a username filter equal to the requester's own
-        username would otherwise run through the normal substring match and could also surface other
-        principals whose username happens to contain it.
+        self_access_only restricts the result to the requester's own group memberships and ignores
+        every other filter param. It is set when access was granted via the
+        GroupV2KesselAccessPermission self-access exception rather than rbac_groups_read.
+
+        This path uses a case-sensitive username match (``username=``, not ``username__iexact``)
+        to avoid leaking another principal's groups when legacy uppercase usernames coexist in
+        the same tenant (see ``Principal.save()`` lowercasing, which has no backfill migration).
         """
         if self_access_only:
-            params = {"order_by": params.get("order_by"), "scope": self.PRINCIPAL_SCOPE}
+            return (
+                self.queryset()
+                .filter(
+                    principals__type=Principal.Types.USER,
+                    principals__username=requester_username,
+                    principals__tenant=F("tenant"),
+                )
+                .distinct()
+                .order_by(*self._ordering(params.get("order_by") or self.DEFAULT_ORDER_BY))
+            )
 
         exclude_username = params.get("exclude_username")
         # exclude_username omits the public default groups, which can never gain members. V1's _filter_default_groups

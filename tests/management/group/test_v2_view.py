@@ -710,6 +710,35 @@ class GroupV2ListSelfAccessViewTest(GroupV2ViewTestBase):
         self.assertEqual(error["field"], "exclude_username")
         self.assertEqual(error["message"], "username and exclude_username are mutually exclusive.")
 
+    @patch("rbac.middleware.backfill_remote_principal")
+    def test_self_access_does_not_leak_groups_of_case_distinct_principal(self, _mock_backfill):
+        """A legacy uppercase principal with a case-distinct username must not leak its groups.
+
+        Principal.save() lowercases on save but has no backfill migration, so legacy rows like
+        "Alice" can coexist with "alice" in the same tenant. The self-access filter must use a
+        case-sensitive match so "alice" never sees groups belonging to "Alice".
+
+        The middleware's backfill_remote_principal also uses username__iexact and would crash with
+        MultipleObjectsReturned when both case variants exist, so it is mocked here to isolate
+        the service-layer fix under test.
+        """
+        legacy_username = self.user_data["username"].upper()
+        # bulk_create bypasses Principal.save() (which lowercases), simulating a pre-normalization row.
+        legacy_principal = Principal(username=legacy_username, tenant=self.tenant, type=Principal.Types.USER)
+        Principal.objects.bulk_create([legacy_principal])
+        legacy_group = Group.objects.create(name="legacy-only", tenant=self.tenant)
+        legacy_group.principals.add(legacy_principal)
+
+        # The requester (lowercase) also belongs to group_b.
+        self.group_b.principals.add(self.requester)
+
+        response = self._list(scope="principal")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        names = self._names(response)
+        self.assertIn("beta", names)
+        self.assertNotIn("legacy-only", names)
+
     def test_self_access_not_granted_for_retrieve(self):
         """The self-access exception is scoped to list only; retrieve still requires rbac_groups_read."""
         response = self.client.get(self._detail_url(self.group_b.uuid), **self.headers)
