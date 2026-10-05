@@ -19,6 +19,7 @@
 
 import logging
 
+from management.permissions.utils import PRINCIPAL_SCOPE
 from management.permissions.workspace_inventory_access import (
     WorkspaceInventoryAccessChecker,
 )
@@ -43,6 +44,12 @@ class GroupV2KesselAccessPermission(permissions.BasePermission):
     RESOURCE_TYPE = "tenant"
     GROUPS_READ_RELATION = "rbac_groups_read"
     GROUPS_WRITE_RELATION = "rbac_groups_write"
+    # Query shape that opts a list request into the self-access exception (see _is_self_access_request).
+    # Reuses management.permissions.utils.PRINCIPAL_SCOPE -- the same shared "principal" scope literal
+    # used by GroupV2Service's queryset()/list() branches -- rather than importing the service layer
+    # directly, since permission classes must not depend on services (permissions/views -> services is
+    # the project's dependency direction, never the reverse).
+    SELF_ACCESS_SCOPE = PRINCIPAL_SCOPE
     # Only actions in this explicit allowlist get rbac_groups_read. Any action name not listed here --
     # including ones added later without updating this file -- fails closed to rbac_groups_write.
     READ_ACTIONS = {"list", "retrieve"}
@@ -65,6 +72,29 @@ class GroupV2KesselAccessPermission(permissions.BasePermission):
         # requests end in a 405, but the permission check runs first, so fail closed. Any action name not
         # explicitly allowlisted above (present or future) also falls here, closed to rbac_groups_write.
         return self.GROUPS_WRITE_RELATION
+
+    def _is_self_access_request(self, request) -> bool:
+        """Check whether a list request only asks for the requester's own groups.
+
+        This is a narrow exception for users without rbac_groups_read: it permits "list my own
+        groups" (V1 parity) without granting visibility into other principals' group membership.
+        Only two query shapes qualify -- scope=principal, or an exact (case-sensitive) match of the
+        username param against the requester's own username. A substring or wildcard match on the
+        requester's username does not qualify, since that could coincidentally also match other
+        principals' usernames.
+
+        exclude_username=<self> is deliberately NOT a third qualifying shape, even alone: excluding
+        the requester's own username would surface groups the requester does NOT belong to -- the
+        opposite of "list my own groups". Granting self-access for that shape would reopen the leak
+        this exception exists to prevent.
+        """
+        username = getattr(request.user, "username", None)
+        if not username:
+            return False
+        params = request.query_params
+        if params.get("scope") == self.SELF_ACCESS_SCOPE:
+            return True
+        return params.get("username") == username
 
     def has_permission(self, request, view):
         """
@@ -101,6 +131,23 @@ class GroupV2KesselAccessPermission(permissions.BasePermission):
             relation=relation,
         )
         if not has_access:
+            action = getattr(view, "action", None)
+            if action == "list" and self._is_self_access_request(request):
+                # Grant the narrow self-access exception instead of a 403. The view/service must
+                # still restrict the queryset to the requester's own groups -- this flag tells it to,
+                # regardless of what the username/exclude_username/scope params otherwise say.
+                request.group_self_access_only = True
+                logger.debug(
+                    "Granted self-access exception for group list",
+                    extra={
+                        "resource_type": "group_v2",
+                        "org_id": getattr(request.user, "org_id", None),
+                        "username": getattr(request.user, "username", None),
+                        "endpoint": request.path,
+                    },
+                )
+                return True
+
             # Authorization failure - SEC-MON-REQ-1 compliance (EOI-8 authorization_failure, EOI-1 pii_manipulation)
             logger.warning(
                 "Authorization denied",

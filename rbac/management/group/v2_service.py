@@ -91,12 +91,28 @@ class GroupV2Service:
             ),
         )
 
-    def list(self, params: dict, requester_username: Optional[str] = None, is_org_admin: bool = False) -> QuerySet:
+    def list(
+        self,
+        params: dict,
+        requester_username: Optional[str] = None,
+        is_org_admin: bool = False,
+        self_access_only: bool = False,
+    ) -> QuerySet:
         """List groups with optional filtering and ordering.
 
         requester_username is required for scope=principal, which returns only the requester's groups.
         is_org_admin decides whether the public admin default group is included.
+
+        self_access_only forces the result to the requester's own group memberships and ignores every
+        other filter param, by discarding them and forcing scope=principal below. It is set when access
+        was granted via the GroupV2KesselAccessPermission self-access exception rather than
+        rbac_groups_read -- without this override, a username filter equal to the requester's own
+        username would otherwise run through the normal substring match and could also surface other
+        principals whose username happens to contain it.
         """
+        if self_access_only:
+            params = {"order_by": params.get("order_by"), "scope": self.PRINCIPAL_SCOPE}
+
         exclude_username = params.get("exclude_username")
         # exclude_username omits the public default groups, which can never gain members. V1's _filter_default_groups
         # also drops tenant-owned default groups; those stay listed here since V2 allows adding members to them.

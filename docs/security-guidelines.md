@@ -89,6 +89,7 @@ Rules:
 - Resource type allowlists are enforced. `RoleBindingKesselAccessPermission.ALLOWED_RESOURCE_TYPES` only allows `{"workspace", "tenant"}`. Unknown types are denied.
 - Tenant-level authorization uses `request.user.admin` (org-admin check), not Kessel. This is intentional for the current milestone.
 - Audit log v2 access uses `AuditLogV2KesselAccessPermission`, which checks the `rbac_audit_log_view` relation on the tenant resource. Unlike v1, there is no org-admin bypass — access is decided solely by Kessel. Org admins receive the relation through the platform admin default role binding.
+- Group V2 list access uses `GroupV2KesselAccessPermission`, which grants a narrow self-access exception: callers without `rbac_groups_read` can still list groups when the query is `scope=principal` or an exact (case-sensitive) match of `username` to their own username (V1 parity). The queryset is restricted to the requester's own memberships via `request.group_self_access_only`. Does not apply to retrieve/create/update/destroy/principals.
 
 ### System user access
 
