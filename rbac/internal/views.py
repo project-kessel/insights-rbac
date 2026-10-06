@@ -2787,9 +2787,14 @@ def verify_migration(request, org_id):
     groups_all_correct = True
     for group in Group.objects.filter(tenant=tenant).prefetch_related("principals")[:group_limit]:
         try:
-            relationships = [group.relationship_to_principal(p) for p in group.principals.all()]
+            principals = list(group.principals.all())
+            relationships = [group.relationship_to_principal(p) for p in principals]
             relationships = [r for r in relationships if r is not None]
             if not relationships:
+                if principals:
+                    group_results.append(
+                        {"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False}
+                    )
                 continue
             if dry_run:
                 validation = validate_generated_tuples(relationships)

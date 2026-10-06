@@ -6310,3 +6310,43 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         checks, unhealthy = get_pipeline_health_checks()
         self.assertFalse(checks["debezium_connector"]["healthy"])
         self.assertIn("debezium_connector", unhealthy)
+
+    @override_settings(KAFKA_CONNECT_URL=None)
+    @patch("internal.views.connection")
+    def test_get_pipeline_health_empty_pgoutput_slots(self, mock_connection):
+        """Test get_pipeline_health_checks when no pgoutput replication slots exist."""
+        from internal.views import get_pipeline_health_checks
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_connection.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        checks, unhealthy = get_pipeline_health_checks()
+
+        self.assertFalse(checks["replication_slots"]["configured"])
+        self.assertEqual(checks["replication_slots"]["slots"], [])
+        self.assertNotIn("replication_slots", unhealthy)
+        mock_cursor.execute.assert_called_once_with(
+            "SELECT slot_name, active FROM pg_replication_slots WHERE plugin = 'pgoutput'"
+        )
+
+    @override_settings(KAFKA_CONNECT_URL=None)
+    @patch("internal.views.connection")
+    def test_get_pipeline_health_all_pgoutput_slots_inactive(self, mock_connection):
+        """Test get_pipeline_health_checks when all pgoutput slots are inactive."""
+        from internal.views import get_pipeline_health_checks
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("debezium", False), ("another", False)]
+        mock_connection.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        checks, unhealthy = get_pipeline_health_checks()
+
+        self.assertTrue(checks["replication_slots"]["configured"])
+        self.assertFalse(checks["replication_slots"]["healthy"])
+        self.assertIn("replication_slots", unhealthy)
+        mock_cursor.execute.assert_called_once_with(
+            "SELECT slot_name, active FROM pg_replication_slots WHERE plugin = 'pgoutput'"
+        )
