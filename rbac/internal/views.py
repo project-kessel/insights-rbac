@@ -2681,7 +2681,7 @@ def verify_migration(request, org_id):
             tuples = InMemoryTuples()
             with transaction.atomic():
                 locked_role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
-                relations_dual_write_handler = RelationApiDualWriteHandler(
+                relations_dual_write_handler = InventoryApiDualWriteHandler(
                     role=locked_role,
                     event_type=ReplicationEventType.UPDATE_CUSTOM_ROLE,
                     tenant=locked_role.tenant,
@@ -2883,7 +2883,7 @@ def verify_migration(request, org_id):
 
             tuples = InMemoryTuples()
             with transaction.atomic():
-                car_dual_write_handler = RelationApiDualWriteCrossAccessHandler(
+                car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request=car,
                     event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
                     replicator=InMemoryRelationReplicator(tuples),

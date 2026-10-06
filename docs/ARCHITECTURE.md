@@ -83,7 +83,7 @@ management/
   audit_log/        # Audit logging
   authorization/    # Auth middleware and permission classes
   notifications/    # Platform notification integration
-  relation_replicator/  # Outbox-based replication to Kessel
+  inventory_replicator/ # Outbox-based replication to Kessel
   debezium/         # Debezium CDC outbox model
   tenant_mapping/   # Cross-service tenant resolution
   tenant_service/   # Tenant lifecycle (bootstrap, migration)
