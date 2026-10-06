@@ -27,6 +27,12 @@ from management.authorization.unable_meet_prerequisites import UnableMeetPrerequ
 from management.exceptions import InvalidFieldError, NotFoundError, RequiredFieldError
 from management.role.v2_exceptions import RolesNotFoundError
 from management.utils import api_path_prefix, v2response_error_from_errors
+from management.workspace.exceptions import (
+    WORKSPACE_NOT_EMPTY_CODE,
+    WORKSPACE_NOT_EMPTY_PROBLEM_TYPE,
+    WORKSPACE_NOT_EMPTY_TITLE,
+    WorkspaceNotEmptyError,
+)
 from rest_framework import status
 from rest_framework.views import Response, exception_handler
 
@@ -106,6 +112,20 @@ def custom_exception_handler_v2(exc, context):
             errors += _generate_errors_from_list(data, **{"status_code": str(response.status_code)})
         error_response = v2response_error_from_errors(errors=errors, exc=exc, context=context)
         response.data = error_response
+    elif isinstance(exc, WorkspaceNotEmptyError):
+        response = Response(
+            data=v2response_error_from_errors(
+                errors=[{"detail": str(exc), "status": str(status.HTTP_400_BAD_REQUEST)}],
+                exc=exc,
+                context=context,
+                problem_type=WORKSPACE_NOT_EMPTY_PROBLEM_TYPE,
+                title=WORKSPACE_NOT_EMPTY_TITLE,
+                code=WORKSPACE_NOT_EMPTY_CODE,
+                params={},
+            ),
+            content_type="application/problem+json",
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     elif isinstance(exc, IntegrityError):
         source_view = context.get("view")
         errors = [{"detail": str(exc), "source": f"{source_view.basename}", "status": "400"}]

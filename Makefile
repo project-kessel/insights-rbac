@@ -32,6 +32,8 @@ Please use `make <target>` where <target> is one of:
   lint                     run linting against the project
   format                   format linting errors found by lint task
   typecheck                run type check
+  i18n-catalog-update      regenerate the English error catalog from OpenAPI
+  i18n-catalog-validate    validate catalog contents and contract sync
 
 --- Commands using local services ---
   create-test-db-file      create a Postgres DB dump file for RBAC
@@ -394,4 +396,10 @@ docker-down:
 	@docker network ls --format '{{.Name}}' |grep -q  rbac-network > /dev/null 2>&1 && \docker network rm rbac-network > /dev/null 2>&1 || echo ""
 
 generate_v2_spec:
-	cd docs/source/specs/typespec/ && npm ci --silent && ./compile_tsp_spec
+	cd docs/source/specs/typespec/ && npm ci --silent && PATH="$$PWD/node_modules/.bin:$$PATH" ./compile_tsp_spec
+
+i18n-catalog-update: generate_v2_spec
+	bash scripts/i18n/frontend-i18n.sh convert --source docs/source/specs/v2/openapi.yaml --source-adapter openapi-problem-details --target-adapter icu-json --output i18n/en.json --locale en --target-role source
+
+i18n-catalog-validate: generate_v2_spec
+	bash scripts/i18n/frontend-i18n.sh validate-project --config .github/i18n/catalog-validation.json

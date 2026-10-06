@@ -3589,6 +3589,9 @@ components:
       required:
         - type
         - title
+        - detail
+        - code
+        - params
       properties:
         type:
           type: string
@@ -3598,6 +3601,16 @@ components:
           type: string
           enum:
             - Unable to delete due to workspace dependencies
+        detail:
+          type: string
+        code:
+          type: string
+          enum:
+            - insights-rbac.workspace.not-empty
+          x-i18n:
+            message: Unable to delete due to workspace dependencies
+        params:
+          $ref: '#/components/schemas/Problems.Workspace.WorkspaceNotEmptyParams'
       allOf:
         - type: object
           properties:
@@ -3614,6 +3627,8 @@ components:
             instance:
               type: string
               format: uri
+    Problems.Workspace.WorkspaceNotEmptyParams:
+      type: object
     ResourceType:
       type: string
       enum:

@@ -45,6 +45,12 @@ Rules:
 - `errors` array is included only when field-level errors exist.
 - `content_type` must be set to `application/problem+json` on the Response.
 
+## Contract-coded v2 errors
+
+Selected UI-visible v2 problems may add a stable `code` and raw typed `params`. Keep `detail` in English as the fallback for older clients, unknown codes, or unavailable catalogs. Define the code, `params` model, and English ICU message in `docs/source/specs/typespec/main.tsp`; annotate the `code` property with `x-i18n.message`. Generate OpenAPI and `i18n/en.json` with `make i18n-catalog-update`, then check contract/catalog sync with `make i18n-catalog-validate`. The `frontend-i18n` CLI must be on `PATH` or available from a built checkout named by `I18N_TOOLING_ROOT`. These fields are additive; do not change v1 error behavior or migrate unrelated Django `gettext` calls as part of this work.
+
+The UI owns localized presentation. The API sends the stable code and unformatted values in `params`; it does not select a locale or return translated error text.
+
 ## ProblemJSONRenderer
 
 Defined in `api/common/renderers.py`. A thin `JSONRenderer` subclass with `media_type = "application/problem+json"`. Added to `BaseV2ViewSet.renderer_classes` so v2 endpoints can accept `Accept: application/problem+json`.

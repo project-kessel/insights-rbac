@@ -1,0 +1,3 @@
+{
+  "insights-rbac.workspace.not-empty": "Unable to delete due to workspace dependencies"
+}

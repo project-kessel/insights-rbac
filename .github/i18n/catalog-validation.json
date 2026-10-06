@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "source": {
+        "path": "i18n/en.json",
+        "adapter": "icu-json",
+        "locale": "en"
+      },
+      "targets": []
+    }
+  ],
+  "generated": [
+    {
+      "path": "i18n/en.json",
+      "adapter": "icu-json",
+      "role": "source",
+      "locale": "en",
+      "command": "bash",
+      "args": [
+        "scripts/i18n/frontend-i18n.sh",
+        "convert",
+        "--source",
+        "docs/source/specs/v2/openapi.yaml",
+        "--source-adapter",
+        "openapi-problem-details",
+        "--target-adapter",
+        "icu-json",
+        "--output",
+        "{output}",
+        "--locale",
+        "en",
+        "--target-role",
+        "source"
+      ],
+      "updateCommand": "make i18n-catalog-update"
+    }
+  ],
+  "catalogDirectories": [
+    { "path": "i18n" }
+  ]
+}

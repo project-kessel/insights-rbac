@@ -1,6 +1,7 @@
 import "@typespec/http";
 import "@typespec/rest";
 import "@typespec/openapi3";
+import "@typespec/openapi";
 import "@typespec/versioning";
 
 using TypeSpec.Http;
@@ -312,9 +313,15 @@ namespace Problems {
     alias CommonProblems = Problem400 | Problem401 | Problem403 | Problem500;
 
     namespace Workspace {
+        model WorkspaceNotEmptyParams {}
+
         model Problem400WorkspaceNotEmpty extends Problems.ProblemDetails<Status = 400>{
             type: ProblemType.WorkspaceNotEmpty,
             title: "Unable to delete due to workspace dependencies",
+            detail: string;
+            @TypeSpec.OpenAPI.extension("x-i18n", #{ message: "Unable to delete due to workspace dependencies" })
+            code: "insights-rbac.workspace.not-empty";
+            params: WorkspaceNotEmptyParams;
         }
     }
 }

@@ -705,7 +705,9 @@ PROBLEM_TYPES = {
 }
 
 
-def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):
+def v2response_error_from_errors(
+    errors, exc=None, context=None, problem_type=None, title=None, code=None, params=None
+):
     """Build a ProblemDetails-formatted error response from errors.
 
     Args:
@@ -714,7 +716,9 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
         context: DRF context dict with "request" (optional).
         problem_type: Explicit RFC 9457 problem type URI override. When set, this
             takes precedence over the default status-code-based lookup in PROBLEM_TYPES.
-            Use for specialized problem types like "http://project-kessel.org/problems/already-exists".
+        title: Optional title override for a specialized problem type.
+        code: Optional stable, service-owned error code for client-side localization.
+        params: Optional raw typed values corresponding to the code's ICU message arguments.
     """
     detail = ""
     status_code = 0
@@ -735,9 +739,13 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
 
     response = {
         "status": status_code,
-        "title": PROBLEM_TITLES.get(status_code, "An error occurred."),
+        "title": title if title is not None else PROBLEM_TITLES.get(status_code, "An error occurred."),
         "detail": detail,
     }
+
+    if code is not None:
+        response["code"] = code
+        response["params"] = params if params is not None else {}
 
     if resolved_type:
         response["type"] = resolved_type

@@ -1660,6 +1660,11 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         detail = response.data.get("detail")
         self.assertEqual(detail, "Unable to delete due to workspace dependencies")
+        self.assertEqual(response.get("content-type"), "application/problem+json")
+        self.assertEqual(response.data.get("type"), "http://project-kessel.org/problems/workspace-not-empty")
+        self.assertEqual(response.data.get("title"), "Unable to delete due to workspace dependencies")
+        self.assertEqual(response.data.get("code"), "insights-rbac.workspace.not-empty")
+        self.assertEqual(response.data.get("params"), {})
 
     def test_delete_workspace_with_non_standard_types(self):
         """Test the non-standard (root, default, ungrouped-hosts) workspaces cannot be deleted."""

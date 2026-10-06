@@ -43,6 +43,7 @@ from management.role.relation_api_dual_write_handler import RelationApiDualWrite
 from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import TenantVersion, lock_tenant_version
 from management.v2_filters import v2_name_filter
+from management.workspace.exceptions import WorkspaceNotEmptyError
 from management.workspace.relation_api_dual_write_workspace_handler import RelationApiDualWriteWorkspaceHandler
 from migration_tool.sharedSystemRolesReplicatedRoleBindings import attribute_key_to_v2_related_resource_type
 from prometheus_client import Counter, Histogram
@@ -454,7 +455,7 @@ class WorkspaceService:
         if instance.type != Workspace.Types.STANDARD:
             raise serializers.ValidationError(f"Unable to delete {instance.type} workspace")
         if Workspace.objects.filter(parent=instance, tenant=instance.tenant).exists():
-            raise serializers.ValidationError("Unable to delete due to workspace dependencies")
+            raise WorkspaceNotEmptyError("Unable to delete due to workspace dependencies")
 
         # Update roles that reference this workspace before deleting it
         roles_updated_count = _update_custom_roles_for_removed_workspace(instance.id, replicator=self._replicator)
