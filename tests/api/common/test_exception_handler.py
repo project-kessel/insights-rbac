@@ -31,7 +31,12 @@ from management.exceptions import (
     RequiredFieldError,
 )
 from management.role.v2_exceptions import RolesNotFoundError
-from management.utils import STATUS_PROBLEM_TYPES, status_default_problem_title, v2response_error_from_errors
+from management.utils import (
+    ProblemType,
+    STATUS_PROBLEM_TYPES,
+    status_default_problem_title,
+    v2response_error_from_errors,
+)
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.views import Response
@@ -444,7 +449,7 @@ class V2ProblemDetailsTest(TestCase):
         """Test that explicit problem_type overrides the status-code default."""
         errors = [{"detail": "Duplicate name", "status": "400"}]
         context = self._mock_context()
-        override = "http://project-kessel.org/problems/already-exists"
+        override = ProblemType.ALREADY_EXISTS
 
         result = v2response_error_from_errors(errors, context=context, problem_type=override)
 

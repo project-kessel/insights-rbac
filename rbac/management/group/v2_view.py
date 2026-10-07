@@ -53,15 +53,13 @@ from management.principal.proxy import PrincipalProxy, external_principal_to_use
 from management.principal.unexpected_status_code_from_it import UnexpectedStatusCodeFromITError
 from management.principal.v2_serializer import PrincipalV2OutputSerializer
 from management.tenant_service import get_tenant_bootstrap_service
-from management.utils import v2response_error_from_errors
+from management.utils import ProblemType, v2response_error_from_errors
 from management.v2_mixins import AtomicOperationsMixin
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
-
-ALREADY_EXISTS_PROBLEM_TYPE = "http://project-kessel.org/problems/already-exists"
 
 
 def _catch_principal_errors(fn):
@@ -467,7 +465,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         )
 
     def _already_exists_response(self, exc):
-        return self._error_response(exc, status.HTTP_400_BAD_REQUEST, problem_type=ALREADY_EXISTS_PROBLEM_TYPE)
+        return self._error_response(exc, status.HTTP_400_BAD_REQUEST, problem_type=ProblemType.ALREADY_EXISTS)
 
     @staticmethod
     def _log_success(request, message, action, group):

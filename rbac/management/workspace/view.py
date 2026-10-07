@@ -29,7 +29,7 @@ from management.base_viewsets import BaseV2ViewSet
 from management.cache import WORKSPACE_CACHE
 from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
-from management.utils import v2response_error_from_errors, validate_and_get_key
+from management.utils import ProblemType, v2response_error_from_errors, validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
 from management.workspace.service import WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
@@ -283,7 +283,7 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                                 }
                             ],
                             exc=e,
-                            problem_type="http://project-kessel.org/problems/already-exists",
+                            problem_type=ProblemType.ALREADY_EXISTS,
                         ),
                         status=status.HTTP_400_BAD_REQUEST,
                     )

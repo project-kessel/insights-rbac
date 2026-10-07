@@ -813,6 +813,7 @@ class ProblemType(enum.StrEnum):
     NOT_FOUND = "http://project-kessel.org/problems/not-found"
     CONFLICT = "http://project-kessel.org/problems/conflict"
     INTERNAL_ERROR = "http://project-kessel.org/problems/internal-error"
+    ALREADY_EXISTS = "http://project-kessel.org/problems/already-exists"
 
 
 PROBLEM_TYPE_TITLES = {
@@ -852,7 +853,7 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
         context: DRF context dict with "request" (optional).
         problem_type: Explicit RFC 9457 problem type URI override. When set, this
             takes precedence over the default status-code-based lookup in PROBLEM_TYPES.
-            Use for specialized problem types like "http://project-kessel.org/problems/already-exists".
+            Use for specialized problem types like ALREADY_EXISTS.
     """
     detail = ""
     status_code = 0
