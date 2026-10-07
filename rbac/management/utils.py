@@ -823,6 +823,7 @@ PROBLEM_TYPE_TITLES = {
     ProblemType.NOT_FOUND: "Not found.",
     ProblemType.CONFLICT: "Conflict.",
     ProblemType.INTERNAL_ERROR: "Unexpected error occurred.",
+    ProblemType.ALREADY_EXISTS: "The resource already exists.",
 }
 
 DEFAULT_PROBLEM_TITLE = "An error occurred."
@@ -842,6 +843,44 @@ STATUS_PROBLEM_TYPES = {
 def status_default_problem_title(status_code: int) -> str:
     """Get the title for the default problem type for the provided status code."""
     return PROBLEM_TYPE_TITLES[STATUS_PROBLEM_TYPES[status_code]]
+
+
+def problem_response_body(
+    *,
+    status_code: int,
+    problem_type: Optional[str] = None,
+    detail: str,
+    instance: Optional[str] = None,
+    extra_data: Optional[dict] = None,
+):
+    """Create an RFC 9457-compliant response body."""
+    if not isinstance(status_code, int):
+        raise TypeError(f"Expected status_code to be an int, but got: {status_code!r}")
+
+    if problem_type is None:
+        # If we do not have a specific problem type for the status, we will leave problem_type as None and eventually
+        # omit it, which, per RFC 9457, means clients should just look at the status code.
+        problem_type = STATUS_PROBLEM_TYPES.get(status_code)
+
+    title = PROBLEM_TYPE_TITLES[problem_type] if problem_type is not None else DEFAULT_PROBLEM_TITLE
+
+    result = dict(extra_data) if extra_data is not None else {}
+
+    for key in ["status", "type", "title", "detail", "instance"]:
+        if key in result:
+            raise ValueError(f"Reserved key {key} in extra_data: {extra_data}")
+
+    result["status"] = status_code
+    result["title"] = title
+    result["detail"] = detail
+
+    if problem_type is not None:
+        result["type"] = problem_type
+
+    if instance is not None:
+        result["instance"] = instance
+
+    return result
 
 
 def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):
@@ -870,28 +909,17 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
                     field_error["field"] = error["source"]
                 field_errors.append(field_error)
 
-    resolved_type = problem_type or STATUS_PROBLEM_TYPES.get(status_code)
+    instance = (
+        context.get("request").path
+        if (context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"])
+        else None
+    )
 
-    response = {
-        "status": status_code,
-        "title": (
-            PROBLEM_TYPE_TITLES.get(resolved_type, DEFAULT_PROBLEM_TITLE)
-            if resolved_type is not None
-            else DEFAULT_PROBLEM_TITLE
-        ),
-        "detail": detail,
-    }
+    extra_data = {"errors": field_errors} if field_errors else None
 
-    if resolved_type:
-        response["type"] = resolved_type
-
-    if field_errors:
-        response["errors"] = field_errors
-
-    if context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"]:
-        response["instance"] = context.get("request").path
-
-    return response
+    return problem_response_body(
+        status_code=status_code, problem_type=problem_type, detail=detail, instance=instance, extra_data=extra_data
+    )
 
 
 def raise_validation_error(source, message):
