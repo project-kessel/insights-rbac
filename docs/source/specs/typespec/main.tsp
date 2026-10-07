@@ -277,7 +277,7 @@ namespace Problems {
     @error
     model Problem404 extends ProblemDetails<Status = 404>{
         type: ProblemType.NotFound,
-        title: "Resource was not found",
+        title: "Not found.",
         @example("Not found")
         detail: string
     }
@@ -316,7 +316,7 @@ namespace Problems {
     @error
     model Problem409 extends ProblemDetails<Status = 409>{
         type: ProblemType.Conflict,
-        title: "The request conflicts with the current state of the resource.",
+        title: "Conflict.",
         @example("Cannot delete group with active role bindings.")
         detail: string
     }

@@ -3511,7 +3511,7 @@ components:
         title:
           type: string
           enum:
-            - Resource was not found
+            - Not found.
         detail:
           type: string
           example: Not found
@@ -3545,7 +3545,7 @@ components:
         title:
           type: string
           enum:
-            - The request conflicts with the current state of the resource.
+            - Conflict.
         detail:
           type: string
           example: Cannot delete group with active role bindings.
