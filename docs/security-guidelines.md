@@ -31,6 +31,7 @@ Rules:
 - Token validation checks issuer, expiry, and optional scope claims against ITSSO JWKS.
 - The `user_id` from the token must exist in `SYSTEM_USERS` setting, or auth fails.
 - `allow_any_org` in the system user config controls whether the caller can set arbitrary org_id via headers. Token org_id and header org_id must match when `allow_any_org` is False.
+- **Organization ID claim precedence**: `validate_token_and_org_id()` reads the top-level `org_id` claim first (the shape produced by Red Hat SSO for user tokens), falling back to the nested `organization.id` claim. An empty top-level `org_id` (blank string) falls through to the nested claim. When neither claim is present, `None` is returned and the token is treated as untrusted (fails closed). The `_parse_claims()` path (used by `get_user_from_bearer_token` for S2S system users) reads only the nested `organization.id` claim.
 - `IT_BYPASS_TOKEN_VALIDATION` returns a mocked user. Never enable in production.
 
 ### 4. Internal API Auth
