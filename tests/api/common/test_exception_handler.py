@@ -360,7 +360,7 @@ class V2ProblemDetailsTest(TestCase):
         self.assertEqual(result["title"], PROBLEM_TITLES[404])
         self.assertEqual(result["type"], PROBLEM_TYPES[404])
 
-    def test_v2response_409_has_no_type(self):
+    def test_v2response_409_has_correct_title_and_type(self):
         """Test that 409 errors have correct title but no type (no URI defined for 409)."""
         errors = [{"detail": "Concurrent update conflict", "status": "409"}]
         context = self._mock_context()
@@ -368,7 +368,7 @@ class V2ProblemDetailsTest(TestCase):
         result = v2response_error_from_errors(errors, context=context)
 
         self.assertEqual(result["title"], PROBLEM_TITLES[409])
-        self.assertNotIn("type", result)
+        self.assertEqual(result["type"], PROBLEM_TYPES[409])
 
     def test_v2response_500_has_correct_title_and_type(self):
         """Test that 500 errors have the correct title and type."""

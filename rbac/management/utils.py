@@ -819,6 +819,7 @@ PROBLEM_TYPES = {
     401: "http://project-kessel.org/problems/unauthenticated",
     403: "http://project-kessel.org/problems/insufficient-permission",
     404: "http://project-kessel.org/problems/not-found",
+    409: "http://project-kessel.org/problems/conflict",
     500: "http://project-kessel.org/problems/internal-error",
 }
 
