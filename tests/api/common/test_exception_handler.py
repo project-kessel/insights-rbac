@@ -17,6 +17,7 @@
 """Test the API exception handler module."""
 
 import uuid
+from unittest.mock import Mock
 
 from django.db import IntegrityError
 from django.test import TestCase
@@ -30,14 +31,17 @@ from management.exceptions import (
     RequiredFieldError,
 )
 from management.role.v2_exceptions import RolesNotFoundError
+from management.utils import STATUS_PROBLEM_TYPES, status_default_problem_title, v2response_error_from_errors
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.views import Response
-from unittest.mock import Mock
 
-from api.common.exception_handler import custom_exception_handler, custom_exception_handler_v2
-from api.common.exception_handler import _generate_errors_from_dict, _generate_error_data_payload_response
-from management.utils import v2response_error_from_errors, PROBLEM_TITLES, PROBLEM_TYPES
+from api.common.exception_handler import (
+    _generate_error_data_payload_response,
+    _generate_errors_from_dict,
+    custom_exception_handler,
+    custom_exception_handler_v2,
+)
 
 
 class ExceptionHandlerTest(TestCase):
@@ -318,7 +322,7 @@ class V2ProblemDetailsTest(TestCase):
         self.assertIn("type", result)
         self.assertEqual(result["status"], 400)
         self.assertEqual(result["detail"], "Test error message")
-        self.assertEqual(result["type"], PROBLEM_TYPES[400])
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[400])
 
     def test_v2response_400_has_correct_title_and_type(self):
         """Test that 400 errors have the correct title and type."""
@@ -327,8 +331,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[400])
-        self.assertEqual(result["type"], PROBLEM_TYPES[400])
+        self.assertEqual(result["title"], status_default_problem_title(400))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[400])
 
     def test_v2response_401_has_correct_title_and_type(self):
         """Test that 401 errors have the correct title and type."""
@@ -337,8 +341,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[401])
-        self.assertEqual(result["type"], PROBLEM_TYPES[401])
+        self.assertEqual(result["title"], status_default_problem_title(401))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[401])
 
     def test_v2response_403_has_correct_title_and_type(self):
         """Test that 403 errors have the correct title and type."""
@@ -347,8 +351,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[403])
-        self.assertEqual(result["type"], PROBLEM_TYPES[403])
+        self.assertEqual(result["title"], status_default_problem_title(403))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[403])
 
     def test_v2response_404_has_correct_title_and_type(self):
         """Test that 404 errors have the correct title and type."""
@@ -357,8 +361,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[404])
-        self.assertEqual(result["type"], PROBLEM_TYPES[404])
+        self.assertEqual(result["title"], status_default_problem_title(404))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[404])
 
     def test_v2response_409_has_correct_title_and_type(self):
         """Test that 409 errors have correct title but no type (no URI defined for 409)."""
@@ -367,8 +371,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[409])
-        self.assertEqual(result["type"], PROBLEM_TYPES[409])
+        self.assertEqual(result["title"], status_default_problem_title(409))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[409])
 
     def test_v2response_500_has_correct_title_and_type(self):
         """Test that 500 errors have the correct title and type."""
@@ -377,8 +381,8 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], PROBLEM_TITLES[500])
-        self.assertEqual(result["type"], PROBLEM_TYPES[500])
+        self.assertEqual(result["title"], status_default_problem_title(500))
+        self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[500])
 
     def test_v2response_unknown_status_has_fallback_title_and_no_type(self):
         """Test that unknown status codes get a fallback title and no type."""
@@ -478,8 +482,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 400,
-                "title": PROBLEM_TITLES[400],
-                "type": PROBLEM_TYPES[400],
+                "title": status_default_problem_title(400),
+                "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "This field is required.",
                 "errors": [{"message": "This field is required.", "field": "name"}],
                 "instance": self.PATH,
@@ -501,8 +505,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 400,
-                "title": PROBLEM_TITLES[400],
-                "type": PROBLEM_TYPES[400],
+                "title": status_default_problem_title(400),
+                "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "Error one.",
                 "errors": [{"message": "Error one."}, {"message": "Error two."}],
                 "instance": self.PATH,
@@ -528,8 +532,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 400,
-                "title": PROBLEM_TITLES[400],
-                "type": PROBLEM_TYPES[400],
+                "title": status_default_problem_title(400),
+                "type": STATUS_PROBLEM_TYPES[400],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "role-bindings"}],
                 "instance": self.PATH,
@@ -550,8 +554,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 401,
-                "title": PROBLEM_TITLES[401],
-                "type": PROBLEM_TYPES[401],
+                "title": status_default_problem_title(401),
+                "type": STATUS_PROBLEM_TYPES[401],
                 "detail": "Invalid token provided.",
                 "errors": [{"message": "Invalid token provided."}],
             },
@@ -572,8 +576,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 401,
-                "title": PROBLEM_TITLES[401],
-                "type": PROBLEM_TYPES[401],
+                "title": status_default_problem_title(401),
+                "type": STATUS_PROBLEM_TYPES[401],
                 "detail": detail,
                 "errors": [{"message": detail}],
             },
@@ -593,8 +597,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 500,
-                "title": PROBLEM_TITLES[500],
-                "type": PROBLEM_TYPES[500],
+                "title": status_default_problem_title(500),
+                "type": STATUS_PROBLEM_TYPES[500],
                 "detail": "Unable to validate the provided token.",
                 "errors": [{"message": "Unable to validate the provided token."}],
             },
@@ -630,8 +634,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 404,
-                "title": PROBLEM_TITLES[404],
-                "type": PROBLEM_TYPES[404],
+                "title": status_default_problem_title(404),
+                "type": STATUS_PROBLEM_TYPES[404],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "detail"}],
                 "instance": self.PATH,
@@ -654,8 +658,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 404,
-                "title": PROBLEM_TITLES[404],
-                "type": PROBLEM_TYPES[404],
+                "title": status_default_problem_title(404),
+                "type": STATUS_PROBLEM_TYPES[404],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "detail"}],
                 "instance": self.PATH,
@@ -678,8 +682,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 400,
-                "title": PROBLEM_TITLES[400],
-                "type": PROBLEM_TYPES[400],
+                "title": status_default_problem_title(400),
+                "type": STATUS_PROBLEM_TYPES[400],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "roles"}],
                 "instance": self.PATH,
@@ -701,8 +705,8 @@ class V2ExceptionHandlerTests(TestCase):
             response.data,
             {
                 "status": 400,
-                "title": PROBLEM_TITLES[400],
-                "type": PROBLEM_TYPES[400],
+                "title": status_default_problem_title(400),
+                "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "resource_type is required",
                 "errors": [{"message": "resource_type is required", "field": "resource_type"}],
                 "instance": self.PATH,

@@ -16,6 +16,7 @@
 #
 """Helper utilities for management module."""
 
+import enum
 import hmac
 import logging
 import os
@@ -803,25 +804,43 @@ def api_path_prefix():
     return path_prefix
 
 
-PROBLEM_TITLES = {
-    400: "The request payload contains invalid syntax.",
-    401: "Authentication credentials were not provided or are invalid.",
-    403: "You do not have permission to perform this action.",
-    404: "Not found.",
-    409: "Conflict.",
-    500: "Unexpected error occurred.",
+class ProblemType(enum.StrEnum):
+    """Enum of known Kessel problem types."""
+
+    INVALID_REQUEST = "http://project-kessel.org/problems/invalid-request"
+    UNAUTHENTICATED = "http://project-kessel.org/problems/unauthenticated"
+    INSUFFICIENT_PERMISSION = "http://project-kessel.org/problems/insufficient-permission"
+    NOT_FOUND = "http://project-kessel.org/problems/not-found"
+    CONFLICT = "http://project-kessel.org/problems/conflict"
+    INTERNAL_ERROR = "http://project-kessel.org/problems/internal-error"
+
+
+PROBLEM_TYPE_TITLES = {
+    ProblemType.INVALID_REQUEST: "The request payload contains invalid syntax.",
+    ProblemType.UNAUTHENTICATED: "Authentication credentials were not provided or are invalid.",
+    ProblemType.INSUFFICIENT_PERMISSION: "You do not have permission to perform this action.",
+    ProblemType.NOT_FOUND: "Not found.",
+    ProblemType.CONFLICT: "Conflict.",
+    ProblemType.INTERNAL_ERROR: "Unexpected error occurred.",
 }
+
+DEFAULT_PROBLEM_TITLE = "An error occurred."
 
 # RFC 9457 problem type URIs matching the TypeSpec ProblemType enum.
 # Each URI identifies a specific problem category for machine-readable error handling.
-PROBLEM_TYPES = {
-    400: "http://project-kessel.org/problems/invalid-request",
-    401: "http://project-kessel.org/problems/unauthenticated",
-    403: "http://project-kessel.org/problems/insufficient-permission",
-    404: "http://project-kessel.org/problems/not-found",
-    409: "http://project-kessel.org/problems/conflict",
-    500: "http://project-kessel.org/problems/internal-error",
+STATUS_PROBLEM_TYPES = {
+    400: ProblemType.INVALID_REQUEST,
+    401: ProblemType.UNAUTHENTICATED,
+    403: ProblemType.INSUFFICIENT_PERMISSION,
+    404: ProblemType.NOT_FOUND,
+    409: ProblemType.CONFLICT,
+    500: ProblemType.INTERNAL_ERROR,
 }
+
+
+def status_default_problem_title(status_code: int) -> str:
+    """Get the title for the default problem type for the provided status code."""
+    return PROBLEM_TYPE_TITLES[STATUS_PROBLEM_TYPES[status_code]]
 
 
 def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):
@@ -850,11 +869,15 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
                     field_error["field"] = error["source"]
                 field_errors.append(field_error)
 
-    resolved_type = problem_type or PROBLEM_TYPES.get(status_code)
+    resolved_type = problem_type or STATUS_PROBLEM_TYPES.get(status_code)
 
     response = {
         "status": status_code,
-        "title": PROBLEM_TITLES.get(status_code, "An error occurred."),
+        "title": (
+            PROBLEM_TYPE_TITLES.get(resolved_type, DEFAULT_PROBLEM_TITLE)
+            if resolved_type is not None
+            else DEFAULT_PROBLEM_TITLE
+        ),
         "detail": detail,
     }
 
