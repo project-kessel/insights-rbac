@@ -50,6 +50,7 @@ from requests.adapters import HTTPAdapter
 from rest_framework import serializers
 from rest_framework.fields import UUIDField
 from rest_framework.request import Request
+from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
 
 from api.common import RH_RBAC_ACCOUNT, RH_RBAC_CLIENT_ID, RH_RBAC_ORG_ID, RH_RBAC_PSK
@@ -845,8 +846,8 @@ def status_default_problem_title(status_code: int) -> str:
 
 
 def problem_response_body(
-    *,
     status_code: int,
+    *,
     problem_type: Optional[str] = None,
     detail: str,
     instance: Optional[str] = None,
@@ -855,6 +856,9 @@ def problem_response_body(
     """Create an RFC 9457-compliant response body."""
     if not isinstance(status_code, int):
         raise TypeError(f"Expected status_code to be an int, but got: {status_code!r}")
+
+    if not (400 <= status_code < 600):
+        raise ValueError(f"Invalid status code: {status_code}")
 
     if problem_type is None:
         # If we do not have a specific problem type for the status, we will leave problem_type as None and eventually
@@ -880,6 +884,19 @@ def problem_response_body(
         result["instance"] = instance
 
     return result
+
+
+def problem_response(status_code: int, **kwargs):
+    """
+    Return a full Response object with an RFC 9457-compliant body.
+
+    See problem_response_body for full arguments.
+    """
+    return Response(
+        status=status_code,
+        content_type="application/problem+json",
+        data=problem_response_body(status_code=status_code, **kwargs),
+    )
 
 
 def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):

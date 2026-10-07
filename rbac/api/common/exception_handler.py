@@ -18,6 +18,7 @@
 """Common exception handler class."""
 
 import copy
+from typing import Optional
 
 from django.db import IntegrityError
 from django.http import Http404
@@ -31,7 +32,7 @@ from management.exceptions import (
     RequiredFieldError,
 )
 from management.role.v2_exceptions import RolesNotFoundError
-from management.utils import api_path_prefix, v2response_error_from_errors
+from management.utils import api_path_prefix, problem_response, v2response_error_from_errors
 from rest_framework import status
 from rest_framework.views import Response, exception_handler
 
@@ -96,57 +97,90 @@ def _generate_error_data_payload_response(detail: str, context, http_status_code
     return data
 
 
+def _single_problem_response_for_context(
+    *,
+    status_code: int,
+    detail: str,
+    context,
+    source: Optional[str] = None,
+    with_instance: bool = False,
+):
+    instance = (
+        context.get("request").path
+        if (
+            with_instance
+            and context
+            and context.get("request")
+            and context.get("request").method in ["PUT", "PATCH", "DELETE"]
+        )
+        else None
+    )
+
+    error = {"message": detail}
+
+    if source is None:
+        # Some exceptions might be raised from places that are not views.
+        view = context.get("view")
+        source = getattr(view, "basename", None) if view else None
+
+    if source is not None:
+        if not isinstance(source, str):
+            raise TypeError(f"Expected view basename to be str or None, but got: {source!r}")
+
+        error["field"] = source
+
+    return problem_response(
+        status_code=status_code,
+        detail=detail,
+        instance=instance,
+        extra_data={"errors": [error]},
+    )
+
+
+def _v1_response_to_v2(response: Response, context: dict) -> Response:
+    response.content_type = "application/problem+json"
+    errors = []
+    data = copy.deepcopy(response.data)
+    if isinstance(data, dict):
+        errors += _generate_errors_from_dict(data, **{"status_code": str(response.status_code)})
+    elif isinstance(data, list):
+        errors += _generate_errors_from_list(data, **{"status_code": str(response.status_code)})
+    response.data = v2response_error_from_errors(errors=errors, context=context)
+
+    return response
+
+
 def custom_exception_handler_v2(exc, context):
     """Create custom response for v2 exceptions."""
-    response = exception_handler(exc, context)
+    v1_initial_response = exception_handler(exc, context)
 
     # Now add the HTTP status code to the response.
-    if response is not None:
-        response.content_type = "application/problem+json"
-        errors = []
-        data = copy.deepcopy(response.data)
-        if isinstance(data, dict):
-            errors += _generate_errors_from_dict(data, **{"status_code": str(response.status_code)})
-        elif isinstance(data, list):
-            errors += _generate_errors_from_list(data, **{"status_code": str(response.status_code)})
-        error_response = v2response_error_from_errors(errors=errors, exc=exc, context=context)
-        response.data = error_response
+    if v1_initial_response is not None:
+        return _v1_response_to_v2(v1_initial_response, context)
     elif isinstance(exc, IntegrityError):
-        source_view = context.get("view")
-        errors = [{"detail": str(exc), "source": f"{source_view.basename}", "status": "400"}]
-        response = Response(
-            data=v2response_error_from_errors(errors=errors, exc=exc, context=context),
-            content_type="application/problem+json",
-            status=status.HTTP_400_BAD_REQUEST,
+        return _single_problem_response_for_context(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            context=context,
+            with_instance=True,
         )
     elif isinstance(exc, InvalidTokenError):
-        response = Response(
-            data=_v2_generate_error_data_payload_response(
-                detail="Invalid token provided.", context=context, http_status_code=status.HTTP_401_UNAUTHORIZED
-            ),
-            content_type="application/json",
-            status=status.HTTP_401_UNAUTHORIZED,
+        return _single_problem_response_for_context(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token provided.",
+            context=context,
         )
     elif isinstance(exc, MissingAuthorizationError):
-        response = Response(
-            data=_v2_generate_error_data_payload_response(
-                detail="A Bearer token in an authorization header is required when performing service account"
-                " operations.",
-                context=context,
-                http_status_code=status.HTTP_401_UNAUTHORIZED,
-            ),
-            content_type="application/json",
-            status=status.HTTP_401_UNAUTHORIZED,
+        return _single_problem_response_for_context(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A Bearer token in an authorization header is required when performing service account operations.",
+            context=context,
         )
     elif isinstance(exc, UnableMeetPrerequisitesError):
-        response = Response(
-            data=_v2_generate_error_data_payload_response(
-                detail="Unable to validate the provided token.",
-                context=context,
-                http_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            ),
-            content_type="application/json",
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        return _single_problem_response_for_context(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to validate the provided token.",
+            context=context,
         )
     elif isinstance(exc, InventoryAuthUnavailableError):
         response = Response(
@@ -161,27 +195,21 @@ def custom_exception_handler_v2(exc, context):
         response["Retry-After"] = "1"
     elif isinstance(exc, RolesNotFoundError):
         # Convert RolesNotFoundError to Http404 and let standard handler process it
-        response = exception_handler(Http404(str(exc)), context)
-        if response is not None:
-            response.content_type = "application/problem+json"
-            errors = _generate_errors_from_dict(response.data, **{"status_code": str(response.status_code)})
-            response.data = v2response_error_from_errors(errors=errors, exc=exc, context=context)
+        v1_response = exception_handler(Http404(str(exc)), context)
+        return _v1_response_to_v2(v1_response, context)
     elif isinstance(exc, NotFoundError):
-        response = exception_handler(Http404(str(exc)), context)
-        if response is not None:
-            response.content_type = "application/problem+json"
-            errors = _generate_errors_from_dict(response.data, **{"status_code": str(response.status_code)})
-            response.data = v2response_error_from_errors(errors=errors, exc=exc, context=context)
+        v1_response = exception_handler(Http404(str(exc)), context)
+        return _v1_response_to_v2(v1_response, context)
     elif isinstance(exc, (InvalidFieldError, RequiredFieldError)):
-        field = getattr(exc, "field", None) or getattr(exc, "field_name", None)
-        errors = [{"detail": str(exc), "source": field, "status": "400"}]
-        response = Response(
-            data=v2response_error_from_errors(errors=errors, exc=exc, context=context),
-            content_type="application/problem+json",
-            status=status.HTTP_400_BAD_REQUEST,
+        return _single_problem_response_for_context(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            context=context,
+            source=getattr(exc, "field", None) or getattr(exc, "field_name", None),
+            with_instance=True,
         )
 
-    return response
+    return None
 
 
 def exception_version_handler(exc, context):
