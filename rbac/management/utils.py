@@ -25,6 +25,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import ClassVar, Optional, TypedDict
 from urllib.parse import urlparse
 from uuid import UUID
@@ -826,8 +827,6 @@ PROBLEM_TYPE_TITLES = {
     ProblemType.ALREADY_EXISTS: "The resource already exists.",
 }
 
-DEFAULT_PROBLEM_TITLE = "An error occurred."
-
 # RFC 9457 problem type URIs matching the TypeSpec ProblemType enum.
 # Each URI identifies a specific problem category for machine-readable error handling.
 STATUS_PROBLEM_TYPES = {
@@ -862,7 +861,7 @@ def problem_response_body(
         # omit it, which, per RFC 9457, means clients should just look at the status code.
         problem_type = STATUS_PROBLEM_TYPES.get(status_code)
 
-    title = PROBLEM_TYPE_TITLES[problem_type] if problem_type is not None else DEFAULT_PROBLEM_TITLE
+    title = PROBLEM_TYPE_TITLES[problem_type] if problem_type is not None else HTTPStatus(status_code).phrase
 
     result = dict(extra_data) if extra_data is not None else {}
 

@@ -396,7 +396,7 @@ class V2ProblemDetailsTest(TestCase):
 
         result = v2response_error_from_errors(errors, context=context)
 
-        self.assertEqual(result["title"], "An error occurred.")
+        self.assertEqual(result["title"], "I'm a Teapot")
         self.assertNotIn("type", result)
 
     def test_v2response_includes_instance_for_put(self):
