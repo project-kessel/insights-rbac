@@ -2200,10 +2200,10 @@ parameters:
   value: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
 - name: POSTGRES_EXPORTER_CPU_REQUEST
   description: Postgres exporter CPU request
-  value: 1m
+  value: 10m
 - name: POSTGRES_EXPORTER_MEMORY_REQUEST
   description: Postgres exporter memory request
-  value: 16Mi
+  value: 32Mi
 - name: POSTGRES_EXPORTER_CPU_LIMIT
   description: Postgres exporter CPU limit
   value: 100m
