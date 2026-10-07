@@ -872,3 +872,27 @@ class TokenValidatorTests(IdentityRequest):
             (token, "org1"),
             self.token_validator.validate_token_and_org_id(request=request, additional_scopes_to_validate=set()),
         )
+
+    def test_validate_token_and_org_id_claim_precedence(self) -> None:
+        """Test that the top-level "org_id" claim takes precedence over the nested "organization.id" claim."""
+        issuer = InMemoryIssuer.generate()
+        self.token_validator.set_jwks_source(issuer, issuer.iss)
+
+        request_factory = RequestFactory()
+
+        for description, org_claims, expected_org_id in [
+            ("top-level org_id only, the real SSO user token shape", {"org_id": "org1"}, "org1"),
+            ("both claims present, top-level wins", {"org_id": "org1", "organization": {"id": "org2"}}, "org1"),
+            ("blank org_id falls back to the nested claim", {"org_id": "", "organization": {"id": "org2"}}, "org2"),
+            ("neither claim present", {}, None),
+        ]:
+            with self.subTest(description=description):
+                token = issuer.issue_jwt({}, {"sub": "u1", "preferred_username": "user1", **org_claims})
+                request = request_factory.get("/", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+                self.assertEqual(
+                    (token, expected_org_id),
+                    self.token_validator.validate_token_and_org_id(
+                        request=request, additional_scopes_to_validate=set()
+                    ),
+                )

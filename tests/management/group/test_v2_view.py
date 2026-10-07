@@ -49,6 +49,7 @@ from management.role_binding.model import RoleBinding, RoleBindingGroup
 from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_opted_in, set_v2_opt_in_state
 from rbac import urls
 from tests.identity_request import IdentityRequest
+from tests.logging_util import enable_logging
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 from api.common import RH_IDENTITY_HEADER
@@ -1684,14 +1685,32 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.mock_it.assert_called_once_with(bearer_token="bearer-token", client_ids=["xyz"])
 
     def test_add_service_account_token_org_mismatch_not_found(self):
-        """A bearer token scoped to a different org than the tenant is rejected like an unknown client ID."""
+        """A bearer token not scoped to the tenant's org is rejected like an unknown client ID."""
+        for description, token_org_id in [
+            ("a different org", "some-other-org"),
+            ("no org claim at all, which fails closed", None),
+        ]:
+            with self.subTest(description=description):
+                self.mock_validate_token.return_value = ("bearer-token", token_org_id)
+
+                response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+                self.assertFalse(self.group_b.principals.filter(pk=self.service_account_2.pk).exists())
+                self.mock_it.assert_not_called()
+
+    def test_add_service_account_token_org_mismatch_logs_warning(self):
+        """The org mismatch that triggers the 404 is logged with both org IDs, and never with the token."""
         self.mock_validate_token.return_value = ("bearer-token", "some-other-org")
 
-        response = self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
+        with enable_logging(), self.assertLogs("management.group.v2_view", level="WARNING") as logs:
+            self._add(self.group_b.uuid, {"service_accounts": ["xyz"]})
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertFalse(self.group_b.principals.filter(pk=self.service_account_2.pk).exists())
-        self.mock_it.assert_not_called()
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn(f"tenant_org_id={self.tenant.org_id}", logs.output[0])
+        self.assertIn("token_org_id=some-other-org", logs.output[0])
+        self.assertNotIn("bearer-token", logs.output[0])
+        self.assertNotIn("xyz", logs.output[0])
 
     def test_add_duplicate_service_accounts_validated_once(self):
         """Duplicate client IDs are deduplicated before the single IT call."""

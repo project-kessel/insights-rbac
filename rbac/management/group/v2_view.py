@@ -329,10 +329,18 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         # A bearer token scoped to a different organization than the tenant resolved from the identity
         # header must not be used to look up or create service-account principals in this tenant. Report
         # it the same way as an unknown client ID, to avoid leaking why validation failed. A missing
-        # "organization.id" claim on a real, validated token is treated as untrusted (fails closed) rather
-        # than skipped -- the "id is None means skip" behavior is reserved strictly for the
+        # organization ID claim on a real, validated token is treated as untrusted (fails closed) rather
+        # than skipped -- the "org ID is None means skip" behavior is reserved strictly for the
         # IT_BYPASS_TOKEN_VALIDATION path, which returns the None sentinel without validating anything.
+        # The response hides the reason, so log it (without the token or the client IDs) to keep the
+        # failure diagnosable.
         if not settings.IT_BYPASS_TOKEN_VALIDATION and token_org_id != request.tenant.org_id:
+            logger.warning(
+                "Rejecting service account validation: bearer token organization does not match the tenant"
+                " resolved from the identity header. tenant_org_id=%s token_org_id=%s",
+                request.tenant.org_id,
+                token_org_id,
+            )
             return None, set(client_ids)
 
         # Development and testing environments may skip IT, in which case the local backfill still runs.
