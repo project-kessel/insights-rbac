@@ -113,6 +113,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             input_serializer.validated_data,
             requester_username=request.user.username,
             is_org_admin=bool(request.user.admin),
+            self_access_only=getattr(request, "group_self_access_only", False),
         )
 
         page = self.paginate_queryset(queryset)
