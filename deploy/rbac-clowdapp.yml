@@ -1010,19 +1010,19 @@ objects:
             secretKeyRef:
               key: db.host
               name: db-clone
-              optional: false
+              optional: true
         - name: DATABASE_PORT
           valueFrom:
             secretKeyRef:
               key: db.port
               name: db-clone
-              optional: false
+              optional: true
         - name: DATABASE_NAME
           valueFrom:
             secretKeyRef:
               key: db.name
               name: db-clone
-              optional: false
+              optional: true
         - name: DATA_SOURCE_URI
           value: "$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)?sslmode=${POSTGRES_EXPORTER_SSLMODE}"
         - name: DATA_SOURCE_USER
@@ -1030,13 +1030,13 @@ objects:
             secretKeyRef:
               key: db.user
               name: db-clone
-              optional: false
+              optional: true
         - name: DATA_SOURCE_PASS
           valueFrom:
             secretKeyRef:
               key: db.password
               name: db-clone
-              optional: false
+              optional: true
         volumes:
         - name: postgres-exporter-queries
           configMap:
