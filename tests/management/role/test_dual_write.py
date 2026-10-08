@@ -16,8 +16,6 @@
 #
 """Test tuple changes for RBAC operations."""
 
-import logging
-from contextlib import contextmanager
 from datetime import timedelta
 from typing import Callable, Iterable, Optional, Tuple
 from unittest.mock import patch
@@ -76,6 +74,7 @@ from migration_tool.in_memory_tuples import (
 )
 from migration_tool.models import V2boundresource
 from migration_tool.utils import create_relationship
+from tests.logging_util import enable_logging
 from tests.util import assert_v1_v2_locally_consistent, assert_v1_v2_tuples_fully_consistent
 from tests.v2_util import bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
 
@@ -85,21 +84,6 @@ from api.cross_access.inventory_api_dual_write_cross_access_handler import (
 )
 from api.cross_access.util import create_cross_principal
 from api.models import Tenant, User
-
-
-@contextmanager
-def enable_logging():
-    """Re-enable logging temporarily for assertLogs in parallel test runner.
-
-    Django's parallel test runner disables low-level logs via logging.disable().
-    This context manager restores logging within its scope and resets afterward.
-    """
-    prior_disable = logging.root.manager.disable
-    logging.disable(logging.NOTSET)
-    try:
-        yield
-    finally:
-        logging.disable(prior_disable)
 
 
 @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
