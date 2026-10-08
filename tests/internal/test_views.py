@@ -6121,7 +6121,10 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
 
     @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
     def test_verify_migration_dry_run_with_role(self, mock_pipeline):
-        """Test dry_run validates generated tuples for a custom role."""
+        """Test dry_run validates generated tuples for a custom role and leaves DB unchanged."""
+        from management.role.v2_model import RoleV2
+        from management.role_binding.model import RoleBinding
+
         custom_role = Role.objects.create(
             name="Test Custom Role",
             description="A test role.",
@@ -6144,6 +6147,13 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
             tenant=self.tenant,
         )
 
+        # Capture DB state before the request to verify read-only guarantee
+        before = (
+            BindingMapping.objects.count(),
+            RoleV2.objects.count(),
+            RoleBinding.objects.count(),
+        )
+
         response = self.client.get(self._url(self.tenant.org_id, dry_run="true"), **self.request.META)
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -6154,7 +6164,13 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         matches = [r for r in roles_check["roles_checked"] if r["role_uuid"] == str(custom_role.uuid)]
         self.assertEqual(len(matches), 1)
         self.assertFalse(matches[0]["checked"])
+        self.assertIn("tuples_generated", matches[0])
         self.assertIn("validation", matches[0])
+        # Verify DB state unchanged (read-only endpoint)
+        self.assertEqual(
+            before,
+            (BindingMapping.objects.count(), RoleV2.objects.count(), RoleBinding.objects.count()),
+        )
 
     @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
     @patch(
@@ -6406,9 +6422,7 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         """Test group_principals reports verified=False and section fails when principals produce no relationships."""
         group = Group.objects.create(name="gp-zero-rel-group", tenant=self.tenant)
         # Principal without user_id → relationship_to_principal returns None → no relationships
-        principal = Principal.objects.create(
-            username="gp-no-userid", tenant=self.tenant, user_id=None
-        )
+        principal = Principal.objects.create(username="gp-no-userid", tenant=self.tenant, user_id=None)
         group.principals.add(principal)
 
         response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
@@ -6428,21 +6442,26 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
     def test_verify_migration_role_permissions_with_data(self, mock_perm_checker, mock_pipeline):
         """Test role_permissions section exercises per-item logic with real CustomRoleV2 data."""
         from management.role.v2_model import CustomRoleV2
+        from management.role_binding.model import RoleBinding
 
         # Create a V1 role as v1_source for the CustomRoleV2
-        v1_role = Role.objects.create(
-            name="RP Test V1 Role", system=False, tenant=self.tenant
-        )
+        v1_role = Role.objects.create(name="RP Test V1 Role", system=False, tenant=self.tenant)
         v2_role = CustomRoleV2.objects.create(
             name="RP Test Custom Role",
             tenant=self.tenant,
             type="custom",
             v1_source=v1_role,
         )
-        permission = Permission.objects.create(
-            permission="test:rp:read", tenant=self.tenant
-        )
+        permission = Permission.objects.create(permission="test:rp:read", tenant=self.tenant)
         v2_role.permissions.add(permission)
+
+        # Capture DB state before the request to verify read-only guarantee
+        before = (
+            BindingMapping.objects.count(),
+            CustomRoleV2.objects.count(),
+            RoleBinding.objects.count(),
+        )
+        v1_role_version = v1_role.version
 
         response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
         self.assertEqual(response.status_code, 200)
@@ -6453,6 +6472,13 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         self.assertTrue(matches[0]["correct"])
         self.assertEqual(matches[0]["v1_role_uuid"], str(v1_role.uuid))
         mock_perm_checker.assert_called()
+        # Verify DB state unchanged (read-only endpoint)
+        self.assertEqual(
+            before,
+            (BindingMapping.objects.count(), CustomRoleV2.objects.count(), RoleBinding.objects.count()),
+        )
+        v1_role.refresh_from_db()
+        self.assertEqual(v1_role.version, v1_role_version)
 
     @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
     @patch("internal.views.CrossAccountRequestChecker.check_cross_account_request", return_value=True)
@@ -6461,22 +6487,27 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         self, mock_car_handler_cls, mock_car_checker, mock_pipeline
     ):
         """Test cross_account_requests section exercises per-item logic with real CAR data."""
+        from management.role.v2_model import RoleV2
+        from management.role_binding.model import RoleBinding
         from migration_tool.in_memory_tuples import InMemoryTuples
 
-        role = Role.objects.create(
-            name="CAR Test Role", system=True, tenant=self.tenant
-        )
-        permission = Permission.objects.create(
-            permission="test:car:read", tenant=self.tenant
-        )
+        role = Role.objects.create(name="CAR Test Role", system=True, tenant=self.tenant)
+        permission = Permission.objects.create(permission="test:car:read", tenant=self.tenant)
         Access.objects.create(role=role, permission=permission, tenant=self.tenant)
         car = CrossAccountRequest.objects.create(
             target_org=self.tenant.org_id,
-            user_id="car-test-user-123",
+            user_id="car-test-usr",
             end_date=timezone.now() + timedelta(days=10),
             status="approved",
         )
         car.roles.add(role)
+
+        # Capture DB state before the request to verify read-only guarantee
+        before = (
+            BindingMapping.objects.count(),
+            RoleV2.objects.count(),
+            RoleBinding.objects.count(),
+        )
 
         # Mock the dual-write handler to produce a fake tuple so len(tuples) > 0
         mock_handler_instance = MagicMock()
@@ -6510,3 +6541,8 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         self.assertEqual(len(matches), 1)
         self.assertTrue(matches[0]["correct"])
         mock_car_checker.assert_called()
+        # Verify DB state unchanged (read-only endpoint)
+        self.assertEqual(
+            before,
+            (BindingMapping.objects.count(), RoleV2.objects.count(), RoleBinding.objects.count()),
+        )
