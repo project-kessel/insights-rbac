@@ -634,6 +634,8 @@ objects:
             value: ${NOTIFICATIONS_RH_ENABLED}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
+          - name: KAFKA_CONNECT_URL
+            value: ${KAFKA_CONNECT_URL}
           - name: DR_RELATIONS_RECONCILE_ENABLED
             value: ${DR_RELATIONS_RECONCILE_ENABLED}
           - name: DR_WORKSPACE_RECONCILE_ENABLED
@@ -1907,6 +1909,9 @@ parameters:
 - description: Enable kafka
   name: KAFKA_ENABLED
   value: 'False'
+- description: Kafka Connect REST API base URL for Debezium health check in verify_migration pipeline_health section
+  name: KAFKA_CONNECT_URL
+  value: ''
 - description: Enable disaster recovery reconciliation endpoint and Celery task
   name: DR_RELATIONS_RECONCILE_ENABLED
   value: 'False'

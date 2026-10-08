@@ -2725,6 +2725,7 @@ def verify_migration(request, org_id):
                         "verified": False,
                     }
                 )
+                roles_all_correct = False
                 continue
 
             serialized_relations = [json_format.MessageToDict(rel.as_message()) for rel in tuples]
@@ -2793,6 +2794,7 @@ def verify_migration(request, org_id):
             if not relationships:
                 if principals:
                     group_results.append({"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False})
+                    groups_all_correct = False
                 continue
             if dry_run:
                 validation = validate_generated_tuples(relationships)
@@ -2915,6 +2917,7 @@ def verify_migration(request, org_id):
                 # is off. check_cross_account_request([]) trivially returns True, so report this
                 # as unverified rather than falsely claiming the request is correct.
                 car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "verified": False})
+                cars_all_correct = False
                 continue
 
             car_correct = CrossAccountRequestChecker.check_cross_account_request(list(tuples), str(car.request_id))

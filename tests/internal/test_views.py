@@ -6350,3 +6350,163 @@ class InternalVerifyMigrationTests(BaseInternalViewsetTests):
         mock_cursor.execute.assert_called_once_with(
             "SELECT slot_name, active FROM pg_replication_slots WHERE plugin = 'pgoutput'"
         )
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch("internal.views.RoleBindingChecker.check_role_binding", return_value=True)
+    def test_verify_migration_bindings_with_data(self, mock_binding_checker, mock_pipeline):
+        """Test bindings section exercises per-item logic with real binding data."""
+        from management.role.v2_model import RoleV2
+        from management.role_binding.model import RoleBinding, RoleBindingGroup
+
+        v2_role = RoleV2.objects.create(name="Binding Test Role", tenant=self.tenant)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(self.default_workspace.id),
+        )
+        group = Group.objects.create(name="binding-test-group", tenant=self.tenant)
+        RoleBindingGroup.objects.create(group=group, binding=binding)
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        bindings_check = body["checks"]["bindings"]
+        self.assertGreaterEqual(len(bindings_check["bindings_checked"]), 1)
+        matches = [b for b in bindings_check["bindings_checked"] if b["binding_uuid"] == str(binding.uuid)]
+        self.assertEqual(len(matches), 1)
+        self.assertTrue(matches[0]["correct"])
+        mock_binding_checker.assert_called()
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch("internal.views.GroupPrincipalChecker.check_relationships")
+    def test_verify_migration_group_principals_with_data(self, mock_group_checker, mock_pipeline):
+        """Test group_principals section exercises per-item logic with real group/principal data."""
+        group = Group.objects.create(name="gp-test-group", tenant=self.tenant)
+        principal = Principal.objects.create(
+            username="gp-test-user", tenant=self.tenant, user_id="gp-test-user-id-123"
+        )
+        group.principals.add(principal)
+
+        mock_group_checker.return_value = {
+            "principal_relations": [{"relation_exists": True}],
+        }
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        groups_check = body["checks"]["group_principals"]
+        matches = [g for g in groups_check["groups_checked"] if g["group_uuid"] == str(group.uuid)]
+        self.assertEqual(len(matches), 1)
+        self.assertTrue(matches[0]["correct"])
+        mock_group_checker.assert_called()
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    def test_verify_migration_group_principals_zero_relationships(self, mock_pipeline):
+        """Test group_principals reports verified=False and section fails when principals produce no relationships."""
+        group = Group.objects.create(name="gp-zero-rel-group", tenant=self.tenant)
+        # Principal without user_id → relationship_to_principal returns None → no relationships
+        principal = Principal.objects.create(
+            username="gp-no-userid", tenant=self.tenant, user_id=None
+        )
+        group.principals.add(principal)
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        groups_check = body["checks"]["group_principals"]
+        matches = [g for g in groups_check["groups_checked"] if g["group_uuid"] == str(group.uuid)]
+        self.assertEqual(len(matches), 1)
+        self.assertFalse(matches[0].get("verified", True))
+        self.assertEqual(matches[0]["tuples_generated"], 0)
+        # The section must be marked as not all correct → appears in failed_checks
+        self.assertFalse(groups_check["correct"])
+        self.assertIn("group_principals", body["failed_checks"])
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch("internal.views.CustomRolePermissionCheckerInstance.check_custom_role_permissions", return_value=True)
+    def test_verify_migration_role_permissions_with_data(self, mock_perm_checker, mock_pipeline):
+        """Test role_permissions section exercises per-item logic with real CustomRoleV2 data."""
+        from management.role.v2_model import CustomRoleV2
+
+        # Create a V1 role as v1_source for the CustomRoleV2
+        v1_role = Role.objects.create(
+            name="RP Test V1 Role", system=False, tenant=self.tenant
+        )
+        v2_role = CustomRoleV2.objects.create(
+            name="RP Test Custom Role",
+            tenant=self.tenant,
+            type="custom",
+            v1_source=v1_role,
+        )
+        permission = Permission.objects.create(
+            permission="test:rp:read", tenant=self.tenant
+        )
+        v2_role.permissions.add(permission)
+
+        response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        perms_check = body["checks"]["role_permissions"]
+        matches = [r for r in perms_check["roles_checked"] if r["v2_role_uuid"] == str(v2_role.uuid)]
+        self.assertEqual(len(matches), 1)
+        self.assertTrue(matches[0]["correct"])
+        self.assertEqual(matches[0]["v1_role_uuid"], str(v1_role.uuid))
+        mock_perm_checker.assert_called()
+
+    @patch("internal.views.get_pipeline_health_checks", return_value=({}, []))
+    @patch("internal.views.CrossAccountRequestChecker.check_cross_account_request", return_value=True)
+    @patch("internal.views.InventoryApiDualWriteCrossAccessHandler")
+    def test_verify_migration_cross_account_requests_with_data(
+        self, mock_car_handler_cls, mock_car_checker, mock_pipeline
+    ):
+        """Test cross_account_requests section exercises per-item logic with real CAR data."""
+        from migration_tool.in_memory_tuples import InMemoryTuples
+
+        role = Role.objects.create(
+            name="CAR Test Role", system=True, tenant=self.tenant
+        )
+        permission = Permission.objects.create(
+            permission="test:car:read", tenant=self.tenant
+        )
+        Access.objects.create(role=role, permission=permission, tenant=self.tenant)
+        car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="car-test-user-123",
+            end_date=timezone.now() + timedelta(days=10),
+            status="approved",
+        )
+        car.roles.add(role)
+
+        # Mock the dual-write handler to produce a fake tuple so len(tuples) > 0
+        mock_handler_instance = MagicMock()
+
+        def populate_tuples(*args, **kwargs):
+            """Side effect to add a fake tuple to the InMemoryTuples passed to the handler."""
+            pass
+
+        mock_handler_instance.generate_relations_to_add_roles = MagicMock()
+        mock_handler_instance.replicate = MagicMock()
+        mock_car_handler_cls.return_value = mock_handler_instance
+
+        # We need the InMemoryTuples to have items — patch at the source
+        original_init = InMemoryTuples.__init__
+
+        def patched_init(self_tuples):
+            original_init(self_tuples)
+
+        with patch("internal.views.InMemoryTuples") as mock_tuples_cls:
+            mock_tuples_instance = MagicMock()
+            mock_tuples_instance.__len__ = MagicMock(return_value=2)
+            mock_tuples_instance.__iter__ = MagicMock(return_value=iter(["tuple1", "tuple2"]))
+            mock_tuples_cls.return_value = mock_tuples_instance
+
+            response = self.client.get(self._url(self.tenant.org_id), **self.request.META)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        cars_check = body["checks"]["cross_account_requests"]
+        matches = [c for c in cars_check["requests_checked"] if c["request_id"] == str(car.request_id)]
+        self.assertEqual(len(matches), 1)
+        self.assertTrue(matches[0]["correct"])
+        mock_car_checker.assert_called()
