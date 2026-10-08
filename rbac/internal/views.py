@@ -2792,9 +2792,7 @@ def verify_migration(request, org_id):
             relationships = [r for r in relationships if r is not None]
             if not relationships:
                 if principals:
-                    group_results.append(
-                        {"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False}
-                    )
+                    group_results.append({"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False})
                 continue
             if dry_run:
                 validation = validate_generated_tuples(relationships)
