@@ -42,8 +42,8 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.views import Response
 
 from api.common.exception_handler import (
+    _flatten_v1_errors,
     _generate_error_data_payload_response,
-    _generate_errors_from_dict,
     custom_exception_handler,
     custom_exception_handler_v2,
 )
@@ -56,7 +56,7 @@ class ExceptionHandlerTest(TestCase):
         """Test generating errors from dictionary errors."""
         kwargs = {"status_code": 400}
         response = {"non_field_errors": ["Cannot access AWS bucket with ARN", "ARN format is incorrect"]}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [
             {"detail": "Cannot access AWS bucket with ARN", "source": "non_field_errors", "status": 400},
             {"detail": "ARN format is incorrect", "source": "non_field_errors", "status": 400},
@@ -65,19 +65,19 @@ class ExceptionHandlerTest(TestCase):
 
         kwargs = {"status_code": 400}
         response = {"provider_type": "Must be either OCP or AWS"}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [{"detail": "Must be either OCP or AWS", "source": "provider_type", "status": 400}]
         self.assertEqual(formatted_errors, expected)
 
         kwargs = {"status_code": 400}
         response = {"tiered_rate": {"unit": ['"UD" is not a valid choice.']}}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [{"detail": '"UD" is not a valid choice.', "source": "tiered_rate.unit", "status": 400}]
         self.assertEqual(formatted_errors, expected)
 
         kwargs = {"status_code": 400}
         response = {"tiered_rate": {"value": ["Ensure that there are no more than 10 decimal places."]}}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [
             {
                 "detail": "Ensure that there are no more than 10 decimal places.",
@@ -89,7 +89,7 @@ class ExceptionHandlerTest(TestCase):
 
         kwargs = {"status_code": 400}
         response = {"tiered_rate": {"value": {"key": "Ensure that there are no more than 10 decimal places."}}}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [
             {
                 "detail": "Ensure that there are no more than 10 decimal places.",
@@ -101,7 +101,7 @@ class ExceptionHandlerTest(TestCase):
 
         kwargs = {"status_code": 400}
         response = {"tiered_rate": {"value": [["key"], ["Ensure that there are no more than 10 decimal places."]]}}
-        formatted_errors = _generate_errors_from_dict(response, **kwargs)
+        formatted_errors = _flatten_v1_errors(response, **kwargs)
         expected = [
             {"detail": "key", "source": "tiered_rate.value", "status": 400},
             {

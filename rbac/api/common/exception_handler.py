@@ -18,6 +18,7 @@
 """Common exception handler class."""
 
 import copy
+from typing import Any, Iterable, Optional
 
 from django.db import IntegrityError
 from django.http import Http404
@@ -32,38 +33,28 @@ from rest_framework import status
 from rest_framework.views import Response, exception_handler
 
 
-def _generate_errors_from_list(data, **kwargs):
-    """Create error objects based on the exception."""
-    errors = []
-    status_code = kwargs.get("status_code", 0)
-    source = kwargs.get("source")
-    for value in data:
-        if isinstance(value, str):
-            new_error = {"detail": value, "source": source, "status": status_code}
-            errors.append(new_error)
-        elif isinstance(value, list):
-            errors += _generate_errors_from_list(value, **kwargs)
-        elif isinstance(value, dict):
-            errors += _generate_errors_from_dict(value, **kwargs)
-    return errors
+def _items_with_source(data, base_source: Optional[str] = None) -> Iterable[tuple[Optional[str], Any]]:
+    if isinstance(data, dict):
+        return (((f"{base_source}.{key}" if base_source else key), value) for key, value in data.items())
+
+    if isinstance(data, list):
+        return ((base_source, value) for value in data)
+
+    raise TypeError(f"Expected data to be a dict or a list, but got: {data!r}")
 
 
-def _generate_errors_from_dict(data, **kwargs):
-    """Create error objects based on the exception."""
+def _flatten_v1_errors(data, *, source: Optional[str] = None, status_code: str):
     errors = []
-    status_code = kwargs.get("status_code", 0)
-    source = kwargs.get("source")
-    for key, value in data.items():
-        source_val = "{}.{}".format(source, key) if source else key
+
+    for nested_source, value in _items_with_source(data, base_source=source):
         if isinstance(value, str):
-            new_error = {"detail": value, "source": source_val, "status": status_code}
+            new_error = {"detail": value, "source": nested_source, "status": status_code}
             errors.append(new_error)
-        elif isinstance(value, list):
-            kwargs["source"] = source_val
-            errors += _generate_errors_from_list(value, **kwargs)
-        elif isinstance(value, dict):
-            kwargs["source"] = source_val
-            errors += _generate_errors_from_dict(value, **kwargs)
+        elif isinstance(value, list) or isinstance(value, dict):
+            errors += _flatten_v1_errors(value, source=nested_source, status_code=status_code)
+        else:
+            raise TypeError(f"Unexpected error value: {value!r}")
+
     return errors
 
 
@@ -90,10 +81,10 @@ def _v1_response_to_v2(response: Response, context: dict) -> Response:
     response.content_type = "application/problem+json"
     errors = []
     data = copy.deepcopy(response.data)
-    if isinstance(data, dict):
-        errors += _generate_errors_from_dict(data, **{"status_code": str(response.status_code)})
-    elif isinstance(data, list):
-        errors += _generate_errors_from_list(data, **{"status_code": str(response.status_code)})
+
+    if isinstance(data, dict) or isinstance(data, list):
+        errors += _flatten_v1_errors(data, status_code=str(response.status_code))
+
     response.data = v2response_error_from_errors(errors=errors, context=context)
 
     return response
@@ -175,10 +166,8 @@ def custom_exception_handler(exc, context):
     if response is not None:
         errors = []
         data = copy.deepcopy(response.data)
-        if isinstance(data, dict):
-            errors += _generate_errors_from_dict(data, **{"status_code": str(response.status_code)})
-        elif isinstance(data, list):
-            errors += _generate_errors_from_list(data, **{"status_code": str(response.status_code)})
+        if isinstance(data, dict) or isinstance(data, list):
+            errors += _flatten_v1_errors(data, status_code=str(response.status_code))
         error_response = {"errors": errors}
         response.data = error_response
     elif isinstance(exc, IntegrityError):
