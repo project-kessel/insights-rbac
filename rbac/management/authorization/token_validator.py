@@ -211,24 +211,28 @@ class ITSSOTokenValidator(TokenValidator):
     def validate_token_and_org_id(
         self, request: HttpRequest, additional_scopes_to_validate: set[ScopeClaims]
     ) -> Tuple[str, Optional[str]]:
-        """Validate the JWT token and return the bearer token along with its "organization.id" claim.
+        """Validate the JWT token and return the bearer token along with its organization ID claim.
 
         Used by callers that must confirm the bearer token belongs to the same organization as the tenant
         resolved from the request's identity header, so that a caller cannot combine an identity header for
         one tenant with a bearer token scoped to a different tenant's IT resources.
+
+        SSO user tokens carry the organization ID as a top-level "org_id" claim, so that one is read first;
+        the nested "organization.id" claim is the fallback for tokens that only carry that shape.
         """
         if settings.IT_BYPASS_TOKEN_VALIDATION:
             return "mocked-invalid-bearer-token-because-token-validation-is-disabled", None
 
         bearer_token, token = self._validate_token(request, additional_scopes_to_validate)
-        return bearer_token, token.claims.get("organization", {}).get("id")
+        return bearer_token, token.claims.get("org_id") or (token.claims.get("organization") or {}).get("id")
 
     def _parse_claims(self, user: User, jwt: Token) -> None:
         super()._parse_claims(user, jwt)
         # Assumes a particular token shape
         # TODO: support multiple based on scope similar to gateway code
-        user.org_id = jwt.claims.get("organization", {}).get("id", None)
-        user.account = jwt.claims.get("organization", {}).get("account_number", None)
+        organization = jwt.claims.get("organization") or {}
+        user.org_id = organization.get("id", None)
+        user.account = organization.get("account_number", None)
         user.admin = "org:admin:all" in jwt.claims.get("roles", [])
 
     def get_user_from_bearer_token(self, request: HttpRequest) -> User:

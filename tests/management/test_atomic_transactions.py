@@ -1,8 +1,7 @@
 """Tests for atomic transaction utilities."""
 
-import logging
 import threading
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pgtransaction
@@ -17,21 +16,7 @@ from management.atomic_transactions import (
 
 from api.models import Tenant
 from tests.identity_request import TransactionalIdentityRequest
-
-
-@contextmanager
-def _enable_logging():
-    """Re-enable logging temporarily for assertLogs under parallel test runner.
-
-    Django's parallel test runner disables low-level logs via logging.disable().
-    This context manager restores logging within its scope and resets afterward.
-    """
-    prior_disable = logging.root.manager.disable
-    logging.disable(logging.NOTSET)
-    try:
-        yield
-    finally:
-        logging.disable(prior_disable)
+from tests.logging_util import enable_logging
 
 
 def _make_serialization_error(msg="conflict"):
@@ -290,7 +275,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
         from management.inventory_replicator.inventory_replicator import raise_dual_write_exception
 
         with (
-            _enable_logging(),
+            enable_logging(),
             self.assertLogs("management.inventory_replicator.inventory_replicator", level="INFO") as cm,
         ):
             with self.assertRaises(OperationalError):
@@ -307,7 +292,7 @@ class RaiseDualWriteExceptionTests(TransactionalIdentityRequest):
         )
 
         with (
-            _enable_logging(),
+            enable_logging(),
             self.assertLogs("management.inventory_replicator.inventory_replicator", level="INFO") as cm,
         ):
             with self.assertRaises(DualWriteException):

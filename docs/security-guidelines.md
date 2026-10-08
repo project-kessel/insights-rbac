@@ -31,6 +31,7 @@ Rules:
 - Token validation checks issuer, expiry, and optional scope claims against ITSSO JWKS.
 - The `user_id` from the token must exist in `SYSTEM_USERS` setting, or auth fails.
 - `allow_any_org` in the system user config controls whether the caller can set arbitrary org_id via headers. Token org_id and header org_id must match when `allow_any_org` is False.
+- **Organization ID claim precedence**: `validate_token_and_org_id()` reads the top-level `org_id` claim first (the shape produced by Red Hat SSO for user tokens), falling back to the nested `organization.id` claim. An empty top-level `org_id` (blank string) falls through to the nested claim. When neither claim is present, `None` is returned and the token is treated as untrusted (fails closed). The `_parse_claims()` path (used by `get_user_from_bearer_token` for S2S system users) reads only the nested `organization.id` claim.
 - `IT_BYPASS_TOKEN_VALIDATION` returns a mocked user. Never enable in production.
 
 ### 4. Internal API Auth
@@ -89,6 +90,7 @@ Rules:
 - Resource type allowlists are enforced. `RoleBindingKesselAccessPermission.ALLOWED_RESOURCE_TYPES` only allows `{"workspace", "tenant"}`. Unknown types are denied.
 - Tenant-level authorization uses `request.user.admin` (org-admin check), not Kessel. This is intentional for the current milestone.
 - Audit log v2 access uses `AuditLogV2KesselAccessPermission`, which checks the `rbac_audit_log_view` relation on the tenant resource. Unlike v1, there is no org-admin bypass — access is decided solely by Kessel. Org admins receive the relation through the platform admin default role binding.
+- Group V2 list access uses `GroupV2KesselAccessPermission`, which grants a narrow self-access exception: callers without `rbac_groups_read` can still list groups when the query is `scope=principal` or an exact (case-sensitive) match of `username` to their own username (V1 parity). The queryset is restricted to the requester's own memberships via `request.group_self_access_only`. The service layer uses a case-sensitive (`username=`) DB filter for self-access, not the `username__iexact` used by the general `scope=principal` codepath, to prevent leaking groups belonging to a legacy case-distinct principal (e.g. `"Alice"` vs `"alice"`). Does not apply to retrieve/create/update/destroy/principals.
 
 ### System user access
 
