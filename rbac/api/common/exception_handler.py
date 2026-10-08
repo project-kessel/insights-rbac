@@ -67,12 +67,6 @@ def _generate_errors_from_dict(data, **kwargs):
     return errors
 
 
-def _v2_generate_error_data_payload_response(detail: str, context, http_status_code: int) -> dict:
-    """Generate the payload for the "data" parameter of the response."""
-    data = _generate_error_data_payload_response(detail=detail, context=context, http_status_code=http_status_code)
-    return v2response_error_from_errors(data["errors"])
-
-
 def _generate_error_data_payload_response(detail: str, context, http_status_code: int) -> dict:
     """Generate the payload for the "data" parameter of the response."""
     data = {
