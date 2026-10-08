@@ -18,21 +18,16 @@
 """Common exception handler class."""
 
 import copy
-from typing import Optional
 
 from django.db import IntegrityError
 from django.http import Http404
 from management.authorization.invalid_token import InvalidTokenError
 from management.authorization.missing_authorization import MissingAuthorizationError
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
-from management.exceptions import (
-    InvalidFieldError,
-    InventoryAuthUnavailableError,
-    NotFoundError,
-    RequiredFieldError,
-)
+from management.exceptions import InvalidFieldError, InventoryAuthUnavailableError, NotFoundError, RequiredFieldError
+from management.problem_details import single_problem_response_with_errors_for_context
 from management.role.v2_exceptions import RolesNotFoundError
-from management.utils import api_path_prefix, problem_response, v2response_error_from_errors
+from management.utils import api_path_prefix, v2response_error_from_errors
 from rest_framework import status
 from rest_framework.views import Response, exception_handler
 
@@ -97,46 +92,6 @@ def _generate_error_data_payload_response(detail: str, context, http_status_code
     return data
 
 
-def _single_problem_response_for_context(
-    *,
-    status_code: int,
-    detail: str,
-    context,
-    source: Optional[str] = None,
-    with_instance: bool = False,
-):
-    instance = (
-        context.get("request").path
-        if (
-            with_instance
-            and context
-            and context.get("request")
-            and context.get("request").method in ["PUT", "PATCH", "DELETE"]
-        )
-        else None
-    )
-
-    error = {"message": detail}
-
-    if source is None:
-        # Some exceptions might be raised from places that are not views.
-        view = context.get("view")
-        source = getattr(view, "basename", None) if view else None
-
-    if source is not None:
-        if not isinstance(source, str):
-            raise TypeError(f"Expected view basename to be str or None, but got: {source!r}")
-
-        error["field"] = source
-
-    return problem_response(
-        status_code=status_code,
-        detail=detail,
-        instance=instance,
-        extra_data={"errors": [error]},
-    )
-
-
 def _v1_response_to_v2(response: Response, context: dict) -> Response:
     response.content_type = "application/problem+json"
     errors = []
@@ -158,41 +113,38 @@ def custom_exception_handler_v2(exc, context):
     if v1_initial_response is not None:
         return _v1_response_to_v2(v1_initial_response, context)
     elif isinstance(exc, IntegrityError):
-        return _single_problem_response_for_context(
+        return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
             context=context,
             with_instance=True,
         )
     elif isinstance(exc, InvalidTokenError):
-        return _single_problem_response_for_context(
+        return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token provided.",
             context=context,
         )
     elif isinstance(exc, MissingAuthorizationError):
-        return _single_problem_response_for_context(
+        return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="A Bearer token in an authorization header is required when performing service account operations.",
             context=context,
         )
     elif isinstance(exc, UnableMeetPrerequisitesError):
-        return _single_problem_response_for_context(
+        return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to validate the provided token.",
             context=context,
         )
     elif isinstance(exc, InventoryAuthUnavailableError):
-        response = Response(
-            data=_v2_generate_error_data_payload_response(
-                detail="Inventory authorization is temporarily unavailable. Please try again shortly.",
-                context=context,
-                http_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            ),
-            content_type="application/problem+json",
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        response = single_problem_response_with_errors_for_context(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inventory authorization is temporarily unavailable. Please try again shortly.",
+            context=context,
         )
         response["Retry-After"] = "1"
+        return response
     elif isinstance(exc, RolesNotFoundError):
         # Convert RolesNotFoundError to Http404 and let standard handler process it
         v1_response = exception_handler(Http404(str(exc)), context)
@@ -201,7 +153,7 @@ def custom_exception_handler_v2(exc, context):
         v1_response = exception_handler(Http404(str(exc)), context)
         return _v1_response_to_v2(v1_response, context)
     elif isinstance(exc, (InvalidFieldError, RequiredFieldError)):
-        return _single_problem_response_for_context(
+        return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
             context=context,

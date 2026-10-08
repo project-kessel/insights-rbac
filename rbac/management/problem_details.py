@@ -153,3 +153,72 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
     return problem_response_body(
         status_code=status_code, problem_type=problem_type, detail=detail, instance=instance, extra_data=extra_data
     )
+
+
+def single_problem_response_with_errors(
+    *,
+    status_code: int,
+    problem_type: Optional[str] = None,
+    detail: str,
+    source: Optional[str] = None,
+    instance: Optional[str] = None,
+):
+    """
+    Get an RFC 9457-compliant response with the provided information and a single-member errors array field.
+
+    This maintains compatibility with existing formats.
+    """
+    error = {"message": detail}
+
+    if source is not None:
+        error["field"] = source
+
+    return problem_response(
+        status_code=status_code,
+        problem_type=problem_type,
+        detail=detail,
+        instance=instance,
+        extra_data={"errors": [error]},
+    )
+
+
+def single_problem_response_with_errors_for_context(
+    *,
+    status_code: int,
+    problem_type: Optional[str] = None,
+    detail: str,
+    context,
+    source: Optional[str] = None,
+    with_instance: bool = False,
+):
+    """
+    Get an RFC 9457-compliant response with a single-member errors array field, taking data from context as necessary.
+
+    This maintains compatibility with existing formats.
+    """
+    instance = (
+        context.get("request").path
+        if (
+            with_instance
+            and context
+            and context.get("request")
+            and context.get("request").method in ["PUT", "PATCH", "DELETE"]
+        )
+        else None
+    )
+
+    if source is None:
+        # Some exceptions might be raised from places that are not views.
+        view = context.get("view")
+        source = getattr(view, "basename", None) if view else None
+
+        if (source is not None) and (not isinstance(source, str)):
+            raise TypeError(f"Expected view basename to be str or None, but got: {source!r}")
+
+    return single_problem_response_with_errors(
+        status_code=status_code,
+        problem_type=problem_type,
+        detail=detail,
+        source=source,
+        instance=instance,
+    )
