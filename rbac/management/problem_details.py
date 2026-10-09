@@ -116,21 +116,11 @@ def problem_response(status_code: int, **kwargs):
     )
 
 
-def problem_instance_for_context(context) -> Optional[str]:
-    """Get the instance implied by the context for a problem details object."""
-    return (
-        context.get("request").path
-        if (context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"])
-        else None
-    )
-
-
-def v2_response_from_v1_errors(errors, context=None):
+def v2_response_from_v1_errors(errors):
     """Build a ProblemDetails-formatted error response from V1-formatted error dicts.
 
     Args:
         errors: List of error dicts with "detail", "status", and optional "source" keys.
-        context: DRF context dict with "request" (optional).
     """
     detail = ""
     status_code = 0
@@ -147,13 +137,11 @@ def v2_response_from_v1_errors(errors, context=None):
                     field_error["field"] = error["source"]
                 field_errors.append(field_error)
 
-    instance = problem_instance_for_context(context)
     extra_data = {"errors": field_errors} if field_errors else None
 
     return problem_response_body(
         status_code=status_code,
         detail=detail,
-        instance=instance,
         extra_data=extra_data,
     )
 
@@ -164,7 +152,6 @@ def single_problem_response_with_errors(
     problem_type: Optional[str] = None,
     detail: str,
     source: Optional[str] = None,
-    instance: Optional[str] = None,
 ):
     """
     Get an RFC 9457-compliant response with the provided information and a single-member errors array field.
@@ -180,7 +167,6 @@ def single_problem_response_with_errors(
         status_code=status_code,
         problem_type=problem_type,
         detail=detail,
-        instance=instance,
         extra_data={"errors": [error]},
     )
 
@@ -192,15 +178,12 @@ def single_problem_response_with_errors_for_context(
     detail: str,
     context,
     source: Optional[str] = None,
-    with_instance: bool = False,
 ):
     """
     Get an RFC 9457-compliant response with a single-member errors array field, taking data from context as necessary.
 
     This maintains compatibility with existing formats.
     """
-    instance = problem_instance_for_context(context) if with_instance else None
-
     if source is None:
         # Some exceptions might be raised from places that are not views.
         view = context.get("view")
@@ -214,5 +197,4 @@ def single_problem_response_with_errors_for_context(
         problem_type=problem_type,
         detail=detail,
         source=source,
-        instance=instance,
     )
