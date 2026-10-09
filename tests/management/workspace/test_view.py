@@ -37,6 +37,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.problem_details import ProblemType
 from management.workspace.serializer import WorkspaceEventSerializer
 from management.workspace.service import WorkspaceService
 from migration_tool.in_memory_tuples import (
@@ -51,7 +52,7 @@ from migration_tool.utils import create_relationship
 from api.models import Tenant
 from rbac import urls
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
-from tests.v2_util import bootstrap_tenant_for_v2_test
+from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
 
 
 class BasicWorkspaceViewTests:
@@ -1616,7 +1617,8 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         detail = response.data.get("detail")
         self.assertEqual(detail, "No Workspace matches the given query.")
         self.assertEqual(status_code, 404)
-        self.assertEqual(response.get("content-type"), "application/problem+json")
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(ProblemType.NOT_FOUND, response.data["type"])
 
     def test_delete_workspace_unauthorized(self):
         request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
@@ -2058,8 +2060,11 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         workspace_data_for_move = {"parent_id": self.standard_workspace.id}
 
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         response_body = response.json()
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response_body.get("type"), ProblemType.NOT_FOUND)
         self.assertEqual(response_body.get("detail"), "No Workspace matches the given query.")
 
     def test_move_with_invalid_uuid_parent_id(self):
@@ -4132,12 +4137,10 @@ class WorkspaceTestsDetail(WorkspaceViewTests):
         response = client.get(url, None, format="json", **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        status_code = response.data.get("status")
-        detail = response.data.get("detail")
-
-        self.assertEqual(detail, "No Workspace matches the given query.")
-        self.assertEqual(status_code, 404)
-        self.assertEqual(response.get("content-type"), "application/problem+json")
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.data.get("status"), 404)
+        self.assertEqual(response.data.get("type"), ProblemType.NOT_FOUND)
+        self.assertEqual(response.data.get("detail"), "No Workspace matches the given query.")
 
     def test_get_workspace_unauthorized(self):
         request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
