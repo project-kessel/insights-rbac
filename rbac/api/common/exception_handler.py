@@ -26,9 +26,9 @@ from management.authorization.invalid_token import InvalidTokenError
 from management.authorization.missing_authorization import MissingAuthorizationError
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 from management.exceptions import InvalidFieldError, InventoryAuthUnavailableError, NotFoundError, RequiredFieldError
-from management.problem_details import single_problem_response_with_errors_for_context
+from management.problem_details import single_problem_response_with_errors_for_context, v2_response_from_v1_errors
 from management.role.v2_exceptions import RolesNotFoundError
-from management.utils import api_path_prefix, v2response_error_from_errors
+from management.utils import api_path_prefix
 from rest_framework import status
 from rest_framework.views import Response, exception_handler
 
@@ -78,14 +78,15 @@ def _generate_error_data_payload_response(detail: str, context, http_status_code
 
 
 def _v1_response_to_v2(response: Response, context: dict) -> Response:
-    response.content_type = "application/problem+json"
-    errors = []
     data = copy.deepcopy(response.data)
 
     if isinstance(data, dict) or isinstance(data, list):
-        errors += _flatten_v1_errors(data, status_code=str(response.status_code))
+        errors = _flatten_v1_errors(data, status_code=str(response.status_code))
+    else:
+        errors = []
 
-    response.data = v2response_error_from_errors(errors=errors, context=context)
+    response.content_type = "application/problem+json"
+    response.data = v2_response_from_v1_errors(errors=errors, context=context)
 
     return response
 

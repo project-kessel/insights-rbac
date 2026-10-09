@@ -35,7 +35,7 @@ from management.utils import (
     ProblemType,
     STATUS_PROBLEM_TYPES,
     status_default_problem_title,
-    v2response_error_from_errors,
+    v2_response_from_v1_errors,
 )
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -319,7 +319,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Test error message", "status": "400"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertIn("status", result)
         self.assertIn("title", result)
@@ -334,7 +334,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Invalid input", "status": "400"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(400))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[400])
@@ -344,7 +344,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Not authenticated", "status": "401"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(401))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[401])
@@ -354,7 +354,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Permission denied", "status": "403"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(403))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[403])
@@ -364,7 +364,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Resource not found", "status": "404"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(404))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[404])
@@ -374,7 +374,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Concurrent update conflict", "status": "409"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(409))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[409])
@@ -384,7 +384,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Internal error", "status": "500"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], status_default_problem_title(500))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[500])
@@ -394,7 +394,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Some error", "status": "418"}]
         context = self._mock_context()
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertEqual(result["title"], "I'm a Teapot")
         self.assertNotIn("type", result)
@@ -404,7 +404,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Update failed", "status": "400"}]
         context = self._mock_context(method="PUT")
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertIn("instance", result)
         self.assertEqual(result["instance"], "/api/v2/roles/")
@@ -414,7 +414,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Patch failed", "status": "400"}]
         context = self._mock_context(method="PATCH")
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertIn("instance", result)
 
@@ -423,7 +423,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Delete failed", "status": "400"}]
         context = self._mock_context(method="DELETE")
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertIn("instance", result)
 
@@ -432,7 +432,7 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Create failed", "status": "400"}]
         context = self._mock_context(method="POST")
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertNotIn("instance", result)
 
@@ -441,19 +441,9 @@ class V2ProblemDetailsTest(TestCase):
         errors = [{"detail": "Get failed", "status": "400"}]
         context = self._mock_context(method="GET")
 
-        result = v2response_error_from_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors, context=context)
 
         self.assertNotIn("instance", result)
-
-    def test_v2response_problem_type_override(self):
-        """Test that explicit problem_type overrides the status-code default."""
-        errors = [{"detail": "Duplicate name", "status": "400"}]
-        context = self._mock_context()
-        override = ProblemType.ALREADY_EXISTS
-
-        result = v2response_error_from_errors(errors, context=context, problem_type=override)
-
-        self.assertEqual(result["type"], override)
 
 
 class V2ExceptionHandlerTests(TestCase):

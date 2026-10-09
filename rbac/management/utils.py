@@ -49,7 +49,7 @@ from management.problem_details import (  # noqa: F401, for backwards compatibil
     STATUS_PROBLEM_TYPES as STATUS_PROBLEM_TYPES,
     problem_response as problem_response,
     status_default_problem_title as status_default_problem_title,
-    v2response_error_from_errors as v2response_error_from_errors,
+    v2_response_from_v1_errors as v2_response_from_v1_errors,
 )
 from prometheus_client import Counter
 from requests.adapters import HTTPAdapter

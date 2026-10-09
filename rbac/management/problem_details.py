@@ -116,16 +116,21 @@ def problem_response(status_code: int, **kwargs):
     )
 
 
-def v2response_error_from_errors(errors, exc=None, context=None, problem_type=None):
-    """Build a ProblemDetails-formatted error response from errors.
+def problem_instance_for_context(context) -> Optional[str]:
+    """Get the instance implied by the context for a problem details object."""
+    return (
+        context.get("request").path
+        if (context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"])
+        else None
+    )
+
+
+def v2_response_from_v1_errors(errors, context=None):
+    """Build a ProblemDetails-formatted error response from V1-formatted error dicts.
 
     Args:
         errors: List of error dicts with "detail", "status", and optional "source" keys.
-        exc: The original exception (optional).
         context: DRF context dict with "request" (optional).
-        problem_type: Explicit RFC 9457 problem type URI override. When set, this
-            takes precedence over the default status-code-based lookup in PROBLEM_TYPES.
-            Use for specialized problem types like ALREADY_EXISTS.
     """
     detail = ""
     status_code = 0
@@ -142,16 +147,14 @@ def v2response_error_from_errors(errors, exc=None, context=None, problem_type=No
                     field_error["field"] = error["source"]
                 field_errors.append(field_error)
 
-    instance = (
-        context.get("request").path
-        if (context and context.get("request") and context.get("request").method in ["PUT", "PATCH", "DELETE"])
-        else None
-    )
-
+    instance = problem_instance_for_context(context)
     extra_data = {"errors": field_errors} if field_errors else None
 
     return problem_response_body(
-        status_code=status_code, problem_type=problem_type, detail=detail, instance=instance, extra_data=extra_data
+        status_code=status_code,
+        detail=detail,
+        instance=instance,
+        extra_data=extra_data,
     )
 
 
@@ -196,16 +199,7 @@ def single_problem_response_with_errors_for_context(
 
     This maintains compatibility with existing formats.
     """
-    instance = (
-        context.get("request").path
-        if (
-            with_instance
-            and context
-            and context.get("request")
-            and context.get("request").method in ["PUT", "PATCH", "DELETE"]
-        )
-        else None
-    )
+    instance = problem_instance_for_context(context) if with_instance else None
 
     if source is None:
         # Some exceptions might be raised from places that are not views.
