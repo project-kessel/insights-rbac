@@ -147,3 +147,7 @@ class WorkspaceCacheReplicator(InventoryReplicator):
 
     def clear_events(self):
         self._workspace_events = {}
+
+
+def is_problem_details_response(response) -> bool:
+    return response.headers["content-type"] == "application/problem+json"

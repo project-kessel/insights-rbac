@@ -45,7 +45,7 @@ from management.tenant_service import V2TenantBootstrapService
 from management.utils import PRINCIPAL_CACHE, as_uuid
 from rbac import urls
 from tests.identity_request import IdentityRequest
-from tests.v2_util import bootstrap_tenant_for_v2_test
+from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
 
 CACHE_PATCH_TARGET = "management.role.v2_service.permission_scope_cache"
 
@@ -2082,6 +2082,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         uuids = {as_uuid(u) for u in uuids}
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
 
         data = response.data
 
@@ -2136,6 +2137,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         """Test that deleting with an empty ids list returns 400."""
         response = self._request_delete({"ids": []})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
         self.assertEqual(response.data["errors"][0]["field"], "ids")
         self.assertEqual(response.data["errors"][0]["message"], "Ensure this field has at least 1 elements.")
 
@@ -2172,7 +2174,8 @@ class RoleV2ViewSetTests(IdentityRequest):
         response = self._request_delete({"ids": [str(seeded_role.uuid)]})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("System roles may not be deleted", str(response.data))
+        self.assertTrue(is_problem_details_response(response))
+        self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
 
     def test_delete_mix_of_custom_and_seeded_returns_400(self):
@@ -2186,7 +2189,8 @@ class RoleV2ViewSetTests(IdentityRequest):
         response = self._request_delete({"ids": [custom_role["id"], str(seeded_role.uuid)]})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("System roles may not be deleted", str(response.data))
+        self.assertTrue(is_problem_details_response(response))
+        self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(uuid=custom_role["id"]).exists())
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
 
@@ -2194,6 +2198,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         """Test that a delete request with no IDs fails with status 400."""
         response = self._request_delete({})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
 
         self.assertIn("title", response.data)
         self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")
@@ -2208,6 +2213,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         """Test that a delete request with a non-array ids field fails with status 400."""
         response = self._request_delete({"ids": 42})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
 
         self.assertIn("title", response.data)
         self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")
@@ -2226,6 +2232,7 @@ class RoleV2ViewSetTests(IdentityRequest):
             with self.subTest(id=invalid_id):
                 response = self._request_delete({"ids": [invalid_id]})
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertTrue(is_problem_details_response(response))
 
                 self.assertIn("title", response.data)
                 self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")
