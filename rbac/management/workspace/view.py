@@ -29,7 +29,7 @@ from management.base_viewsets import BaseV2ViewSet
 from management.cache import WORKSPACE_CACHE
 from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
-from management.utils import v2response_error_from_errors, validate_and_get_key
+from management.utils import ProblemType, validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
 from management.workspace.service import WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
@@ -47,6 +47,7 @@ from .serializer import (
     WorkspaceSerializer,
     WorkspaceWithAncestrySerializer,
 )
+from ..problem_details import single_problem_response_with_errors
 from ..utils import flatten_validation_error, validate_uuid
 
 INCLUDE_ANCESTRY_KEY = "include_ancestry"
@@ -274,18 +275,10 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         except ValidationError as e:
             for field, error_message in flatten_validation_error(e):
                 if "unique_workspace_name_per_parent" in error_message:
-                    return Response(
-                        v2response_error_from_errors(
-                            errors=[
-                                {
-                                    "detail": "A workspace with the same name already exists under the parent.",
-                                    "status": status.HTTP_400_BAD_REQUEST,
-                                }
-                            ],
-                            exc=e,
-                            problem_type="http://project-kessel.org/problems/already-exists",
-                        ),
-                        status=status.HTTP_400_BAD_REQUEST,
+                    return single_problem_response_with_errors(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        problem_type=ProblemType.ALREADY_EXISTS,
+                        detail="A workspace with the same name already exists under the parent.",
                     )
                 if "__all__" in field:
                     raise serializers.ValidationError(error_message)

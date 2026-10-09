@@ -30,30 +30,30 @@ from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from api.models import Tenant
 from management.audit_log.model import AuditLog
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
 from management.models import Group, Permission, Principal, Workspace
-from management.tenant_mapping.v2_activation import set_v2_opt_in_state
-from management.utils import PROBLEM_TYPES
 from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.role.definer import seed_roles
 from management.role.platform import platform_v2_role_uuid_for
 from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
-from management.role_binding.service import RoleBindingService, API_PRINCIPAL_SOURCE
+from management.role_binding.service import API_PRINCIPAL_SOURCE, RoleBindingService
 from management.subject import SubjectType
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
+from management.tenant_mapping.v2_activation import set_v2_opt_in_state
 from management.tenant_service.v2 import V2TenantBootstrapService
+from management.utils import STATUS_PROBLEM_TYPES
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator
-from rbac import urls
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
+
+from api.models import Tenant
+from rbac import urls
 
 
 def _coerce_api_datetime(value):
@@ -3641,7 +3641,7 @@ class BatchCreateViewTests(IdentityRequest):
         expected = {
             "status": 404,
             "title": "Not found.",
-            "type": PROBLEM_TYPES[404],
+            "type": STATUS_PROBLEM_TYPES[404],
             "detail": expected_detail,
             "errors": [{"message": expected_detail, "field": "detail"}],
         }
@@ -3664,7 +3664,7 @@ class BatchCreateViewTests(IdentityRequest):
             "detail": expected_detail,
             "errors": [{"message": expected_detail, "field": expected_field}],
         }
-        problem_type = PROBLEM_TYPES.get(expected_status)
+        problem_type = STATUS_PROBLEM_TYPES.get(expected_status)
         if problem_type:
             expected["type"] = problem_type
         self.assertEqual(response.status_code, expected_status)
@@ -4135,7 +4135,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
-                    "type": PROBLEM_TYPES[400],
+                    "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": missing_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4189,7 +4189,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
-                    "type": PROBLEM_TYPES[400],
+                    "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": expected_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4251,7 +4251,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 404,
                     "title": "Not found.",
-                    "type": PROBLEM_TYPES[404],
+                    "type": STATUS_PROBLEM_TYPES[404],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": "detail"}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",
@@ -4319,7 +4319,7 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                 expected = {
                     "status": 400,
                     "title": "The request payload contains invalid syntax.",
-                    "type": PROBLEM_TYPES[400],
+                    "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": expected_field}],
                     "instance": "/api/rbac/v2/role-bindings/by-subject/",

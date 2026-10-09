@@ -24,6 +24,7 @@ from management.base_viewsets import BaseV2ViewSet
 from management.notifications.notification_handlers import custom_v2_role_obj_change_notification_handler
 from management.permissions.role_v2_access import RoleV2KesselAccessPermission
 from management.permissions.v2_edit_api_access import V2WriteRequiresWorkspacesEnabled
+from management.problem_details import single_problem_response_with_errors
 from management.role.v2_exceptions import CustomRoleRequiredError, RolesNotFoundError
 from management.role.v2_model import RoleV2
 from management.role.v2_serializer import (
@@ -35,7 +36,6 @@ from management.role.v2_serializer import (
 )
 from management.role.v2_service import RoleV2Service
 from management.role_binding.serializer import resolve_resource_identifiers
-from management.utils import v2response_error_from_errors
 from management.v2_mixins import AtomicOperationsMixin
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -243,17 +243,10 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                 .exclude(type=RoleV2.Types.CUSTOM)
             )
             if non_custom.exists():
-                return Response(
-                    v2response_error_from_errors(
-                        errors=[
-                            {
-                                "detail": "System roles may not be deleted.",
-                                "status": status.HTTP_400_BAD_REQUEST,
-                                "source": "ids",
-                            }
-                        ],
-                    ),
-                    status=status.HTTP_400_BAD_REQUEST,
+                return single_problem_response_with_errors(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="System roles may not be deleted.",
+                    source="ids",
                 )
 
         try:
@@ -277,25 +270,16 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                 },
             )
         except RolesNotFoundError as e:
-            return Response(
-                v2response_error_from_errors(
-                    errors=[{"detail": str(e), "status": status.HTTP_404_NOT_FOUND, "source": "ids"}], exc=e
-                ),
-                status=status.HTTP_404_NOT_FOUND,
+            return single_problem_response_with_errors(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+                source="ids",
             )
         except CustomRoleRequiredError as e:
-            return Response(
-                v2response_error_from_errors(
-                    errors=[
-                        {
-                            "detail": str(e),
-                            "status": status.HTTP_400_BAD_REQUEST,
-                            "source": "ids",
-                        }
-                    ],
-                    exc=e,
-                ),
-                status=status.HTTP_400_BAD_REQUEST,
+            return single_problem_response_with_errors(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+                source="ids",
             )
 
         # We don't allow a revert here because sending a notification in the middle could fail. This would make it

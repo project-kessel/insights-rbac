@@ -27,9 +27,6 @@ import requests
 from django.db.models import ProtectedError
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
-from rest_framework import status
-from rest_framework.test import APIClient
-
 from management import v2_urls
 from management.audit_log.model import AuditLog
 from management.authorization.invalid_token import InvalidTokenError
@@ -47,13 +44,16 @@ from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
 from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_opted_in, set_v2_opt_in_state
-from rbac import urls
+from management.utils import ProblemType
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
 from tests.logging_util import enable_logging
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 from api.common import RH_IDENTITY_HEADER
 from api.models import Tenant
+from rbac import urls
 
 ACCESS_CHECK_TARGET = "management.permissions.group_v2_access.WorkspaceInventoryAccessChecker.check_resource_access"
 TOKEN_VALIDATION_TARGET = "management.authorization.token_validator.ITSSOTokenValidator.validate_token_and_org_id"
@@ -1066,7 +1066,7 @@ class GroupV2CreateViewTest(GroupV2ViewTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         body = response.json()
-        self.assertEqual(body["type"], "http://project-kessel.org/problems/already-exists")
+        self.assertEqual(body["type"], ProblemType.ALREADY_EXISTS)
         self.assertEqual(body["detail"], "A group with name 'alpha' already exists for this tenant.")
         self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2).exists())
 
@@ -1206,7 +1206,7 @@ class GroupV2UpdateViewTest(GroupV2ViewTestBase):
         response = self._update(self.group_a, {"name": "beta"})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.json()["type"], "http://project-kessel.org/problems/already-exists")
+        self.assertEqual(response.json()["type"], ProblemType.ALREADY_EXISTS)
         self.group_a.refresh_from_db()
         self.assertEqual(self.group_a.name, "alpha")
         self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2).exists())
