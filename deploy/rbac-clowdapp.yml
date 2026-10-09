@@ -1004,6 +1004,9 @@ objects:
         args:
         - "--extend.query-path=/etc/config.yaml"
         - "--config.file="
+        ports:
+        - name: metrics
+          containerPort: 9187
         env:
         - name: DATABASE_HOST
           valueFrom:
@@ -1041,7 +1044,7 @@ objects:
         - name: postgres-exporter-queries
           configMap:
             name: rbac-postgres-exporter-queries
-            optional: true
+            optional: false
         volumeMounts:
         - name: postgres-exporter-queries
           mountPath: /etc/config.yaml
@@ -1647,21 +1650,6 @@ objects:
     resources:
       requests:
         storage: 2Gi
-
-- apiVersion: v1
-  kind: Service
-  metadata:
-    name: rbac-postgres-exporter
-    labels:
-      app: rbac-postgres-exporter
-  spec:
-    ports:
-    - name: 9187-tcp
-      port: 9187
-      targetPort: 9187
-    selector:
-      pod: rbac-rbac-postgres-exporter
-    type: ClusterIP
 parameters:
 - description: Image name
   name: IMAGE
