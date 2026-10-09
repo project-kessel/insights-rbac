@@ -1,5 +1,9 @@
 # Local Docker/Podman validation
 
+For detailed instructions on creating V1/V2 test identities, choosing admin
+status, and assigning local V2 permissions, see
+[`local-validation-identities.md`](local-validation-identities.md).
+
 This guide runs the local RBAC API validations against the full Kessel stack.
 The commands use Podman when it is available, but Docker is also supported.
 
