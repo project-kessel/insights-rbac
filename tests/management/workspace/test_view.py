@@ -19,40 +19,39 @@
 import json
 import random
 import string
-
+from importlib import reload
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, transaction
 from django.test.utils import override_settings
-from django.urls import clear_url_caches
-from importlib import reload
-from psycopg2.errors import DeadlockDetected, SerializationFailure
-from unittest.mock import patch
-from django.urls import reverse
+from django.urls import clear_url_caches, reverse
 from management.audit_log.model import AuditLog
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
-from rest_framework import status
-from rest_framework.test import APIClient
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.problem_details import ProblemType
 from management.workspace.serializer import WorkspaceEventSerializer
 from management.workspace.service import WorkspaceService
 from migration_tool.in_memory_tuples import (
-    all_of,
     InMemoryRelationReplicator,
     InMemoryTuples,
+    all_of,
     relation,
     resource,
     subject,
 )
 from migration_tool.utils import create_relationship
-from api.models import Tenant
-from rbac import urls
+from psycopg2.errors import DeadlockDetected, SerializationFailure
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
+
+from api.models import Tenant
+from rbac import urls
 
 
 class BasicWorkspaceViewTests:
@@ -90,6 +89,10 @@ class BasicWorkspaceViewTests:
         if not platform_default:
             principal, _ = Principal.objects.get_or_create(username=username, tenant=self.tenant)
             group.principals.add(principal)
+
+    def _assert_is_already_exists_response(self, response):
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(ProblemType.ALREADY_EXISTS, response.data["type"])
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -204,6 +207,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         # Patch get_queryset to not use select_for_update during tests
         # SERIALIZABLE isolation level already provides necessary locking
         from unittest.mock import patch
+
         from management.workspace.view import WorkspaceViewSet
 
         original_get_queryset = WorkspaceViewSet.get_queryset
@@ -521,6 +525,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         client = APIClient()
         response = client.post(url, test_data, format="json", **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self._assert_is_already_exists_response(response)
         resp_body = json.loads(response.content.decode())
         self.assertEqual(resp_body.get("detail"), "Can't create workspace with same name within same parent workspace")
 
@@ -1278,6 +1283,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response_message = response.json()
 
         self.assertEqual(response_message.get("status"), status.HTTP_400_BAD_REQUEST)
+        self._assert_is_already_exists_response(response)
         self.assertEqual(
             response_message.get("detail"), f"A workspace with the name '{wsB.name}' already exists under same parent."
         )
@@ -1301,6 +1307,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response_message = response.json()
 
         self.assertEqual(response_message.get("status"), status.HTTP_400_BAD_REQUEST)
+        self._assert_is_already_exists_response(response)
         self.assertEqual(
             response_message.get("detail"), f"A workspace with the name '{wsB.name}' already exists under same parent."
         )
@@ -2428,6 +2435,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
 
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self._assert_is_already_exists_response(response)
         response_body = response.json()
         self.assertEqual(
             response_body.get("detail"), "A workspace with the same name already exists under the target parent."
