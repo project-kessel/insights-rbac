@@ -18,8 +18,7 @@
 
 from collections import deque
 from dataclasses import dataclass
-from unittest.mock import Mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.conf import settings
 from django.test import TestCase
@@ -36,22 +35,25 @@ from management.inventory_replicator.inventory_replicator import (
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.models import Access, BindingMapping, Group, Permission, Policy, ResourceDefinition, Role, Workspace
 from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
-from management.role.v2_model import RoleV2, CustomRoleV2
+from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding
 from management.role_binding.service import RoleBindingService
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
-from management.workspace.service import WorkspaceService
+from management.workspace.service import WorkspaceAlreadyExistsError, WorkspaceService
 from migration_tool.in_memory_tuples import (
-    InMemoryTuples,
     InMemoryRelationReplicator,
+    InMemoryTuples,
     all_of,
     relation,
-    subject_type,
     resource,
+    subject_type,
 )
+from rest_framework import serializers
 from tests.management.role.test_dual_write import RbacFixture
 from tests.util import assert_v2_tuples_consistent
-from tests.v2_util import bootstrap_tenant_for_v2_test, seed_v2_role_from_v1, WorkspaceCacheReplicator
+from tests.v2_util import WorkspaceCacheReplicator, bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
+
+from api.models import Tenant
 
 
 @dataclass
@@ -202,7 +204,7 @@ class WorkspaceServiceCreateTests(WorkspaceServiceTestBase):
     def test_create_unique_per_parent(self):
         """Test the create method enforces name uniqueness per tenant"""
         validated_data = {"name": "Standard", "parent_id": self.default_workspace.id}
-        with self.assertRaises(serializers.ValidationError) as context:
+        with self.assertRaises(WorkspaceAlreadyExistsError) as context:
             self.service.create(validated_data, self.tenant)
         self.assertIn("Can't create workspace with same name within same parent workspace", str(context.exception))
 
@@ -346,7 +348,7 @@ class WorkspaceServiceUpdateTests(WorkspaceServiceTestBase):
 
         # Try to update the Workspace A with name="Workspace B"
         validated_data = {"name": wsB.name}
-        with self.assertRaises(serializers.ValidationError) as context:
+        with self.assertRaises(WorkspaceAlreadyExistsError) as context:
             self.service.update(wsA, validated_data)
         self.assertIn(
             f"A workspace with the name '{wsB.name}' already exists under same parent.", str(context.exception)

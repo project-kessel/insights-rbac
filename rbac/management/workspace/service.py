@@ -20,7 +20,7 @@ import itertools
 import logging
 import uuid
 from itertools import groupby
-from typing import Optional
+from typing import NoReturn, Optional
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -342,6 +342,12 @@ def _remove_workspace_direct_role_bindings(workspace: Workspace, replicator: Inv
     return len(role_bindings)
 
 
+class WorkspaceAlreadyExistsError(Exception):
+    """An error indicating that a duplicate workspace name has been used under the relevant parent namespace."""
+
+    pass
+
+
 class WorkspaceService:
     """Workspace service."""
 
@@ -378,6 +384,19 @@ class WorkspaceService:
             workspace=workspace, event_type=event_type, replicator=self._replicator
         )
 
+    def _handle_validation_error(self, e: ValidationError, as_serializer_error: bool, conflict_msg: str) -> NoReturn:
+        message = e.message_dict
+        if hasattr(e, "error_dict") and "__all__" in e.error_dict:
+            for error in e.error_dict["__all__"]:
+                for msg in error.messages:
+                    if "unique_workspace_name_per_parent" in msg:
+                        raise WorkspaceAlreadyExistsError(conflict_msg) from e
+
+        if as_serializer_error:
+            raise serializers.ValidationError(message) from e
+        else:
+            raise e
+
     @atomic
     def create(self, validated_data: dict, request_tenant: Tenant) -> Workspace:
         """Create workspace."""
@@ -406,14 +425,11 @@ class WorkspaceService:
 
             return workspace
         except ValidationError as e:
-            message = e.message_dict
-            if hasattr(e, "error_dict") and "__all__" in e.error_dict:
-                for error in e.error_dict["__all__"]:
-                    for msg in error.messages:
-                        if "unique_workspace_name_per_parent" in msg:
-                            message = "Can't create workspace with same name within same parent workspace"
-                            break
-            raise serializers.ValidationError(message)
+            self._handle_validation_error(
+                e,
+                as_serializer_error=True,
+                conflict_msg="Can't create workspace with same name within same parent workspace",
+            )
 
     def update(self, instance: Workspace, validated_data: dict) -> Workspace:
         """Update workspace."""
@@ -433,15 +449,14 @@ class WorkspaceService:
             dual_write_handler = self._dual_write_handler(instance, ReplicationEventType.UPDATE_WORKSPACE)
             dual_write_handler.replicate_updated_workspace(instance.parent, force_create=force_create)
         except ValidationError as e:
-            message = e.message_dict
-            if hasattr(e, "error_dict") and "__all__" in e.error_dict:
-                for error in e.error_dict["__all__"]:
-                    for msg in error.messages:
-                        if "unique_workspace_name_per_parent" in msg:
-                            name = validated_data.get("name")
-                            message = f"A workspace with the name '{name}' already exists under same parent."
-                            break
-            raise serializers.ValidationError(message)
+            name = validated_data.get("name")
+
+            self._handle_validation_error(
+                e,
+                as_serializer_error=True,
+                conflict_msg=f"A workspace with the name {name!r} already exists under same parent.",
+            )
+
         return instance
 
     @atomic
@@ -477,7 +492,16 @@ class WorkspaceService:
         target_workspace = Workspace.objects.get(id=target_workspace_id, tenant=instance.tenant)
         previous_parent_workspace = instance.parent
         instance.parent = target_workspace
-        instance.save(update_fields=["parent"])
+
+        try:
+            instance.save(update_fields=["parent"])
+        except ValidationError as e:
+            self._handle_validation_error(
+                e,
+                as_serializer_error=False,
+                conflict_msg="A workspace with the same name already exists under the target parent.",
+            )
+
         dual_write_handler = self._dual_write_handler(instance, ReplicationEventType.MOVE_WORKSPACE)
         dual_write_handler.replicate_updated_workspace(previous_parent_workspace, skip_ws_events=True)
         return instance

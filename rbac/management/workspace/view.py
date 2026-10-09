@@ -18,6 +18,7 @@
 
 import logging
 import uuid
+from typing import NoReturn
 
 import pgtransaction
 from django.core.exceptions import ValidationError
@@ -31,7 +32,7 @@ from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
 from management.utils import ProblemType, validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
-from management.workspace.service import WorkspaceService
+from management.workspace.service import WorkspaceAlreadyExistsError, WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
 from rest_framework import serializers, status
 from rest_framework.decorators import action
@@ -272,17 +273,15 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             if response is not None:
                 return response
             raise
+        except WorkspaceAlreadyExistsError:
+            return single_problem_response_with_errors(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                problem_type=ProblemType.ALREADY_EXISTS,
+                detail="Can't create workspace with same name within same parent workspace",
+                source="name",
+            )
         except ValidationError as e:
-            for field, error_message in flatten_validation_error(e):
-                if "unique_workspace_name_per_parent" in error_message:
-                    return single_problem_response_with_errors(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        problem_type=ProblemType.ALREADY_EXISTS,
-                        detail="A workspace with the same name already exists under the parent.",
-                    )
-                if "__all__" in field:
-                    raise serializers.ValidationError(error_message)
-            raise
+            self._handle_validation_error(e)
 
     @staticmethod
     def _get_org_id(request):
@@ -466,7 +465,15 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
     @transaction.atomic()
     def update(self, request, *args, **kwargs):
         """Update a workspace."""
-        return super().update(request, *args, **kwargs)
+        try:
+            return super().update(request, *args, **kwargs)
+        except WorkspaceAlreadyExistsError as e:
+            return single_problem_response_with_errors(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                problem_type=ProblemType.ALREADY_EXISTS,
+                detail=str(e),
+                source="name",
+            )
 
     @pgtransaction.atomic(isolation_level=pgtransaction.SERIALIZABLE, retry=3)
     def _move_atomic(self, request):
@@ -525,16 +532,15 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 {"detail": "Workspace not found."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except WorkspaceAlreadyExistsError:
+            return single_problem_response_with_errors(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                problem_type=ProblemType.ALREADY_EXISTS,
+                detail="A workspace with the same name already exists under the target parent.",
+                source="parent_id",
+            )
         except ValidationError as e:
-            message = ""
-            for field, error_message in flatten_validation_error(e):
-                if "unique_workspace_name_per_parent" in error_message:
-                    message = "A workspace with the same name already exists under the target parent."
-                    break
-                if "__all__" in field:
-                    message = error_message
-                    break
-            raise serializers.ValidationError(message)
+            self._handle_validation_error(e)
 
     def _handle_operational_error(
         self, error: OperationalError, operation: str, ws_id: str | None = None
@@ -596,6 +602,16 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
         return None
+
+    def _handle_validation_error(self, e: ValidationError) -> NoReturn:
+        message = ""
+
+        for field, error_message in flatten_validation_error(e):
+            if "__all__" in field:
+                message = error_message
+                break
+
+        raise serializers.ValidationError(message)
 
     @staticmethod
     def _parent_id_query_param_validation(request: Request) -> uuid.UUID:
