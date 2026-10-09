@@ -5,6 +5,9 @@ knowledge_base:
   code_guidelines:
     filePatterns:
       - "docs/*-guidelines.md"
+      - "docs/coderabbit-rbac-knowledge.md"
+# Rules below are condensed from docs/coderabbit-rbac-knowledge.md, which lists exceptions and links to guideline sections.
+# Other repos can inherit them with `inheritance: true` + `remote_config` pointing at this file.
 reviews:
   request_changes_workflow: false
   high_level_summary: true
@@ -21,9 +24,32 @@ reviews:
         - All models must inherit TenantAwareModel for multi-tenancy
         - V2 views must extend BaseV2ViewSet
         - V2 errors must use RFC 7807 Problem JSON format
+        Also flag (see docs/coderabbit-rbac-knowledge.md for exceptions):
+        - Querysets on tenant-scoped models without a tenant filter (request.tenant or explicit tenant=),
+          and get_queryset() overrides that skip super() and do not filter by tenant
+        - create/update/destroy overridden on an AtomicOperationsMixin subclass; use perform_atomic_* instead
+        - A v2 detail path returning 403 or raising PermissionDenied for an object the caller cannot see;
+          it must return 404 to avoid existence leakage
+        - New v2 viewsets without an *AccessPermission class, or v2 write actions without V2WriteRequiresWorkspacesEnabled
+        - DRF exceptions raised from services; services raise domain exceptions that serializers convert
+        - Outbox/dual-write replication or external calls outside the transaction that mutates the data
+        - New models without a UUID v7 primary key, or APIs exposing integer PKs
+        - Any change to v1 response or error shapes
     - path: "rbac/management/v2_urls.py"
       instructions: |
         V2 routes are feature-flagged by V2_APIS_ENABLED. Ensure new routes follow this pattern.
+    - path: "rbac/rbac/**"
+      instructions: |
+        Settings and authentication middleware. Flag:
+        - Identity, org_id or admin status taken from user-controlled input without validation by the applicable authentication entry point (x-rh-identity, PSK, or JWT)
+        - Changes to security middleware order, or dev-only bypasses (ALLOW_ANY, DEVELOPMENT,
+          IT_BYPASS_TOKEN_VALIDATION, IT_BYPASS_IT_CALLS, DEBUG) defaulting to True
+        - Logging of SERVICE_PSKS, SYSTEM_USERS, tokens or identity headers
+    - path: "rbac/internal/**"
+      instructions: |
+        Internal /_private/ APIs. Flag new routes that skip InternalIdentityHeaderMiddleware auth
+        (only /_private/_a2s/ uses public auth), and inline `user.system and user.admin` checks
+        instead of check_system_user_access().
     - path: "tests/**"
       instructions: |
         Tests should use IdentityRequest or TransactionalIdentityRequest base classes.
