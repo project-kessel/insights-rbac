@@ -28,6 +28,8 @@ from django.core.exceptions import ValidationError
 from django.db import OperationalError, transaction
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
+
+import management.workspace.view
 from management.audit_log.model import AuditLog
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
@@ -2169,6 +2171,37 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         response_body = response.json()
         self.assertEqual(response_body.get("detail"), TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE)
+
+    def test_move_parent_id_not_exists_late(self):
+        """Test that a workspace deleted after the permission check returns a not found response."""
+
+        url = reverse("v2_management:workspace-move", kwargs={"pk": self.standard_workspace.id})
+        client = APIClient()
+
+        target_workspace = self.service.create(
+            {
+                "name": "Workspace Target",
+                "parent_id": self.default_workspace.id,
+            },
+            self.tenant,
+        )
+
+        workspace_data_for_move = {"parent_id": str(target_workspace.id)}
+
+        old_move = WorkspaceService.move
+
+        with patch.object(WorkspaceService, "move", autospec=True) as move_mock:
+
+            def deleted_move(*args, **kwargs):
+                self.service.destroy(target_workspace)
+                old_move(*args, **kwargs)
+
+            move_mock.side_effect = deleted_move
+            response = client.post(url, workspace_data_for_move, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json().get("type"), ProblemType.NOT_FOUND)
 
     def test_move_parent_with_empty_parent_id(self):
         """Test you cannot move a workspace when empty string is provided as a parent id."""

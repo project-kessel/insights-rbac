@@ -48,7 +48,7 @@ from .serializer import (
     WorkspaceSerializer,
     WorkspaceWithAncestrySerializer,
 )
-from ..problem_details import single_problem_response_with_errors, problem_response
+from ..problem_details import problem_response, single_problem_response_with_errors
 from ..utils import flatten_validation_error, validate_uuid
 
 INCLUDE_ANCESTRY_KEY = "include_ancestry"
@@ -528,9 +528,10 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             raise
         except Workspace.DoesNotExist:
             logger.exception("Target Workspace not found during operation, ws id: %s", kwargs.get("pk"))
-            return Response(
-                {"detail": "Workspace not found."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return problem_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                problem_type=ProblemType.NOT_FOUND,
+                detail="Workspace not found.",
             )
         except WorkspaceAlreadyExistsError:
             return single_problem_response_with_errors(
