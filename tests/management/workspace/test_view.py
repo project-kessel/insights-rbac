@@ -98,6 +98,9 @@ class BasicWorkspaceViewTests:
     def _assert_is_already_exists_response(self, response):
         assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.ALREADY_EXISTS)
 
+    def _assert_is_protected_response(self, response):
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
+
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class WorkspaceViewTests(IdentityRequest, BasicWorkspaceViewTests):
@@ -1086,7 +1089,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         for ws_id in invalid_id, root_id, standard_id:
             test_data = {"name": "New Workspace Name", "parent_id": ws_id}
             response = client.put(url, test_data, format="json", **self.headers)
-            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self._assert_is_protected_response(response)
             resp_body = json.loads(response.content.decode())
             self.assertEqual(resp_body.get("detail"), "The root workspace cannot be updated.")
 
@@ -1108,7 +1111,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         for test_data in test_data_cases:
             for method in ("put", "patch"):  # try to update via PUT and PATCH endpoint
                 response = getattr(client, method)(url, test_data, format="json", **self.headers)
-                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self._assert_is_protected_response(response)
                 resp_body = json.loads(response.content.decode())
                 self.assertEqual(resp_body.get("detail"), "The root workspace cannot be updated.")
 
@@ -1132,7 +1135,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         for ws_id in invalid_id, ungrouped_id, standard_id:
             test_data = {"name": "New Workspace Name", "parent_id": ws_id}
             response = client.put(url, test_data, format="json", **self.headers)
-            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self._assert_is_protected_response(response)
             resp_body = json.loads(response.content.decode())
             self.assertEqual(resp_body.get("detail"), "The ungrouped-hosts workspace cannot be updated.")
 
@@ -1154,7 +1157,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         for test_data in test_data_cases:
             for method in ("put", "patch"):  # try to update via PUT and PATCH endpoint
                 response = getattr(client, method)(url, test_data, format="json", **self.headers)
-                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self._assert_is_protected_response(response)
                 resp_body = json.loads(response.content.decode())
                 self.assertEqual(resp_body.get("detail"), "The ungrouped-hosts workspace cannot be updated.")
 
@@ -2104,7 +2107,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         workspace_data_for_move = {"parent_id": self.standard_workspace.id}
 
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self._assert_is_protected_response(response)
         response_body = response.json()
         self.assertEqual(response_body.get("detail"), "Cannot move non-standard workspace.")
 
@@ -2145,7 +2148,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         workspace_data_for_move = {"parent_id": self.standard_workspace.id}
 
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self._assert_is_protected_response(response)
         response_body = response.json()
         self.assertEqual(response_body.get("detail"), "Cannot move non-standard workspace.")
 
@@ -2218,7 +2221,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         workspace_data_for_move = {"parent_id": self.root_workspace.id}
 
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self._assert_is_protected_response(response)
         self.assertEqual(
             response.json().get("detail"), "Sub-workspaces may only be created under the default workspace."
         )
@@ -4334,12 +4337,9 @@ class WorkspaceViewTestsWithPeerRestrictions(TransactionalWorkspaceViewTests):
         workspace = {"name": "New Workspace", "description": "Workspace", "parent_id": self.root_workspace.id}
         response = client.post(url, workspace, format="json", **self.headers)
 
-        status_code = response.data.get("status")
+        self._assert_is_protected_response(response)
         detail = response.data.get("detail")
         self.assertEqual(detail, "Sub-workspaces may only be created under the default workspace.")
-
-        self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.get("content-type"), "application/problem+json")
 
 
 @override_settings(V2_APIS_ENABLED=True, WORKSPACE_HIERARCHY_DEPTH_LIMIT=100, WORKSPACE_RESTRICT_DEFAULT_PEERS=False)

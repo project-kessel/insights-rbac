@@ -348,6 +348,12 @@ class WorkspaceAlreadyExistsError(Exception):
     pass
 
 
+class InvalidWorkspaceTypeError(Exception):
+    """An error indicating that a workspace is of an ineligible type."""
+
+    pass
+
+
 class WorkspaceService:
     """Workspace service."""
 
@@ -434,7 +440,7 @@ class WorkspaceService:
     def update(self, instance: Workspace, validated_data: dict) -> Workspace:
         """Update workspace."""
         if instance.type in (Workspace.Types.ROOT, Workspace.Types.UNGROUPED_HOSTS):
-            raise serializers.ValidationError(f"The {instance.type} workspace cannot be updated.")
+            raise InvalidWorkspaceTypeError(f"The {instance.type} workspace cannot be updated.")
         for attr, value in validated_data.items():
             if self._parent_id_attr_update(attr, value, instance):
                 raise serializers.ValidationError("Can't update the 'parent_id' on a workspace directly")
@@ -467,7 +473,7 @@ class WorkspaceService:
         instance = Workspace.objects.select_for_update().get(pk=instance.pk)
 
         if instance.type != Workspace.Types.STANDARD:
-            raise serializers.ValidationError(f"Unable to delete {instance.type} workspace")
+            raise InvalidWorkspaceTypeError(f"Unable to delete {instance.type} workspace")
         if Workspace.objects.filter(parent=instance, tenant=instance.tenant).exists():
             raise serializers.ValidationError("Unable to delete due to workspace dependencies")
 
@@ -513,9 +519,7 @@ class WorkspaceService:
             error = {"workspace": [message]}
             raise serializers.ValidationError(error)
         if self._violates_peer_restrictions(target_parent_id, tenant):
-            message = "Sub-workspaces may only be created under the default workspace."
-            error = {"workspace": [message]}
-            raise serializers.ValidationError(error)
+            raise InvalidWorkspaceTypeError("Sub-workspaces may only be created under the default workspace.")
 
     def _parent_id_attr_update(self, attr: str, value: str, instance: Workspace) -> bool:
         """Determine if the attribute being updated is parent_id."""
@@ -562,7 +566,7 @@ class WorkspaceService:
     def _prevent_moving_non_standard_workspace(instance: Workspace) -> None:
         """Prevent moving non-standard workspace."""
         if instance.type != Workspace.Types.STANDARD:
-            raise serializers.ValidationError({"workspace": "Cannot move non-standard workspace."})
+            raise InvalidWorkspaceTypeError("Cannot move non-standard workspace.")
 
     @staticmethod
     def _prevent_moving_workspace_under_own_descendant(new_parent_id: uuid.UUID, instance: Workspace) -> None:

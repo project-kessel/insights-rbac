@@ -18,7 +18,7 @@
 
 import logging
 import uuid
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 import pgtransaction
 from django.core.exceptions import ValidationError
@@ -32,7 +32,7 @@ from management.filters import ValidatedOrderingFilter
 from management.permissions.workspace_access import WorkspaceAccessPermission
 from management.utils import ProblemType, validate_and_get_key
 from management.workspace.filters import WorkspaceAccessFilterBackend, WorkspaceObjectAccessMixin
-from management.workspace.service import WorkspaceAlreadyExistsError, WorkspaceService
+from management.workspace.service import InvalidWorkspaceTypeError, WorkspaceAlreadyExistsError, WorkspaceService
 from psycopg2.errors import DeadlockDetected, SerializationFailure
 from rest_framework import serializers, status
 from rest_framework.decorators import action
@@ -280,6 +280,8 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 detail="Can't create workspace with same name within same parent workspace",
                 source="name",
             )
+        except InvalidWorkspaceTypeError as e:
+            return self._protected_response(e, source="workspace")
         except ValidationError as e:
             self._handle_validation_error(e)
 
@@ -406,7 +408,10 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
 
         Overridden only to add transaction.
         """
-        return super().destroy(request, *args, **kwargs)
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except InvalidWorkspaceTypeError as e:
+            return self._protected_response(e)
 
     def perform_destroy(self, instance):
         """Delegate to service for destroy logic and log audit entry."""
@@ -474,6 +479,8 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 detail=str(e),
                 source="name",
             )
+        except InvalidWorkspaceTypeError as e:
+            return self._protected_response(e)
 
     @pgtransaction.atomic(isolation_level=pgtransaction.SERIALIZABLE, retry=3)
     def _move_atomic(self, request):
@@ -540,6 +547,8 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 detail="A workspace with the same name already exists under the target parent.",
                 source="parent_id",
             )
+        except InvalidWorkspaceTypeError as e:
+            return self._protected_response(e, source="workspace")
         except ValidationError as e:
             self._handle_validation_error(e)
 
@@ -622,3 +631,11 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
             raise serializers.ValidationError({"parent_id": "The 'parent_id' field is required."})
         validate_uuid(new_parent_id)
         return uuid.UUID(new_parent_id)
+
+    def _protected_response(self, exception: Exception, source: Optional[str] = None):
+        return single_problem_response_with_errors(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            problem_type=ProblemType.PROTECTED_OBJECT,
+            detail=str(exception),
+            source=source,
+        )

@@ -39,7 +39,7 @@ from management.role.v2_model import CustomRoleV2, RoleV2
 from management.role_binding.model import RoleBinding
 from management.role_binding.service import RoleBindingService
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
-from management.workspace.service import WorkspaceAlreadyExistsError, WorkspaceService
+from management.workspace.service import WorkspaceAlreadyExistsError, WorkspaceService, InvalidWorkspaceTypeError
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
@@ -300,7 +300,7 @@ class WorkspaceServiceUpdateTests(WorkspaceServiceTestBase):
     def test_update_root_workspace(self):
         """Test we cannot update the root workspace."""
         validated_data = {"name": "Bar Name", "description": "Bar Desc"}
-        with self.assertRaises(serializers.ValidationError) as context:
+        with self.assertRaises(InvalidWorkspaceTypeError) as context:
             self.service.update(self.root_workspace, validated_data)
         self.assertIn("The root workspace cannot be updated.", str(context.exception))
 
@@ -333,7 +333,7 @@ class WorkspaceServiceUpdateTests(WorkspaceServiceTestBase):
     def test_update_ungrouped_workspace(self):
         """Test we cannot update the ungrouped workspace."""
         validated_data = {"name": "Bar Name", "description": "Bar Desc"}
-        with self.assertRaises(serializers.ValidationError) as context:
+        with self.assertRaises(InvalidWorkspaceTypeError) as context:
             self.service.update(self.ungrouped_workspace, validated_data)
         self.assertIn("The ungrouped-hosts workspace cannot be updated.", str(context.exception))
 
@@ -367,7 +367,7 @@ class WorkspaceServiceDestroyTests(WorkspaceServiceTestBase):
     def test_destroy_non_standard(self):
         """Test the destroy method on non-standard workspaces"""
         for workspace in (self.default_workspace, self.root_workspace, self.ungrouped_workspace):
-            with self.assertRaises(serializers.ValidationError) as context:
+            with self.assertRaises(InvalidWorkspaceTypeError) as context:
                 self.service.destroy(workspace)
             self.assertIn(f"Unable to delete {workspace.type} workspace", str(context.exception))
 
@@ -631,7 +631,7 @@ class WorkspaceHierarchyTests(WorkspaceServiceTestBase):
     @override_settings(WORKSPACE_HIERARCHY_DEPTH_LIMIT=2, WORKSPACE_RESTRICT_DEFAULT_PEERS=True)
     def test_enforce_hierarchy_depth_is_within_range_but_peer_violation(self):
         """Test when hierarchy depth is within range but there are peer restrictions"""
-        with self.assertRaises(serializers.ValidationError) as context:
+        with self.assertRaises(InvalidWorkspaceTypeError) as context:
             self.service._enforce_hierarchy_depth(self.root_workspace.id, self.tenant)
         self.assertIn("Sub-workspaces may only be created under the default workspace.", str(context.exception))
 
