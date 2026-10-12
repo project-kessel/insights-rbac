@@ -19,23 +19,20 @@
 import uuid
 from collections.abc import Iterable
 from importlib import reload
-from urllib.parse import urlencode
 from unittest.mock import ANY, patch
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
 from django.utils.dateparse import parse_datetime
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from api.models import Tenant
 from management import v2_urls
 from management.audit_log.model import AuditLog
-from management.models import Permission, Workspace
-from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.models import Permission, Workspace
+from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
+from management.problem_details import ProblemType
 from management.role.definer import seed_roles
 from management.role.v2_model import CustomRoleV2, PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_role_scope import v2_role_excluded_application_permission_ids_cache
@@ -43,9 +40,17 @@ from management.role.v2_service import RoleV2Service
 from management.tenant_mapping.v2_activation import is_v2_opted_in, set_v2_opt_in_state
 from management.tenant_service import V2TenantBootstrapService
 from management.utils import PRINCIPAL_CACHE, as_uuid
-from rbac import urls
+from rest_framework import status
+from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
-from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
+from tests.v2_util import (
+    assert_problem_details_response_with,
+    bootstrap_tenant_for_v2_test,
+    is_problem_details_response,
+)
+
+from api.models import Tenant
+from rbac import urls
 
 CACHE_PATCH_TARGET = "management.role.v2_service.permission_scope_cache"
 
@@ -165,7 +170,7 @@ class RoleV2RetrieveViewTest(IdentityRequest):
 
             url = self._get_role_url(excluded_role.uuid)
             response = self.client.get(url, **self.headers)
-            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+            assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
         finally:
             v2_role_excluded_application_permission_ids_cache.invalidate()
 
@@ -173,16 +178,14 @@ class RoleV2RetrieveViewTest(IdentityRequest):
         """Test that retrieving a platform role returns 404 (platform roles are not exposed)."""
         url = self._get_role_url(self.platform_role.uuid)
         response = self.client.get(url, **self.headers)
-
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
 
     def test_retrieve_role_not_found(self):
         """Test retrieving a non-existent role."""
         non_existent_uuid = uuid.uuid4()
         url = self._get_role_url(non_existent_uuid)
         response = self.client.get(url, **self.headers)
-
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
 
     def test_retrieve_role_invalid_uuid_format(self):
         """Test retrieving a role with invalid UUID format."""
@@ -2081,8 +2084,7 @@ class RoleV2ViewSetTests(IdentityRequest):
     def _assert_delete_not_found(self, response, uuids: Iterable[str | uuid.UUID]):
         uuids = {as_uuid(u) for u in uuids}
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
 
         data = response.data
 
@@ -2136,8 +2138,7 @@ class RoleV2ViewSetTests(IdentityRequest):
     def test_delete_empty(self):
         """Test that deleting with an empty ids list returns 400."""
         response = self._request_delete({"ids": []})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["errors"][0]["field"], "ids")
         self.assertEqual(response.data["errors"][0]["message"], "Ensure this field has at least 1 elements.")
 
@@ -2173,8 +2174,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self._request_delete({"ids": [str(seeded_role.uuid)]})
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
         self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
 
@@ -2188,8 +2188,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self._request_delete({"ids": [custom_role["id"], str(seeded_role.uuid)]})
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
         self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(uuid=custom_role["id"]).exists())
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
@@ -2197,8 +2196,7 @@ class RoleV2ViewSetTests(IdentityRequest):
     def test_delete_missing_ids(self):
         """Test that a delete request with no IDs fails with status 400."""
         response = self._request_delete({})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
 
         self.assertIn("title", response.data)
         self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")
@@ -2212,8 +2210,7 @@ class RoleV2ViewSetTests(IdentityRequest):
     def test_delete_non_array_ids(self):
         """Test that a delete request with a non-array ids field fails with status 400."""
         response = self._request_delete({"ids": 42})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(is_problem_details_response(response))
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
 
         self.assertIn("title", response.data)
         self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")
@@ -2231,8 +2228,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         for invalid_id in [42, "d5111b1de8104822b54ba5cb590dceb6", "not a UUID"]:
             with self.subTest(id=invalid_id):
                 response = self._request_delete({"ids": [invalid_id]})
-                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-                self.assertTrue(is_problem_details_response(response))
+                assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
 
                 self.assertIn("title", response.data)
                 self.assertEqual(response.data["title"], "The request payload contains invalid syntax.")

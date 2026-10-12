@@ -23,17 +23,16 @@ from importlib import reload
 from unittest.mock import patch
 from uuid import uuid4
 
+import management.workspace.view
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, transaction
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
-
-import management.workspace.view
 from management.audit_log.model import AuditLog
+from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
-from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.problem_details import ProblemType, status_default_problem_title
 from management.workspace.serializer import WorkspaceEventSerializer
 from management.workspace.service import WorkspaceService
@@ -50,7 +49,11 @@ from psycopg2.errors import DeadlockDetected, SerializationFailure
 from rest_framework import status
 from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
-from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
+from tests.v2_util import (
+    assert_problem_details_response_with,
+    bootstrap_tenant_for_v2_test,
+    is_problem_details_response,
+)
 
 from api.models import Tenant
 from rbac import urls
@@ -93,8 +96,7 @@ class BasicWorkspaceViewTests:
             group.principals.add(principal)
 
     def _assert_is_already_exists_response(self, response):
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(ProblemType.ALREADY_EXISTS, response.data["type"])
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.ALREADY_EXISTS)
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -1621,13 +1623,8 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         client = APIClient()
         response = client.delete(url, None, format="json", **self.headers)
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        status_code = response.data.get("status")
-        detail = response.data.get("detail")
-        self.assertEqual(detail, "No Workspace matches the given query.")
-        self.assertEqual(status_code, 404)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(ProblemType.NOT_FOUND, response.data["type"])
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data.get("detail"), "No Workspace matches the given query.")
 
     def test_delete_workspace_unauthorized(self):
         request_context = self._create_request_context(self.customer_data, self.user_data, is_org_admin=False)
@@ -1759,9 +1756,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response = client.post(url, data, format="json", **self.headers)
 
         # Verify returns 503 SERVICE UNAVAILABLE after all retries exhausted
-        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(ProblemType.SERVICE_UNAVAILABLE, response.data["type"])
+        assert_problem_details_response_with(self, response, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(status_default_problem_title(503), response.data["title"])
         self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
         self.assertEqual(response["Retry-After"], "1")
@@ -1870,9 +1865,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response = client.post(url, data, format="json", **self.headers)
 
         # Verify returns 500 INTERNAL SERVER ERROR for deadlock
-        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(response.data["type"], ProblemType.INTERNAL_ERROR)
+        assert_problem_details_response_with(self, response, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertEqual(status_default_problem_title(500), response.data["title"])
         self.assertIn("Internal server error", str(response.data["detail"]))
 
@@ -1926,9 +1919,7 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         response = client.post(url, data, format="json", **self.headers)
 
         # OperationalError propagates through _replicate -> pgtransaction retries -> exhausted -> 503
-        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(ProblemType.SERVICE_UNAVAILABLE, response.data["type"])
+        assert_problem_details_response_with(self, response, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(status_default_problem_title(503), response.data["title"])
         self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
         self.assertEqual(response["Retry-After"], "1")
@@ -2080,9 +2071,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         response = client.post(url, workspace_data_for_move, format="json", **self.headers)
         response_body = response.json()
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(response_body.get("type"), ProblemType.NOT_FOUND)
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response_body.get("detail"), "No Workspace matches the given query.")
 
     def test_move_with_invalid_uuid_parent_id(self):
@@ -2198,10 +2187,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
 
             move_mock.side_effect = deleted_move
             response = client.post(url, workspace_data_for_move, format="json", **self.headers)
-
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(response.json().get("type"), ProblemType.NOT_FOUND)
+            assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
 
     def test_move_parent_with_empty_parent_id(self):
         """Test you cannot move a workspace when empty string is provided as a parent id."""
@@ -2829,9 +2815,7 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
         response = client.post(url, data, format="json", **self.headers)
 
         # Verify returns 500 INTERNAL SERVER ERROR for deadlock
-        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(response.data["type"], ProblemType.INTERNAL_ERROR)
+        assert_problem_details_response_with(self, response, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertIn("Internal server error", str(response.data["detail"]))
 
         # Verify all retry attempts were made (1 initial + 3 retries = 4 total)
@@ -4188,10 +4172,7 @@ class WorkspaceTestsDetail(WorkspaceViewTests):
         client = APIClient()
         response = client.get(url, None, format="json", **self.headers)
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertTrue(is_problem_details_response(response))
-        self.assertEqual(response.data.get("status"), 404)
-        self.assertEqual(response.data.get("type"), ProblemType.NOT_FOUND)
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.data.get("detail"), "No Workspace matches the given query.")
 
     def test_get_workspace_unauthorized(self):
