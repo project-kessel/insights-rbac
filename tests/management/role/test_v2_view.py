@@ -1968,9 +1968,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self.client.put(update_url, data, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response["Content-Type"], "application/problem+json")
-        self.assertEqual(response.data["status"], 400)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertIn("System roles may not be updated", str(response.data))
 
     # --- Problem RFC format on errors ---
@@ -2174,7 +2172,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self._request_delete({"ids": [str(seeded_role.uuid)]})
 
-        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
 
@@ -2188,7 +2186,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self._request_delete({"ids": [custom_role["id"], str(seeded_role.uuid)]})
 
-        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertIn("System roles may not be deleted", response.data["detail"])
         self.assertTrue(RoleV2.objects.filter(uuid=custom_role["id"]).exists())
         self.assertTrue(RoleV2.objects.filter(pk=seeded_role.pk).exists())
