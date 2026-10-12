@@ -49,7 +49,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from tests.identity_request import IdentityRequest
 from tests.logging_util import enable_logging
-from tests.v2_util import bootstrap_tenant_for_v2_test
+from tests.v2_util import bootstrap_tenant_for_v2_test, is_problem_details_response
 
 from api.common import RH_IDENTITY_HEADER
 from api.models import Tenant
@@ -1066,6 +1066,7 @@ class GroupV2CreateViewTest(GroupV2ViewTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         body = response.json()
+        self.assertTrue(is_problem_details_response(response))
         self.assertEqual(body["type"], ProblemType.ALREADY_EXISTS)
         self.assertEqual(body["detail"], "A group with name 'alpha' already exists for this tenant.")
         self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2).exists())
@@ -1081,6 +1082,8 @@ class GroupV2CreateViewTest(GroupV2ViewTestBase):
         ):
             with self.subTest(body=body):
                 response = self._create(body)
+                self.assertTrue(is_problem_details_response(response))
+                self.assertEqual(response.json()["type"], ProblemType.INVALID_REQUEST)
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertEqual(response.json()["errors"][0]["field"], field)
 
@@ -1090,7 +1093,9 @@ class GroupV2CreateViewTest(GroupV2ViewTestBase):
 
         response = self._create({"name": "gamma"})
 
+        self.assertTrue(is_problem_details_response(response))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.json()["type"], ProblemType.INSUFFICIENT_PERMISSION)
         self.assertEqual(self.mock_check_access.call_args.kwargs["relation"], "rbac_groups_write")
         self.assertFalse(Group.objects.filter(tenant=self.tenant, name="gamma").exists())
 
@@ -1183,6 +1188,8 @@ class GroupV2UpdateViewTest(GroupV2ViewTestBase):
         response = self._update(group, {"name": "renamed"})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.INVALID_REQUEST)
         self.assertEqual(response.json()["detail"], "Groups with system=true may not be updated.")
         group.refresh_from_db()
         self.assertEqual(group.name, "sys")
@@ -1206,6 +1213,7 @@ class GroupV2UpdateViewTest(GroupV2ViewTestBase):
         response = self._update(self.group_a, {"name": "beta"})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
         self.assertEqual(response.json()["type"], ProblemType.ALREADY_EXISTS)
         self.group_a.refresh_from_db()
         self.assertEqual(self.group_a.name, "alpha")
@@ -1291,6 +1299,8 @@ class GroupV2DestroyViewTest(GroupV2ViewTestBase):
                 response = self._delete(group.uuid)
 
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertTrue(is_problem_details_response(response))
+                self.assertEqual(response.json()["type"], ProblemType.INVALID_REQUEST)
                 self.assertEqual(response.json()["detail"], f"Groups with {flag}=true may not be deleted.")
                 self.assertTrue(Group.objects.filter(uuid=group.uuid).exists())
         self.mock_dual_write.assert_not_called()
@@ -1304,6 +1314,8 @@ class GroupV2DestroyViewTest(GroupV2ViewTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         body = response.json()
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(body["type"], ProblemType.CONFLICT)
         self.assertEqual(body["status"], 409)
         self.assertEqual(
             body["detail"],
@@ -1349,6 +1361,8 @@ class GroupV2DestroyViewTest(GroupV2ViewTestBase):
             response = self._delete(self.group_a.uuid)
 
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.CONFLICT)
         self.mock_dual_write.return_value.replicate_removed_principals.assert_not_called()
 
     @patch("management.group.v2_view.group_obj_change_notification_handler")
@@ -1377,6 +1391,8 @@ class GroupV2DestroyViewTest(GroupV2ViewTestBase):
         response = self._delete(self.group_a.uuid)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.INSUFFICIENT_PERMISSION)
         self.assertEqual(self.mock_check_access.call_args.kwargs["relation"], "rbac_groups_write")
         self.assertTrue(Group.objects.filter(uuid=self.group_a.uuid).exists())
 
@@ -1842,6 +1858,7 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         response = self._add(self.group_b.uuid, {"usernames": ["user_3"]})
 
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertTrue(is_problem_details_response(response))
         self.assertFalse(self.group_b.principals.filter(pk=self.user_3.pk).exists())
 
     def test_add_bop_skipped_for_service_account_only_request(self):
@@ -1910,6 +1927,8 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         response = self._add(self.group_b.uuid, {"usernames": ["user_3"], "service_accounts": ["xyz", "unknown"]})
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.NOT_FOUND)
         self.assertEqual(response.json()["detail"], "Principal(s) not found: unknown.")
         self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
         self.assertFalse(Principal.objects.filter(tenant=self.tenant, service_account_id="unknown").exists())
@@ -1922,6 +1941,8 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.NOT_FOUND)
         self.assertEqual(response.json()["detail"], "Principal(s) not found: no-such-user, unknown.")
         self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
         self.mock_dual_write.assert_not_called()
@@ -1999,6 +2020,7 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
                 response = self._add(self.group_b.uuid, {"usernames": ["user_3"], "service_accounts": ["xyz"]})
 
                 self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+                self.assertTrue(is_problem_details_response(response))
                 self.assertEqual(response.json()["detail"], "Unable to validate service accounts.")
                 self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
                 self.mock_proxy.assert_not_called()
@@ -2098,6 +2120,8 @@ class GroupV2RemovePrincipalsBulkViewTest(GroupV2ViewTestBase):
         response = self._remove(self.group_b.uuid, usernames="user_2")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.NOT_FOUND)
 
     def test_remove_duplicate_usernames_deduplicated(self):
         """Duplicate identifiers in the query params are resolved to a distinct set and removed exactly once."""
@@ -2126,6 +2150,8 @@ class GroupV2RemovePrincipalsBulkViewTest(GroupV2ViewTestBase):
         response = self._remove(group.uuid, usernames="user_1")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.json()["type"], ProblemType.INVALID_REQUEST)
         self.assertTrue(group.principals.filter(pk=self.user_1.pk).exists())
 
     def test_remove_requires_write_permission(self):
