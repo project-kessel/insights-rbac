@@ -34,6 +34,7 @@ class ProblemType(enum.StrEnum):
     INTERNAL_ERROR = "http://project-kessel.org/problems/internal-error"
     ALREADY_EXISTS = "http://project-kessel.org/problems/already-exists"
     SERVICE_UNAVAILABLE = "http://project-kessel.org/problems/service-unavailable"
+    PROTECTED_OBJECT = "http://project-kessel.org/problems/protected-internal-object"
 
 
 PROBLEM_TYPE_TITLES: dict[str, str] = {
@@ -45,6 +46,7 @@ PROBLEM_TYPE_TITLES: dict[str, str] = {
     ProblemType.INTERNAL_ERROR: "Unexpected error occurred.",
     ProblemType.ALREADY_EXISTS: "The resource already exists.",
     ProblemType.SERVICE_UNAVAILABLE: "A downstream dependency is temporarily unavailable. Please retry shortly.",
+    ProblemType.PROTECTED_OBJECT: "An internal object cannot be modified.",
 }
 
 # RFC 9457 problem type URIs matching the TypeSpec ProblemType enum.

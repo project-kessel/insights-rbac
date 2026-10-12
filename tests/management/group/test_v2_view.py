@@ -1186,7 +1186,7 @@ class GroupV2UpdateViewTest(GroupV2ViewTestBase):
 
         response = self._update(group, {"name": "renamed"})
 
-        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertEqual(response.json()["detail"], "Groups with system=true may not be updated.")
         group.refresh_from_db()
         self.assertEqual(group.name, "sys")
@@ -1293,7 +1293,9 @@ class GroupV2DestroyViewTest(GroupV2ViewTestBase):
 
                 response = self._delete(group.uuid)
 
-                assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
+                assert_problem_details_response_with(
+                    self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT
+                )
                 self.assertEqual(response.json()["detail"], f"Groups with {flag}=true may not be deleted.")
                 self.assertTrue(Group.objects.filter(uuid=group.uuid).exists())
         self.mock_dual_write.assert_not_called()
@@ -1774,7 +1776,7 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
 
         response = self._add(group.uuid, {"usernames": ["user_3"]})
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertEqual(response.json()["detail"], "Groups with system=true may not be modified.")
         self.mock_dual_write.return_value.replicate_new_principals.assert_not_called()
 
@@ -2126,7 +2128,7 @@ class GroupV2RemovePrincipalsBulkViewTest(GroupV2ViewTestBase):
 
         response = self._remove(group.uuid, usernames="user_1")
 
-        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertTrue(group.principals.filter(pk=self.user_1.pk).exists())
 
     def test_remove_requires_write_permission(self):
@@ -2190,7 +2192,7 @@ class GroupV2RemovePrincipalViewTest(GroupV2ViewTestBase):
 
         response = self._remove(group.uuid, self.user_1.uuid)
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        assert_problem_details_response_with(self, response, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         self.assertTrue(group.principals.filter(pk=self.user_1.pk).exists())
 
     def test_remove_principal_requires_write_permission(self):
