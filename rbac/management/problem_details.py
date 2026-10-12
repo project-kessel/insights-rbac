@@ -33,6 +33,7 @@ class ProblemType(enum.StrEnum):
     CONFLICT = "http://project-kessel.org/problems/conflict"
     INTERNAL_ERROR = "http://project-kessel.org/problems/internal-error"
     ALREADY_EXISTS = "http://project-kessel.org/problems/already-exists"
+    SERVICE_UNAVAILABLE = "http://project-kessel.org/problems/service-unavailable"
 
 
 PROBLEM_TYPE_TITLES: dict[str, str] = {
@@ -43,6 +44,7 @@ PROBLEM_TYPE_TITLES: dict[str, str] = {
     ProblemType.CONFLICT: "Conflict.",
     ProblemType.INTERNAL_ERROR: "Unexpected error occurred.",
     ProblemType.ALREADY_EXISTS: "The resource already exists.",
+    ProblemType.SERVICE_UNAVAILABLE: "A downstream dependency is temporarily unavailable. Please retry shortly.",
 }
 
 # RFC 9457 problem type URIs matching the TypeSpec ProblemType enum.
@@ -54,6 +56,7 @@ STATUS_PROBLEM_TYPES = {
     404: ProblemType.NOT_FOUND,
     409: ProblemType.CONFLICT,
     500: ProblemType.INTERNAL_ERROR,
+    503: ProblemType.SERVICE_UNAVAILABLE,
 }
 
 

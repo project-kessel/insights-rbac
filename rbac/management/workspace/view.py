@@ -48,7 +48,7 @@ from .serializer import (
     WorkspaceSerializer,
     WorkspaceWithAncestrySerializer,
 )
-from ..problem_details import single_problem_response_with_errors
+from ..problem_details import single_problem_response_with_errors, problem_response
 from ..utils import flatten_validation_error, validate_uuid
 
 INCLUDE_ANCESTRY_KEY = "include_ancestry"
@@ -264,9 +264,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 },
                 exc_info=True,
             )
-            return Response(
-                {"detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            return problem_response(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
             )
         except OperationalError as e:
             response = self._handle_operational_error(e, "creation")
@@ -572,12 +572,12 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                         "username": getattr(self.request.user, "username", None),
                     },
                 )
-                response = Response(
-                    {
-                        "detail": "The server is temporarily unable to handle this request due to concurrent updates. "
+                response = problem_response(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        "The server is temporarily unable to handle this request due to concurrent updates. "
                         "Please try again shortly."
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    ),
                 )
                 response["Retry-After"] = "1"
                 return response
@@ -597,9 +597,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                         "username": getattr(self.request.user, "username", None),
                     },
                 )
-                return Response(
-                    {"detail": "Internal server error in concurrent updates. Please try again later."},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                return problem_response(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Internal server error in concurrent updates. Please try again later.",
                 )
         return None
 

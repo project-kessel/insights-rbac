@@ -32,7 +32,7 @@ from management.audit_log.model import AuditLog
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role, Workspace
 from management.permissions.workspace_access import TARGET_WORKSPACE_ACCESS_DENIED_MESSAGE
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
-from management.problem_details import ProblemType
+from management.problem_details import ProblemType, status_default_problem_title
 from management.workspace.serializer import WorkspaceEventSerializer
 from management.workspace.service import WorkspaceService
 from migration_tool.in_memory_tuples import (
@@ -1758,6 +1758,9 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
 
         # Verify returns 503 SERVICE UNAVAILABLE after all retries exhausted
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(ProblemType.SERVICE_UNAVAILABLE, response.data["type"])
+        self.assertEqual(status_default_problem_title(503), response.data["title"])
         self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
         self.assertEqual(response["Retry-After"], "1")
 
@@ -1866,6 +1869,9 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
 
         # Verify returns 500 INTERNAL SERVER ERROR for deadlock
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.data["type"], ProblemType.INTERNAL_ERROR)
+        self.assertEqual(status_default_problem_title(500), response.data["title"])
         self.assertIn("Internal server error", str(response.data["detail"]))
 
         # Verify all retry attempts were made (1 initial + 3 retries = 4 total)
@@ -1919,6 +1925,9 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
 
         # OperationalError propagates through _replicate -> pgtransaction retries -> exhausted -> 503
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(ProblemType.SERVICE_UNAVAILABLE, response.data["type"])
+        self.assertEqual(status_default_problem_title(503), response.data["title"])
         self.assertIn("temporarily unable to handle this request", str(response.data["detail"]))
         self.assertEqual(response["Retry-After"], "1")
 
@@ -2788,6 +2797,8 @@ class WorkspaceMove(TransactionalWorkspaceViewTests):
 
         # Verify returns 500 INTERNAL SERVER ERROR for deadlock
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertTrue(is_problem_details_response(response))
+        self.assertEqual(response.data["type"], ProblemType.INTERNAL_ERROR)
         self.assertIn("Internal server error", str(response.data["detail"]))
 
         # Verify all retry attempts were made (1 initial + 3 retries = 4 total)
