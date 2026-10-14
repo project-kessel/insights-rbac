@@ -1111,6 +1111,24 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Service unavailable.",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem503"
+                }
+              }
+            }
           }
         },
         "tags": [

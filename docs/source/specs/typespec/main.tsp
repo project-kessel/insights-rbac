@@ -2335,7 +2335,7 @@ namespace Groups {
     @post op addPrincipals(
         @path uuid: UUID;
         @body body: AddPrincipalsInput;
-    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404 | Problems.Problem503;
 
     @route("{uuid}/principals/{principal_uuid}/")
     @doc("Remove a single principal from a group by principal UUID. Protected-group behavior: system groups return 400. For bulk removal, use DELETE /groups/{uuid}/principals/ with query parameters.")

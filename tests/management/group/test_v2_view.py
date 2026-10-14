@@ -1845,7 +1845,8 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
 
         response = self._add(self.group_b.uuid, {"usernames": ["user_3"]})
 
-        assert_problem_details_response_with(self, response, status.HTTP_502_BAD_GATEWAY)
+        assert_problem_details_response_with(self, response, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(str(response.headers["Retry-After"]), "1")
         self.assertFalse(self.group_b.principals.filter(pk=self.user_3.pk).exists())
 
     def test_add_bop_skipped_for_service_account_only_request(self):
@@ -1995,14 +1996,15 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
                 self.mock_it.assert_not_called()
 
     def test_add_service_account_it_unavailable(self):
-        """IT connection errors and unexpected IT statuses return 502 and nothing is added."""
+        """IT connection errors and unexpected IT statuses return 503 and nothing is added."""
         for error in (requests.exceptions.ConnectionError(), UnexpectedStatusCodeFromITError()):
             with self.subTest(error=type(error).__name__):
                 self.mock_it.side_effect = error
 
                 response = self._add(self.group_b.uuid, {"usernames": ["user_3"], "service_accounts": ["xyz"]})
 
-                assert_problem_details_response_with(self, response, status.HTTP_502_BAD_GATEWAY)
+                assert_problem_details_response_with(self, response, status.HTTP_503_SERVICE_UNAVAILABLE)
+                self.assertEqual(str(response.headers["Retry-After"]), "1")
                 self.assertEqual(response.json()["detail"], "Unable to validate service accounts.")
                 self.assertCountEqual(self.group_b.principals.all(), [self.user_1])
                 self.mock_proxy.assert_not_called()
