@@ -18,7 +18,7 @@
 
 import logging
 import uuid
-from typing import NoReturn, Optional
+from typing import NoReturn
 
 import pgtransaction
 from django.core.exceptions import ValidationError
@@ -278,10 +278,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 problem_type=ProblemType.ALREADY_EXISTS,
                 detail="Can't create workspace with same name within same parent workspace",
-                source="name",
             )
         except InvalidWorkspaceTypeError as e:
-            return self._protected_response(e, source="workspace")
+            return self._protected_response(e)
         except ValidationError as e:
             self._handle_validation_error(e)
 
@@ -477,7 +476,6 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 problem_type=ProblemType.ALREADY_EXISTS,
                 detail=str(e),
-                source="name",
             )
         except InvalidWorkspaceTypeError as e:
             return self._protected_response(e)
@@ -545,10 +543,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 problem_type=ProblemType.ALREADY_EXISTS,
                 detail="A workspace with the same name already exists under the target parent.",
-                source="parent_id",
             )
         except InvalidWorkspaceTypeError as e:
-            return self._protected_response(e, source="workspace")
+            return self._protected_response(e)
         except ValidationError as e:
             self._handle_validation_error(e)
 
@@ -632,10 +629,9 @@ class WorkspaceViewSet(WorkspaceObjectAccessMixin, BaseV2ViewSet):
         validate_uuid(new_parent_id)
         return uuid.UUID(new_parent_id)
 
-    def _protected_response(self, exception: Exception, source: Optional[str] = None):
+    def _protected_response(self, exception: Exception):
         return single_problem_response_with_errors(
             status_code=status.HTTP_400_BAD_REQUEST,
             problem_type=ProblemType.PROTECTED_OBJECT,
             detail=str(exception),
-            source=source,
         )
