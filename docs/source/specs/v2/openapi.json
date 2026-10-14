@@ -671,6 +671,9 @@
                       "$ref": "#/components/schemas/Problems.Problem400"
                     },
                     {
+                      "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    },
+                    {
                       "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
                     }
                   ]

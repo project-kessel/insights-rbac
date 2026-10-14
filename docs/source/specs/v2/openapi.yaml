@@ -424,6 +424,7 @@ paths:
               schema:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
                   - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.

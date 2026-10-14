@@ -2259,7 +2259,7 @@ namespace Groups {
     @put op update(
         @path uuid: UUID;
         @body body: GroupInput;
-    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400AlreadyExists | Problems.Problem400ProtectedObject | Problems.Problem404;
 
     @route("{uuid}/")
     @doc("Delete a group. Protected-group behavior: system groups (system=true) return 400; platform_default groups return 400; admin_default groups return 400. Groups with active role bindings return 409 Conflict. Only custom (non-protected) groups with no active role bindings can be deleted.")
