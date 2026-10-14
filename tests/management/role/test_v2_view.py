@@ -1739,9 +1739,7 @@ class RoleV2ViewSetTests(IdentityRequest):
 
         response = self.client.put(update_url, data, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(response["Content-Type"], "application/problem+json")
-        self.assertEqual(response.data["status"], 404)
+        assert_problem_details_response_with(self, response, status.HTTP_404_NOT_FOUND)
         self.assertIn("title", response.data)
         self.assertIn("detail", response.data)
 

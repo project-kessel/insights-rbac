@@ -217,8 +217,12 @@ class RoleV2Service:
                 .prefetch_related("permissions")
                 .first()
             )
+
             if not role:
-                raise NotFoundError("role", role_uuid)
+                if RoleV2.objects.filter(tenant=Tenant.objects.get(tenant_name="public"), uuid=role_uuid).exists():
+                    raise CustomRoleRequiredError("Only custom roles can be updated.")
+                else:
+                    raise NotFoundError("role", role_uuid)
 
             # Capture current state before update for outbox replication
             # The permissions are already loaded from prefetch_related above
