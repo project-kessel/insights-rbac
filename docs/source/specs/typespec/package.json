@@ -6,10 +6,10 @@
     "node": ">=20.0.0"
   },
   "peerDependencies": {
-    "@typespec/compiler": "1.16.0"
+    "@typespec/compiler": "1.17.0"
   },
   "devDependencies": {
-    "@typespec/compiler": "1.16.0"
+    "@typespec/compiler": "1.17.0"
   },
   "private": true,
   "dependencies": {
