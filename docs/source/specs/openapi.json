@@ -779,7 +779,7 @@
             "in": "query",
             "name": "order_by",
             "required": false,
-            "description": "Parameter for ordering principals by value. For inverse ordering, supply '-' before the param value, such as: ?order_by=-username. All options work for type of service-account principal, only username works for a user based principal.",
+            "description": "Parameter for ordering principals by value. For inverse ordering, supply '-' before the param value, such as: ?order_by=-username. All options work for type of service-account principal, only username works for a user based principal. Service accounts which are not Service Access Tokens have no expiry, so they sort after every expiring one when ordering by time_expires ascending.",
             "schema": {
               "type": "string",
               "enum": [
@@ -788,7 +788,8 @@
                 "owner",
                 "description",
                 "clientId",
-                "time_created"
+                "time_created",
+                "time_expires"
               ]
             }
           },
@@ -3467,6 +3468,16 @@
           "time_created": {
             "type": "integer",
             "example": 1706100532
+          },
+          "mode": {
+            "type": "string",
+            "description": "Distinguishes a Service Access Token from a regular Service Account. Omitted entirely for regular Service Accounts, so an absent value must be treated as a regular Service Account. Note this is separate from 'type', which stays 'service-account' for both.",
+            "example": "service-access-token"
+          },
+          "time_expires": {
+            "type": "integer",
+            "description": "Unix timestamp at which a Service Access Token's credentials expire. Omitted for regular Service Accounts, which do not expire. Extended when the secret is rotated, so it is read live from the identity service and never cached.",
+            "example": 1713876532
           }
         }
       },

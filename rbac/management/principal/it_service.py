@@ -17,6 +17,7 @@
 """Class to manage interactions with the IT service accounts service."""
 
 import logging
+import math
 import time
 import uuid
 from typing import Any, Iterable, Optional, Tuple
@@ -39,6 +40,27 @@ KEY_SERVICE_ACCOUNT = "service-account-"
 
 # IT path to fetch the service accounts.
 IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
+
+# Keys IT uses for the "service access token" attributes on a service account. IT only sets these for service
+# accounts created in service access token mode, so they are absent for every regular service account.
+
+IT_KEY_SERVICE_ACCOUNT_MODE = "type"
+IT_KEY_SERVICE_ACCOUNT_EXPIRATION = "expiration"
+
+# Mode value marking a service account as a service access token. Only used to build mocked IT responses; real
+# responses are passed through with whatever value IT sent.
+IT_VALUE_MODE_SERVICE_ACCESS_TOKEN = "service-access-token"
+
+# Default lifetime of a service access token, per CIAM-ADR-00090. Only used to build mocked IT responses.
+MOCK_SERVICE_ACCESS_TOKEN_LIFETIME_SECONDS = 90 * 24 * 60 * 60
+
+# Service account fields holding a Unix timestamp, mapped to the sort key used when the field is missing or is not
+# a number. A regular service account has no expiry, so it sorts after every expiring one when ascending. An
+# unknown creation time keeps sorting first, which is what the previous string-based sort did for it.
+TIMESTAMP_ORDER_BY_FIELDS: dict[str, float] = {
+    "time_created": 0.0,
+    "time_expires": float("inf"),
+}
 
 # Maximum number of service accounts to request at once. This is a limit set by the IT service.
 IT_SERVICE_ACCOUNT_BATCH_SIZE = 100
@@ -410,15 +432,41 @@ class ITService:
 
         if order_by:
             # If any order_by parameter is passed then sort the service accounts by that field either asc or desc
-            if order_by in ["-time_created", "-name", "-description", "-clientId", "-owner"]:
-                service_accounts.sort(reverse=True, key=lambda sa: str(sa.get(order_by[1:], "")).casefold())
+            if order_by in ["-time_created", "-time_expires", "-name", "-description", "-clientId", "-owner"]:
+                descending_field = order_by[1:]
+                service_accounts.sort(
+                    reverse=True, key=lambda sa: self._service_account_sort_key(sa, descending_field)
+                )
             else:
-                service_accounts.sort(reverse=False, key=lambda sa: str(sa.get(order_by, "")).casefold())
+                service_accounts.sort(reverse=False, key=lambda sa: self._service_account_sort_key(sa, order_by))
 
         # flake8 ignore E203 = Whitespace before ':' -> false positive https://github.com/PyCQA/pycodestyle/issues/373
         service_accounts = service_accounts[offset : offset + limit]  # type: ignore # noqa: E203
 
         return service_accounts, count
+
+    @staticmethod
+    def _service_account_sort_key(service_account: dict, field: str) -> Any:
+        """Build the sort key for a service account for the given "order_by" field.
+
+        Timestamp fields need a numeric key. Coercing them to strings sorts "999" after "1000", which only looks
+        correct today because every timestamp we store happens to have the same number of digits.
+        """
+        if field not in TIMESTAMP_ORDER_BY_FIELDS:
+            return str(service_account.get(field, "")).casefold()
+
+        try:
+            timestamp = float(service_account[field])
+        except (KeyError, TypeError, ValueError):
+            return TIMESTAMP_ORDER_BY_FIELDS[field]
+
+        # "NaN" parses as a float but is unorderable: every comparison against it is false, so a list containing
+        # one can come back out of order. Fall back to the field's default, which is a sentinel we choose and is
+        # therefore ordered consistently against every real timestamp.
+        if not math.isfinite(timestamp):
+            return TIMESTAMP_ORDER_BY_FIELDS[field]
+
+        return timestamp
 
     def get_service_accounts_group(self, group: Group, user: User, options: dict[str, Any] = {}) -> list[dict]:
         """Get the service accounts for the given group."""
@@ -549,6 +597,8 @@ class ITService:
         created_by = service_account_from_it_service.get("createdBy")
         created_at = service_account_from_it_service.get("createdAt")
         user_id = service_account_from_it_service.get("userId")
+        mode = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_MODE)
+        expiration = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_EXPIRATION)
 
         if client_id:
             service_account["clientId"] = client_id
@@ -568,8 +618,18 @@ class ITService:
         if user_id:
             service_account["userId"] = user_id
 
-        # Hard code the type for every service account.
+        # Hard code the type for every service account. This stays "service-account" for service access tokens too:
+        # "type" distinguishes service accounts from users, and "mode" distinguishes a service access token from a
+        # regular service account.
         service_account["type"] = "service-account"
+
+        # IT only returns these for service accounts created in "service access token" mode, so an absent value means
+        # a regular service account and we leave the keys out of the response entirely.
+        if mode:
+            service_account["mode"] = mode
+
+        if expiration:
+            service_account["time_expires"] = expiration
 
         return service_account
 
@@ -627,23 +687,41 @@ class ITService:
     def _get_mock_service_accounts(self, service_account_principals: Iterable[Principal]) -> list[dict]:
         """Mock an IT service call which returns service accounts. Useful for development or testing."""
         mocked_service_accounts: list[dict] = []
+        now = round(time.time())
         for sap in service_account_principals:
+            mocked_account = {
+                "id": sap.service_account_id,
+                "clientId": sap.service_account_id,
+                "name": f"{sap.service_account_id}-name",
+                "description": f"{sap.service_account_id}-description",
+                "createdBy": sap.username,
+                "createdAt": now,
+            }
+
+            # Mock a mix of regular service accounts and service access tokens so that both shapes get exercised in
+            # the environments which bypass IT. The choice is derived from the client ID so that it is stable for a
+            # given service account across requests.
+            if self._mock_is_service_access_token(sap.service_account_id):
+                mocked_account[IT_KEY_SERVICE_ACCOUNT_MODE] = IT_VALUE_MODE_SERVICE_ACCESS_TOKEN
+                mocked_account[IT_KEY_SERVICE_ACCOUNT_EXPIRATION] = now + MOCK_SERVICE_ACCESS_TOKEN_LIFETIME_SECONDS
+
             # Transform the service account to the structure our logic works with and then append it to the list of
             # mocked service accounts we will be returning.
-            mocked_service_accounts.append(
-                self._transform_incoming_payload(
-                    {
-                        "id": sap.service_account_id,
-                        "clientId": sap.service_account_id,
-                        "name": f"{sap.service_account_id}-name",
-                        "description": f"{sap.service_account_id}-description",
-                        "createdBy": sap.username,
-                        "createdAt": round(time.time()),
-                    }
-                )
-            )
+            mocked_service_accounts.append(self._transform_incoming_payload(mocked_account))
 
         return mocked_service_accounts
+
+    @staticmethod
+    def _mock_is_service_access_token(client_id: Optional[str]) -> bool:
+        """Decide whether a mocked service account should be presented as a service access token.
+
+        Derived from the client ID rather than randomised so that a given service account keeps the same mode for
+        every request, the way a real one would. Only used when IT calls are bypassed.
+        """
+        if not client_id:
+            return False
+
+        return client_id[-1] in "02468ace"
 
     def _filtered_service_accounts(
         self,

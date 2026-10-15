@@ -2942,6 +2942,68 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_get_group_service_access_token_fields_are_surfaced(self, mock_request):
+        """Test that the service access token fields survive the group principals serializer.
+
+        Unlike the flat principals endpoint, this one renders through ServiceAccountSerializer, which drops any
+        field it does not declare. Without the declaration the fields would silently disappear here while still
+        being present on /principals/.
+        """
+        sat_client_id = self.sa_client_ids[0]
+        mocked_values = []
+        for uuid in self.sa_client_ids:
+            mocked_value = {
+                "clientId": uuid,
+                "name": f"service_account_name_{uuid.split('-')[0]}",
+                "description": f"Service Account description {uuid.split('-')[0]}",
+                "owner": "jsmith",
+                "username": "service_account-" + uuid,
+                "time_created": 1706784741,
+                "type": "service-account",
+            }
+
+            if uuid == sat_client_id:
+                mocked_value["mode"] = "service-access-token"
+                mocked_value["time_expires"] = 1713876532
+
+            mocked_values.append(mocked_value)
+
+        mock_request.return_value = mocked_values
+
+        url = (
+            f"{reverse('v1_management:group-principals', kwargs={'uuid': self.group.uuid})}"
+            "?principal_type=service-account"
+        )
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        returned_service_accounts = {str(sa["clientId"]): sa for sa in response.data.get("data")}
+
+        service_access_token = returned_service_accounts[sat_client_id]
+        self.assertEqual("service-access-token", service_access_token.get("mode"))
+        self.assertEqual(1713876532, service_access_token.get("time_expires"))
+        self.assertEqual(
+            "service-account",
+            service_access_token.get("type"),
+            'the "type" field must stay "service-account" for service access tokens',
+        )
+
+        for client_id, service_account in returned_service_accounts.items():
+            if client_id == sat_client_id:
+                continue
+
+            self.assertNotIn(
+                "mode",
+                service_account,
+                "a regular service account must be serialized without the service access token keys rather than"
+                " with null values",
+            )
+            self.assertNotIn("time_expires", service_account)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
     def test_get_group_service_account_valid_limit_offset(self, mock_request):
         """Test that we can read a list of service accounts according to the given limit and offset."""
         mocked_values = []

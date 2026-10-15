@@ -16,6 +16,7 @@
 #
 """Test the principal viewset."""
 
+import copy
 from datetime import datetime
 from unittest.mock import patch, ANY
 from uuid import uuid4
@@ -1231,6 +1232,145 @@ class PrincipalViewsetServiceAccountTests(IdentityRequest):
         self.assertEqual(sa2.get("owner"), test_owner)
         self.assertEqual(sa2.get("type"), "service-account")
         self.assertEqual(sa2.get("username"), "service_account-" + sa_id2)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_principal_service_access_token_fields_are_surfaced(self, mock_request):
+        """Test that the service access token fields reach the response of the flat principals endpoint."""
+        sat_client_id = self.sa_client_ids[0]
+        mocked_values = copy.deepcopy(self.mocked_values)
+        for mocked_value in mocked_values:
+            if mocked_value["clientId"] == sat_client_id:
+                mocked_value["mode"] = "service-access-token"
+                mocked_value["time_expires"] = 1713876532
+
+        mock_request.return_value = mocked_values
+
+        url = f"{reverse('v1_management:principals')}?type=service-account"
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        returned_service_accounts = {sa["clientId"]: sa for sa in response.data.get("data")}
+
+        self.assertEqual(
+            3,
+            len(returned_service_accounts),
+            "filtering by the service-account type must keep returning service access tokens alongside regular"
+            " service accounts, since the SA/SAT distinction is carried by the mode field and not by the type",
+        )
+
+        service_access_token = returned_service_accounts[sat_client_id]
+        self.assertEqual("service-access-token", service_access_token.get("mode"))
+        self.assertEqual(1713876532, service_access_token.get("time_expires"))
+        self.assertEqual(
+            "service-account",
+            service_access_token.get("type"),
+            'the "type" field must stay "service-account" so that the console can keep using it to tell service'
+            " accounts apart from users",
+        )
+
+        for client_id, service_account in returned_service_accounts.items():
+            if client_id == sat_client_id:
+                continue
+
+            self.assertCountEqual(
+                list(service_account.keys()),
+                ["clientId", "name", "description", "owner", "time_created", "type", "username"],
+                "a service account without the service access token attributes must be returned exactly as it was"
+                " before, with no extra keys",
+            )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_principal_service_account_order_by_time_expires(self, mock_request):
+        """Test that ordering by the expiry time compares timestamps as numbers in both directions."""
+        # Expiry times with a differing number of digits are the case a string sort gets wrong.
+        expirations = {self.sa_client_ids[0]: 1000, self.sa_client_ids[1]: 999, self.sa_client_ids[2]: 1001}
+
+        mocked_values = copy.deepcopy(self.mocked_values)
+        for mocked_value in mocked_values:
+            mocked_value["mode"] = "service-access-token"
+            mocked_value["time_expires"] = expirations[mocked_value["clientId"]]
+
+        mock_request.return_value = mocked_values
+
+        client = APIClient()
+
+        url = f"{reverse('v1_management:principals')}?type=service-account&order_by=time_expires"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [999, 1000, 1001],
+            [sa["time_expires"] for sa in response.data.get("data")],
+            "ascending order should compare the expiry times as numbers",
+        )
+
+        url = f"{reverse('v1_management:principals')}?type=service-account&order_by=-time_expires"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [1001, 1000, 999],
+            [sa["time_expires"] for sa in response.data.get("data")],
+            "descending order should compare the expiry times as numbers",
+        )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_principal_service_account_order_by_time_created(self, mock_request):
+        """Test that ordering by the creation time compares timestamps as numbers in both directions."""
+        creations = {self.sa_client_ids[0]: 1000, self.sa_client_ids[1]: 999, self.sa_client_ids[2]: 1001}
+
+        mocked_values = copy.deepcopy(self.mocked_values)
+        for mocked_value in mocked_values:
+            mocked_value["time_created"] = creations[mocked_value["clientId"]]
+
+        mock_request.return_value = mocked_values
+
+        client = APIClient()
+
+        url = f"{reverse('v1_management:principals')}?type=service-account&order_by=time_created"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [999, 1000, 1001],
+            [sa["time_created"] for sa in response.data.get("data")],
+            "ascending order should compare the creation times as numbers",
+        )
+
+        url = f"{reverse('v1_management:principals')}?type=service-account&order_by=-time_created"
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [1001, 1000, 999],
+            [sa["time_created"] for sa in response.data.get("data")],
+            "descending order should compare the creation times as numbers",
+        )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_principal_service_account_without_mode_is_unchanged(self, mock_request):
+        """Test that service accounts which IT does not flag are returned exactly as they were before."""
+        mock_request.return_value = self.mocked_values
+
+        url = f"{reverse('v1_management:principals')}?type=service-account"
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        for service_account in response.data.get("data"):
+            self.assertCountEqual(
+                list(service_account.keys()),
+                ["clientId", "name", "description", "owner", "time_created", "type", "username"],
+            )
+            self.assertNotIn("mode", service_account)
+            self.assertNotIn("time_expires", service_account)
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")

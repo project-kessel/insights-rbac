@@ -80,7 +80,16 @@ class ServiceAccountSerializer(serializers.Serializer):
     description = serializers.CharField(allow_null=True, required=False)
     owner = serializers.CharField()
     time_created = serializers.IntegerField()
+    # "type" tells a service account apart from a user, so it stays "service-account" for service access tokens as
+    # well. "mode" is what distinguishes a service access token from a regular service account.
     type = serializers.CharField()
+    # IT only sends these for service accounts created in service access token mode. Declared as optional so that a
+    # regular service account is serialized exactly as it was before, with the keys left out entirely rather than
+    # rendered as null.
+    # Not a ChoiceField: the set of values IT sends is still being confirmed in CIAM-12318, and rejecting an
+    # unrecognised one would fail the whole response rather than degrading to "treat it as a regular SA".
+    mode = serializers.CharField(required=False)
+    time_expires = serializers.IntegerField(required=False)
     username = serializers.CharField()
 
     class Meta:
