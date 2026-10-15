@@ -119,12 +119,12 @@ When a scenario is expected to behave differently for a particular combination
 the expected status per combination and assert it separately. If a combination
 is intentionally skipped for a scenario, print a `SKIP` line with the reason.
 
-When an API endpoint produces Kessel relations (creates, updates, or deletes
-SpiceDB tuples), the validation script must include Kessel relation checks for
-that endpoint. An HTTP success response alone is not enough. Wait for the
-expected direct SpiceDB tuple, assert it exists, and print it. For deletes,
-wait until the tuple is absent and report that removal. Use the persisted
-`t_*` relation names, for example:
+For any API endpoint that creates, updates, or deletes Kessel relations,
+including V2 writes that replicate to Kessel, the validation script must
+include Kessel relation checks. An HTTP success response alone is not enough.
+Wait for the expected direct SpiceDB tuple, assert it exists, and print it. For
+deletes, wait until the tuple is absent and report that removal. Use the
+persisted `t_*` relation names, for example:
 
 ```text
 rbac/workspace:<workspace-id> t_binding rbac/role_binding:<binding-id>
