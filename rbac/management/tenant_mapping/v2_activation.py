@@ -151,7 +151,13 @@ def set_v2_opt_in_state(tenant: Tenant, opted_in: bool):
     this flag is not yet checked before converting a tenant.)
 
     Opting-in a V1 tenant is idempotent. A V2 tenant is necessarily opted-in and cannot opt out.
+
+    Newly opting-in a tenant also creates its default role bindings, in the same transaction as the
+    opt-in write. Opting out never deletes them.
     """
+    # Imported here to avoid a circular import (role_binding.service -> v2_activation).
+    from management.role_binding.service import RoleBindingService
+
     mapping = TenantMapping.objects.select_for_update().filter(tenant=tenant).first()
 
     if mapping is None:
@@ -159,9 +165,12 @@ def set_v2_opt_in_state(tenant: Tenant, opted_in: bool):
             f"Tenant {tenant.org_id} has no TenantMapping; opting-in to V2 can only be done for a bootstrapped tenant."
         )
 
+    newly_opted_in = False
+
     if opted_in:
         if mapping.v2_opted_in_at is None:
             mapping.v2_opted_in_at = timezone.now()
+            newly_opted_in = True
     else:
         if mapping.v2_write_activated_at is not None:
             raise InvalidV2OptOutError(f"Tenant {tenant.org_id} cannot opt out of V2 after performing a V2 write.")
@@ -169,6 +178,10 @@ def set_v2_opt_in_state(tenant: Tenant, opted_in: bool):
         mapping.v2_opted_in_at = None
 
     mapping.save(update_fields=["v2_opted_in_at"])
+
+    if newly_opted_in:
+        logger.info("Tenant %s opted-in to V2; creating default role bindings", tenant.org_id)
+        RoleBindingService(tenant).create_default_bindings(mapping)
 
 
 def is_v2_opted_in(tenant: Tenant) -> bool:

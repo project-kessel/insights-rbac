@@ -3320,6 +3320,10 @@ class DefaultBindingsAPITests(TestCase):
         Also verifies that platform roles return their children (seeded roles)
         instead of the platform role itself in the API response.
         """
+        # Drop the bindings created when the tenant opted-in to V2, so that the lazy
+        # creation path under test starts from a clean slate. RoleBindingGroup entries cascade.
+        RoleBinding.objects.filter(tenant=self.tenant).delete()
+
         # Initially, no default bindings should exist
         self.assertEqual(self._count_default_bindings(DefaultAccessType.USER), 0)
         self.assertEqual(self._count_default_bindings(DefaultAccessType.ADMIN), 0)
@@ -3410,6 +3414,10 @@ class DefaultBindingsAPITests(TestCase):
             platform_default=True,
             system=False,
         )
+
+        # Drop the bindings created when the tenant opted-in to V2, so that the lazy
+        # creation path under test starts from a clean slate. RoleBindingGroup entries cascade.
+        RoleBinding.objects.filter(tenant=self.tenant).delete()
 
         # Initially no bindings
         self.assertEqual(self._count_default_bindings(DefaultAccessType.USER), 0)

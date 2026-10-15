@@ -114,6 +114,7 @@ class RoleBindingService:
         self._principal_source = principal_source
         self._allow_external_subjects = allow_external_subjects
         self._skip_scope_validation = skip_scope_validation
+        self._public_default_groups: dict[DefaultAccessType, Group] = {}
 
         if settings.REPLICATION_TO_RELATION_ENABLED:
             self._replicator = replicator if replicator is not None else OutboxReplicator()
@@ -167,7 +168,7 @@ class RoleBindingService:
         subject_id = params.get("subject_id")
         exclude_sources = params.get("exclude_sources", ExcludeSources.NONE)
 
-        # Ensure default bindings exist (lazy creation)
+        # TODO(RHCLOUD-50990): Remove once the RHCLOUD-50168 backfill has run for existing opt-in tenants.
         self._ensure_default_bindings_exist()
 
         binding_uuids, exclude_direct = self._resolve_inherited_bindings(exclude_sources, resource_type, resource_id)
@@ -206,6 +207,9 @@ class RoleBindingService:
             Ordering is handled by V2CursorPagination.get_ordering() to ensure
             cursor pagination works correctly with the requested order_by parameter.
         """
+        # TODO(RHCLOUD-50990): Remove once the RHCLOUD-50168 backfill has run for existing opt-in tenants.
+        self._ensure_default_bindings_exist()
+
         resource_id = params.get("resource_id")
         resource_type = params.get("resource_type")
         exclude_sources = params.get("exclude_sources", ExcludeSources.NONE)
@@ -705,12 +709,14 @@ class RoleBindingService:
     def _ensure_default_bindings_exist(self) -> None:
         """Lazily create default role bindings if they don't exist.
 
-        This method checks if the tenant has default role bindings by counting ADMIN bindings.
-        ADMIN bindings are always created (regardless of custom groups), so if all 3 ADMIN
-        bindings exist, we know default bindings have already been processed for this tenant.
+        .. deprecated::
+            Temporary path for tenants that opted in before default bindings were
+            created eagerly on opt-in.  Remove this method **and both call sites**
+            once the RHCLOUD-50168 backfill has run for existing opt-in tenants
+            (tracked in RHCLOUD-50990).
 
-        If bindings don't exist, it creates all missing bindings in a single atomic transaction.
-        USER bindings are only created if the tenant has no custom default group.
+        Checks ADMIN binding count as a fast-path: if all 3 ADMIN bindings
+        exist, default bindings have already been processed for this tenant.
         """
         try:
             mapping = self.tenant.tenant_mapping
@@ -730,12 +736,23 @@ class RoleBindingService:
             return
 
         # ADMIN bindings don't all exist - need to create missing bindings
-        # Now check for custom default group (only needed when creating)
-        has_custom_default_group = self._has_custom_default_group()
+        self.create_default_bindings(mapping)
 
-        # Create all missing bindings in a single transaction
+    def create_default_bindings(self, mapping: TenantMapping) -> None:
+        """Create any missing default role bindings for the tenant.
+
+        USER bindings are skipped when the tenant has a custom default group, since that
+        group replaces the platform default access.
+
+        Missing platform roles are logged and swallowed rather than raised, so that callers
+        (lazy creation on read, V2 opt-in) are not aborted by an incomplete seeding state.
+        The bindings are created later, once seeding has caught up.
+
+        Args:
+            mapping: The tenant mapping containing default UUIDs
+        """
         try:
-            self._create_all_default_bindings(mapping, skip_user_bindings=has_custom_default_group)
+            self._create_all_default_bindings(mapping, skip_user_bindings=self._has_custom_default_group())
         except DefaultGroupNotAvailableError:
             logger.warning(
                 f"Platform roles not available, skipping default binding creation for tenant {self.tenant.org_id}"
@@ -801,6 +818,26 @@ class RoleBindingService:
         if created_count > 0:
             logger.info(f"Created {created_count} default role bindings for tenant {self.tenant.org_id}")
 
+    def _public_default_group(self, access_type: DefaultAccessType) -> Group:
+        """Return the public tenant's default group for the given access type.
+
+        The group is looked up once per service instance, since the same two groups are
+        reused for every scope.
+
+        The public default groups are seeded before the service starts, so a missing group is
+        not an expected state and ``Group.DoesNotExist`` is left to propagate.
+        """
+        group = self._public_default_groups.get(access_type)
+
+        if group is None:
+            group_set = (
+                Group.admin_default_set() if access_type == DefaultAccessType.ADMIN else Group.platform_default_set()
+            )
+            group = group_set.public_tenant_only().get()
+            self._public_default_groups[access_type] = group
+
+        return group
+
     def _create_single_default_binding(
         self,
         mapping: TenantMapping,
@@ -834,10 +871,7 @@ class RoleBindingService:
             raise DefaultGroupNotAvailableError(f"Platform role not found: {platform_role_uuid}")
 
         # Get the platform default group from public tenant (created by seed_group)
-        if access_type == DefaultAccessType.ADMIN:
-            group = Group.admin_default_set().public_tenant_only().get()
-        else:
-            group = Group.platform_default_set().public_tenant_only().get()
+        group = self._public_default_group(access_type)
 
         # Create the role binding
         binding, created = RoleBinding.objects.get_or_create(
