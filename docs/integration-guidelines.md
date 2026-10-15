@@ -2,9 +2,9 @@
 
 ## External Services Overview
 
-RBAC integrates with six external services: Kessel Relations (gRPC), Kessel Inventory (gRPC), Kafka (producer + consumer), BOP (HTTP), IT Service (HTTP), and Redis (Celery broker + cache). All connections are configured via environment variables with local-dev bypass modes.
+RBAC integrates with five external services: the Kessel Inventory API (gRPC, used for both relation replication and access checks), Kafka (producer + consumer), BOP (HTTP), IT Service (HTTP), and Redis (Celery broker + cache). All connections are configured via environment variables with local-dev bypass modes.
 
-## 1. Kessel Relations API (gRPC) -- Relation Replication
+## 1. Kessel Inventory API (gRPC) -- Relation Replication
 
 ### Replicator Selection
 
@@ -14,7 +14,7 @@ Controlled by `get_replicator(write_relationships)` in `rbac/internal/utils.py`:
 - `"logging"` -- `LoggingReplicator` (logs tuples without writing)
 - `"false"` -- `NoopReplicator` (no-op)
 
-Always use the replicator abstraction. Never call the Relations API directly from service code -- go through `RelationReplicator.replicate(event)`.
+Always use the replicator abstraction. Never call the Kessel API directly from service code -- go through `InventoryReplicator.replicate(event)` (`management/inventory_replicator/`).
 
 ### Building Replication Events
 
@@ -42,9 +42,9 @@ Use `RelationTuple` from `management/inventory_replicator/types.py` instead of r
 
 ### gRPC Channel Creation
 
-Three channel factories in `management/utils.py`:
-- `create_client_channel_inventory(addr)` -- Inventory API (OAuth2 credentials)
-- `create_client_channel(addr)` -- Legacy, same as relation
+Channel factories in `management/utils.py`:
+- `create_client_channel_inventory(addr)` -- Inventory API (OAuth2 credentials). Used by the replicator, the inventory checkers and the permission classes.
+- `create_client_channel_relation(addr)` and `create_client_channel(addr)` -- legacy Relations API factories; no callers since the replicator moved to the Inventory API.
 
 All use insecure channels when `DEVELOPMENT=True` or `CLOWDER_ENABLED=true`, TLS otherwise. Always use as context managers.
 
@@ -61,7 +61,7 @@ The outbox pattern is the production replication path:
 1. Service code calls `OutboxReplicator.replicate(event)`.
 2. `OutboxWAL.log()` inserts into `management_outbox` then immediately deletes -- Debezium reads from PostgreSQL WAL, not the table.
 3. Debezium publishes the change event to a Kafka topic.
-4. `RBACKafkaConsumer` reads the topic and calls `RelationsApiReplicator` to write/delete tuples via gRPC.
+4. `RBACKafkaConsumer` reads the topic and calls `InventoryApiReplicator` to write/delete tuples via gRPC.
 
 The Outbox model (`management/debezium/model.py`) follows the Debezium outbox event router schema: `aggregatetype`, `aggregateid`, `event_type` (column `type`), `payload` (JSON).
 

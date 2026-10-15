@@ -105,8 +105,8 @@ These configure connections to external systems:
 | Variable | Description | Default | Notes |
 |----------|-------------|---------|-------|
 | `KAFKA_SERVERS` | Kafka bootstrap servers | Auto-detected | Usually from Clowder |
-| `REPLICATION_TO_RELATION_ENABLED` | Enable relation API calls | `false` | Production feature |
-| `RELATION_API_SERVER` | Relations API endpoint | `localhost:9000` | gRPC server |
+| `REPLICATION_TO_RELATION_ENABLED` | Enable relation replication | `false` | Production feature |
+| `INVENTORY_API_SERVER` | Kessel Inventory API endpoint used by `InventoryApiReplicator` | `localhost:9000` | gRPC server; auth via `INVENTORY_API_CLIENT_ID` / `INVENTORY_API_CLIENT_SECRET` |
 
 ## How Message Processing Works
 

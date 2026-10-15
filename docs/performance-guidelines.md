@@ -96,7 +96,7 @@ The `AtomicOperationsMixin` in `v2_mixins.py` wraps `create`/`update`/`destroy` 
 ### select_for_update Patterns
 
 - **Always pair `select_for_update()` with `transaction.atomic()`.** The codebase uses `select_for_update(of=["self"])` to lock only the target table in joins.
-- **Dual-write handlers require the role to be locked** before constructing the handler (`role/relation_api_dual_write_handler.py:289`).
+- **Dual-write handlers require the role to be locked** before constructing the handler (see the `InventoryApiDualWriteHandler` docstring in `role/inventory_api_dual_write_handler.py`).
 - Chain `select_for_update().select_related("tenant")` to avoid extra queries inside the locked section.
 
 ### Test Isolation

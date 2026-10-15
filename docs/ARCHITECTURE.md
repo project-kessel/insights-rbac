@@ -23,7 +23,7 @@ insights-rbac is a microservice within the [console.redhat.com](https://console.
                |               |     |               |
         +------v------+  +----v-+ +-v----+   +------v-------+
         |  PostgreSQL  |  |Redis | |Kafka |   |    Kessel     |
-        |   (data)     |  |(cache)| |(CDC) |   | Relations API |
+        |   (data)     |  |(cache)| |(CDC) |   | Inventory API |
         +--------------+  +------+ +------+   |   (SpiceDB)   |
                                               +--------------+
 ```
@@ -34,7 +34,7 @@ insights-rbac is a microservice within the [console.redhat.com](https://console.
 2. The platform gateway (3scale) authenticates the request and injects an `x-rh-identity` header containing the org ID, user info, and entitlements as base64-encoded JSON.
 3. RBAC middleware decodes the identity header, resolves the tenant, and attaches `request.user` and `request.tenant` to the Django request.
 4. The view delegates to the service layer for business logic.
-5. For v2 APIs, permission checks are performed against Kessel Relations (SpiceDB) via gRPC.
+5. For v2 APIs, permission checks are performed against Kessel (SpiceDB) through the Kessel Inventory API via gRPC.
 6. The response is returned with tenant-scoped data only.
 
 ### MCP Endpoint (Agent-to-Service)
@@ -83,7 +83,7 @@ management/
   audit_log/        # Audit logging
   authorization/    # Auth middleware and permission classes
   notifications/    # Platform notification integration
-  relation_replicator/  # Outbox-based replication to Kessel
+  inventory_replicator/ # Outbox-based replication to Kessel
   debezium/         # Debezium CDC outbox model
   tenant_mapping/   # Cross-service tenant resolution
   tenant_service/   # Tenant lifecycle (bootstrap, migration)
@@ -106,7 +106,7 @@ Each domain module typically contains:
 
 **V1 API** (`/api/rbac/v1/`): Stable, widely consumed. Manages roles, groups, policies, and permissions. Uses flat error arrays. Routes are always registered.
 
-**V2 API** (`/api/rbac/v2/`): Next-generation workspace-based API. Uses RFC 7807 Problem JSON errors. Routes are gated behind the `V2_APIS_ENABLED` feature flag. Authorization is handled by Kessel Relations instead of local permission checks.
+**V2 API** (`/api/rbac/v2/`): Next-generation workspace-based API. Uses RFC 7807 Problem JSON errors. Routes are gated behind the `V2_APIS_ENABLED` feature flag. Authorization is handled by Kessel (via the Inventory API) instead of local permission checks.
 
 Both API versions share the same underlying models and service layer. The differences are in serializers, views, URL routing, and error format.
 
@@ -149,17 +149,17 @@ Tenant (org_id)
 
 ## External Integrations
 
-### Kessel Relations (SpiceDB)
+### Kessel (SpiceDB, via the Inventory API)
 
 Authorization engine for v2 APIs. RBAC replicates its data model to Kessel as relationship tuples:
 
-- **Write path**: Service code produces replication events via `RelationReplicator`. In production, `OutboxReplicator` writes to the outbox table, Debezium captures changes via WAL, publishes to Kafka, and the RBAC Kafka consumer writes tuples to Kessel via gRPC.
+- **Write path**: Service code produces replication events via `InventoryReplicator`. In production, `OutboxReplicator` writes to the outbox table, Debezium captures changes via WAL, publishes to Kafka, and the RBAC Kafka consumer writes tuples to Kessel through the Inventory API (`InventoryApiReplicator`) via gRPC.
 - **Read path**: V2 permission classes call `CheckForUpdate` (single resource check) or `StreamedListObjects` (list all authorized resources) against Kessel.
 
 ### Kafka
 
 - **Producer**: Outbox-based CDC via Debezium (not direct Kafka writes from application code).
-- **Consumer**: `RBACKafkaConsumer` reads replication events and applies them to Kessel Relations. Also consumes platform sync and chrome navigation topics.
+- **Consumer**: `RBACKafkaConsumer` reads replication events and applies them to Kessel through the Inventory API. Also consumes platform sync and chrome navigation topics.
 
 ### Redis
 

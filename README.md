@@ -18,7 +18,7 @@ The service is multi-tenant: every request is scoped to an organization (tenant)
 - **Database**: PostgreSQL 16
 - **Cache**: Redis
 - **Task Queue**: Celery (Redis broker)
-- **Authorization**: Kessel Relations (SpiceDB-based, gRPC)
+- **Authorization**: Kessel (SpiceDB-based), accessed through the Kessel Inventory API (gRPC)
 - **Messaging**: Kafka (Debezium CDC outbox pattern)
 - **Metrics**: Prometheus
 
