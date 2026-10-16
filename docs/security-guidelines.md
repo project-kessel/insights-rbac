@@ -47,15 +47,18 @@ Rules:
 
 ### Two-layer v2 access control
 
-Every v2 endpoint must have both layers:
+Every v2 endpoint must have a permission class. Whether it also needs a filter backend depends on whether the resource is object-scoped, tenant-wide or resource-scoped:
 
-1. **Permission class** (`*AccessPermission`): coarse-grained 403 checks. Defined in `permission_classes` on the viewset.
-2. **Filter backend** (`*AccessFilterBackend`): queryset-level filtering for list operations. Defined in `filter_backends` on the viewset.
+1. **Permission class** (`*AccessPermission`): coarse-grained 403 checks. Defined in `permission_classes` on the viewset. Required on every v2 endpoint.
+2. **Filter backend** (`*AccessFilterBackend`): queryset-level filtering for list operations. Defined in `filter_backends` on the viewset. Required on **object-scoped** viewsets, where different objects in the same list can be visible to different callers (e.g. workspaces).
 
 Rules:
 - Permission classes check if the user can call the endpoint at all.
 - Filter backends narrow the queryset to only authorized objects. For detail views, this produces 404 (not 403) for inaccessible objects, preventing existence leakage.
 - Always list the access filter backend first in `filter_backends` so access filtering happens before other filters.
+- On object-scoped viewsets, every action that reads objects must go through the filtered queryset (`self.get_object()` or `self.filter_queryset(self.get_queryset())`), except for secondary objects that the permission class explicitly authorizes. A custom `@action` that loads unauthorized objects directly (`Model.objects.get(...)`, a service call by ID) bypasses the filter backend and its 404 behavior.
+- **Tenant-wide** viewsets (access is all-or-nothing for the entire tenant, so there is no per-object visibility to filter) omit the filter backend. Instead, the viewset's class docstring documents the relation(s) or permission checks that gate access, so the "no filter backend" choice is visible and auditable rather than silent. `AuditLogV2ViewSet`, `PermissionV2ViewSet`, `RoleV2ViewSet`, `GroupV2ViewSet`, and `PrincipalV2ViewSet` follow this pattern.
+- **Resource-scoped** viewsets check access against a caller-supplied resource (workspace or tenant) rather than filtering a queryset of heterogeneously-visible objects. The permission class checks the required relation on the specific resource identified in query params or request body, and the service query must be scoped to that same resource. `RoleBindingViewSet` follows this pattern: `RoleBindingKesselAccessPermission` checks the relation on the caller-supplied resource, falling back to a tenant-level check for unscoped read requests when no resource is specified. For tenant-scoped checks (both explicit and fallback), the authorization strategy depends on the `KESSEL_TENANT_AUTH_ENABLED` feature flag: when the flag is **off**, only org admins (`request.user.admin`) are allowed; when the flag is **on**, the check is delegated to Kessel (see `_check_single_resource` in `role_binding_access.py`). This is an exception to the general tenant-level rule below. These viewsets omit the filter backend but document the per-resource permission check in the class docstring.
 
 ### Mixed-method routes (one `@action` serving GET/POST/DELETE on the same path)
 
@@ -88,7 +91,7 @@ v2 uses Kessel Inventory API for fine-grained checks:
 Rules:
 - When Kessel is unreachable, `_call_inventory()` returns a safe default (False for checks, empty set for lookups). Never default to granting access.
 - Resource type allowlists are enforced. `RoleBindingKesselAccessPermission.ALLOWED_RESOURCE_TYPES` only allows `{"workspace", "tenant"}`. Unknown types are denied.
-- Tenant-level authorization uses `request.user.admin` (org-admin check), not Kessel. This is intentional for the current milestone.
+- Tenant-level authorization generally uses `request.user.admin` (org-admin check), not Kessel. This is intentional for the current milestone. **Exception**: `RoleBindingKesselAccessPermission` uses the `KESSEL_TENANT_AUTH_ENABLED` feature flag to select the strategy — org-admin when the flag is off, Kessel when it is on (see the resource-scoped viewset rule above).
 - Audit log v2 access uses `AuditLogV2KesselAccessPermission`, which checks the `rbac_audit_log_view` relation on the tenant resource. Unlike v1, there is no org-admin bypass — access is decided solely by Kessel. Org admins receive the relation through the platform admin default role binding.
 - Group V2 list access uses `GroupV2KesselAccessPermission`, which grants a narrow self-access exception: callers without `rbac_groups_read` can still list groups when the query is `scope=principal` or an exact (case-sensitive) match of `username` to their own username (V1 parity). The queryset is restricted to the requester's own memberships via `request.group_self_access_only`. The service layer uses a case-sensitive (`username=`) DB filter for self-access, not the `username__iexact` used by the general `scope=principal` codepath, to prevent leaking groups belonging to a legacy case-distinct principal (e.g. `"Alice"` vs `"alice"`). Does not apply to retrieve/create/update/destroy/principals.
 

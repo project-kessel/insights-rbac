@@ -63,6 +63,15 @@ class RoleBindingViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             - subject_id: Filter by subject ID
             - fields: Control which fields are included in the response
             - order_by: Sort by specified field(s), prefix with '-' for descending
+
+    No ``AccessFilterBackend`` is used: ``RoleBindingKesselAccessPermission``
+    checks the ``view``/``role_binding_view`` (read) or
+    ``create``/``edit``/``role_binding_grant``/``role_binding_revoke`` (write)
+    relation directly on the caller-supplied resource (workspace or tenant),
+    falling back to a tenant-level check (org-admin, or Kessel when
+    ``KESSEL_TENANT_AUTH_ENABLED``) for unscoped read requests.
+    ``RoleBindingSystemUserAccessPermission`` denies non-admin system users
+    before this check runs.
     """
 
     _SUBJECT_NAME_ATTR = {"group": "name", "user": "username"}

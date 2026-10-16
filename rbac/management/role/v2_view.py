@@ -54,7 +54,14 @@ class RoleV2CursorPagination(V2CursorPagination):
 
 
 class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
-    """RoleV2 ViewSet."""
+    """RoleV2 ViewSet.
+
+    No ``AccessFilterBackend`` is used because
+    ``RoleV2KesselAccessPermission`` checks a single
+    ``rbac_roles_read``/``rbac_roles_write`` relation on the tenant resource.
+    List and retrieve still apply queryset and service filters for assignable,
+    in-scope, resource-eligible roles and may include public-tenant seeded roles.
+    """
 
     permission_classes = (RoleV2KesselAccessPermission, V2WriteRequiresWorkspacesEnabled)
     queryset = RoleV2.objects.exclude(type=RoleV2.Types.PLATFORM)

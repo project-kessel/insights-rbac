@@ -79,7 +79,14 @@ def _catch_principal_errors(fn):
 
 
 class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
-    """GroupV2 ViewSet."""
+    """GroupV2 ViewSet.
+
+    No ``AccessFilterBackend`` is used because group visibility is
+    tenant-wide all-or-nothing: ``GroupV2KesselAccessPermission`` checks a
+    single ``rbac_groups_read``/``rbac_groups_write`` relation on the tenant
+    resource (with a narrow self-access exception for listing one's own
+    groups).
+    """
 
     permission_classes = (GroupV2KesselAccessPermission, V2WriteRequiresWorkspacesEnabled)
     serializer_class = GroupV2ResponseSerializer

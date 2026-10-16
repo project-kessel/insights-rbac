@@ -223,10 +223,14 @@ Never rely on implicit tenant. Always explicitly pass or filter by tenant.
 ## Access Control Integration
 
 v2 viewsets declare two layers:
-1. `permission_classes` tuple -- endpoint-level permission checks (e.g., `WorkspaceAccessPermission`, `RoleBindingKesselAccessPermission`).
-2. `filter_backends` -- queryset filtering (e.g., `WorkspaceAccessFilterBackend`).
+1. `permission_classes` tuple -- endpoint-level permission checks (e.g., `WorkspaceAccessPermission`, `RoleBindingKesselAccessPermission`). Required on every v2 viewset.
+2. `filter_backends` -- queryset filtering (e.g., `WorkspaceAccessFilterBackend`). Required only on **object-scoped** viewsets, where different objects in the same list can be visible to different callers.
 
 The permission class order matters. `V2WriteRequiresWorkspacesEnabled` is a guard that blocks writes when workspaces feature is disabled; it goes last. `RoleBindingSystemUserAccessPermission` goes first to allow system-to-system calls to bypass Kessel checks.
+
+**Tenant-wide** viewsets (access is all-or-nothing for the entire tenant) have no per-object distinction to filter, so they omit `filter_backends` entirely. In its place, the class docstring names the relation(s)/permission checks enforced -- see `RoleV2ViewSet`, `GroupV2ViewSet`, and `PrincipalV2ViewSet` for the wording pattern (originated by `AuditLogV2ViewSet` and `PermissionV2ViewSet`).
+
+**Resource-scoped** viewsets check access against a caller-supplied resource (workspace or tenant) rather than filtering a queryset. They also omit `filter_backends`, but the permission class checks the required relation on the specific resource from query params or request body, and the service query is scoped to that same resource. `RoleBindingViewSet` follows this pattern: `RoleBindingKesselAccessPermission` checks the relation on the caller-supplied resource. The class docstring documents the per-resource permission check.
 
 ## Service Layer Pattern
 

@@ -26,7 +26,14 @@ from management.v2_filters import v2_name_filter
 
 
 class PrincipalV2ViewSet(BaseV2ViewSet):
-    """Read-only V2 ViewSet for principals."""
+    """Read-only V2 ViewSet for principals.
+
+    No ``AccessFilterBackend`` is used because principal visibility is
+    tenant-wide all-or-nothing: ``PrincipalV2AccessPermission`` checks
+    the ``ALLOW_ANY`` testing bypass, org-admin status, the V1
+    ``principal:read`` access grant, or (Kessel fallback) a single
+    ``rbac_principal_read`` relation on the tenant resource.
+    """
 
     permission_classes = (PrincipalV2AccessPermission,)
     queryset = Principal.objects.all()
