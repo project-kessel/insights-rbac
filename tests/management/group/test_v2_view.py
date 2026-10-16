@@ -986,17 +986,15 @@ class GroupV2PublicDefaultGroupsViewTest(GroupV2ViewTestBase):
                 self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_write_actions_on_public_default_group_not_found(self):
-        """Update, delete and every principals action return 404 for public default groups and change nothing."""
-        self.enterContext(
-            patch(
-                "management.principal.proxy.PrincipalProxy.request_filtered_principals",
-                return_value={
-                    "status_code": 200,
-                    "data": [{"username": "user_1", "user_id": "u1", "org_id": self.tenant.org_id, "is_active": True}],
-                },
-            )
-        )
-        self.enterContext(patch("management.group.v2_view.backfill_remote_principals"))
+        """Update, delete and every principals action return 404 for public default groups and change nothing.
+
+        BOP and the principal backfill are patched only so the test can assert they are never reached:
+        every action must 404 before any external call. Patching them (instead of leaving them out) keeps
+        the guard explicit -- an unpatched proxy would only fail the test by coincidence, through an
+        unreachable host, and would attempt a real HTTP call from a unit test.
+        """
+        mock_proxy = self.enterContext(patch("management.principal.proxy.PrincipalProxy.request_filtered_principals"))
+        mock_backfill = self.enterContext(patch("management.group.v2_view.backfill_remote_principals"))
 
         for group in (self.public_platform_default, self.public_admin_default):
             original_name = group.name
@@ -1025,6 +1023,8 @@ class GroupV2PublicDefaultGroupsViewTest(GroupV2ViewTestBase):
             self.assertFalse(group.principals.exists())
 
         self.mock_dual_write.assert_not_called()
+        mock_proxy.assert_not_called()
+        mock_backfill.assert_not_called()
         self.assertFalse(AuditLog.objects.filter(resource_type=AuditLog.GROUP_V2).exists())
 
 
@@ -1798,10 +1798,45 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.assertFalse(self.group_b.principals.filter(pk=self.user_3.pk).exists())
 
     def test_add_group_not_found(self):
-        """Adding principals to an unknown group returns 404."""
-        response = self._add(uuid.uuid4(), {"usernames": ["user_3"]})
+        """Adding principals to an unknown group returns 404 before any external validation or backfill.
+
+        The identifiers are unknown too, so the response also proves the group is resolved first: the 404
+        reports the missing group rather than listing the invalid identifiers.
+        """
+        response = self._add(uuid.uuid4(), {"usernames": ["no-such-user"], "service_accounts": ["no-such-sa"]})
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["detail"], "No Group matches the given query.")
+        self.mock_proxy.assert_not_called()
+        self.mock_backfill.assert_not_called()
+        self.mock_validate_token.assert_not_called()
+        self.mock_it.assert_not_called()
+
+    def test_add_to_public_default_group_not_found_skips_external_validation(self):
+        """A public default group is not writable, so the 404 comes back without calling BOP or IT."""
+        public_default = Group.objects.create(
+            name="default access",
+            platform_default=True,
+            system=True,
+            tenant=Tenant.objects.get(tenant_name=Tenant.PUBLIC_TENANT_NAME),
+        )
+        self.it_client_ids.add("new-sa")
+
+        # Retrieve resolves the group, so the 404 below is about the group not being writable rather than
+        # about it being invisible -- without this the test would still pass if public defaults stopped
+        # resolving at all.
+        retrieved = self.client.get(self._detail_url(public_default.uuid), **self.headers)
+        self.assertEqual(retrieved.status_code, status.HTTP_200_OK)
+
+        response = self._add(public_default.uuid, {"usernames": ["user_3"], "service_accounts": ["new-sa"]})
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.mock_proxy.assert_not_called()
+        self.mock_backfill.assert_not_called()
+        self.mock_validate_token.assert_not_called()
+        self.mock_it.assert_not_called()
+        self.assertFalse(Principal.objects.filter(tenant=self.tenant, service_account_id="new-sa").exists())
+        self.assertFalse(public_default.principals.exists())
 
     def test_add_cross_account_principal_not_found(self):
         """A cross-account principal is not resolvable through this local-lookup endpoint."""

@@ -243,6 +243,12 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         usernames = set(serializer.validated_data.get("usernames") or [])
         service_account_client_ids = set(serializer.validated_data.get("service_accounts") or [])
 
+        # Resolve the group before any external call, so a group the tenant cannot write to (unknown, or
+        # a read-only public default group) 404s without spending IT/BOP calls or backfilling principals
+        # the caller never gets to use. The result is discarded: _perform_add_principals() re-reads the
+        # group inside its atomic block.
+        self.get_object()
+
         # Validate all identifiers before opening the DB transaction (V1 parity), so that any unknown
         # identifier fails the whole request before the group is modified. Both passes run (unless one
         # hits a hard failure like an unreachable backend) so a request with both an unknown username and
