@@ -192,6 +192,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -574,6 +576,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -1145,6 +1149,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1376,6 +1382,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1954,6 +1962,9 @@ parameters:
   value: '10'
 - name: IT_TOKEN_JKWS_CACHE_LIFETIME
   value: '28800'
+- name: OUTBOUND_HTTP_TIMEOUT
+  description: Timeout in seconds for outbound HTTP requests to BOP and JWKS endpoints (does not affect IT service, which uses IT_SERVICE_TIMEOUT_SECONDS)
+  value: '10'
 - name: PRINCIPAL_USER_DOMAIN
   description: >
     Kessel requires principal IDs to be qualified by a domain,

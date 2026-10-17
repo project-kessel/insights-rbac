@@ -72,6 +72,7 @@ class TokenValidatorTests(IdentityRequest):
         url: str,
         oidc_configuration_url_status_code: status = status.HTTP_200_OK,
         jwks_url_response_status_code: status = status.HTTP_200_OK,
+        **kwargs,
     ) -> mock.Mock:
         """Side effect handler for when we need the "requests.get" method to return different responses."""
         if url == self.oidc_configuration_url:
@@ -84,7 +85,7 @@ class TokenValidatorTests(IdentityRequest):
                 status_code=jwks_url_response_status_code, json=lambda: self.jwks_certificates_response_json
             )
 
-    def _requests_get_sideffect_jwks_bad_response(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_bad_response(self, url: str, **kwargs) -> mock.Mock:
         """Side effect handler that returns bad request response for when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -96,7 +97,7 @@ class TokenValidatorTests(IdentityRequest):
                 status_code=status.HTTP_400_BAD_REQUEST, json=lambda: self.jwks_certificates_response_json
             )
 
-    def _requests_get_sideffect_jwks_connection_error(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_connection_error(self, url: str, **kwargs) -> mock.Mock:
         """Side effect handler that raises a connection error when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -106,7 +107,7 @@ class TokenValidatorTests(IdentityRequest):
         elif url == self.oidc_configuration_jwks_url:
             raise requests.exceptions.ConnectionError
 
-    def _requests_get_sideffect_jwks_timeout_error(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_timeout_error(self, url: str, **kwargs) -> mock.Mock:
         """Side effect handler that raises a timeout error when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -229,6 +230,14 @@ class TokenValidatorTests(IdentityRequest):
 
         # And the "import key set" method should also have been called with the same contents.
         import_key_set.assert_called_with(self.jwks_certificates_response_json)
+
+        # Assert that each requests.get call received the timeout kwarg.
+        for call in get.call_args_list:
+            self.assertEqual(
+                call.kwargs.get("timeout"),
+                settings.OUTBOUND_HTTP_TIMEOUT,
+                "each requests.get call must include timeout=settings.OUTBOUND_HTTP_TIMEOUT",
+            )
 
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")

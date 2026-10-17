@@ -121,7 +121,7 @@ Key env vars: `INVENTORY_API_SERVER`, `INVENTORY_API_CLIENT_ID`, `INVENTORY_API_
 - TLS: Clowder CA or local cert at `management/principal/certs/client.pem`
 - Bypass: `BYPASS_BOP_VERIFICATION=True` returns principals from local DB without calling BOP
 
-Env vars: `PRINCIPAL_PROXY_SERVICE_PROTOCOL`, `_HOST`, `_PORT`, `_PATH`, `PRINCIPAL_PROXY_CLIENT_ID`, `PRINCIPAL_PROXY_API_TOKEN`.
+Env vars: `PRINCIPAL_PROXY_SERVICE_PROTOCOL`, `_HOST`, `_PORT`, `_PATH`, `PRINCIPAL_PROXY_CLIENT_ID`, `PRINCIPAL_PROXY_API_TOKEN`, `OUTBOUND_HTTP_TIMEOUT` (default 10 seconds; applies to all BOP requests and JWKS fetches).
 
 Metrics: `rbac_proxy_request_processing_seconds` (histogram), `bop_request_status_total` (counter by method+status).
 
