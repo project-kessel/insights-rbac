@@ -2301,6 +2301,19 @@ class MCPSearchRolesTests(MCPToolTestMixin, IdentityRequest):
         self.assertNotIn("Unassigned Role", role_names)
         self.assertNotIn("ignored_filters", tool_output)
 
+    def test_search_roles_v1_with_cursor_is_noop(self):
+        """Positive: search_roles on V1 org ignores cursor parameter silently."""
+        role = Role.objects.create(name="V1 Role", tenant=self.tenant)
+        policy = Policy.objects.create(name="auto_policy", group=None, tenant=self.tenant)
+        policy.roles.add(role)
+
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v1")
+        self.assertNotIn("ignored_filters", tool_output)
+
 
 class MCPViewNonAdminTests(IdentityRequest):
     """Test the MCP endpoint for non-admin users via _private/_a2s/mcp/."""
@@ -2667,6 +2680,159 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("role bindings", tool_output["ignored_filters"]["username"]["reason"])
         self.assertIn("list_role_bindings", tool_output["ignored_filters"]["username"]["alternative"])
         self.assertIn("jdoe", tool_output["ignored_filters"]["username"]["alternative"])
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_forwarded(self, mock_call_view):
+        """Positive: search_roles on V2 org forwards cursor parameter to the API."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("data", tool_output)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_extracted_from_url(self, mock_call_view):
+        """Positive: search_roles extracts bare cursor token from a links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "10")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_preserves_search_params(self, mock_call_view):
+        """Positive: search_roles preserves name/permission/resource_type/order_by/limit from links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = (
+            "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA=="
+            "&limit=20&name=Cost*&permission=cost-management:*:*"
+            "&resource_type=workspace&order_by=name"
+        )
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "20")
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["permission"], "cost-management:*:*")
+        self.assertEqual(forwarded_params["resource_type"], "workspace")
+        self.assertEqual(forwarded_params["order_by"], "name")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_explicit_args_override_url_params(self, mock_call_view):
+        """Positive: explicit tool arguments take precedence over values embedded in links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&name=OldName&limit=20"
+        response = self._call_tool("search_roles", {"cursor": next_url, "name": "NewName"})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["name"], "NewName")
+        self.assertEqual(forwarded_params["limit"], "20")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_explicit_limit_overrides_cursor_url_limit(self, mock_call_view):
+        """Positive: explicit nondefault limit takes precedence over the limit embedded in cursor URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url, "limit": 50})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        # Explicit limit=50 must NOT be overwritten by the URL's limit=10.
+        self.assertEqual(forwarded_params["limit"], "50")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_without_cursor_param_omits_cursor(self, mock_call_view):
+        """Positive: URL with query params but no cursor key does not forward the raw URL as a cursor token."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        url_no_cursor = "/api/rbac/v2/roles/?name=Cost*&limit=20"
+        response = self._call_tool("search_roles", {"cursor": url_no_cursor})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertNotIn("cursor", forwarded_params)
+        # Fallback search params from the URL are still applied.
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["limit"], "20")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_bare_cursor_with_question_mark_preserved(self, mock_call_view):
+        """Positive: bare cursor token containing '?' is forwarded as-is."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        bare_token = "cD0xMjM0?NTY3OA=="
+        response = self._call_tool("search_roles", {"cursor": bare_token})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], bare_token)
+
+    def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
+        """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 5})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "5")
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["reason"])
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["alternative"])
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_offset_not_forwarded_to_view(self, mock_call_view):
+        """Positive: search_roles on V2 org does not pass offset to the cursor-paginated roles view."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        response = self._call_tool("search_roles", {"offset": 5, "limit": 7})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertNotIn("offset", forwarded_params)
+        self.assertEqual(forwarded_params["limit"], "7")
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "5")
+
+    def test_search_roles_v2_offset_not_ignored_when_zero(self):
+        """Positive: search_roles on V2 org does NOT flag offset when it's 0 (default)."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 0})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertNotIn("offset", tool_output.get("ignored_filters", {}))
+
+    def test_search_roles_v2_cursor_with_offset_both_present(self):
+        """Positive: search_roles with both cursor and offset > 0 includes both in result."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA==", "offset": 10})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "10")
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)
