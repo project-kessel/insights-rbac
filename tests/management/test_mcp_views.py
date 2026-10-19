@@ -48,9 +48,21 @@ from management.mcp_views import (
     _validate_write_payload,
     mcp_shutdown,
 )
-from management.models import Access, AuditLog, Group, Permission, Policy, Principal, Role
+from management.models import (
+    Access,
+    AuditLog,
+    Group,
+    Permission,
+    Policy,
+    Principal,
+    Role,
+)
 from management.role.v2_model import RoleV2
-from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
+from management.role_binding.model import (
+    RoleBinding,
+    RoleBindingGroup,
+    RoleBindingPrincipal,
+)
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_mapping.v2_activation import ensure_v2_write_activated
 from management.tenant_service.v2 import V2TenantBootstrapService
@@ -70,7 +82,9 @@ class MCPToolTestMixin:
     def setUp(self):
         """Auto-mock access checks so protected tools are callable in tests."""
         super().setUp()
-        kessel_patcher = patch("management.mcp_views._check_kessel_access", return_value=True)
+        kessel_patcher = patch(
+            "management.mcp_views._check_kessel_access", return_value=True
+        )
         self._kessel_mock = kessel_patcher.start()
         self.addCleanup(kessel_patcher.stop)
         v1_patcher = patch("management.mcp_views._check_v1_access", return_value=True)
@@ -93,7 +107,12 @@ class MCPToolTestMixin:
     def _get_tool_names(self):
         """Get tool names from tools/list response."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
         return [t["name"] for t in response.json()["result"]["tools"]]
 
     def _get_tool_output(self, response):
@@ -110,7 +129,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down MCP view tests."""
@@ -127,7 +148,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_returns_server_info(self):
         """Positive: MCP initialize returns server capabilities."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -142,7 +168,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_returns_instructions(self):
         """Positive: MCP initialize includes instructions field."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         result = response.json()["result"]
         self.assertIn("instructions", result)
@@ -151,7 +182,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_instructions_always_include_remediation_guidance(self):
         """Positive: instructions always include remediation guidance regardless of write mode."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         instructions = response.json()["result"]["instructions"]
         self.assertIn("Remediation Guidance", instructions)
@@ -162,7 +198,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_instructions_include_write_actions_when_writes_enabled(self):
         """Positive: instructions include write action prompt when write mode is on."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         instructions = response.json()["result"]["instructions"]
         self.assertIn("Write Actions", instructions)
@@ -172,7 +213,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_instructions_omit_write_actions_when_writes_disabled(self):
         """Negative: instructions omit write action prompt when write mode is off."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         instructions = response.json()["result"]["instructions"]
         self.assertNotIn("Write Actions", instructions)
@@ -181,7 +227,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_initialize_instructions_include_honest_caveats(self):
         """Positive: instructions always include cross-cutting honest caveats."""
         body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         instructions = response.json()["result"]["instructions"]
         self.assertIn("Honest Caveats", instructions)
@@ -231,14 +282,24 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_notification_returns_202(self):
         """Positive: JSON-RPC notification (no id) returns 202."""
         body = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, 202)
 
     def test_tools_list_returns_list_principals_tool(self):
         """Positive: tools/list returns the list_principals tool with schema."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -256,7 +317,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_unknown_method_returns_error(self):
         """Negative: Unknown method returns -32601 error."""
         body = {"jsonrpc": "2.0", "method": "unknown/method", "id": 3, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -267,7 +333,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_invalid_json_returns_parse_error(self):
         """Negative: Invalid JSON returns -32700 parse error."""
-        response = self.client.post(self.url, data="not json", content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url, data="not json", content_type="application/json", **self.headers
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -278,7 +346,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_invalid_jsonrpc_version_returns_error(self):
         """Negative: Wrong jsonrpc version returns -32600 error."""
         body = {"jsonrpc": "1.0", "method": "initialize", "id": 4, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -289,7 +362,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_missing_method_returns_error(self):
         """Negative: Missing method field returns -32600 error."""
         body = {"jsonrpc": "2.0", "id": 40, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -301,7 +379,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_notification_without_method_returns_error(self):
         """Negative: Notification (no id) without method returns -32600 error."""
         body = {"jsonrpc": "2.0"}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -330,7 +413,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_tools_list_returns_hello_tool(self):
         """Positive: tools/list includes the hello tool with message param."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tools = response.json()["result"]["tools"]
@@ -350,14 +438,21 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 20,
             "params": {"name": "hello", "arguments": {}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
         result = data["result"]
         self.assertFalse(result["isError"])
         tool_output = json.loads(result["content"][0]["text"])
-        self.assertEqual(tool_output["response"], "RBAC received your message: 'Hello, World!'")
+        self.assertEqual(
+            tool_output["response"], "RBAC received your message: 'Hello, World!'"
+        )
         self.assertIn("date", tool_output)
 
     def test_tools_call_hello_with_custom_message(self):
@@ -368,12 +463,21 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 21,
             "params": {"name": "hello", "arguments": {"message": "Hi from LLM!"}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = json.loads(response.json()["result"]["content"][0]["text"])
-        self.assertEqual(tool_output["response"], "RBAC received your message: 'Hi from LLM!'")
-        self.assertRegex(tool_output["date"], r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC")
+        self.assertEqual(
+            tool_output["response"], "RBAC received your message: 'Hi from LLM!'"
+        )
+        self.assertRegex(
+            tool_output["date"], r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC"
+        )
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
@@ -394,7 +498,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {"limit": 10, "offset": 0},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -430,7 +539,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 50,
             "params": {"name": "list_principals", "arguments": {}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -444,7 +558,10 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         "management.principal.proxy.PrincipalProxy.request_principals",
         return_value={
             "status_code": 200,
-            "data": {"userCount": "2", "users": [{"username": "user1"}, {"username": "user2"}]},
+            "data": {
+                "userCount": "2",
+                "users": [{"username": "user1"}, {"username": "user2"}],
+            },
         },
     )
     def test_tools_call_list_principals_dict_response(self, mock_request):
@@ -458,7 +575,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {"limit": 5, "offset": 0, "sort_order": "desc"},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -491,7 +613,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 },
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         mock_request.assert_called_once_with(
@@ -514,8 +641,18 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "jsmith", "first_name": "John", "last_name": "Smith", "email": "jsmith@example.com"},
-                {"username": "jdoe", "first_name": "Jane", "last_name": "Doe", "email": "jdoe@example.com"},
+                {
+                    "username": "jsmith",
+                    "first_name": "John",
+                    "last_name": "Smith",
+                    "email": "jsmith@example.com",
+                },
+                {
+                    "username": "jdoe",
+                    "first_name": "Jane",
+                    "last_name": "Doe",
+                    "email": "jdoe@example.com",
+                },
                 {
                     "username": "rbac_user",
                     "first_name": "RBAC",
@@ -542,14 +679,31 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "jsmith", "first_name": "John", "last_name": "Smith", "email": "jsmith@example.com"},
-                {"username": "jdoe", "first_name": "Jane", "last_name": "Doe", "email": "jdoe@example.com"},
-                {"username": "asmith", "first_name": "Alice", "last_name": "Smith", "email": "asmith@example.com"},
+                {
+                    "username": "jsmith",
+                    "first_name": "John",
+                    "last_name": "Smith",
+                    "email": "jsmith@example.com",
+                },
+                {
+                    "username": "jdoe",
+                    "first_name": "Jane",
+                    "last_name": "Doe",
+                    "email": "jdoe@example.com",
+                },
+                {
+                    "username": "asmith",
+                    "first_name": "Alice",
+                    "last_name": "Smith",
+                    "email": "asmith@example.com",
+                },
             ],
             "userCount": 3,
         },
     )
-    def test_tools_call_list_principals_filter_by_name_multiple_matches(self, mock_request):
+    def test_tools_call_list_principals_filter_by_name_multiple_matches(
+        self, mock_request
+    ):
         """Positive: list_principals name filter returns all matching users."""
         response = self._call_tool("list_principals", {"name": "Smith"})
 
@@ -566,13 +720,25 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "jsmith", "first_name": "John", "last_name": "Smith", "email": "jsmith@example.com"},
-                {"username": "jdoe", "first_name": "Jane", "last_name": "Doe", "email": "jdoe@example.com"},
+                {
+                    "username": "jsmith",
+                    "first_name": "John",
+                    "last_name": "Smith",
+                    "email": "jsmith@example.com",
+                },
+                {
+                    "username": "jdoe",
+                    "first_name": "Jane",
+                    "last_name": "Doe",
+                    "email": "jdoe@example.com",
+                },
             ],
             "userCount": 2,
         },
     )
-    def test_tools_call_list_principals_filter_by_name_case_insensitive(self, mock_request):
+    def test_tools_call_list_principals_filter_by_name_case_insensitive(
+        self, mock_request
+    ):
         """Positive: list_principals name filter is case-insensitive."""
         response = self._call_tool("list_principals", {"name": "john smith"})
 
@@ -588,7 +754,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "jsmith", "first_name": "John", "last_name": "Smith", "email": "jsmith@example.com"},
+                {
+                    "username": "jsmith",
+                    "first_name": "John",
+                    "last_name": "Smith",
+                    "email": "jsmith@example.com",
+                },
             ],
             "userCount": 1,
         },
@@ -607,15 +778,29 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "jsmith", "first_name": "John", "last_name": "Smith", "email": "jsmith@example.com"},
-                {"username": "asmith", "first_name": "Alice", "last_name": "Smith", "email": "asmith@example.com"},
+                {
+                    "username": "jsmith",
+                    "first_name": "John",
+                    "last_name": "Smith",
+                    "email": "jsmith@example.com",
+                },
+                {
+                    "username": "asmith",
+                    "first_name": "Alice",
+                    "last_name": "Smith",
+                    "email": "asmith@example.com",
+                },
             ],
             "userCount": 2,
         },
     )
-    def test_tools_call_list_principals_filter_by_name_username_only(self, mock_request):
+    def test_tools_call_list_principals_filter_by_name_username_only(
+        self, mock_request
+    ):
         """Positive: list_principals with name filter and username_only returns only usernames."""
-        response = self._call_tool("list_principals", {"name": "Smith", "username_only": "true"})
+        response = self._call_tool(
+            "list_principals", {"name": "Smith", "username_only": "true"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -629,7 +814,13 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         "management.principal.proxy.PrincipalProxy.request_principals",
         return_value={
             "status_code": 500,
-            "errors": [{"detail": "BOP service unavailable", "status": "500", "source": "principals"}],
+            "errors": [
+                {
+                    "detail": "BOP service unavailable",
+                    "status": "500",
+                    "source": "principals",
+                }
+            ],
         },
     )
     def test_tools_call_list_principals_filter_by_name_bop_error(self, mock_request):
@@ -643,18 +834,25 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_tools_call_list_principals_name_and_usernames_conflict(self):
         """Negative: list_principals rejects conflicting name and usernames parameters."""
-        response = self._call_tool("list_principals", {"name": "Smith", "usernames": "jsmith"})
+        response = self._call_tool(
+            "list_principals", {"name": "Smith", "usernames": "jsmith"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
         self.assertIn("errors", tool_output)
-        self.assertEqual(tool_output["errors"][0]["detail"], "Cannot use both 'name' and 'usernames' parameters")
+        self.assertEqual(
+            tool_output["errors"][0]["detail"],
+            "Cannot use both 'name' and 'usernames' parameters",
+        )
 
     @patch(
         "management.principal.proxy.PrincipalProxy.request_principals",
         return_value={
             "status_code": 500,
-            "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
+            "errors": [
+                {"detail": "Unexpected error.", "status": "500", "source": "principals"}
+            ],
         },
     )
     def test_tools_call_list_principals_proxy_error(self, mock_request):
@@ -668,7 +866,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -680,7 +883,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     @patch("management.mcp_views._call_view")
     def test_tools_call_list_principals_username_not_found_hint(self, mock_call_view):
         """Positive: list_principals includes retry hint when usernames lookup returns zero results."""
-        mock_call_view.return_value = json.dumps({"meta": {"count": 0}, "data": [], "links": {}})
+        mock_call_view.return_value = json.dumps(
+            {"meta": {"count": 0}, "data": [], "links": {}}
+        )
         response = self._call_tool("list_principals", {"usernames": "Joe"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -706,7 +911,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     @patch("management.mcp_views._call_view")
     def test_tools_call_list_principals_no_hint_without_usernames(self, mock_call_view):
         """Positive: list_principals does NOT include hint when no usernames filter is used."""
-        mock_call_view.return_value = json.dumps({"meta": {"count": 0}, "data": [], "links": {}})
+        mock_call_view.return_value = json.dumps(
+            {"meta": {"count": 0}, "data": [], "links": {}}
+        )
         response = self._call_tool("list_principals", {"limit": 10})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -719,7 +926,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         return_value={
             "status_code": 200,
             "data": [
-                {"username": "test_user", "email": "test@example.com", "first_name": "Test", "last_name": "User"}
+                {
+                    "username": "test_user",
+                    "email": "test@example.com",
+                    "first_name": "Test",
+                    "last_name": "User",
+                }
             ],
             "userCount": 1,
         },
@@ -744,7 +956,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -765,7 +982,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 30,
             "params": {"name": "hello", "arguments": {}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -776,7 +998,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_non_dict_params_returns_invalid_request(self):
         """Negative: params as a list instead of object returns -32600."""
         body = {"jsonrpc": "2.0", "method": "tools/call", "id": 32, "params": [1, 2, 3]}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -793,7 +1020,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 34,
             "params": {"arguments": {}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -810,7 +1042,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 35,
             "params": {"name": "hello", "arguments": "not a dict"},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -827,7 +1064,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 33,
             "params": {"name": "hello"},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -842,7 +1084,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}},
             {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}},
         ]
-        response = self.client.post(self.url, data=json.dumps(batch), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(batch),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -856,9 +1103,17 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "jsonrpc": "2.0",
             "method": "tools/call",
             "id": 31,
-            "params": {"name": "hello", "arguments": {"message": 123, "unknown_param": "x"}},
+            "params": {
+                "name": "hello",
+                "arguments": {"message": 123, "unknown_param": "x"},
+            },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -876,7 +1131,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 10,
             "params": {"name": "hello", "arguments": {"message": "Hey!"}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json")
+        response = self.client.post(
+            self.url, data=json.dumps(body), content_type="application/json"
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = json.loads(response.json()["result"]["content"][0]["text"])
@@ -890,7 +1147,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             "id": 11,
             "params": {"name": "list_principals", "arguments": {}},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json")
+        response = self.client.post(
+            self.url, data=json.dumps(body), content_type="application/json"
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -916,7 +1175,10 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 },
             }
             response = self.client.post(
-                self.url, data=json.dumps(body), content_type="application/json", **self.headers
+                self.url,
+                data=json.dumps(body),
+                content_type="application/json",
+                **self.headers,
             )
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -946,7 +1208,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {"sort_order": "invalid"},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -973,7 +1240,10 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
                 },
             }
             response = self.client.post(
-                self.url, data=json.dumps(body), content_type="application/json", **self.headers
+                self.url,
+                data=json.dumps(body),
+                content_type="application/json",
+                **self.headers,
             )
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -985,7 +1255,12 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_tools_list_includes_non_v2_tools(self):
         """Positive: tools/list includes all non-V2-only tools when V2 is disabled."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_names = [t["name"] for t in response.json()["result"]["tools"]]
@@ -1016,13 +1291,24 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_tools_list_excludes_v2_only_tools_when_v2_disabled(self):
         """Negative: V2-only tools are hidden when V2_APIS_ENABLED=False."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_names = [t["name"] for t in response.json()["result"]["tools"]]
-        v2_only_tools = [name for name, cfg in _TOOL_CONFIG.items() if cfg.api_version == ApiVersion.V2]
+        v2_only_tools = [
+            name
+            for name, cfg in _TOOL_CONFIG.items()
+            if cfg.api_version == ApiVersion.V2
+        ]
         for tool in v2_only_tools:
-            self.assertNotIn(tool, tool_names, f"V2-only tool '{tool}' should be hidden")
+            self.assertNotIn(
+                tool, tool_names, f"V2-only tool '{tool}' should be hidden"
+            )
 
     # --- get_status ---
 
@@ -1212,7 +1498,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         Access.objects.create(permission=perm, role=role, tenant=self.tenant)
         group = Group.objects.create(name="Access Governance", tenant=self.tenant)
         group.principals.add(self.principal)
-        policy = Policy.objects.create(name="auth_policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="auth_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         response = self._call_tool("list_audit_logs", {"include_authorization": True})
@@ -1315,7 +1603,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
 
-        response = self._call_tool("list_audit_logs", {"group_name": "target_group_alpha"})
+        response = self._call_tool(
+            "list_audit_logs", {"group_name": "target_group_alpha"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1340,7 +1630,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
 
-        response = self._call_tool("list_audit_logs", {"role_name": "target_role_alpha"})
+        response = self._call_tool(
+            "list_audit_logs", {"role_name": "target_role_alpha"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1473,7 +1765,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "Contractors"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "Contractors"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1485,7 +1779,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_group_changes_without_auth_returns_error(self):
         """Permission: investigate_group_changes without auth returns auth error."""
-        response = self._call_tool("investigate_group_changes", {"group_name": "Test"}, use_auth=False)
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "Test"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1494,7 +1790,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_group_changes_group_not_found(self):
         """Negative: investigate_group_changes returns error when group not found."""
-        response = self._call_tool("investigate_group_changes", {"group_name": "NonExistent"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "NonExistent"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1506,7 +1804,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         Group.objects.create(name="Contractors-East", tenant=self.tenant)
         Group.objects.create(name="Contractors-West", tenant=self.tenant)
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "Contractors-North"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "Contractors-North"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1600,7 +1900,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         Access.objects.create(permission=perm, role=role, tenant=self.tenant)
         auth_group = Group.objects.create(name="Access Governance", tenant=self.tenant)
         auth_group.principals.add(self.principal)
-        policy = Policy.objects.create(name="auth_policy", group=auth_group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="auth_policy", group=auth_group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         response = self._call_tool(
@@ -1618,11 +1920,17 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
     def test_investigate_group_changes_shows_current_roles(self):
         """Positive: investigate_group_changes includes current roles on the group."""
         group = Group.objects.create(name="TestGroup", tenant=self.tenant)
-        role = Role.objects.create(name="TestRole", display_name="Test Role Display", tenant=self.tenant)
-        policy = Policy.objects.create(name="test_policy", group=group, tenant=self.tenant)
+        role = Role.objects.create(
+            name="TestRole", display_name="Test Role Display", tenant=self.tenant
+        )
+        policy = Policy.objects.create(
+            name="test_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "TestGroup"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "TestGroup"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["group"]["current_role_count"], 1)
@@ -1633,9 +1941,13 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: investigate_group_changes indicates if queried role is currently assigned."""
         group = Group.objects.create(name="Contractors", tenant=self.tenant)
         role = Role.objects.create(
-            name="Vulnerability administrator", display_name="Vulnerability administrator", tenant=self.tenant
+            name="Vulnerability administrator",
+            display_name="Vulnerability administrator",
+            tenant=self.tenant,
         )
-        policy = Policy.objects.create(name="test_policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="test_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         AuditLog.objects.create(
@@ -1684,7 +1996,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "TestGroup"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "TestGroup"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["summary"]["total_changes_found"], 3)
@@ -1698,7 +2012,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: investigate_group_changes finds group with case-insensitive name."""
         Group.objects.create(name="Contractors", tenant=self.tenant)
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "contractors"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "contractors"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("group", tool_output)
@@ -1708,7 +2024,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: investigate_group_changes returns empty audit_entries when no changes found."""
         Group.objects.create(name="NewGroup", tenant=self.tenant)
 
-        response = self._call_tool("investigate_group_changes", {"group_name": "NewGroup"})
+        response = self._call_tool(
+            "investigate_group_changes", {"group_name": "NewGroup"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["audit_entries"]), 0)
@@ -1760,7 +2078,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: list_group_principals returns principals in group."""
         group = Group.objects.create(name="principals_group", tenant=self.tenant)
         group.principals.add(self.principal)
-        response = self._call_tool("list_group_principals", {"group_uuid": str(group.uuid)})
+        response = self._call_tool(
+            "list_group_principals", {"group_uuid": str(group.uuid)}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1805,7 +2125,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         Access.objects.create(permission=perm, role=role, tenant=self.tenant)
         group = Group.objects.create(name="access_group", tenant=self.tenant)
         group.principals.add(self.principal)
-        policy = Policy.objects.create(name="access_policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="access_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         response = self._call_tool("list_access", {"application": "rbac"})
@@ -1818,7 +2140,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_list_access_without_auth_returns_error(self):
         """Permission: list_access without auth returns auth error."""
-        response = self._call_tool("list_access", {"application": "rbac"}, use_auth=False)
+        response = self._call_tool(
+            "list_access", {"application": "rbac"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1854,7 +2178,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
 
     def test_list_permission_options_without_auth_returns_error(self):
         """Permission: list_permission_options without auth returns auth error."""
-        response = self._call_tool("list_permission_options", {"field": "application"}, use_auth=False)
+        response = self._call_tool(
+            "list_permission_options", {"field": "application"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1867,7 +2193,9 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: list_group_roles returns roles for a group."""
         group = Group.objects.create(name="roles_group", tenant=self.tenant)
         role = Role.objects.create(name="test_role", tenant=self.tenant)
-        policy = Policy.objects.create(name="test_policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="test_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         response = self._call_tool("list_group_roles", {"group_uuid": str(group.uuid)})
@@ -1895,10 +2223,14 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: list_group_roles accepts group_name instead of group_uuid."""
         group = Group.objects.create(name="group_for_roles_test", tenant=self.tenant)
         role = Role.objects.create(name="role_alpha", tenant=self.tenant)
-        policy = Policy.objects.create(name="policy_alpha", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="policy_alpha", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
-        response = self._call_tool("list_group_roles", {"group_name": "group_for_roles_test"})
+        response = self._call_tool(
+            "list_group_roles", {"group_name": "group_for_roles_test"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1912,10 +2244,14 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         """Positive: list_group_roles group_name lookup is case-insensitive."""
         group = Group.objects.create(name="Group_With_Mixed_Case", tenant=self.tenant)
         role = Role.objects.create(name="role_beta", tenant=self.tenant)
-        policy = Policy.objects.create(name="policy_beta", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="policy_beta", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
-        response = self._call_tool("list_group_roles", {"group_name": "group_with_mixed_case"})
+        response = self._call_tool(
+            "list_group_roles", {"group_name": "group_with_mixed_case"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -1931,11 +2267,15 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
-        self.assertIn("Either group_uuid or group_name is required", tool_output["error"])
+        self.assertIn(
+            "Either group_uuid or group_name is required", tool_output["error"]
+        )
 
     def test_list_group_roles_group_not_found_returns_error(self):
         """Negative: list_group_roles with non-existent group_name returns error."""
-        response = self._call_tool("list_group_roles", {"group_name": "nonexistent_group_xyz"})
+        response = self._call_tool(
+            "list_group_roles", {"group_name": "nonexistent_group_xyz"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -1990,7 +2330,9 @@ class MCPViewV2ToolsTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         self.enterContext(
             patch(
                 "management.permissions.role_v2_access.get_kessel_principal_id",
@@ -2014,7 +2356,12 @@ class MCPViewV2ToolsTests(MCPToolTestMixin, IdentityRequest):
     def test_tools_list_includes_v2_only_tools_when_v2_enabled(self):
         """Positive: V2-only tools are visible when V2_APIS_ENABLED=True."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_names = [t["name"] for t in response.json()["result"]["tools"]]
@@ -2086,31 +2433,53 @@ class PermissionMatchesTests(IdentityRequest):
 
     def test_exact_match(self):
         """Positive: exact permission match returns True."""
-        self.assertTrue(_permission_matches("cost-management:cost_model:write", "cost-management:cost_model:write"))
+        self.assertTrue(
+            _permission_matches(
+                "cost-management:cost_model:write", "cost-management:cost_model:write"
+            )
+        )
 
     def test_wildcard_all(self):
         """Positive: full wildcard matches any permission in the same app."""
-        self.assertTrue(_permission_matches("cost-management:*:*", "cost-management:cost_model:write"))
+        self.assertTrue(
+            _permission_matches(
+                "cost-management:*:*", "cost-management:cost_model:write"
+            )
+        )
 
     def test_wildcard_verb(self):
         """Positive: verb wildcard matches any verb."""
-        self.assertTrue(_permission_matches("cost-management:cost_model:*", "cost-management:cost_model:write"))
+        self.assertTrue(
+            _permission_matches(
+                "cost-management:cost_model:*", "cost-management:cost_model:write"
+            )
+        )
 
     def test_mismatch_verb(self):
         """Negative: different verb does not match."""
-        self.assertFalse(_permission_matches("cost-management:cost_model:read", "cost-management:cost_model:write"))
+        self.assertFalse(
+            _permission_matches(
+                "cost-management:cost_model:read", "cost-management:cost_model:write"
+            )
+        )
 
     def test_mismatch_app(self):
         """Negative: different application does not match."""
-        self.assertFalse(_permission_matches("inventory:hosts:read", "cost-management:hosts:read"))
+        self.assertFalse(
+            _permission_matches("inventory:hosts:read", "cost-management:hosts:read")
+        )
 
     def test_malformed_granted(self):
         """Negative: malformed granted permission returns False."""
-        self.assertFalse(_permission_matches("invalid-format", "cost-management:cost_model:write"))
+        self.assertFalse(
+            _permission_matches("invalid-format", "cost-management:cost_model:write")
+        )
 
     def test_malformed_requested(self):
         """Negative: malformed requested permission returns False."""
-        self.assertFalse(_permission_matches("cost-management:cost_model:write", "invalid"))
+        self.assertFalse(
+            _permission_matches("cost-management:cost_model:write", "invalid")
+        )
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True)
@@ -2123,7 +2492,9 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         role = Role.objects.create(name="test_role", tenant=self.tenant)
         perm = Permission.objects.create(
@@ -2136,7 +2507,9 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
         Access.objects.create(permission=perm, role=role, tenant=self.tenant)
         group = Group.objects.create(name="test_group", tenant=self.tenant)
         group.principals.add(self.principal)
-        policy = Policy.objects.create(name="test_policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="test_policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
     def tearDown(self):
@@ -2151,7 +2524,10 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_invalid_permission_format(self):
         """Negative: invalid permission format returns error."""
-        response = self._call_tool("check_user_permission", {"username": self.test_username, "permission": "invalid"})
+        response = self._call_tool(
+            "check_user_permission",
+            {"username": self.test_username, "permission": "invalid"},
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -2161,7 +2537,8 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
     def test_permission_allowed(self):
         """Positive: check_user_permission returns allowed=True when user has permission."""
         response = self._call_tool(
-            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:read"}
+            "check_user_permission",
+            {"username": self.test_username, "permission": "rbac:roles:read"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2173,7 +2550,8 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
     def test_permission_denied(self):
         """Negative: check_user_permission returns allowed=False when user lacks permission."""
         response = self._call_tool(
-            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:write"}
+            "check_user_permission",
+            {"username": self.test_username, "permission": "rbac:roles:write"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2200,11 +2578,18 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
         mock_by_name.return_value = json.dumps(
             {
                 "data": [
-                    {"username": self.test_username, "first_name": "Test", "last_name": "User"},
+                    {
+                        "username": self.test_username,
+                        "first_name": "Test",
+                        "last_name": "User",
+                    },
                 ]
             }
         )
-        response = self._call_tool("check_user_permission", {"username": "Test User", "permission": "rbac:roles:read"})
+        response = self._call_tool(
+            "check_user_permission",
+            {"username": "Test User", "permission": "rbac:roles:read"},
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -2221,7 +2606,10 @@ class MCPCheckUserPermissionTests(MCPToolTestMixin, IdentityRequest):
                 ]
             }
         )
-        response = self._call_tool("check_user_permission", {"username": "Test", "permission": "rbac:roles:read"})
+        response = self._call_tool(
+            "check_user_permission",
+            {"username": "Test", "permission": "rbac:roles:read"},
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -2286,7 +2674,9 @@ class MCPSearchRolesTests(MCPToolTestMixin, IdentityRequest):
         group = Group.objects.create(name="Test Group", tenant=self.tenant)
         group.principals.add(principal)
         role = Role.objects.create(name="User Role", tenant=self.tenant)
-        policy = Policy.objects.create(name="Test Policy", group=group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="Test Policy", group=group, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         Role.objects.create(name="Unassigned Role", tenant=self.tenant)
@@ -2304,7 +2694,9 @@ class MCPSearchRolesTests(MCPToolTestMixin, IdentityRequest):
     def test_search_roles_v1_with_cursor_is_noop(self):
         """Positive: search_roles on V1 org ignores cursor parameter silently."""
         role = Role.objects.create(name="V1 Role", tenant=self.tenant)
-        policy = Policy.objects.create(name="auto_policy", group=None, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="auto_policy", group=None, tenant=self.tenant
+        )
         policy.roles.add(role)
 
         response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
@@ -2331,17 +2723,29 @@ class MCPViewNonAdminTests(IdentityRequest):
         )
 
         self.user_data = {"username": "non_admin", "email": "non_admin@example.com"}
-        self.customer = {"account_id": "1234", "org_id": "4321", "tenant_name": non_admin_tenant_name}
-        self.request_context = self._create_request_context(self.customer, self.user_data, is_org_admin=False)
+        self.customer = {
+            "account_id": "1234",
+            "org_id": "4321",
+            "tenant_name": non_admin_tenant_name,
+        }
+        self.request_context = self._create_request_context(
+            self.customer, self.user_data, is_org_admin=False
+        )
 
         request = self.request_context["request"]
         self.headers = request.META
 
         # Set up RBAC permission for non-admin to read principals
-        self.non_admin_principal = Principal.objects.create(username="non_admin", tenant=self.non_admin_tenant)
-        self.group = Group.objects.create(name="principal_readers", tenant=self.non_admin_tenant)
+        self.non_admin_principal = Principal.objects.create(
+            username="non_admin", tenant=self.non_admin_tenant
+        )
+        self.group = Group.objects.create(
+            name="principal_readers", tenant=self.non_admin_tenant
+        )
         self.group.principals.add(self.non_admin_principal)
-        self.role = Role.objects.create(name="principal_reader_role", tenant=self.non_admin_tenant)
+        self.role = Role.objects.create(
+            name="principal_reader_role", tenant=self.non_admin_tenant
+        )
         self.permission = Permission.objects.create(
             application="rbac",
             resource_type="principals",
@@ -2349,9 +2753,13 @@ class MCPViewNonAdminTests(IdentityRequest):
             permission="rbac:principal:read",
             tenant=self.non_admin_tenant,
         )
-        self.access = Access.objects.create(permission=self.permission, role=self.role, tenant=self.non_admin_tenant)
+        self.access = Access.objects.create(
+            permission=self.permission, role=self.role, tenant=self.non_admin_tenant
+        )
         self.policy = Policy.objects.create(
-            name="principal_reader_policy", group=self.group, tenant=self.non_admin_tenant
+            name="principal_reader_policy",
+            group=self.group,
+            tenant=self.non_admin_tenant,
         )
         self.policy.roles.add(self.role)
 
@@ -2380,7 +2788,12 @@ class MCPViewNonAdminTests(IdentityRequest):
                 "arguments": {},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -2405,7 +2818,12 @@ class MCPViewNonAdminTests(IdentityRequest):
                 "arguments": {},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -2432,7 +2850,9 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         self.enterContext(
             patch(
@@ -2469,7 +2889,9 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_type="workspace",
             resource_id="root-workspace-id",
         )
-        RoleBindingPrincipal.objects.create(binding=self.binding, principal=self.principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=self.binding, principal=self.principal, source="direct"
+        )
 
     def tearDown(self):
         """Tear down V2 check_user_permission tests."""
@@ -2486,14 +2908,19 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
         """Positive: V2 org auto-detects and returns allowed=True via role bindings."""
         response = self._call_tool(
             "check_user_permission",
-            {"username": self.test_username, "permission": "vulnerability:vulnerability:read"},
+            {
+                "username": self.test_username,
+                "permission": "vulnerability:vulnerability:read",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
         self.assertTrue(tool_output["allowed"])
         self.assertEqual(tool_output["username"], self.test_username)
-        self.assertEqual(tool_output["matched_permission"], "vulnerability:vulnerability:read")
+        self.assertEqual(
+            tool_output["matched_permission"], "vulnerability:vulnerability:read"
+        )
         self.assertEqual(tool_output["role_name"], "Vuln Reader")
         self.assertEqual(tool_output["org_version"], "v2")
 
@@ -2501,7 +2928,10 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
         """Negative: V2 org returns allowed=False when user lacks the permission."""
         response = self._call_tool(
             "check_user_permission",
-            {"username": self.test_username, "permission": "vulnerability:vulnerability:write"},
+            {
+                "username": self.test_username,
+                "permission": "vulnerability:vulnerability:write",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2514,7 +2944,10 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
         """Negative: V2 org returns hint when user doesn't exist."""
         response = self._call_tool(
             "check_user_permission",
-            {"username": "nonexistent_user", "permission": "vulnerability:vulnerability:read"},
+            {
+                "username": "nonexistent_user",
+                "permission": "vulnerability:vulnerability:read",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2549,7 +2982,10 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
 
         response = self._call_tool(
             "check_user_permission",
-            {"username": self.test_username, "permission": "vulnerability:vulnerability:write"},
+            {
+                "username": self.test_username,
+                "permission": "vulnerability:vulnerability:write",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2575,17 +3011,24 @@ class MCPCheckUserPermissionV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_type="workspace",
             resource_id="root-workspace-id",
         )
-        RoleBindingPrincipal.objects.create(binding=wildcard_binding, principal=self.principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=wildcard_binding, principal=self.principal, source="direct"
+        )
 
         response = self._call_tool(
             "check_user_permission",
-            {"username": self.test_username, "permission": "vulnerability:vulnerability:write"},
+            {
+                "username": self.test_username,
+                "permission": "vulnerability:vulnerability:write",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
         self.assertTrue(tool_output["allowed"])
-        self.assertEqual(tool_output["matched_permission"], "vulnerability:vulnerability:*")
+        self.assertEqual(
+            tool_output["matched_permission"], "vulnerability:vulnerability:*"
+        )
         self.assertEqual(tool_output["org_version"], "v2")
 
 
@@ -2623,7 +3066,9 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_search_roles_v2_success(self):
         """Positive: search_roles on V2 org returns role data with org_version=v2."""
-        RoleV2.objects.create(name="V2 Custom Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="V2 Custom Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         response = self._call_tool("search_roles")
 
         self.assertEqual(response.status_code, 200)
@@ -2634,8 +3079,12 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_search_roles_v2_filter_by_name(self):
         """Positive: search_roles on V2 org filters by name."""
-        RoleV2.objects.create(name="Cost Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
-        RoleV2.objects.create(name="Other V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="Cost Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
+        RoleV2.objects.create(
+            name="Other V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         response = self._call_tool("search_roles", {"name": "Cost Reader"})
 
         self.assertEqual(response.status_code, 200)
@@ -2653,12 +3102,18 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
             permission="inventory:hosts:read",
             tenant=self.tenant,
         )
-        matching_role = RoleV2.objects.create(name="Host Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        matching_role = RoleV2.objects.create(
+            name="Host Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         matching_role.permissions.add(perm)
 
-        RoleV2.objects.create(name="Empty Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="Empty Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
 
-        response = self._call_tool("search_roles", {"permission": "inventory:hosts:read"})
+        response = self._call_tool(
+            "search_roles", {"permission": "inventory:hosts:read"}
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -2669,7 +3124,9 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_search_roles_v2_username_ignored_with_guidance(self):
         """Positive: search_roles on V2 org returns ignored_filters when username is provided."""
-        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         response = self._call_tool("search_roles", {"username": "jdoe"})
 
         self.assertEqual(response.status_code, 200)
@@ -2678,24 +3135,50 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("ignored_filters", tool_output)
         self.assertIn("username", tool_output["ignored_filters"])
         self.assertEqual(tool_output["ignored_filters"]["username"]["value"], "jdoe")
-        self.assertIn("role bindings", tool_output["ignored_filters"]["username"]["reason"])
-        self.assertIn("list_role_bindings", tool_output["ignored_filters"]["username"]["alternative"])
+        self.assertIn(
+            "role bindings", tool_output["ignored_filters"]["username"]["reason"]
+        )
+        self.assertIn(
+            "list_role_bindings",
+            tool_output["ignored_filters"]["username"]["alternative"],
+        )
         self.assertIn("jdoe", tool_output["ignored_filters"]["username"]["alternative"])
 
-    def test_search_roles_v2_cursor_forwarded(self):
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_forwarded(self, mock_call_view):
         """Positive: search_roles on V2 org forwards cursor parameter to the API."""
-        RoleV2.objects.create(name="V2 Role 1", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
-        RoleV2.objects.create(name="V2 Role 2", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        mock_call_view.return_value = json.dumps(
+            {"data": [], "links": {}, "meta": {"count": 0}}
+        )
         response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v2")
         self.assertIn("data", tool_output)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_extracted_from_url(self, mock_call_view):
+        """Positive: search_roles extracts bare cursor token from a links.next URL."""
+        mock_call_view.return_value = json.dumps(
+            {"data": [], "links": {}, "meta": {"count": 0}}
+        )
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
 
     def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
         """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
-        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         response = self._call_tool("search_roles", {"offset": 5})
 
         self.assertEqual(response.status_code, 200)
@@ -2709,7 +3192,9 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_search_roles_v2_offset_not_ignored_when_zero(self):
         """Positive: search_roles on V2 org does NOT flag offset when it's 0 (default)."""
-        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         response = self._call_tool("search_roles", {"offset": 0})
 
         self.assertEqual(response.status_code, 200)
@@ -2720,8 +3205,12 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_search_roles_v2_cursor_with_offset_both_present(self):
         """Positive: search_roles with both cursor and offset > 0 includes both in result."""
-        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
-        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA==", "offset": 10})
+        RoleV2.objects.create(
+            name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
+        response = self._call_tool(
+            "search_roles", {"cursor": "cD0xMjM0NTY3OA==", "offset": 10}
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -2774,7 +3263,9 @@ class MCPUnifiedGetRoleTests(MCPToolTestMixin, IdentityRequest):
         )
         role = Role.objects.create(name="Cost Reader V1", tenant=self.tenant)
         access = Access.objects.create(role=role, permission=perm, tenant=self.tenant)
-        Policy.objects.create(name="auto_policy", group=None, tenant=self.tenant).roles.add(role)
+        Policy.objects.create(
+            name="auto_policy", group=None, tenant=self.tenant
+        ).roles.add(role)
 
         response = self._call_tool("get_role", {"role_uuid": str(role.uuid)})
 
@@ -2834,14 +3325,25 @@ class MCPDeploymentGatingTests(MCPToolTestMixin, IdentityRequest):
         for tool_name, config in _TOOL_CONFIG.items():
             self.assertIn(
                 config.api_version,
-                (ApiVersion.UNIFIED, ApiVersion.COMMON, ApiVersion.V1, ApiVersion.V2, ApiVersion.UNVERSIONED),
+                (
+                    ApiVersion.UNIFIED,
+                    ApiVersion.COMMON,
+                    ApiVersion.V1,
+                    ApiVersion.V2,
+                    ApiVersion.UNVERSIONED,
+                ),
                 f"Tool '{tool_name}' has unexpected api_version: {config.api_version}",
             )
 
     def test_unified_tools_are_always_listed(self):
         """Positive: unified tools appear in tools/list regardless of V2 setting."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         tool_names = [t["name"] for t in response.json()["result"]["tools"]]
         self.assertIn("search_roles", tool_names)
@@ -2866,7 +3368,10 @@ class MCPToolDescriptionOverrideTests(MCPToolTestMixin, IdentityRequest):
         """After setting an override, tools/list returns the overridden description."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
         response = self.client.post(
-            self.mcp_url, data=json.dumps(body), content_type="application/json", **self.headers
+            self.mcp_url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
         )
         self.assertEqual(response.status_code, 200)
         tools = response.json()["result"]["tools"]
@@ -2881,7 +3386,10 @@ class MCPToolDescriptionOverrideTests(MCPToolTestMixin, IdentityRequest):
         """Overriding one tool does not affect other tools."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
         response = self.client.post(
-            self.mcp_url, data=json.dumps(body), content_type="application/json", **self.headers
+            self.mcp_url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
         )
         tools = response.json()["result"]["tools"]
         principals_tool = next(t for t in tools if t["name"] == "list_principals")
@@ -2896,7 +3404,9 @@ class MCPToolDescriptionEndpointTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.base_url = "/_private/api/utils/mcp_tool_descriptions/"
         self.client = APIClient()
-        internal_context = self._create_request_context(self.customer_data, self.user_data, is_internal=True)
+        internal_context = self._create_request_context(
+            self.customer_data, self.user_data, is_internal=True
+        )
         self.internal_headers = internal_context["request"].META
 
         self._override_store = {}
@@ -2936,7 +3446,9 @@ class MCPToolDescriptionEndpointTests(MCPToolTestMixin, IdentityRequest):
         hello_tool = next(t for t in data["tools"] if t["tool_name"] == "hello")
         self.assertIsNotNone(hello_tool["default_description"])
         self.assertIsNone(hello_tool["override_description"])
-        self.assertEqual(hello_tool["active_description"], hello_tool["default_description"])
+        self.assertEqual(
+            hello_tool["active_description"], hello_tool["default_description"]
+        )
 
     def test_get_single_tool_description(self):
         """GET single tool returns its default description."""
@@ -2976,7 +3488,9 @@ class MCPToolDescriptionEndpointTests(MCPToolTestMixin, IdentityRequest):
 
     def test_unknown_tool_returns_404(self):
         """PUT/DELETE/GET for unknown tool returns 404."""
-        response = self.client.get(f"{self.base_url}nonexistent_tool/", **self.internal_headers)
+        response = self.client.get(
+            f"{self.base_url}nonexistent_tool/", **self.internal_headers
+        )
         self.assertEqual(response.status_code, 404)
 
         response = self.client.put(
@@ -3008,15 +3522,21 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         # Create a group and add the principal
-        self.group = Group.objects.create(name="Wilson Project", description="Test project group", tenant=self.tenant)
+        self.group = Group.objects.create(
+            name="Wilson Project", description="Test project group", tenant=self.tenant
+        )
         self.group.principals.add(self.principal)
 
         # Create a role with permissions
         self.role = Role.objects.create(
-            name="Project Contributor", display_name="Project Contributor", tenant=self.tenant
+            name="Project Contributor",
+            display_name="Project Contributor",
+            tenant=self.tenant,
         )
         self.permission = Permission.objects.create(
             application="project",
@@ -3025,10 +3545,14 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
             permission="project:tasks:write",
             tenant=self.tenant,
         )
-        self.access = Access.objects.create(permission=self.permission, role=self.role, tenant=self.tenant)
+        self.access = Access.objects.create(
+            permission=self.permission, role=self.role, tenant=self.tenant
+        )
 
         # Assign role to group via policy
-        self.policy = Policy.objects.create(name="project_policy", group=self.group, tenant=self.tenant)
+        self.policy = Policy.objects.create(
+            name="project_policy", group=self.group, tenant=self.tenant
+        )
         self.policy.roles.add(self.role)
 
         # Create audit log entries for actions BY the user (with resource_uuid for exact matching)
@@ -3147,7 +3671,11 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         mock_by_name.return_value = json.dumps(
             {
                 "data": [
-                    {"username": self.test_username, "first_name": "Test", "last_name": "User"},
+                    {
+                        "username": self.test_username,
+                        "first_name": "Test",
+                        "last_name": "User",
+                    },
                 ]
             }
         )
@@ -3183,7 +3711,9 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
 
     def test_get_user_state_without_auth_returns_error(self):
         """Permission: get_user_state without auth returns auth error."""
-        response = self._call_tool("get_user_state", {"username": self.test_username}, use_auth=False)
+        response = self._call_tool(
+            "get_user_state", {"username": self.test_username}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -3272,7 +3802,12 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
     def test_get_user_state_description_contains_offboarding_keywords(self):
         """Positive: get_user_state tool description contains offboarding trigger keywords."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
         tools = response.json()["result"]["tools"]
         tool = next(t for t in tools if t["name"] == "get_user_state")
         description = tool["description"]
@@ -3292,14 +3827,20 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         self.group = Group.objects.create(
-            name="Contractor Team", description="External contractors", tenant=self.tenant
+            name="Contractor Team",
+            description="External contractors",
+            tenant=self.tenant,
         )
         self.group.principals.add(self.principal)
 
-        self.role = Role.objects.create(name="Viewer", display_name="Viewer", tenant=self.tenant)
+        self.role = Role.objects.create(
+            name="Viewer", display_name="Viewer", tenant=self.tenant
+        )
         self.permission = Permission.objects.create(
             application="inventory",
             resource_type="hosts",
@@ -3307,9 +3848,13 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
             permission="inventory:hosts:read",
             tenant=self.tenant,
         )
-        self.access = Access.objects.create(permission=self.permission, role=self.role, tenant=self.tenant)
+        self.access = Access.objects.create(
+            permission=self.permission, role=self.role, tenant=self.tenant
+        )
 
-        self.policy = Policy.objects.create(name="contractor_policy", group=self.group, tenant=self.tenant)
+        self.policy = Policy.objects.create(
+            name="contractor_policy", group=self.group, tenant=self.tenant
+        )
         self.policy.roles.add(self.role)
 
     def tearDown(self):
@@ -3330,7 +3875,12 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
     def test_lookup_person_description_contains_contractor_keywords(self):
         """Positive: lookup_person description contains contractor/offboarding keywords."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
         tools = response.json()["result"]["tools"]
         tool = next(t for t in tools if t["name"] == "lookup_person")
         description = tool["description"]
@@ -3342,16 +3892,26 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
 
     def test_lookup_person_returns_same_data_as_get_user_state(self):
         """Positive: lookup_person returns identical output to get_user_state."""
-        response_person = self._call_tool("lookup_person", {"username": self.test_username})
-        response_state = self._call_tool("get_user_state", {"username": self.test_username})
+        response_person = self._call_tool(
+            "lookup_person", {"username": self.test_username}
+        )
+        response_state = self._call_tool(
+            "get_user_state", {"username": self.test_username}
+        )
 
         output_person = self._get_tool_output(response_person)
         output_state = self._get_tool_output(response_state)
 
         self.assertEqual(output_person["uuid"], output_state["uuid"])
         self.assertEqual(output_person["org_version"], output_state["org_version"])
-        self.assertEqual(output_person["summary"]["group_count"], output_state["summary"]["group_count"])
-        self.assertEqual(output_person["summary"]["permission_count"], output_state["summary"]["permission_count"])
+        self.assertEqual(
+            output_person["summary"]["group_count"],
+            output_state["summary"]["group_count"],
+        )
+        self.assertEqual(
+            output_person["summary"]["permission_count"],
+            output_state["summary"]["permission_count"],
+        )
 
     def test_lookup_person_success(self):
         """Positive: lookup_person returns comprehensive user state."""
@@ -3370,7 +3930,9 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
 
     def test_lookup_person_user_not_found(self):
         """Negative: lookup_person returns error for non-existent user."""
-        response = self._call_tool("lookup_person", {"username": "nonexistent_contractor"})
+        response = self._call_tool(
+            "lookup_person", {"username": "nonexistent_contractor"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -3378,7 +3940,9 @@ class MCPLookupPersonTests(MCPToolTestMixin, IdentityRequest):
 
     def test_lookup_person_without_auth_returns_error(self):
         """Permission: lookup_person without auth returns auth error."""
-        response = self._call_tool("lookup_person", {"username": self.test_username}, use_auth=False)
+        response = self._call_tool(
+            "lookup_person", {"username": self.test_username}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -3398,7 +3962,9 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         self.enterContext(
             patch(
@@ -3439,7 +4005,9 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_type="workspace",
             resource_id="root-workspace-id",
         )
-        RoleBindingPrincipal.objects.create(binding=self.binding, principal=self.principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=self.binding, principal=self.principal, source="direct"
+        )
 
     def tearDown(self):
         """Tear down V2 get_user_state tests."""
@@ -3472,7 +4040,11 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("inventory:hosts:read", permissions)
 
         # Verify role info is included
-        access_entry = next(a for a in tool_output["access"] if a["permission"] == "inventory:hosts:read")
+        access_entry = next(
+            a
+            for a in tool_output["access"]
+            if a["permission"] == "inventory:hosts:read"
+        )
         self.assertEqual(access_entry["role_name"], "Host Reader")
 
     def test_get_user_state_v2_includes_resource_scope(self):
@@ -3480,7 +4052,11 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
         response = self._call_tool("get_user_state", {"username": self.test_username})
 
         tool_output = self._get_tool_output(response)
-        access_entry = next(a for a in tool_output["access"] if a["permission"] == "inventory:hosts:read")
+        access_entry = next(
+            a
+            for a in tool_output["access"]
+            if a["permission"] == "inventory:hosts:read"
+        )
 
         self.assertIn("resource_scope", access_entry)
         self.assertEqual(access_entry["resource_scope"]["type"], "workspace")
@@ -3512,7 +4088,11 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
         permissions = [a["permission"] for a in tool_output["access"]]
         self.assertIn("cost-management:cost_model:write", permissions)
 
-        access_entry = next(a for a in tool_output["access"] if a["permission"] == "cost-management:cost_model:write")
+        access_entry = next(
+            a
+            for a in tool_output["access"]
+            if a["permission"] == "cost-management:cost_model:write"
+        )
         self.assertEqual(access_entry["role_name"], "Cost Manager")
         self.assertEqual(access_entry["resource_scope"]["type"], "workspace")
         self.assertEqual(access_entry["resource_scope"]["id"], "group-workspace-id")
@@ -3525,12 +4105,18 @@ class MCPGetUserStateV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_type="workspace",
             resource_id="workspace-b-id",
         )
-        RoleBindingPrincipal.objects.create(binding=binding_b, principal=self.principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=binding_b, principal=self.principal, source="direct"
+        )
 
         response = self._call_tool("get_user_state", {"username": self.test_username})
 
         tool_output = self._get_tool_output(response)
-        hosts_read_entries = [a for a in tool_output["access"] if a["permission"] == "inventory:hosts:read"]
+        hosts_read_entries = [
+            a
+            for a in tool_output["access"]
+            if a["permission"] == "inventory:hosts:read"
+        ]
         self.assertEqual(len(hosts_read_entries), 2)
 
         scope_ids = {e["resource_scope"]["id"] for e in hosts_read_entries}
@@ -3560,7 +4146,9 @@ class MCPTimeoutTests(MCPToolTestMixin, IdentityRequest):
 
     def test_execute_with_timeout_passes_kwargs(self):
         """Positive: Keyword arguments are forwarded to the function."""
-        result = _execute_with_timeout(lambda name="world": f"hello {name}", 5, name="test")
+        result = _execute_with_timeout(
+            lambda name="world": f"hello {name}", 5, name="test"
+        )
         self.assertEqual(result, "hello test")
 
     def test_execute_with_timeout_raises_on_slow_function(self):
@@ -3594,7 +4182,9 @@ class MCPTimeoutTests(MCPToolTestMixin, IdentityRequest):
         data = response.json()
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32603)
-        self.assertEqual(data["error"]["message"], "Tool execution timed out after 0.1s")
+        self.assertEqual(
+            data["error"]["message"], "Tool execution timed out after 0.1s"
+        )
 
     @override_settings(MCP_TOOL_TIMEOUT_SECONDS=0.1)
     @patch("management.mcp_views._TOOL_CONFIG")
@@ -3678,7 +4268,9 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
             permission="subscriptions:products:read",
             tenant=self.public_tenant,
         )
-        self.access = Access.objects.create(permission=self.perm, role=self.system_role, tenant=self.public_tenant)
+        self.access = Access.objects.create(
+            permission=self.perm, role=self.system_role, tenant=self.public_tenant
+        )
 
         # Create a cross-account request
         self.car = CrossAccountRequest.objects.create(
@@ -3742,8 +4334,12 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(request_data["status"], "approved")
         self.assertIn("roles", request_data)
         self.assertEqual(len(request_data["roles"]), 1)
-        self.assertEqual(request_data["roles"][0]["display_name"], "Subscriptions viewer")
-        self.assertIn("subscriptions:products:read", request_data["roles"][0]["permissions"])
+        self.assertEqual(
+            request_data["roles"][0]["display_name"], "Subscriptions viewer"
+        )
+        self.assertIn(
+            "subscriptions:products:read", request_data["roles"][0]["permissions"]
+        )
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_investigate_tam_access_filter_by_name(self, mock_proxy):
@@ -3761,7 +4357,9 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
             ],
         }
 
-        response = self._call_tool("investigate_tam_access", {"requester_name": "Rachel"})
+        response = self._call_tool(
+            "investigate_tam_access", {"requester_name": "Rachel"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["requests"]), 1)
@@ -3819,11 +4417,18 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
 
         tool_output = self._get_tool_output(response)
         self.assertIn("required_permission_check", tool_output["analysis"])
-        self.assertFalse(tool_output["analysis"]["required_permission_check"]["granted"])
-        self.assertIn("similar_permissions_granted", tool_output["analysis"]["required_permission_check"])
+        self.assertFalse(
+            tool_output["analysis"]["required_permission_check"]["granted"]
+        )
+        self.assertIn(
+            "similar_permissions_granted",
+            tool_output["analysis"]["required_permission_check"],
+        )
         self.assertIn(
             "subscriptions:products:read",
-            tool_output["analysis"]["required_permission_check"]["similar_permissions_granted"],
+            tool_output["analysis"]["required_permission_check"][
+                "similar_permissions_granted"
+            ],
         )
 
     def test_investigate_tam_access_no_requests(self):
@@ -3877,7 +4482,9 @@ class MCPInvestigateTamAccessTests(MCPToolTestMixin, IdentityRequest):
 
         tool_output = self._get_tool_output(response)
         self.assertIn("permissions_by_application", tool_output["analysis"])
-        self.assertIn("subscriptions", tool_output["analysis"]["permissions_by_application"])
+        self.assertIn(
+            "subscriptions", tool_output["analysis"]["permissions_by_application"]
+        )
 
 
 class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
@@ -3907,7 +4514,9 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
             permission="test-app:resources:read",
             tenant=self.public_tenant,
         )
-        Access.objects.create(permission=self.perm, role=self.system_role, tenant=self.public_tenant)
+        Access.objects.create(
+            permission=self.perm, role=self.system_role, tenant=self.public_tenant
+        )
 
         # Create another role
         self.other_role = Role.objects.create(
@@ -3924,7 +4533,9 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
             permission="other-app:items:read",
             tenant=self.public_tenant,
         )
-        Access.objects.create(permission=self.other_perm, role=self.other_role, tenant=self.public_tenant)
+        Access.objects.create(
+            permission=self.other_perm, role=self.other_role, tenant=self.public_tenant
+        )
 
         # Create a cross-account request (not expiring soon)
         self.car = CrossAccountRequest.objects.create(
@@ -4004,7 +4615,11 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(len(tool_output["active_access"]), 2)
 
         # PII is redacted — user_info contains only user_id
-        user1 = next(u for u in tool_output["active_access"] if u["user_info"]["user_id"] == "10001")
+        user1 = next(
+            u
+            for u in tool_output["active_access"]
+            if u["user_info"]["user_id"] == "10001"
+        )
         self.assertNotIn("name", user1["user_info"])
         self.assertNotIn("email", user1["user_info"])
         self.assertIn("Test role 1", [r["name"] for r in user1["roles"]])
@@ -4192,7 +4807,11 @@ class AuditRedhatAccessTests(MCPToolTestMixin, IdentityRequest):
         response = self._call_tool("audit_redhat_access")
 
         tool_output = self._get_tool_output(response)
-        user1 = next(u for u in tool_output["active_access"] if u["user_info"]["user_id"] == "10001")
+        user1 = next(
+            u
+            for u in tool_output["active_access"]
+            if u["user_info"]["user_id"] == "10001"
+        )
         self.assertIn("name", user1["user_info"])
         self.assertIn("email", user1["user_info"])
         self.assertEqual(user1["user_info"]["email"], "user1@example.com")
@@ -4240,10 +4859,16 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_success(self):
         """Positive: check_role_permissions returns comprehensive role analysis."""
         role = Role.objects.create(name="Patch Reviewer", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.remediation_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
+        Access.objects.create(
+            role=role, permission=self.remediation_read_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Patch Reviewer"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Patch Reviewer"}
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -4269,9 +4894,13 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_identifies_read_only(self):
         """Positive: check_role_permissions correctly identifies read-only roles."""
         role = Role.objects.create(name="Viewer Role", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Viewer Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Viewer Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertTrue(tool_output["coverage_analysis"]["is_read_only"])
@@ -4281,10 +4910,16 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_identifies_write_capability(self):
         """Positive: check_role_permissions correctly identifies roles with write access."""
         role = Role.objects.create(name="Patch Admin", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_write_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
+        Access.objects.create(
+            role=role, permission=self.patch_write_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Patch Admin"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Patch Admin"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertFalse(tool_output["coverage_analysis"]["is_read_only"])
@@ -4294,9 +4929,13 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_expands_wildcards(self):
         """Positive: check_role_permissions expands wildcard permissions in explanation."""
         role = Role.objects.create(name="Full Access", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Full Access"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Full Access"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("expanded_permissions", tool_output["permissions"])
@@ -4305,7 +4944,9 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_role_not_found(self):
         """Negative: check_role_permissions returns error for non-existent role."""
-        response = self._call_tool("check_role_permissions", {"role_name": "NonExistent Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "NonExistent Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4317,7 +4958,9 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
         Role.objects.create(name="Patch Reviewer", tenant=self.tenant)
         Role.objects.create(name="Patch Admin", tenant=self.tenant)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Patch Review"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Patch Review"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4328,9 +4971,13 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_case_insensitive(self):
         """Positive: check_role_permissions finds role with case-insensitive search."""
         role = Role.objects.create(name="Patch Reviewer", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "patch reviewer"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "patch reviewer"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["role"]["name"], "Patch Reviewer")
@@ -4339,16 +4986,22 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
         """Positive: check_role_permissions warns about roles with no permissions."""
         Role.objects.create(name="Empty Role", tenant=self.tenant)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Empty Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Empty Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["permissions"]["total_count"], 0)
-        self.assertTrue(any("no permissions" in r.lower() for r in tool_output["recommendations"]))
+        self.assertTrue(
+            any("no permissions" in r.lower() for r in tool_output["recommendations"])
+        )
 
     def test_check_role_permissions_includes_available_permissions(self):
         """Positive: check_role_permissions lists available but not granted permissions."""
         role = Role.objects.create(name="Patch Reader", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
 
         response = self._call_tool(
             "check_role_permissions",
@@ -4363,7 +5016,9 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_without_auth_returns_error(self):
         """Permission: check_role_permissions without auth returns auth error."""
-        response = self._call_tool("check_role_permissions", {"role_name": "Any Role"}, use_auth=False)
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Any Role"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -4376,7 +5031,9 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
         if not public_tenant:
             public_tenant = Tenant.objects.create(tenant_name="public", org_id="")
 
-        system_role = Role.objects.create(name="System Reader", system=True, tenant=public_tenant)
+        system_role = Role.objects.create(
+            name="System Reader", system=True, tenant=public_tenant
+        )
         system_perm = Permission.objects.create(
             application="system",
             resource_type="*",
@@ -4384,9 +5041,13 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
             permission="system:*:read",
             tenant=public_tenant,
         )
-        Access.objects.create(role=system_role, permission=system_perm, tenant=public_tenant)
+        Access.objects.create(
+            role=system_role, permission=system_perm, tenant=public_tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "System Reader"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "System Reader"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4395,9 +5056,13 @@ class MCPCheckRolePermissionsTests(MCPToolTestMixin, IdentityRequest):
     def test_check_role_permissions_returns_org_version_v1(self):
         """Positive: check_role_permissions returns org_version=v1 for V1 orgs."""
         role = Role.objects.create(name="V1 Test Role", tenant=self.tenant)
-        Access.objects.create(role=role, permission=self.patch_read_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=self.patch_read_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "V1 Test Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "V1 Test Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v1")
@@ -4464,11 +5129,15 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_success(self):
         """Positive: check_role_permissions returns comprehensive analysis for V2 roles."""
-        role = RoleV2.objects.create(name="V2 Patch Reviewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Patch Reviewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
         role.permissions.add(self.remediation_read_perm)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "V2 Patch Reviewer"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "V2 Patch Reviewer"}
+        )
 
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
@@ -4489,10 +5158,14 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_returns_org_version(self):
         """Positive: check_role_permissions returns org_version=v2 for V2 orgs."""
-        role = RoleV2.objects.create(name="V2 Test Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Test Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "V2 Test Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "V2 Test Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v2")
@@ -4503,7 +5176,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
         if not public_tenant:
             public_tenant = Tenant.objects.create(tenant_name="public", org_id="")
 
-        seeded_role = RoleV2.objects.create(name="Seeded Reader", tenant=public_tenant, type=RoleV2.Types.SEEDED)
+        seeded_role = RoleV2.objects.create(
+            name="Seeded Reader", tenant=public_tenant, type=RoleV2.Types.SEEDED
+        )
         seeded_perm = Permission.objects.create(
             application="inventory",
             resource_type="hosts",
@@ -4513,7 +5188,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
         )
         seeded_role.permissions.add(seeded_perm)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Seeded Reader"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Seeded Reader"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4521,7 +5198,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_identifies_read_only(self):
         """Positive: check_role_permissions correctly identifies read-only V2 roles."""
-        role = RoleV2.objects.create(name="V2 Viewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Viewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
 
         response = self._call_tool("check_role_permissions", {"role_name": "V2 Viewer"})
@@ -4532,7 +5211,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_identifies_write_capability(self):
         """Positive: check_role_permissions correctly identifies V2 roles with write access."""
-        role = RoleV2.objects.create(name="V2 Admin", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Admin", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
         role.permissions.add(self.patch_write_perm)
 
@@ -4545,10 +5226,16 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_suggests_similar_roles(self):
         """Positive: check_role_permissions suggests similar V2 role names on partial match."""
-        RoleV2.objects.create(name="Patch Reviewer V2", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
-        RoleV2.objects.create(name="Patch Admin V2", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="Patch Reviewer V2", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
+        RoleV2.objects.create(
+            name="Patch Admin V2", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Patch Review"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Patch Review"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4558,10 +5245,14 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_expands_wildcards(self):
         """Positive: check_role_permissions expands wildcard permissions for V2 roles."""
-        role = RoleV2.objects.create(name="V2 Wildcard Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Wildcard Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "V2 Wildcard Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "V2 Wildcard Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("expanded_permissions", tool_output["permissions"])
@@ -4570,7 +5261,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_role_not_found(self):
         """Negative: check_role_permissions returns error for non-existent V2 role."""
-        response = self._call_tool("check_role_permissions", {"role_name": "NonExistent V2 Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "NonExistent V2 Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4579,27 +5272,39 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_case_insensitive(self):
         """Positive: check_role_permissions finds V2 role with case-insensitive search."""
-        role = RoleV2.objects.create(name="V2 Patch Reviewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Patch Reviewer", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "v2 patch reviewer"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "v2 patch reviewer"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["role"]["name"], "V2 Patch Reviewer")
 
     def test_check_role_permissions_v2_empty_role(self):
         """Positive: check_role_permissions warns about V2 roles with no permissions."""
-        RoleV2.objects.create(name="V2 Empty Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(
+            name="V2 Empty Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "V2 Empty Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "V2 Empty Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["permissions"]["total_count"], 0)
-        self.assertTrue(any("no permissions" in r.lower() for r in tool_output["recommendations"]))
+        self.assertTrue(
+            any("no permissions" in r.lower() for r in tool_output["recommendations"])
+        )
 
     def test_check_role_permissions_v2_includes_available_permissions(self):
         """Positive: check_role_permissions lists available but not granted permissions for V2."""
-        role = RoleV2.objects.create(name="V2 Patch Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        role = RoleV2.objects.create(
+            name="V2 Patch Reader", tenant=self.tenant, type=RoleV2.Types.CUSTOM
+        )
         role.permissions.add(self.patch_read_perm)
 
         response = self._call_tool(
@@ -4615,7 +5320,9 @@ class MCPCheckRolePermissionsV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_check_role_permissions_v2_without_auth_returns_error(self):
         """Permission: check_role_permissions without auth returns auth error for V2."""
-        response = self._call_tool("check_role_permissions", {"role_name": "Any V2 Role"}, use_auth=False)
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Any V2 Role"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -4649,15 +5356,21 @@ class MCPCheckRolePermissionsEdgeCasesTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
         role = Role.objects.create(name="Full Access Role", tenant=self.tenant)
-        Access.objects.create(role=role, permission=full_wildcard_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=full_wildcard_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Full Access Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Full Access Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertTrue(tool_output["coverage_analysis"]["has_wildcard_resource"])
         self.assertTrue(tool_output["coverage_analysis"]["has_wildcard_verb"])
         self.assertTrue(any("CAUTION" in r for r in tool_output["recommendations"]))
-        self.assertTrue(any("full access" in r.lower() for r in tool_output["recommendations"]))
+        self.assertTrue(
+            any("full access" in r.lower() for r in tool_output["recommendations"])
+        )
 
     def test_check_role_permissions_multi_app_warning(self):
         """Positive: check_role_permissions warns about roles spanning many applications."""
@@ -4678,11 +5391,17 @@ class MCPCheckRolePermissionsEdgeCasesTests(MCPToolTestMixin, IdentityRequest):
         for perm in perms:
             Access.objects.create(role=role, permission=perm, tenant=self.tenant)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Multi App Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Multi App Role"}
+        )
 
         tool_output = self._get_tool_output(response)
-        self.assertEqual(len(tool_output["coverage_analysis"]["applications_covered"]), 4)
-        self.assertTrue(any("spans 4 applications" in r for r in tool_output["recommendations"]))
+        self.assertEqual(
+            len(tool_output["coverage_analysis"]["applications_covered"]), 4
+        )
+        self.assertTrue(
+            any("spans 4 applications" in r for r in tool_output["recommendations"])
+        )
 
     def test_check_role_permissions_verbs_not_included(self):
         """Positive: check_role_permissions lists verbs not included in recommendations."""
@@ -4696,14 +5415,18 @@ class MCPCheckRolePermissionsEdgeCasesTests(MCPToolTestMixin, IdentityRequest):
         role = Role.objects.create(name="Read Only Role", tenant=self.tenant)
         Access.objects.create(role=role, permission=read_only_perm, tenant=self.tenant)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Read Only Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Read Only Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         verbs_not_included = tool_output["permissions"]["verbs_not_included"]
         self.assertIn("write", verbs_not_included)
         self.assertIn("create", verbs_not_included)
         self.assertIn("delete", verbs_not_included)
-        self.assertTrue(any("Verbs NOT granted" in r for r in tool_output["recommendations"]))
+        self.assertTrue(
+            any("Verbs NOT granted" in r for r in tool_output["recommendations"])
+        )
 
     def test_check_role_permissions_wildcard_verb_clears_verbs_not_included(self):
         """Positive: Wildcard verb (*) results in empty verbs_not_included list."""
@@ -4715,9 +5438,13 @@ class MCPCheckRolePermissionsEdgeCasesTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
         role = Role.objects.create(name="Wildcard Verb Role", tenant=self.tenant)
-        Access.objects.create(role=role, permission=wildcard_verb_perm, tenant=self.tenant)
+        Access.objects.create(
+            role=role, permission=wildcard_verb_perm, tenant=self.tenant
+        )
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Wildcard Verb Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Wildcard Verb Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["permissions"]["verbs_not_included"], [])
@@ -4752,7 +5479,9 @@ class MCPCheckRolePermissionsEdgeCasesTests(MCPToolTestMixin, IdentityRequest):
         Access.objects.create(role=role, permission=write_perm, tenant=self.tenant)
         Access.objects.create(role=role, permission=create_perm, tenant=self.tenant)
 
-        response = self._call_tool("check_role_permissions", {"role_name": "Multi Verb Role"})
+        response = self._call_tool(
+            "check_role_permissions", {"role_name": "Multi Verb Role"}
+        )
 
         tool_output = self._get_tool_output(response)
         verbs_included = tool_output["permissions"]["verbs_included"]
@@ -4776,10 +5505,18 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         self.client = APIClient()
 
         # Create test principals
-        self.user1 = Principal.objects.create(username="jen.park", tenant=self.tenant, type="user")
-        self.user2 = Principal.objects.create(username="tomas.rivera", tenant=self.tenant, type="user")
-        self.user3 = Principal.objects.create(username="priya.shah", tenant=self.tenant, type="user")
-        self.user4 = Principal.objects.create(username="alex.chen", tenant=self.tenant, type="user")
+        self.user1 = Principal.objects.create(
+            username="jen.park", tenant=self.tenant, type="user"
+        )
+        self.user2 = Principal.objects.create(
+            username="tomas.rivera", tenant=self.tenant, type="user"
+        )
+        self.user3 = Principal.objects.create(
+            username="priya.shah", tenant=self.tenant, type="user"
+        )
+        self.user4 = Principal.objects.create(
+            username="alex.chen", tenant=self.tenant, type="user"
+        )
         self.svc1 = Principal.objects.create(
             username="svc-legacy-patcher",
             tenant=self.tenant,
@@ -4816,7 +5553,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Add members to Legacy Ops
-        self.legacy_ops_group.principals.add(self.user1, self.user2, self.user3, self.user4, self.svc1, self.svc2)
+        self.legacy_ops_group.principals.add(
+            self.user1, self.user2, self.user3, self.user4, self.svc1, self.svc2
+        )
 
         # Add some users to platform default (they'll be stranded after dissolution)
         self.platform_default_group.principals.add(self.user1, self.user2, self.user3)
@@ -4859,16 +5598,30 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Assign permissions to roles
-        Access.objects.create(permission=self.inventory_perm, role=self.inventory_role, tenant=self.tenant)
-        Access.objects.create(permission=self.patch_perm, role=self.patch_role, tenant=self.tenant)
-        Access.objects.create(permission=self.remediation_perm, role=self.remediation_role, tenant=self.tenant)
+        Access.objects.create(
+            permission=self.inventory_perm, role=self.inventory_role, tenant=self.tenant
+        )
+        Access.objects.create(
+            permission=self.patch_perm, role=self.patch_role, tenant=self.tenant
+        )
+        Access.objects.create(
+            permission=self.remediation_perm,
+            role=self.remediation_role,
+            tenant=self.tenant,
+        )
 
         # Create policy and add roles to Legacy Ops group
-        self.policy = Policy.objects.create(name="legacy-ops-policy", group=self.legacy_ops_group, tenant=self.tenant)
-        self.policy.roles.add(self.inventory_role, self.patch_role, self.remediation_role)
+        self.policy = Policy.objects.create(
+            name="legacy-ops-policy", group=self.legacy_ops_group, tenant=self.tenant
+        )
+        self.policy.roles.add(
+            self.inventory_role, self.patch_role, self.remediation_role
+        )
 
         # Add a role to the other group for overlapping access
-        other_policy = Policy.objects.create(name="engineering-policy", group=self.other_group, tenant=self.tenant)
+        other_policy = Policy.objects.create(
+            name="engineering-policy", group=self.other_group, tenant=self.tenant
+        )
         other_policy.roles.add(self.inventory_role)
 
     def tearDown(self):
@@ -4883,7 +5636,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_success(self):
         """Positive: audit_group_for_dissolution returns group dissolution analysis."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -4898,7 +5653,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_without_auth_returns_error(self):
         """Permission: audit_group_for_dissolution without auth returns auth error."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"}, use_auth=False)
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -4907,7 +5664,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_identifies_stranded_users(self):
         """Positive: identifies users who would be stranded (only in target + platform default)."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
@@ -4919,7 +5678,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_identifies_stranded_service_accounts(self):
         """Positive: identifies service accounts that would lose all access."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
@@ -4928,9 +5689,13 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn(str(self.svc1.uuid), analysis["stranded_service_accounts"])
         self.assertIn(str(self.svc2.uuid), analysis["stranded_service_accounts"])
 
-    def test_audit_group_for_dissolution_identifies_members_with_overlapping_access(self):
+    def test_audit_group_for_dissolution_identifies_members_with_overlapping_access(
+        self,
+    ):
         """Positive: identifies members who have overlapping access via other groups."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
@@ -4940,7 +5705,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_shows_roles_and_permissions(self):
         """Positive: returns roles assigned to the group with their permissions."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         roles = tool_output["roles"]
@@ -4958,7 +5725,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_member_details(self):
         """Positive: returns detailed member information including other groups."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         members = tool_output["members"]
@@ -4979,7 +5748,10 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_by_uuid(self):
         """Positive: can look up group by UUID instead of name."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_uuid": str(self.legacy_ops_group.uuid)})
+        response = self._call_tool(
+            "audit_group_for_dissolution",
+            {"group_uuid": str(self.legacy_ops_group.uuid)},
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -4987,7 +5759,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_group_not_found(self):
         """Negative: returns error for non-existent group."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Non-Existent Group"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Non-Existent Group"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output)
@@ -4997,7 +5771,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
         """Edge case: handles group with no members."""
         empty_group = Group.objects.create(name="Empty Group", tenant=self.tenant)
 
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Empty Group"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Empty Group"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["members"]), 0)
@@ -5008,14 +5784,18 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_audit_group_for_dissolution_warns_about_stranded(self):
         """Positive: warnings field includes stranded user/service account alerts."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         warnings = tool_output["analysis"]["warnings"]
         self.assertTrue(len(warnings) >= 2)
 
         # Check for user warning
-        user_warning = next(w for w in warnings if "user" in w.lower() and "demoted" in w.lower())
+        user_warning = next(
+            w for w in warnings if "user" in w.lower() and "demoted" in w.lower()
+        )
         self.assertIn("3", user_warning)
 
         # Check for service account warning
@@ -5025,7 +5805,9 @@ class AuditGroupForDissolutionTests(MCPToolTestMixin, IdentityRequest):
     @override_settings(MCP_PII_REDACTION_ENABLED=False)
     def test_audit_group_for_dissolution_pii_visible_when_redaction_disabled(self):
         """Positive: audit_group_for_dissolution returns usernames when redaction is disabled via env var."""
-        response = self._call_tool("audit_group_for_dissolution", {"group_name": "Legacy Ops"})
+        response = self._call_tool(
+            "audit_group_for_dissolution", {"group_name": "Legacy Ops"}
+        )
         tool_output = self._get_tool_output(response)
 
         members = tool_output["members"]
@@ -5047,7 +5829,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = "sarah"
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         # Create two groups - "Compliance Auditors" and "Compliance Admins"
         self.auditors_group = Group.objects.create(
@@ -5096,16 +5880,24 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         )
 
         # Auditor role only has read permission
-        Access.objects.create(permission=self.read_perm, role=self.auditor_role, tenant=self.tenant)
+        Access.objects.create(
+            permission=self.read_perm, role=self.auditor_role, tenant=self.tenant
+        )
 
         # Admin role ALSO only has read permission (this is the "gotcha")
-        Access.objects.create(permission=self.read_perm, role=self.admin_role, tenant=self.tenant)
+        Access.objects.create(
+            permission=self.read_perm, role=self.admin_role, tenant=self.tenant
+        )
 
         # Assign roles to groups via policies
-        auditors_policy = Policy.objects.create(name="auditors_policy", group=self.auditors_group, tenant=self.tenant)
+        auditors_policy = Policy.objects.create(
+            name="auditors_policy", group=self.auditors_group, tenant=self.tenant
+        )
         auditors_policy.roles.add(self.auditor_role)
 
-        admins_policy = Policy.objects.create(name="admins_policy", group=self.admins_group, tenant=self.tenant)
+        admins_policy = Policy.objects.create(
+            name="admins_policy", group=self.admins_group, tenant=self.tenant
+        )
         admins_policy.roles.add(self.admin_role)
 
     def tearDown(self):
@@ -5120,7 +5912,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_success(self):
         """Positive: investigate_user_access returns comprehensive user access info."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -5138,7 +5932,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_without_auth_returns_error(self):
         """Permission: investigate_user_access without auth returns auth error."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username}, use_auth=False)
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -5147,7 +5943,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_user_not_found(self):
         """Negative: investigate_user_access returns error for non-existent user."""
-        response = self._call_tool("investigate_user_access", {"username": "nonexistent_user"})
+        response = self._call_tool(
+            "investigate_user_access", {"username": "nonexistent_user"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -5162,7 +5960,11 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         mock_by_name.return_value = json.dumps(
             {
                 "data": [
-                    {"username": self.test_username, "first_name": "Sarah", "last_name": "Connor"},
+                    {
+                        "username": self.test_username,
+                        "first_name": "Sarah",
+                        "last_name": "Connor",
+                    },
                 ]
             }
         )
@@ -5180,7 +5982,11 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         mock_by_name.return_value = json.dumps(
             {
                 "data": [
-                    {"username": "sarah1", "first_name": "Sarah", "last_name": "Connor"},
+                    {
+                        "username": "sarah1",
+                        "first_name": "Sarah",
+                        "last_name": "Connor",
+                    },
                     {"username": "sarah2", "first_name": "Sarah", "last_name": "Smith"},
                 ]
             }
@@ -5199,7 +6005,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_lists_all_groups(self):
         """Positive: investigate_user_access lists all groups the user belongs to."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["analysis"]["total_groups"], 2)
@@ -5211,7 +6019,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_lists_roles_per_group(self):
         """Positive: investigate_user_access lists roles assigned to each group."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5221,13 +6031,19 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
             self.assertEqual(len(group["roles"]), 1)
 
             if group["name"] == "Compliance Auditors":
-                self.assertEqual(group["roles"][0]["display_name"], "Compliance Auditor")
+                self.assertEqual(
+                    group["roles"][0]["display_name"], "Compliance Auditor"
+                )
             elif group["name"] == "Compliance Admins":
-                self.assertEqual(group["roles"][0]["display_name"], "Compliance administrator")
+                self.assertEqual(
+                    group["roles"][0]["display_name"], "Compliance administrator"
+                )
 
     def test_investigate_user_access_expands_role_permissions(self):
         """Positive: investigate_user_access expands roles to show actual permissions."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5240,7 +6056,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_tracks_permission_sources(self):
         """Positive: investigate_user_access tracks which groups/roles grant each permission."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5264,7 +6082,10 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
         self.assertIn("permissions_for_application", tool_output["analysis"])
         self.assertEqual(tool_output["analysis"]["application_permission_count"], 1)
-        self.assertIn("compliance:policies:read", tool_output["analysis"]["permissions_for_application"])
+        self.assertIn(
+            "compliance:policies:read",
+            tool_output["analysis"]["permissions_for_application"],
+        )
 
     def test_investigate_user_access_expected_permission_found(self):
         """Positive: investigate_user_access identifies when expected permission is present."""
@@ -5344,9 +6165,13 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
     def test_investigate_user_access_user_with_no_groups(self):
         """Positive: investigate_user_access handles user with no groups."""
         # Create a user with no group memberships
-        lonely_user = Principal.objects.create(username="lonely_user", tenant=self.tenant)
+        lonely_user = Principal.objects.create(
+            username="lonely_user", tenant=self.tenant
+        )
 
-        response = self._call_tool("investigate_user_access", {"username": "lonely_user"})
+        response = self._call_tool(
+            "investigate_user_access", {"username": "lonely_user"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["groups"]), 0)
@@ -5357,7 +6182,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_includes_hints(self):
         """Positive: investigate_user_access includes helpful hints."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5369,14 +6196,18 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_analysis_summary(self):
         """Positive: investigate_user_access returns summary statistics."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
         analysis = tool_output["analysis"]
         self.assertEqual(analysis["total_groups"], 2)
         self.assertEqual(analysis["total_roles"], 2)
-        self.assertEqual(analysis["total_unique_permissions"], 1)  # Only read, not write
+        self.assertEqual(
+            analysis["total_unique_permissions"], 1
+        )  # Only read, not write
 
     @patch(
         "management.mcp_views.PrincipalProxy.request_filtered_principals",
@@ -5439,7 +6270,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         # Verify the "misleading name" issue is discoverable:
         # The Compliance Admins group has "Compliance administrator" role
         # but that role only has read, not write
-        admins_group = next(g for g in tool_output["groups"] if g["name"] == "Compliance Admins")
+        admins_group = next(
+            g for g in tool_output["groups"] if g["name"] == "Compliance Admins"
+        )
         admin_role = admins_group["roles"][0]
         self.assertEqual(admin_role["display_name"], "Compliance administrator")
         self.assertIn("compliance:policies:read", admin_role["permissions"])
@@ -5469,7 +6302,9 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
             permission="compliance:policies:delete",
             tenant=self.tenant,
         )
-        Access.objects.create(permission=delete_perm, role=self.admin_role, tenant=self.tenant)
+        Access.objects.create(
+            permission=delete_perm, role=self.admin_role, tenant=self.tenant
+        )
 
         response = self._call_tool(
             "investigate_user_access",
@@ -5480,8 +6315,14 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
 
         # Should now have 2 unique permissions
         self.assertEqual(tool_output["analysis"]["application_permission_count"], 2)
-        self.assertIn("compliance:policies:read", tool_output["analysis"]["permissions_for_application"])
-        self.assertIn("compliance:policies:delete", tool_output["analysis"]["permissions_for_application"])
+        self.assertIn(
+            "compliance:policies:read",
+            tool_output["analysis"]["permissions_for_application"],
+        )
+        self.assertIn(
+            "compliance:policies:delete",
+            tool_output["analysis"]["permissions_for_application"],
+        )
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)
@@ -5496,7 +6337,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = "sarah_v2"
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         self.enterContext(
             patch(
@@ -5557,7 +6400,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_id="default",
             tenant=self.tenant,
         )
-        RoleBindingGroup.objects.create(binding=self.auditor_binding, group=self.auditors_group)
+        RoleBindingGroup.objects.create(
+            binding=self.auditor_binding, group=self.auditors_group
+        )
 
         self.admin_binding = RoleBinding.objects.create(
             role=self.admin_role,
@@ -5565,7 +6410,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_id="default",
             tenant=self.tenant,
         )
-        RoleBindingGroup.objects.create(binding=self.admin_binding, group=self.admins_group)
+        RoleBindingGroup.objects.create(
+            binding=self.admin_binding, group=self.admins_group
+        )
 
     def tearDown(self):
         """Tear down V2 investigate_user_access tests."""
@@ -5583,14 +6430,18 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_v2_returns_org_version(self):
         """Positive: investigate_user_access returns org_version='v2' for V2 orgs."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v2")
 
     def test_investigate_user_access_v2_includes_role_bindings(self):
         """Positive: investigate_user_access V2 includes role_bindings instead of group.roles."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("role_bindings", tool_output)
@@ -5605,7 +6456,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_v2_shows_binding_source(self):
         """Positive: investigate_user_access V2 shows whether binding is via group or direct."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5660,7 +6513,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_id="default",
             tenant=self.tenant,
         )
-        RoleBindingPrincipal.objects.create(binding=direct_binding, principal=self.principal, source="system")
+        RoleBindingPrincipal.objects.create(
+            binding=direct_binding, principal=self.principal, source="system"
+        )
 
         response = self._call_tool(
             "investigate_user_access",
@@ -5677,12 +6532,16 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertTrue(tool_output["analysis"]["has_expected_permission"])
 
         # Should have a direct binding
-        direct_bindings = [b for b in tool_output["role_bindings"] if b["binding_source"] == "direct"]
+        direct_bindings = [
+            b for b in tool_output["role_bindings"] if b["binding_source"] == "direct"
+        ]
         self.assertEqual(len(direct_bindings), 1)
 
     def test_investigate_user_access_v2_includes_resource_scope(self):
         """Positive: investigate_user_access V2 includes resource scope in bindings."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5694,7 +6553,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_v2_permission_sources_include_scope(self):
         """Positive: investigate_user_access V2 permission sources include resource scope."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5707,7 +6568,9 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_investigate_user_access_v2_hints_include_role_bindings(self):
         """Positive: investigate_user_access V2 hints reference role bindings."""
-        response = self._call_tool("investigate_user_access", {"username": self.test_username})
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -5736,7 +6599,9 @@ class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down write gating tests."""
@@ -5747,12 +6612,23 @@ class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
     def test_write_tools_annotated_when_disabled(self):
         """Write tools are listed with disabled annotation when MCP_WRITE_ENABLED=False."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
-        tools = {t["name"]: t["description"] for t in response.json()["result"]["tools"]}
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
+        tools = {
+            t["name"]: t["description"] for t in response.json()["result"]["tools"]
+        }
         self.assertIn("create_group", tools)
-        self.assertTrue(tools["create_group"].startswith("[DISABLED -- write mode off]"))
+        self.assertTrue(
+            tools["create_group"].startswith("[DISABLED -- write mode off]")
+        )
         self.assertIn("add_principals_to_group", tools)
-        self.assertTrue(tools["add_principals_to_group"].startswith("[DISABLED -- write mode off]"))
+        self.assertTrue(
+            tools["add_principals_to_group"].startswith("[DISABLED -- write mode off]")
+        )
 
     @override_settings(MCP_WRITE_ENABLED=True)
     def test_write_tools_visible_when_enabled(self):
@@ -5774,7 +6650,9 @@ class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
     @override_settings(MCP_WRITE_ENABLED=True)
     def test_write_tool_call_requires_auth(self):
         """Write tools require authentication even when write mode is enabled."""
-        response = self._call_tool("create_group", {"name": "Test Group"}, use_auth=False)
+        response = self._call_tool(
+            "create_group", {"name": "Test Group"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -5829,7 +6707,9 @@ class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
             config = _TOOL_CONFIG.get(name)
             self.assertIsNotNone(config, f"Tool '{name}' not registered")
             self.assertTrue(config.write, f"Tool '{name}' should have write=True")
-            self.assertTrue(config.requires_auth, f"Tool '{name}' should have requires_auth=True")
+            self.assertTrue(
+                config.requires_auth, f"Tool '{name}' should have requires_auth=True"
+            )
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
@@ -5841,7 +6721,9 @@ class MCPCreateGroupTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down create group tests."""
@@ -5851,7 +6733,9 @@ class MCPCreateGroupTests(MCPToolTestMixin, IdentityRequest):
 
     def test_create_group_success(self):
         """Create a group successfully."""
-        response = self._call_tool("create_group", {"name": "New Test Group", "description": "A test group"})
+        response = self._call_tool(
+            "create_group", {"name": "New Test Group", "description": "A test group"}
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -5889,7 +6773,9 @@ class MCPAddPrincipalsToGroupTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         self.group = Group.objects.create(name="Test Group", tenant=self.tenant)
 
@@ -5899,7 +6785,9 @@ class MCPAddPrincipalsToGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_add_principals_by_uuid(self, mock_proxy, mock_replicator):
         """Add principals to a group by UUID."""
@@ -5965,7 +6853,10 @@ class MCPAddPrincipalsToGroupTests(MCPToolTestMixin, IdentityRequest):
 
 
 @override_settings(
-    MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False, V2_APIS_ENABLED=True, ATOMIC_RETRY_DISABLED=True
+    MCP_WRITE_ENABLED=True,
+    MCP_WRITE_CONFIRMATION=False,
+    V2_APIS_ENABLED=True,
+    ATOMIC_RETRY_DISABLED=True,
 )
 class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
     """Test V2 write tools (create_role, create_workspace).
@@ -5982,9 +6873,13 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         self.enterContext(
-            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch(
+                "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+            )
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         ensure_v2_write_activated(self.tenant)
@@ -6026,7 +6921,9 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("create_role_bindings", tool_names)
         self.assertIn("create_workspace", tool_names)
 
-    @patch("management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission")
+    @patch(
+        "management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission"
+    )
     def test_create_role_v2_success(self, mock_perm):
         """Create a V2 role successfully."""
         mock_perm.return_value = True
@@ -6036,7 +6933,11 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
                 "name": "Test V2 Role",
                 "description": "A test role",
                 "permissions": [
-                    {"application": "rbac", "resource_type": "group", "operation": "read"},
+                    {
+                        "application": "rbac",
+                        "resource_type": "group",
+                        "operation": "read",
+                    },
                 ],
             },
         )
@@ -6044,15 +6945,21 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "Test V2 Role", f"Got output: {output}")
 
-    @patch("management.permissions.workspace_access.WorkspaceAccessPermission.has_permission")
+    @patch(
+        "management.permissions.workspace_access.WorkspaceAccessPermission.has_permission"
+    )
     def test_create_workspace_success(self, mock_perm):
         """Create a workspace successfully."""
         mock_perm.return_value = True
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
         self.assertIsNotNone(root_ws, "Root workspace should exist after bootstrap")
 
         from management.workspace.view import WorkspaceViewSet
@@ -6072,18 +6979,26 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "Test Workspace", f"Got output: {output}")
 
-    @patch("management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission")
-    @patch("management.permissions.role_binding_access.RoleBindingSystemUserAccessPermission.has_permission")
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission"
+    )
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingSystemUserAccessPermission.has_permission"
+    )
     def test_create_role_bindings_success(self, mock_sys_perm, mock_kessel_perm):
         """Create a role binding successfully."""
         mock_sys_perm.return_value = True
         mock_kessel_perm.return_value = True
         role = RoleV2.objects.create(name="Binding Test Role", tenant=self.tenant)
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
         response = self._call_tool(
             "create_role_bindings",
             {
@@ -6091,7 +7006,10 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
                     {
                         "role": {"id": str(role.id)},
                         "resource": {"type": "workspace", "id": str(root_ws.id)},
-                        "subject": {"type": "principal", "id": str(self.principal.uuid)},
+                        "subject": {
+                            "type": "principal",
+                            "id": str(self.principal.uuid),
+                        },
                     }
                 ],
             },
@@ -6100,7 +7018,9 @@ class MCPWriteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
@@ -6112,7 +7032,9 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         self.group = Group.objects.create(name="Test Group", tenant=self.tenant)
         self.permission = Permission.objects.create(
@@ -6131,7 +7053,9 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_add_roles_to_group_success(self, mock_replicator):
         """Add roles to a group successfully."""
         role = Role.objects.create(name="Test Role", tenant=self.tenant, system=False)
@@ -6144,7 +7068,9 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
 
     def test_create_role_v1_success(self):
         """Create a V1 role successfully."""
@@ -6152,16 +7078,25 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
             "create_role_v1",
             {
                 "name": "MCP Created Role",
-                "access": [{"permission": "cost-management:cost_model:read", "resourceDefinitions": []}],
+                "access": [
+                    {
+                        "permission": "cost-management:cost_model:read",
+                        "resourceDefinitions": [],
+                    }
+                ],
             },
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
-        self.assertEqual(output.get("name"), "MCP Created Role", f"Got output: {output}")
+        self.assertEqual(
+            output.get("name"), "MCP Created Role", f"Got output: {output}"
+        )
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
@@ -6173,12 +7108,16 @@ class MCPCrossAccountRequestTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         self.target_tenant = Tenant.objects.create(
             tenant_name="target_org",
             org_id="9999999",
         )
-        self.role = Role.objects.create(name="CAR Test Role", system=True, tenant=self.tenant)
+        self.role = Role.objects.create(
+            name="CAR Test Role", system=True, tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down cross-account request tests."""
@@ -6215,7 +7154,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
 
         self.user_access_admin_role = Role.objects.create(
             name="User Access administrator",
@@ -6250,8 +7191,12 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         )
         self.access_policy.roles.add(self.user_access_admin_role)
 
-        self.admin_user1 = Principal.objects.create(username="admin_user1", tenant=self.tenant)
-        self.admin_user2 = Principal.objects.create(username="admin_user2", tenant=self.tenant)
+        self.admin_user1 = Principal.objects.create(
+            username="admin_user1", tenant=self.tenant
+        )
+        self.admin_user2 = Principal.objects.create(
+            username="admin_user2", tenant=self.tenant
+        )
         self.access_governance_group.principals.add(self.admin_user1)
         self.access_governance_group.principals.add(self.admin_user2)
 
@@ -6267,7 +7212,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_success(self):
         """Positive: guide_user_access_delegation returns factual data."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -6283,18 +7230,24 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_finds_role(self):
         """Positive: guide_user_access_delegation finds the User Access administrator role."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
         # Verify role info (simplified - only uuid and name)
         self.assertIsNotNone(tool_output["role_info"])
         self.assertEqual(tool_output["role_info"]["name"], "User Access administrator")
-        self.assertEqual(tool_output["role_info"]["uuid"], str(self.user_access_admin_role.uuid))
+        self.assertEqual(
+            tool_output["role_info"]["uuid"], str(self.user_access_admin_role.uuid)
+        )
 
     def test_guide_user_access_delegation_finds_groups_with_role(self):
         """Positive: guide_user_access_delegation finds groups that have the role."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6306,7 +7259,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_user_not_org_admin(self):
         """Positive: guide_user_access_delegation shows user is not org admin."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6315,7 +7270,11 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_without_auth_returns_error(self):
         """Permission: guide_user_access_delegation without auth returns auth error."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username}, use_auth=False)
+        response = self._call_tool(
+            "guide_user_access_delegation",
+            {"username": self.test_username},
+            use_auth=False,
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
@@ -6324,12 +7283,16 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_nonexistent_user(self, mock_list_principals, mock_name_search):
+    def test_guide_user_access_delegation_nonexistent_user(
+        self, mock_list_principals, mock_name_search
+    ):
         """Edge case: guide_user_access_delegation handles non-existent user gracefully."""
         mock_list_principals.return_value = '{"data": []}'
         mock_name_search.return_value = '{"data": []}'
 
-        response = self._call_tool("guide_user_access_delegation", {"username": "nonexistent_user"})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": "nonexistent_user"}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
@@ -6343,7 +7306,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         # Remove the role from the group
         self.access_policy.roles.remove(self.user_access_admin_role)
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6360,7 +7325,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         # Add the test user to the group that has the role
         self.access_governance_group.principals.add(self.principal)
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6369,7 +7336,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_user_does_not_have_role(self):
         """Positive: correctly identifies when user does not have the role."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6382,7 +7351,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         self.rbac_access.delete()
         self.user_access_admin_role.delete()
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6405,7 +7376,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
         )
         second_policy.roles.add(self.user_access_admin_role)
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6417,7 +7390,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_fuzzy_single_match(self, mock_list_principals, mock_name_search):
+    def test_guide_user_access_delegation_fuzzy_single_match(
+        self, mock_list_principals, mock_name_search
+    ):
         """Positive: fuzzy fallback resolves display name to single user."""
         mock_list_principals.return_value = '{"data": []}'
         mock_name_search.return_value = json.dumps(
@@ -6442,7 +7417,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_fuzzy_multiple_matches(self, mock_list_principals, mock_name_search):
+    def test_guide_user_access_delegation_fuzzy_multiple_matches(
+        self, mock_list_principals, mock_name_search
+    ):
         """Edge case: fuzzy fallback returns candidates when multiple users match."""
         mock_list_principals.return_value = '{"data": []}'
         mock_name_search.return_value = json.dumps(
@@ -6464,12 +7441,16 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     @patch("management.mcp_views._list_principals_by_name")
     @patch("management.mcp_views.list_principals")
-    def test_guide_user_access_delegation_fuzzy_no_match(self, mock_list_principals, mock_name_search):
+    def test_guide_user_access_delegation_fuzzy_no_match(
+        self, mock_list_principals, mock_name_search
+    ):
         """Negative: fuzzy fallback returns error when no users match."""
         mock_list_principals.return_value = '{"data": []}'
         mock_name_search.return_value = '{"data": []}'
 
-        response = self._call_tool("guide_user_access_delegation", {"username": "Nonexistent"})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": "Nonexistent"}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertIn("error", tool_output["user_info"])
@@ -6477,7 +7458,9 @@ class MCPGuideUserAccessDelegationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_v1_org_version(self):
         """Positive: V1 organization shows org_version=v1."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v1")
@@ -6495,9 +7478,13 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
         self.test_username = self.user_data["username"]
-        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username=self.test_username, tenant=self.tenant
+        )
         self.enterContext(
-            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch(
+                "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+            )
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         ensure_v2_write_activated(self.tenant)
@@ -6548,10 +7535,16 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_id="root-workspace-id",
         )
 
-        self.admin_principal = Principal.objects.create(username="admin_via_binding", tenant=self.tenant)
-        RoleBindingPrincipal.objects.create(binding=self.binding, principal=self.admin_principal, source="direct")
+        self.admin_principal = Principal.objects.create(
+            username="admin_via_binding", tenant=self.tenant
+        )
+        RoleBindingPrincipal.objects.create(
+            binding=self.binding, principal=self.admin_principal, source="direct"
+        )
 
-        self.admin_group = Group.objects.create(name="User Access Admins Group", tenant=self.tenant)
+        self.admin_group = Group.objects.create(
+            name="User Access Admins Group", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down V2 guide_user_access_delegation tests."""
@@ -6570,14 +7563,18 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_v2_returns_org_version(self):
         """Positive: V2 organization shows org_version=v2."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v2")
 
     def test_guide_user_access_delegation_v2_finds_role_bindings(self):
         """Positive: V2 org finds role bindings with the role."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6588,9 +7585,13 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_v2_user_has_role_direct(self):
         """Positive: V2 detects user has role via direct binding."""
-        RoleBindingPrincipal.objects.create(binding=self.binding, principal=self.principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=self.binding, principal=self.principal, source="direct"
+        )
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6601,7 +7602,9 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
         self.admin_group.principals.add(self.principal)
         RoleBindingGroup.objects.create(binding=self.binding, group=self.admin_group)
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6609,7 +7612,9 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_guide_user_access_delegation_v2_user_does_not_have_role(self):
         """Positive: V2 correctly identifies user does not have the role."""
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6620,7 +7625,9 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
         RoleBindingPrincipal.objects.all().delete()
         self.binding.delete()
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6634,9 +7641,13 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
             resource_type="workspace",
             resource_id="child-workspace-id",
         )
-        RoleBindingPrincipal.objects.create(binding=second_binding, principal=self.admin_principal, source="direct")
+        RoleBindingPrincipal.objects.create(
+            binding=second_binding, principal=self.admin_principal, source="direct"
+        )
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6646,7 +7657,9 @@ class MCPGuideUserAccessDelegationV2Tests(MCPToolTestMixin, IdentityRequest):
         """Positive: V2 role binding info includes principal and group counts."""
         RoleBindingGroup.objects.create(binding=self.binding, group=self.admin_group)
 
-        response = self._call_tool("guide_user_access_delegation", {"username": self.test_username})
+        response = self._call_tool(
+            "guide_user_access_delegation", {"username": self.test_username}
+        )
 
         tool_output = self._get_tool_output(response)
 
@@ -6667,9 +7680,13 @@ class MCPUpdateGroupTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
-        self.group = Group.objects.create(name="Test Group", description="Original desc", tenant=self.tenant)
+        self.group = Group.objects.create(
+            name="Test Group", description="Original desc", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down update group tests."""
@@ -6677,12 +7694,18 @@ class MCPUpdateGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_update_group_success(self, mock_replicator):
         """Update a group successfully."""
         response = self._call_tool(
             "update_group",
-            {"group_uuid": str(self.group.uuid), "name": "Updated Group", "description": "New desc"},
+            {
+                "group_uuid": str(self.group.uuid),
+                "name": "Updated Group",
+                "description": "New desc",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -6692,7 +7715,9 @@ class MCPUpdateGroupTests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["name"], "Updated Group")
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_update_group_by_name(self, mock_replicator):
         """Update a group resolved by name."""
         response = self._call_tool(
@@ -6735,7 +7760,9 @@ class MCPUpdateRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         self.permission = Permission.objects.create(
             application="cost-management",
@@ -6744,8 +7771,12 @@ class MCPUpdateRoleV1Tests(MCPToolTestMixin, IdentityRequest):
             permission="cost-management:cost_model:read",
             tenant=self.tenant,
         )
-        self.role = Role.objects.create(name="Test Role", tenant=self.tenant, system=False)
-        Access.objects.create(role=self.role, permission=self.permission, tenant=self.tenant)
+        self.role = Role.objects.create(
+            name="Test Role", tenant=self.tenant, system=False
+        )
+        Access.objects.create(
+            role=self.role, permission=self.permission, tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down V1 role update tests."""
@@ -6761,14 +7792,21 @@ class MCPUpdateRoleV1Tests(MCPToolTestMixin, IdentityRequest):
             {
                 "role_uuid": str(self.role.uuid),
                 "name": "Updated Role",
-                "access": [{"permission": "cost-management:cost_model:read", "resourceDefinitions": []}],
+                "access": [
+                    {
+                        "permission": "cost-management:cost_model:read",
+                        "resourceDefinitions": [],
+                    }
+                ],
             },
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "Updated Role")
 
@@ -6795,7 +7833,9 @@ class MCPUpdateRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
 
     def test_patch_role_v1_no_fields(self):
         """Patching a role without any fields returns error."""
@@ -6811,7 +7851,10 @@ class MCPUpdateRoleV1Tests(MCPToolTestMixin, IdentityRequest):
 
 
 @override_settings(
-    MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False, V2_APIS_ENABLED=True, ATOMIC_RETRY_DISABLED=True
+    MCP_WRITE_ENABLED=True,
+    MCP_WRITE_CONFIRMATION=False,
+    V2_APIS_ENABLED=True,
+    ATOMIC_RETRY_DISABLED=True,
 )
 class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
     """Test V2 update tools (update_role, update_role_binding, update_workspace, move_workspace)."""
@@ -6823,7 +7866,9 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         self.enterContext(
             patch(
                 "management.permissions.role_v2_access.get_kessel_principal_id",
@@ -6849,7 +7894,9 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
     def tearDown(self):
         """Tear down V2 update tool tests."""
         RoleBinding.objects.all().delete()
-        for ws in Workspace.objects.filter(type=Workspace.Types.STANDARD).order_by("-parent_id"):
+        for ws in Workspace.objects.filter(type=Workspace.Types.STANDARD).order_by(
+            "-parent_id"
+        ):
             ws.delete()
         RoleV2.objects.all().delete()
         Permission.objects.filter(permission="rbac:group:read").delete()
@@ -6858,7 +7905,9 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         TenantMapping.objects.filter(tenant=self.tenant).delete()
         super().tearDown()
 
-    @patch("management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission")
+    @patch(
+        "management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission"
+    )
     def test_update_role_v2_success(self, mock_perm):
         """Update a V2 role successfully."""
         mock_perm.return_value = True
@@ -6870,7 +7919,11 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
                 "role_uuid": str(role.uuid),
                 "name": "Updated V2 Role",
                 "permissions": [
-                    {"application": "rbac", "resource_type": "group", "operation": "read"},
+                    {
+                        "application": "rbac",
+                        "resource_type": "group",
+                        "operation": "read",
+                    },
                 ],
             },
         )
@@ -6878,7 +7931,9 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "Updated V2 Role")
 
@@ -6895,13 +7950,20 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32000)
 
-    @patch("management.permissions.workspace_access.WorkspaceAccessPermission.has_permission")
+    @patch(
+        "management.permissions.workspace_access.WorkspaceAccessPermission.has_permission"
+    )
     def test_update_workspace_success(self, mock_perm):
         """Update a workspace successfully."""
         mock_perm.return_value = True
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
         ws = Workspace.objects.create(
-            name="Test WS", tenant=self.tenant, type=Workspace.Types.STANDARD, parent=root_ws
+            name="Test WS",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=root_ws,
         )
 
         response = self._call_tool(
@@ -6917,23 +7979,38 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "Updated WS")
 
-    @patch("management.permissions.workspace_access.WorkspaceAccessPermission.has_permission")
+    @patch(
+        "management.permissions.workspace_access.WorkspaceAccessPermission.has_permission"
+    )
     def test_move_workspace_success(self, mock_perm):
         """Move a workspace to a new parent."""
         mock_perm.return_value = True
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
         parent1 = Workspace.objects.create(
-            name="Parent 1", tenant=self.tenant, type=Workspace.Types.STANDARD, parent=root_ws
+            name="Parent 1",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=root_ws,
         )
         child = Workspace.objects.create(
-            name="Child WS", tenant=self.tenant, type=Workspace.Types.STANDARD, parent=parent1
+            name="Child WS",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=parent1,
         )
         parent2 = Workspace.objects.create(
-            name="Parent 2", tenant=self.tenant, type=Workspace.Types.STANDARD, parent=root_ws
+            name="Parent 2",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=root_ws,
         )
 
         from management.workspace.view import WorkspaceViewSet
@@ -6948,16 +8025,24 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
 
-    @patch("management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission")
-    @patch("management.permissions.role_binding_access.RoleBindingSystemUserAccessPermission.has_permission")
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingKesselAccessPermission.has_permission"
+    )
+    @patch(
+        "management.permissions.role_binding_access.RoleBindingSystemUserAccessPermission.has_permission"
+    )
     def test_update_role_binding_success(self, mock_sys_perm, mock_kessel_perm):
         """Update role bindings for a subject."""
         mock_sys_perm.return_value = True
         mock_kessel_perm.return_value = True
         role = RoleV2.objects.create(name="Binding Role", tenant=self.tenant)
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
 
         response = self._call_tool(
             "update_role_binding",
@@ -6973,7 +8058,9 @@ class MCPUpdateToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
@@ -6985,7 +8072,9 @@ class MCPUpdateCrossAccountTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down cross-account update tests."""
@@ -6996,7 +8085,10 @@ class MCPUpdateCrossAccountTests(MCPToolTestMixin, IdentityRequest):
         """Patching without auth returns auth error."""
         response = self._call_tool(
             "patch_cross_account_request",
-            {"request_id": "00000000-0000-0000-0000-000000000000", "status": "cancelled"},
+            {
+                "request_id": "00000000-0000-0000-0000-000000000000",
+                "status": "cancelled",
+            },
             use_auth=False,
         )
 
@@ -7064,7 +8156,9 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         self.group = Group.objects.create(name="Delete Me", tenant=self.tenant)
 
@@ -7074,7 +8168,9 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_delete_group_success(self, mock_replicator):
         """Delete a group successfully."""
         response = self._call_tool(
@@ -7089,7 +8185,9 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_delete_group_by_name(self, mock_replicator):
         """Delete a group resolved by name."""
         response = self._call_tool(
@@ -7104,7 +8202,9 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
 
     def test_delete_group_no_auth(self):
         """Deleting without auth returns auth error."""
-        response = self._call_tool("delete_group", {"group_name": "Delete Me"}, use_auth=False)
+        response = self._call_tool(
+            "delete_group", {"group_name": "Delete Me"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -7122,13 +8222,17 @@ class MCPDeleteGroupTests(MCPToolTestMixin, IdentityRequest):
         output = self._get_tool_output(response)
         self.assertIn("error", output)
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_remove_principals_from_group_success(self, mock_proxy, mock_replicator):
         """Remove principals from a group."""
         mock_proxy.return_value = {
             "status_code": 200,
-            "data": [{"username": "testuser", "user_id": "12345", "is_org_admin": False}],
+            "data": [
+                {"username": "testuser", "user_id": "12345", "is_org_admin": False}
+            ],
         }
         self.group.principals.add(self.principal)
 
@@ -7166,7 +8270,9 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         self.group = Group.objects.create(name="Test Group", tenant=self.tenant)
         self.permission = Permission.objects.create(
@@ -7176,8 +8282,12 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
             permission="cost-management:cost_model:read",
             tenant=self.tenant,
         )
-        self.role = Role.objects.create(name="Delete Me Role", tenant=self.tenant, system=False)
-        Access.objects.create(role=self.role, permission=self.permission, tenant=self.tenant)
+        self.role = Role.objects.create(
+            name="Delete Me Role", tenant=self.tenant, system=False
+        )
+        Access.objects.create(
+            role=self.role, permission=self.permission, tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down V1 role delete tests."""
@@ -7187,10 +8297,14 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         Principal.objects.all().delete()
         super().tearDown()
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_remove_roles_from_group_success(self, mock_replicator):
         """Remove roles from a group successfully."""
-        policy = Policy.objects.create(name="test-policy", group=self.group, tenant=self.tenant)
+        policy = Policy.objects.create(
+            name="test-policy", group=self.group, tenant=self.tenant
+        )
         policy.roles.add(self.role)
 
         response = self._call_tool(
@@ -7205,7 +8319,9 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
-    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+    )
     def test_delete_role_v1_success(self, mock_replicator):
         """Delete a V1 role successfully."""
         response = self._call_tool(
@@ -7222,7 +8338,9 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
 
     def test_delete_role_v1_no_auth(self):
         """Deleting a role without auth returns auth error."""
-        response = self._call_tool("delete_role_v1", {"role_uuid": str(self.role.uuid)}, use_auth=False)
+        response = self._call_tool(
+            "delete_role_v1", {"role_uuid": str(self.role.uuid)}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -7231,7 +8349,10 @@ class MCPDeleteRoleV1Tests(MCPToolTestMixin, IdentityRequest):
 
 
 @override_settings(
-    MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False, V2_APIS_ENABLED=True, ATOMIC_RETRY_DISABLED=True
+    MCP_WRITE_ENABLED=True,
+    MCP_WRITE_CONFIRMATION=False,
+    V2_APIS_ENABLED=True,
+    ATOMIC_RETRY_DISABLED=True,
 )
 class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
     """Test V2 delete tools (bulk_delete_roles, delete_workspace)."""
@@ -7243,9 +8364,13 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
         self.enterContext(
-            patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+            patch(
+                "management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event"
+            )
         )
         V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
         ensure_v2_write_activated(self.tenant)
@@ -7265,7 +8390,9 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
     def tearDown(self):
         """Tear down V2 delete tool tests."""
         RoleBinding.objects.all().delete()
-        for ws in Workspace.objects.filter(type=Workspace.Types.STANDARD).order_by("-parent_id"):
+        for ws in Workspace.objects.filter(type=Workspace.Types.STANDARD).order_by(
+            "-parent_id"
+        ):
             ws.delete()
         RoleV2.objects.all().delete()
         Group.objects.all().delete()
@@ -7273,7 +8400,9 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         TenantMapping.objects.filter(tenant=self.tenant).delete()
         super().tearDown()
 
-    @patch("management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission")
+    @patch(
+        "management.permissions.role_v2_access.RoleV2KesselAccessPermission.has_permission"
+    )
     def test_bulk_delete_roles_success(self, mock_perm):
         """Bulk-delete V2 roles successfully."""
         mock_perm.return_value = True
@@ -7288,26 +8417,37 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
     def test_bulk_delete_roles_no_auth(self):
         """Bulk-deleting roles without auth returns auth error."""
-        response = self._call_tool("bulk_delete_roles", {"ids": ["fake"]}, use_auth=False)
+        response = self._call_tool(
+            "bulk_delete_roles", {"ids": ["fake"]}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32000)
 
-    @patch("management.permissions.workspace_access.WorkspaceAccessPermission.has_permission")
+    @patch(
+        "management.permissions.workspace_access.WorkspaceAccessPermission.has_permission"
+    )
     def test_delete_workspace_success(self, mock_perm):
         """Delete a workspace successfully."""
         mock_perm.return_value = True
-        root_ws = Workspace.objects.filter(tenant=self.tenant, type=Workspace.Types.ROOT).first()
+        root_ws = Workspace.objects.filter(
+            tenant=self.tenant, type=Workspace.Types.ROOT
+        ).first()
         ws = Workspace.objects.create(
-            name="Delete WS", tenant=self.tenant, type=Workspace.Types.STANDARD, parent=root_ws
+            name="Delete WS",
+            tenant=self.tenant,
+            type=Workspace.Types.STANDARD,
+            parent=root_ws,
         )
 
         response = self._call_tool(
@@ -7318,13 +8458,17 @@ class MCPDeleteToolsV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("result", data, f"Expected result but got: {data}")
-        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertFalse(
+            data["result"]["isError"], f"Tool returned error: {data['result']}"
+        )
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output["status"], "no_content")
 
     def test_delete_workspace_no_auth(self):
         """Deleting a workspace without auth returns auth error."""
-        response = self._call_tool("delete_workspace", {"workspace_uuid": "fake"}, use_auth=False)
+        response = self._call_tool(
+            "delete_workspace", {"workspace_uuid": "fake"}, use_auth=False
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -7370,7 +8514,10 @@ class MCPHealthCheckTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("checks", output)
 
     @patch("management.mcp_views._check_redis")
-    @patch("management.mcp_views._check_database", side_effect=Exception("connection refused"))
+    @patch(
+        "management.mcp_views._check_database",
+        side_effect=Exception("connection refused"),
+    )
     def test_health_check_database_failure(self, _mock_db, _mock_redis):
         """health_check returns degraded when database is unreachable."""
         response = self._call_tool("health_check")
@@ -7397,7 +8544,9 @@ class MCPHealthCheckTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(output["checks"]["database"], "ok")
 
     @patch("management.mcp_views._check_redis")
-    @patch("management.mcp_views._get_tools", side_effect=RuntimeError("event loop error"))
+    @patch(
+        "management.mcp_views._get_tools", side_effect=RuntimeError("event loop error")
+    )
     def test_health_check_tool_registry_failure(self, _mock_tools, _mock_redis):
         """health_check returns degraded when tool registry cannot be resolved."""
         response = self._call_tool("health_check")
@@ -7435,11 +8584,15 @@ class MCPAuditLogSourceTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def test_mcp_create_group_sets_audit_source(self):
         """MCP create_group tags audit log with ai_assistant source."""
-        response = self._call_tool("create_group", {"name": "MCP Group", "description": "via MCP"})
+        response = self._call_tool(
+            "create_group", {"name": "MCP Group", "description": "via MCP"}
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -7461,7 +8614,9 @@ class MCPAuditLogSourceTests(MCPToolTestMixin, IdentityRequest):
             tenant=self.tenant,
         )
 
-        audit_entry = AuditLog.objects.filter(tenant=self.tenant, principal_username="api_user").first()
+        audit_entry = AuditLog.objects.filter(
+            tenant=self.tenant, principal_username="api_user"
+        ).first()
         self.assertIsNotNone(audit_entry)
         self.assertIsNone(audit_entry.source)
 
@@ -7525,7 +8680,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down access check tests."""
@@ -7574,7 +8731,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         ]
         for tool_name in expected_protected:
             config = _TOOL_CONFIG.get(tool_name)
-            self.assertIsNotNone(config, f"Tool '{tool_name}' not found in _TOOL_CONFIG")
+            self.assertIsNotNone(
+                config, f"Tool '{tool_name}' not found in _TOOL_CONFIG"
+            )
             self.assertIsNotNone(
                 config.required_relation,
                 f"Tool '{tool_name}' missing required_relation",
@@ -7599,7 +8758,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         }
         for tool_name, expected_perm in expected_v1_permissions.items():
             config = _TOOL_CONFIG.get(tool_name)
-            self.assertIsNotNone(config, f"Tool '{tool_name}' not found in _TOOL_CONFIG")
+            self.assertIsNotNone(
+                config, f"Tool '{tool_name}' not found in _TOOL_CONFIG"
+            )
             self.assertEqual(
                 config.v1_permission,
                 expected_perm,
@@ -7618,17 +8779,33 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         ]
         for tool_name in expected_redacted:
             config = _TOOL_CONFIG.get(tool_name)
-            self.assertIsNotNone(config, f"Tool '{tool_name}' not found in _TOOL_CONFIG")
+            self.assertIsNotNone(
+                config, f"Tool '{tool_name}' not found in _TOOL_CONFIG"
+            )
             self.assertTrue(
                 len(config.redacted_fields) > 0,
                 f"Tool '{tool_name}' should declare redacted_fields",
             )
-            self.assertIn("email", config.redacted_fields, f"Tool '{tool_name}' should redact email")
-            self.assertIn("last_name", config.redacted_fields, f"Tool '{tool_name}' should redact last_name")
+            self.assertIn(
+                "email",
+                config.redacted_fields,
+                f"Tool '{tool_name}' should redact email",
+            )
+            self.assertIn(
+                "last_name",
+                config.redacted_fields,
+                f"Tool '{tool_name}' should redact last_name",
+            )
 
     def test_unprotected_tools_have_no_required_relation(self):
         """View-delegated tools do not have required_relation set."""
-        unprotected = ["hello", "list_principals", "list_permissions", "list_groups", "get_group"]
+        unprotected = [
+            "hello",
+            "list_principals",
+            "list_permissions",
+            "list_groups",
+            "get_group",
+        ]
         for tool_name in unprotected:
             config = _TOOL_CONFIG.get(tool_name)
             if config:
@@ -7664,8 +8841,14 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         request.tenant = self.tenant
         self.assertFalse(_check_kessel_access(request, "tenant", "rbac_roles_read"))
 
-    @patch("management.mcp_views.get_kessel_principal_id", return_value="localhost/test_user")
-    @patch("management.mcp_views.WorkspaceInventoryAccessChecker.check_resource_access", return_value=True)
+    @patch(
+        "management.mcp_views.get_kessel_principal_id",
+        return_value="localhost/test_user",
+    )
+    @patch(
+        "management.mcp_views.WorkspaceInventoryAccessChecker.check_resource_access",
+        return_value=True,
+    )
     def test_check_kessel_access_granted(self, mock_checker, _mock_principal):
         """_check_kessel_access returns True when Kessel grants access."""
         from django.test import RequestFactory
@@ -7680,8 +8863,14 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
             relation="rbac_roles_read",
         )
 
-    @patch("management.mcp_views.get_kessel_principal_id", return_value="localhost/test_user")
-    @patch("management.mcp_views.WorkspaceInventoryAccessChecker.check_resource_access", return_value=False)
+    @patch(
+        "management.mcp_views.get_kessel_principal_id",
+        return_value="localhost/test_user",
+    )
+    @patch(
+        "management.mcp_views.WorkspaceInventoryAccessChecker.check_resource_access",
+        return_value=False,
+    )
     def test_check_kessel_access_denied(self, mock_checker, _mock_principal):
         """_check_kessel_access returns False when Kessel denies access."""
         from django.test import RequestFactory
@@ -7690,8 +8879,13 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         request.tenant = self.tenant
         self.assertFalse(_check_kessel_access(request, "tenant", "rbac_roles_read"))
 
-    @patch("management.mcp_views.get_kessel_principal_id", side_effect=Exception("Dependency error"))
-    def test_check_kessel_access_principal_exception_fails_closed(self, _mock_principal):
+    @patch(
+        "management.mcp_views.get_kessel_principal_id",
+        side_effect=Exception("Dependency error"),
+    )
+    def test_check_kessel_access_principal_exception_fails_closed(
+        self, _mock_principal
+    ):
         """_check_kessel_access returns False when get_kessel_principal_id raises (fail-closed)."""
         from django.test import RequestFactory
 
@@ -7699,12 +8893,17 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         request.tenant = self.tenant
         self.assertFalse(_check_kessel_access(request, "tenant", "rbac_roles_read"))
 
-    @patch("management.mcp_views.get_kessel_principal_id", return_value="localhost/test_user")
+    @patch(
+        "management.mcp_views.get_kessel_principal_id",
+        return_value="localhost/test_user",
+    )
     @patch(
         "management.mcp_views.WorkspaceInventoryAccessChecker.check_resource_access",
         side_effect=Exception("Inventory API error"),
     )
-    def test_check_kessel_access_inventory_exception_fails_closed(self, _mock_checker, _mock_principal):
+    def test_check_kessel_access_inventory_exception_fails_closed(
+        self, _mock_checker, _mock_principal
+    ):
         """_check_kessel_access returns False when check_resource_access raises (fail-closed)."""
         from django.test import RequestFactory
 
@@ -7728,7 +8927,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         from django.test import RequestFactory
 
         request = RequestFactory().get("/")
-        request.user = type("User", (), {"admin": False, "access": {"role": {"read": ["*"]}}})()
+        request.user = type(
+            "User", (), {"admin": False, "access": {"role": {"read": ["*"]}}}
+        )()
         self.assertFalse(_check_v1_access(request, ("admin", "only")))
 
     def test_check_v1_access_role_read_granted(self):
@@ -7736,7 +8937,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         from django.test import RequestFactory
 
         request = RequestFactory().get("/")
-        request.user = type("User", (), {"admin": False, "access": {"role": {"read": ["*"]}}})()
+        request.user = type(
+            "User", (), {"admin": False, "access": {"role": {"read": ["*"]}}}
+        )()
         self.assertTrue(_check_v1_access(request, ("role", "read")))
 
     def test_check_v1_access_group_read_granted(self):
@@ -7744,7 +8947,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         from django.test import RequestFactory
 
         request = RequestFactory().get("/")
-        request.user = type("User", (), {"admin": False, "access": {"group": {"read": ["*"]}}})()
+        request.user = type(
+            "User", (), {"admin": False, "access": {"group": {"read": ["*"]}}}
+        )()
         self.assertTrue(_check_v1_access(request, ("group", "read")))
 
     def test_check_v1_access_principal_read_granted(self):
@@ -7752,7 +8957,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         from django.test import RequestFactory
 
         request = RequestFactory().get("/")
-        request.user = type("User", (), {"admin": False, "access": {"principal": {"read": ["*"]}}})()
+        request.user = type(
+            "User", (), {"admin": False, "access": {"principal": {"read": ["*"]}}}
+        )()
         self.assertTrue(_check_v1_access(request, ("principal", "read")))
 
     def test_check_v1_access_no_matching_access(self):
@@ -7760,7 +8967,9 @@ class MCPAccessCheckTests(MCPToolTestMixin, IdentityRequest):
         from django.test import RequestFactory
 
         request = RequestFactory().get("/")
-        request.user = type("User", (), {"admin": False, "access": {"group": {"read": ["*"]}}})()
+        request.user = type(
+            "User", (), {"admin": False, "access": {"group": {"read": ["*"]}}}
+        )()
         self.assertFalse(_check_v1_access(request, ("role", "read")))
 
     def test_check_v1_access_empty_access(self):
@@ -7904,7 +9113,9 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down write confirmation tests."""
@@ -7933,9 +9144,13 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_write_tool_executes_with_valid_token(self):
         """Write tool with valid confirmation_token executes the operation."""
-        token = self._get_confirmation_token("create_group", {"name": "Confirmed Group"})
+        token = self._get_confirmation_token(
+            "create_group", {"name": "Confirmed Group"}
+        )
 
-        response2 = self._call_tool("create_group", {"name": "Confirmed Group", "confirmation_token": token})
+        response2 = self._call_tool(
+            "create_group", {"name": "Confirmed Group", "confirmation_token": token}
+        )
 
         self.assertEqual(response2.status_code, 200)
         data = response2.json()
@@ -7945,7 +9160,10 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_invalid_token_rejected(self):
         """Invalid confirmation token is rejected."""
-        response = self._call_tool("create_group", {"name": "Test Group", "confirmation_token": "invalid-token-value"})
+        response = self._call_tool(
+            "create_group",
+            {"name": "Test Group", "confirmation_token": "invalid-token-value"},
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -7957,9 +9175,13 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
         """Confirmation token can only be used once."""
         token = self._get_confirmation_token("create_group", {"name": "One Time Group"})
 
-        self._call_tool("create_group", {"name": "One Time Group", "confirmation_token": token})
+        self._call_tool(
+            "create_group", {"name": "One Time Group", "confirmation_token": token}
+        )
 
-        response3 = self._call_tool("create_group", {"name": "One Time Group", "confirmation_token": token})
+        response3 = self._call_tool(
+            "create_group", {"name": "One Time Group", "confirmation_token": token}
+        )
 
         data = response3.json()
         self.assertTrue(data["result"]["isError"])
@@ -7982,11 +9204,17 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
 
     def test_token_rejected_for_different_tool(self):
         """Token issued for one tool cannot be used for a different tool."""
-        token = self._get_confirmation_token("create_group", {"name": "Cross Tool Test"})
+        token = self._get_confirmation_token(
+            "create_group", {"name": "Cross Tool Test"}
+        )
 
         response2 = self._call_tool(
             "update_group",
-            {"group_name": "Cross Tool Test", "name": "New Name", "confirmation_token": token},
+            {
+                "group_name": "Cross Tool Test",
+                "name": "New Name",
+                "confirmation_token": token,
+            },
         )
 
         data = response2.json()
@@ -8029,8 +9257,18 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
     @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=True)
     def test_initialize_includes_confirmation_instructions(self):
         """Initialize response includes confirmation protocol instructions when enabled."""
-        body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {"clientInfo": {"name": "test"}}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        body = {
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "id": 1,
+            "params": {"clientInfo": {"name": "test"}},
+        }
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         data = response.json()
         instructions = data["result"]["instructions"]
@@ -8040,8 +9278,18 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
     @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
     def test_initialize_omits_confirmation_instructions_when_disabled(self):
         """Initialize response omits confirmation instructions when disabled."""
-        body = {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {"clientInfo": {"name": "test"}}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        body = {
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "id": 1,
+            "params": {"clientInfo": {"name": "test"}},
+        }
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         data = response.json()
         instructions = data["result"]["instructions"]
@@ -8051,7 +9299,12 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
     def test_write_tool_descriptions_include_confirmation_suffix(self):
         """Write tool descriptions include confirmation protocol instructions."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         data = response.json()
         tools = {t["name"]: t for t in data["result"]["tools"]}
@@ -8063,7 +9316,12 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
     def test_write_tool_descriptions_omit_confirmation_when_disabled(self):
         """Write tool descriptions omit confirmation suffix when disabled."""
         body = {"jsonrpc": "2.0", "method": "tools/list", "id": 1, "params": {}}
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
 
         data = response.json()
         tools = {t["name"]: t for t in data["result"]["tools"]}
@@ -8075,13 +9333,20 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
         import dataclasses
         from unittest.mock import MagicMock
 
-        token = self._get_confirmation_token("create_group", {"name": "Token Strip Test"})
+        token = self._get_confirmation_token(
+            "create_group", {"name": "Token Strip Test"}
+        )
         original_config = _TOOL_CONFIG["create_group"]
         mock_fn = MagicMock(wraps=original_config.fn)
         mock_config = dataclasses.replace(original_config, fn=mock_fn)
 
-        with patch.dict("management.mcp_views._TOOL_CONFIG", {"create_group": mock_config}):
-            response2 = self._call_tool("create_group", {"name": "Token Strip Test", "confirmation_token": token})
+        with patch.dict(
+            "management.mcp_views._TOOL_CONFIG", {"create_group": mock_config}
+        ):
+            response2 = self._call_tool(
+                "create_group",
+                {"name": "Token Strip Test", "confirmation_token": token},
+            )
 
         data = response2.json()
         self.assertFalse(data["result"]["isError"])
@@ -8107,7 +9372,11 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
             ready=True,
         )
         other_identity = self._build_identity(
-            other_user, other_customer["account_id"], other_customer["org_id"], True, False
+            other_user,
+            other_customer["account_id"],
+            other_customer["org_id"],
+            True,
+            False,
         )
         other_header = b64encode(json_dumps(other_identity).encode("utf-8"))
         other_headers = {"HTTP_X_RH_IDENTITY": other_header}
@@ -8121,7 +9390,12 @@ class MCPWriteConfirmationTests(MCPToolTestMixin, IdentityRequest):
                 "arguments": {"name": "Cross Org Test", "confirmation_token": token},
             },
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **other_headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **other_headers,
+        )
 
         data = response.json()
         self.assertTrue(data["result"]["isError"])
@@ -8140,7 +9414,9 @@ class MCPWritePreviewTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down preview tests."""
@@ -8194,7 +9470,9 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down schema validation tests."""
@@ -8209,7 +9487,12 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
             "id": 200,
             "params": {"name": tool_name, "arguments": arguments},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         return response.json()
 
@@ -8292,7 +9575,11 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
         """_sanitize_validation_error formats required errors cleanly."""
         import jsonschema as js
 
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
         try:
             js.validate({}, schema)
         except js.ValidationError as exc:
@@ -8303,7 +9590,11 @@ class MCPSchemaValidationTests(MCPToolTestMixin, IdentityRequest):
         """_sanitize_validation_error formats additionalProperties errors cleanly."""
         import jsonschema as js
 
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False}
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "additionalProperties": False,
+        }
         try:
             js.validate({"name": "ok", "extra": "bad"}, schema)
         except js.ValidationError as exc:
@@ -8340,7 +9631,9 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_valid_permission_format(self):
         """Valid 'app:resource:verb' permission passes."""
-        self.assertIsNone(_validate_permission_format("cost-management:cost_model:read"))
+        self.assertIsNone(
+            _validate_permission_format("cost-management:cost_model:read")
+        )
 
     def test_valid_permission_with_wildcard(self):
         """Wildcard permission passes."""
@@ -8381,7 +9674,11 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_valid_v2_permission(self):
         """V2 permission with all required fields passes."""
-        perm = {"application": "cost-management", "resource_type": "cost_model", "operation": "read"}
+        perm = {
+            "application": "cost-management",
+            "resource_type": "cost_model",
+            "operation": "read",
+        }
         self.assertIsNone(_validate_v2_permission(perm, 0))
 
     def test_v2_permission_missing_operation(self):
@@ -8428,7 +9725,9 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_uuid_list_valid(self):
         """List of valid UUIDs passes."""
-        self.assertIsNone(_validate_uuid_list([self._VALID_UUID, self._VALID_UUID2], "ids"))
+        self.assertIsNone(
+            _validate_uuid_list([self._VALID_UUID, self._VALID_UUID2], "ids")
+        )
 
     def test_uuid_list_invalid_at_index_zero(self):
         """Invalid UUID at index 0 returns error naming ids[0]."""
@@ -8477,12 +9776,21 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_create_role_v1_at_max_permissions(self):
         """create_role_v1 with exactly the max number of permissions passes."""
-        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE)]
-        self.assertIsNone(_validate_write_payload("create_role_v1", {"name": "Big Role", "access": access}))
+        access = [
+            {"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE)
+        ]
+        self.assertIsNone(
+            _validate_write_payload(
+                "create_role_v1", {"name": "Big Role", "access": access}
+            )
+        )
 
     def test_create_role_v1_exceeds_max_permissions(self):
         """create_role_v1 with too many permissions is rejected."""
-        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)]
+        access = [
+            {"permission": f"app:res:verb{i}"}
+            for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)
+        ]
         args = {"name": "Huge Role", "access": access}
         result = _validate_write_payload("create_role_v1", args)
         self.assertIsNotNone(result)
@@ -8505,7 +9813,13 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
         """Valid create_role (V2) payload passes."""
         args = {
             "name": "Cost Reader",
-            "permissions": [{"application": "cost-management", "resource_type": "cost_model", "operation": "read"}],
+            "permissions": [
+                {
+                    "application": "cost-management",
+                    "resource_type": "cost_model",
+                    "operation": "read",
+                }
+            ],
         }
         self.assertIsNone(_validate_write_payload("create_role", args))
 
@@ -8521,7 +9835,10 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_add_roles_to_group_invalid_group_uuid(self):
         """add_roles_to_group with invalid group_uuid is rejected."""
-        result = _validate_write_payload("add_roles_to_group", {"group_uuid": "bad-uuid", "roles": [self._VALID_UUID]})
+        result = _validate_write_payload(
+            "add_roles_to_group",
+            {"group_uuid": "bad-uuid", "roles": [self._VALID_UUID]},
+        )
         self.assertIsNotNone(result)
         self.assertIn("group_uuid", result)
         self.assertIn("not a valid UUID", result)
@@ -8529,7 +9846,8 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
     def test_add_roles_to_group_invalid_role_uuid(self):
         """add_roles_to_group with invalid role UUID in roles list is rejected."""
         result = _validate_write_payload(
-            "add_roles_to_group", {"group_uuid": self._VALID_UUID, "roles": ["not-a-uuid"]}
+            "add_roles_to_group",
+            {"group_uuid": self._VALID_UUID, "roles": ["not-a-uuid"]},
         )
         self.assertIsNotNone(result)
         self.assertIn("roles[0]", result)
@@ -8581,7 +9899,9 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_bulk_delete_roles_invalid_uuid(self):
         """bulk_delete_roles with invalid UUID in ids is rejected."""
-        result = _validate_write_payload("bulk_delete_roles", {"ids": ["valid-looking", "not-uuid"]})
+        result = _validate_write_payload(
+            "bulk_delete_roles", {"ids": ["valid-looking", "not-uuid"]}
+        )
         self.assertIsNotNone(result)
         self.assertIn("ids[0]", result)
         self.assertIn("not a valid UUID", result)
@@ -8606,13 +9926,18 @@ class MCPWritePayloadValidationUnitTests(IdentityRequest):
 
     def test_patch_cross_account_request_invalid_uuid(self):
         """patch_cross_account_request with invalid request_id is rejected."""
-        result = _validate_write_payload("patch_cross_account_request", {"request_id": "xyz"})
+        result = _validate_write_payload(
+            "patch_cross_account_request", {"request_id": "xyz"}
+        )
         self.assertIsNotNone(result)
         self.assertIn("request_id", result)
 
 
 @override_settings(
-    MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False, V2_APIS_ENABLED=True, ATOMIC_RETRY_DISABLED=True
+    MCP_WRITE_ENABLED=True,
+    MCP_WRITE_CONFIRMATION=False,
+    V2_APIS_ENABLED=True,
+    ATOMIC_RETRY_DISABLED=True,
 )
 class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityRequest):
     """Integration tests: write payload validation through the full MCP endpoint."""
@@ -8624,7 +9949,9 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
-        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        self.principal = Principal.objects.create(
+            username="test_user", tenant=self.tenant
+        )
 
     def tearDown(self):
         """Tear down write payload validation integration tests."""
@@ -8641,7 +9968,12 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
             "id": 300,
             "params": {"name": tool_name, "arguments": arguments},
         }
-        response = self.client.post(self.url, data=json.dumps(body), content_type="application/json", **self.headers)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.headers,
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         return response.json()
 
@@ -8665,8 +9997,13 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
 
     def test_max_permissions_rejected_via_endpoint(self):
         """Too many permissions rejected through the MCP endpoint."""
-        access = [{"permission": f"app:res:verb{i}"} for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)]
-        data = self._call_tool_raw("create_role_v1", {"name": "Big Role", "access": access})
+        access = [
+            {"permission": f"app:res:verb{i}"}
+            for i in range(_MAX_PERMISSIONS_PER_ROLE + 1)
+        ]
+        data = self._call_tool_raw(
+            "create_role_v1", {"name": "Big Role", "access": access}
+        )
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32602)
         self.assertIn("exceeds the maximum", data["error"]["message"])
@@ -8679,7 +10016,11 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
         )
         # Validation passed — may succeed or fail downstream, but must not be a validation error.
         if "error" in data:
-            self.assertNotEqual(data["error"]["code"], -32602, msg=f"Unexpected validation error: {data}")
+            self.assertNotEqual(
+                data["error"]["code"],
+                -32602,
+                msg=f"Unexpected validation error: {data}",
+            )
 
     def test_v2_valid_payload_passes_through(self):
         """Valid create_role (V2) payload passes semantic validation."""
@@ -8688,12 +10029,20 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
             {
                 "name": "Good V2 Role",
                 "permissions": [
-                    {"application": "cost-management", "resource_type": "cost_model", "operation": "read"}
+                    {
+                        "application": "cost-management",
+                        "resource_type": "cost_model",
+                        "operation": "read",
+                    }
                 ],
             },
         )
         if "error" in data:
-            self.assertNotEqual(data["error"]["code"], -32602, msg=f"Unexpected validation error: {data}")
+            self.assertNotEqual(
+                data["error"]["code"],
+                -32602,
+                msg=f"Unexpected validation error: {data}",
+            )
 
     def test_v2_permission_missing_field_rejected(self):
         """V2 permission with missing field rejected through endpoint."""
@@ -8721,7 +10070,10 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
                     {
                         "role": "550e8400-e29b-41d4-a716-446655440000",
                         "resource": {"type": "workspace", "id": "bad-uuid"},
-                        "subject": {"type": "principal", "id": "550e8400-e29b-41d4-a716-446655440001"},
+                        "subject": {
+                            "type": "principal",
+                            "id": "550e8400-e29b-41d4-a716-446655440001",
+                        },
                     }
                 ]
             },
@@ -8775,7 +10127,9 @@ class MCPHealthCheckTests(IdentityRequest):
         _shutdown_in_progress.set()
         mcp_url = "/_private/_a2s/mcp/"
         payload = {"jsonrpc": "2.0", "method": "tools/list", "id": 1}
-        response = self.client.post(mcp_url, data=json.dumps(payload), content_type="application/json")
+        response = self.client.post(
+            mcp_url, data=json.dumps(payload), content_type="application/json"
+        )
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertIn("error", body)
@@ -8820,7 +10174,9 @@ class MCPShutdownTests(IdentityRequest):
 
     @patch("management.mcp_views._MCP_TOOL_EXECUTOR")
     @patch("management.mcp_views._get_connection_pool")
-    def test_shutdown_survives_redis_disconnect_error(self, mock_get_pool, mock_executor):
+    def test_shutdown_survives_redis_disconnect_error(
+        self, mock_get_pool, mock_executor
+    ):
         """Edge case: Redis disconnect failure does not prevent shutdown."""
         mock_pool = mock_get_pool.return_value
         mock_pool.disconnect.side_effect = ConnectionError("pool gone")

@@ -452,7 +452,7 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 |-----------|------|---------|-------------|
 | `limit` | integer | `10` | Max results |
 | `offset` | integer | `0` | Pagination offset (V1 only; ignored in V2) |
-| `cursor` | string | `""` | Cursor for pagination (V2 only; obtained from `links.next` in previous response) |
+| `cursor` | string | `""` | Cursor for pagination (V2 only; pass the bare token or the full `links.next` URL — the token is extracted automatically) |
 | `name` | string | `""` | Filter by role name (V2 supports `*` wildcards) |
 | `display_name` | string | `""` | Filter by display name (V1 only) |
 | `permission` | string | `""` | Filter by permission (comma-separated) |
