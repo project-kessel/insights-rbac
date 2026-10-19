@@ -2301,6 +2301,20 @@ class MCPSearchRolesTests(MCPToolTestMixin, IdentityRequest):
         self.assertNotIn("Unassigned Role", role_names)
         self.assertNotIn("ignored_filters", tool_output)
 
+    def test_search_roles_v1_with_cursor_is_noop(self):
+        """Positive: search_roles on V1 org ignores cursor parameter silently."""
+        role = Role.objects.create(name="V1 Role", tenant=self.tenant)
+        policy = Policy.objects.create(name="auto_policy", group=None, tenant=self.tenant)
+        policy.roles.add(role)
+
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v1")
+        if "ignored_filters" in tool_output:
+            self.assertNotIn("cursor", tool_output["ignored_filters"])
+
 
 class MCPViewNonAdminTests(IdentityRequest):
     """Test the MCP endpoint for non-admin users via _private/_a2s/mcp/."""
@@ -2667,6 +2681,54 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("role bindings", tool_output["ignored_filters"]["username"]["reason"])
         self.assertIn("list_role_bindings", tool_output["ignored_filters"]["username"]["alternative"])
         self.assertIn("jdoe", tool_output["ignored_filters"]["username"]["alternative"])
+
+    def test_search_roles_v2_cursor_forwarded(self):
+        """Positive: search_roles on V2 org forwards cursor parameter to the API."""
+        RoleV2.objects.create(name="V2 Role 1", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        RoleV2.objects.create(name="V2 Role 2", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("data", tool_output)
+
+    def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
+        """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 5})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "5")
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["reason"])
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["alternative"])
+
+    def test_search_roles_v2_offset_not_ignored_when_zero(self):
+        """Positive: search_roles on V2 org does NOT flag offset when it's 0 (default)."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 0})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        if "ignored_filters" in tool_output:
+            self.assertNotIn("offset", tool_output["ignored_filters"])
+
+    def test_search_roles_v2_cursor_with_offset_both_present(self):
+        """Positive: search_roles with both cursor and offset > 0 includes both in result."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA==", "offset": 10})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "10")
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)

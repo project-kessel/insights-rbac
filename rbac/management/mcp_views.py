@@ -1363,7 +1363,9 @@ def list_role_access(
         "search_roles(permission='<app>:<resource>:<verb>'). Accepts comma-separated permissions. "
         "To see all roles for an application, call search_roles(application='<app>'). "
         "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
-        "V2 orgs support name with '*' wildcards (e.g., name='Cost*') and resource_type filter. "
+        "V2 orgs support name with '*' wildcards (e.g., name='Cost*'), resource_type filter, and "
+        "cursor-based pagination. For V2 pagination, pass the 'cursor' from the previous response's "
+        "links.next; 'offset' is not supported in V2 (use cursor instead). "
         "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
@@ -1372,7 +1374,8 @@ def list_role_access(
         "- Role names are not unique across V1 and V2. The org_version field indicates which API "
         "version the result came from.\n"
         "- The username filter is V1-only. For V2 orgs, it is ignored and returned in ignored_filters "
-        "with guidance to use list_role_bindings instead."
+        "with guidance to use list_role_bindings instead.\n"
+        "- The offset parameter is V1-only. For V2 orgs, use the cursor parameter from links.next instead."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1392,6 +1395,7 @@ def search_roles(
     resource_type: str = "",
     order_by: str = "",
     username: str = "",
+    cursor: str = "",
 ) -> str:
     """Search roles, auto-detecting V1/V2 and delegating to the appropriate view."""
     tenant = getattr(request, "tenant", None)
@@ -1408,6 +1412,7 @@ def search_roles(
             display_name,
             application,
             system,
+            cursor,
         )
     return _search_roles_v1(
         request, limit, offset, name, display_name, permission, application, system, order_by, username
@@ -1465,6 +1470,7 @@ def _search_roles_v2(
     display_name: str,
     application: str,
     system: str,
+    cursor: str,
 ) -> str:
     """Search roles using V2 API."""
     query_params: dict[str, str] = {
@@ -1479,6 +1485,8 @@ def _search_roles_v2(
         query_params["permission"] = permission
     if order_by:
         query_params["order_by"] = order_by
+    if cursor:
+        query_params["cursor"] = cursor
 
     path = reverse("v2_management:roles-list")
     raw = _call_view(request, _role_v2_list_view, path, query_params)
@@ -1519,6 +1527,13 @@ def _search_roles_v2(
             "value": system,
             "reason": "V2 roles use 'type' (custom/system/seeded) instead of a boolean 'system' flag.",
             "alternative": "V2 role results include a 'type' field you can filter client-side.",
+        }
+
+    if offset:
+        ignored_filters["offset"] = {
+            "value": str(offset),
+            "reason": "V2 roles use cursor-based pagination instead of offset.",
+            "alternative": "Use the 'cursor' parameter from the previous response's links.next to paginate.",
         }
 
     if ignored_filters:
