@@ -120,9 +120,7 @@ _role_binding_update_view = RoleBindingViewSet.as_view({"put": "by_subject"})
 _workspace_update_view = WorkspaceViewSet.as_view({"put": "update"})
 _workspace_move_view = WorkspaceViewSet.as_view({"post": "move"})
 _cross_account_update_view = CrossAccountRequestViewSet.as_view({"put": "update"})
-_cross_account_patch_view = CrossAccountRequestViewSet.as_view(
-    {"patch": "partial_update"}
-)
+_cross_account_patch_view = CrossAccountRequestViewSet.as_view({"patch": "partial_update"})
 
 # Write views (DELETE)
 _group_delete_view = GroupViewSet.as_view({"delete": "destroy"})
@@ -176,9 +174,7 @@ def _get_description_override(tool_name: str) -> str | None:
         value = conn.get(f"{_REDIS_DESC_PREFIX}{tool_name}")
         return value.decode() if value else None
     except redis_exceptions.RedisError:
-        logger.debug(
-            "mcp: redis unavailable for description override, tool=%s", tool_name
-        )
+        logger.debug("mcp: redis unavailable for description override, tool=%s", tool_name)
         return None
 
 
@@ -204,11 +200,7 @@ def _get_all_description_overrides() -> dict[str, str]:
             return {}
         values = r.mget(keys)
         prefix_len = len(_REDIS_DESC_PREFIX)
-        return {
-            k.decode()[prefix_len:]: v.decode()
-            for k, v in zip(keys, values)
-            if v is not None
-        }
+        return {k.decode()[prefix_len:]: v.decode() for k, v in zip(keys, values) if v is not None}
     except redis_exceptions.RedisError:
         logger.debug("mcp: redis unavailable for description overrides")
         return {}
@@ -307,9 +299,7 @@ def register_tool(
 
             @wraps(fn)
             def _schema_stub(**kwargs: Any) -> str:
-                raise RuntimeError(
-                    f"{tool_name} should not be called via MCPServer dispatch"
-                )
+                raise RuntimeError(f"{tool_name} should not be called via MCPServer dispatch")
 
             _schema_stub.__signature__ = wrapper_sig  # type: ignore[attr-defined]
             mcp.tool(name=tool_name, description=description)(_schema_stub)
@@ -341,17 +331,11 @@ def _clone_request(
     method_upper = method.upper()
     body_data = json.dumps(body) if body is not None else ""
     if method_upper == "POST":
-        view_request = _request_factory.post(
-            path, data=body_data, content_type="application/json"
-        )
+        view_request = _request_factory.post(path, data=body_data, content_type="application/json")
     elif method_upper == "PUT":
-        view_request = _request_factory.put(
-            path, data=body_data, content_type="application/json"
-        )
+        view_request = _request_factory.put(path, data=body_data, content_type="application/json")
     elif method_upper == "PATCH":
-        view_request = _request_factory.patch(
-            path, data=body_data, content_type="application/json"
-        )
+        view_request = _request_factory.patch(path, data=body_data, content_type="application/json")
     elif method_upper == "DELETE":
         view_request = _request_factory.delete(path, **kwargs)
     else:
@@ -415,9 +399,7 @@ def _call_view_json(
     elif response.status_code >= 400:
         try:
             parsed = json.loads(content)
-            detail = (
-                parsed.get("detail", content) if isinstance(parsed, dict) else content
-            )
+            detail = parsed.get("detail", content) if isinstance(parsed, dict) else content
         except ValueError:
             detail = f"HTTP {response.status_code}"
         if not isinstance(detail, str):
@@ -450,14 +432,10 @@ def _call_view_delete(
     **view_kwargs: Any,
 ) -> str:
     """Call a Django view with a DELETE request."""
-    return _call_view_json(
-        request, view, path, method="DELETE", query_params=query_params, **view_kwargs
-    )
+    return _call_view_json(request, view, path, method="DELETE", query_params=query_params, **view_kwargs)
 
 
-def _resolve_group_uuid(
-    group_uuid: str, group_name: str, tenant
-) -> tuple[str | None, str | None]:
+def _resolve_group_uuid(group_uuid: str, group_name: str, tenant) -> tuple[str | None, str | None]:
     """Resolve a group to its UUID from either group_uuid or group_name.
 
     Returns (resolved_uuid, error_json). On success error_json is None;
@@ -466,20 +444,14 @@ def _resolve_group_uuid(
     if group_uuid:
         return group_uuid, None
     if group_name:
-        group = (
-            Group.objects.filter(name__iexact=group_name, tenant=tenant)
-            .only("uuid")
-            .first()
-        )
+        group = Group.objects.filter(name__iexact=group_name, tenant=tenant).only("uuid").first()
         if not group:
             return None, json.dumps({"error": f"Group '{group_name}' not found"})
         return str(group.uuid), None
     return None, json.dumps({"error": "Either group_uuid or group_name is required"})
 
 
-def _resolve_group_for_tool(
-    request: HttpRequest, group_uuid: str, group_name: str
-) -> tuple[str | None, str | None]:
+def _resolve_group_for_tool(request: HttpRequest, group_uuid: str, group_name: str) -> tuple[str | None, str | None]:
     """Resolve a group UUID from a tool request, checking tenant context first."""
     tenant = getattr(request, "tenant", None)
     if not tenant:
@@ -497,9 +469,7 @@ _CROSS_ACCOUNT_LIFECYCLE = (
 def _cross_account_status_counts(org_id: str) -> dict[str, int]:
     """Return pending and expired cross-account request counts in a single query."""
     rows = (
-        CrossAccountRequest.objects.filter(
-            target_org=org_id, status__in=["pending", "expired"]
-        )
+        CrossAccountRequest.objects.filter(target_org=org_id, status__in=["pending", "expired"])
         .values("status")
         .annotate(count=Count("pk"))
     )
@@ -523,9 +493,7 @@ def _lookup_principal(
     - On multiple matches: principal/resolved_username are None, candidates is a list of user dicts.
     - On no matches: everything is None.
     """
-    principal = Principal.objects.filter(
-        username=username_or_name, tenant=tenant
-    ).first()
+    principal = Principal.objects.filter(username=username_or_name, tenant=tenant).first()
     if principal:
         return principal, username_or_name, None
 
@@ -542,9 +510,7 @@ def _lookup_principal(
     if len(matches) == 1:
         resolved_username = matches[0].get("username")
         if resolved_username:
-            principal = Principal.objects.filter(
-                username=resolved_username, tenant=tenant
-            ).first()
+            principal = Principal.objects.filter(username=resolved_username, tenant=tenant).first()
             if principal:
                 return principal, resolved_username, None
 
@@ -575,9 +541,7 @@ def _lookup_principal(
 def hello(message: str = "Hello, World!") -> str:
     """Respond to a greeting — no authentication required."""
     now: str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return json.dumps(
-        {"response": f"RBAC received your message: '{message}'", "date": now}
-    )
+    return json.dumps({"response": f"RBAC received your message: '{message}'", "date": now})
 
 
 @register_tool(
@@ -622,19 +586,11 @@ def list_principals(
 
     # Reject conflicting inputs
     if name and usernames:
-        return json.dumps(
-            {
-                "errors": [
-                    {"detail": "Cannot use both 'name' and 'usernames' parameters"}
-                ]
-            }
-        )
+        return json.dumps({"errors": [{"detail": "Cannot use both 'name' and 'usernames' parameters"}]})
 
     # If name filter provided, fetch and filter directly via proxy
     if name:
-        return _list_principals_by_name(
-            request, name, limit, offset, sort_order, status, username_only
-        )
+        return _list_principals_by_name(request, name, limit, offset, sort_order, status, username_only)
 
     # Otherwise, delegate to PrincipalView
     query_params: dict[str, str] = {
@@ -665,9 +621,7 @@ def list_principals(
         except (json.JSONDecodeError, AttributeError):
             pass
 
-    return _strip_pii_from_principal_list(
-        result, tenant=getattr(request, "tenant", None)
-    )
+    return _strip_pii_from_principal_list(result, tenant=getattr(request, "tenant", None))
 
 
 def _list_principals_by_name(
@@ -696,17 +650,9 @@ def _list_principals_by_name(
     max_users = 2000
 
     while bop_offset < max_users:
-        resp = proxy.request_principals(
-            org_id=org_id, limit=bop_limit, offset=bop_offset, options=options
-        )
+        resp = proxy.request_principals(org_id=org_id, limit=bop_limit, offset=bop_offset, options=options)
         if resp.get("status_code") != 200:
-            return json.dumps(
-                {
-                    "errors": resp.get(
-                        "errors", [{"detail": "Failed to fetch principals"}]
-                    )
-                }
-            )
+            return json.dumps({"errors": resp.get("errors", [{"detail": "Failed to fetch principals"}])})
 
         data = resp.get("data", [])
         if isinstance(data, dict):
@@ -749,9 +695,7 @@ def _list_principals_by_name(
                     else None
                 ),
                 "previous": (
-                    f"{path}?{base_params}&limit={limit}&offset={max(0, offset - limit)}"
-                    if offset > 0
-                    else None
+                    f"{path}?{base_params}&limit={limit}&offset={max(0, offset - limit)}" if offset > 0 else None
                 ),
                 "last": f"{path}?{base_params}&limit={limit}&offset={max(0, len(filtered_users) - limit)}",
             },
@@ -759,14 +703,10 @@ def _list_principals_by_name(
         },
         default=str,
     )
-    return _strip_pii_from_principal_list(
-        raw_json, tenant=getattr(request, "tenant", None)
-    )
+    return _strip_pii_from_principal_list(raw_json, tenant=getattr(request, "tenant", None))
 
 
-def _strip_pii_from_principal_list(
-    raw_json: str, tenant: Any = None, redacted_fields: tuple[str, ...] = ()
-) -> str:
+def _strip_pii_from_principal_list(raw_json: str, tenant: Any = None, redacted_fields: tuple[str, ...] = ()) -> str:
     """Strip redacted fields from a principal-list API response, enriching with UUIDs."""
     fields = redacted_fields or _PRINCIPAL_REDACTED_FIELDS
     if not _is_pii_redaction_enabled():
@@ -781,9 +721,7 @@ def _strip_pii_from_principal_list(
         usernames = [item.get("username") for item in data if item.get("username")]
         if usernames:
             uuid_map = dict(
-                Principal.objects.filter(
-                    username__in=usernames, tenant=tenant
-                ).values_list("username", "uuid")
+                Principal.objects.filter(username__in=usernames, tenant=tenant).values_list("username", "uuid")
             )
             for item in data:
                 uname = item.get("username")
@@ -1051,9 +989,7 @@ def list_audit_logs(
     order_field = order_by.lstrip("-")
     if order_field not in valid_order_fields:
         return json.dumps(
-            {
-                "error": f"Invalid order_by field '{order_by}'. Valid fields: {', '.join(sorted(valid_order_fields))}"
-            }
+            {"error": f"Invalid order_by field '{order_by}'. Valid fields: {', '.join(sorted(valid_order_fields))}"}
         )
 
     tenant = getattr(request, "tenant", None)
@@ -1121,9 +1057,7 @@ def list_audit_logs(
         if org_admin_cache[actor]:
             auth_info = org_admin_auth
         elif cache_key not in auth_cache[actor]:
-            auth_cache[actor][cache_key] = _find_authorizing_role(
-                actor, tenant, required_perms
-            )
+            auth_cache[actor][cache_key] = _find_authorizing_role(actor, tenant, required_perms)
             auth_info = auth_cache[actor][cache_key]
         else:
             auth_info = auth_cache[actor][cache_key]
@@ -1139,9 +1073,7 @@ def list_audit_logs(
         }
 
         if not auth_info:
-            result["note"] = (
-                f"User '{actor}' not found or no longer has permissions. Required: {required_perms}"
-            )
+            result["note"] = f"User '{actor}' not found or no longer has permissions. Required: {required_perms}"
 
         results.append(result)
 
@@ -1208,9 +1140,7 @@ def _is_org_admin(username: str, org_id: str) -> bool:
     return False
 
 
-def _find_authorizing_role(
-    username: str, tenant: Any, required_perms: list[str]
-) -> dict[str, Any] | None:
+def _find_authorizing_role(username: str, tenant: Any, required_perms: list[str]) -> dict[str, Any] | None:
     """Find the role and permission that authorized an action."""
     principal = Principal.objects.filter(username=username, tenant=tenant).first()
     if not principal:
@@ -1404,9 +1334,7 @@ def list_group_roles(
         query_params["exclude"] = exclude
 
     path = reverse("v1_management:group-roles", kwargs={"uuid": resolved_uuid})
-    return _call_view(
-        request, _group_roles_view, path, query_params, uuid=resolved_uuid
-    )
+    return _call_view(request, _group_roles_view, path, query_params, uuid=resolved_uuid)
 
 
 @register_tool(
@@ -1671,15 +1599,11 @@ def get_role(
 def _get_role_v1(request: HttpRequest, role_uuid: str) -> str:
     """Get role details using V1 API (retrieve + access)."""
     detail_path = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
-    detail_raw = _call_view(
-        request, _role_v1_detail_view, detail_path, {}, uuid=role_uuid
-    )
+    detail_raw = _call_view(request, _role_v1_detail_view, detail_path, {}, uuid=role_uuid)
     result = json.loads(detail_raw)
 
     access_path = reverse("v1_management:role-access", kwargs={"uuid": role_uuid})
-    access_raw = _call_view(
-        request, _role_access_view, access_path, {"limit": "1000"}, uuid=role_uuid
-    )
+    access_raw = _call_view(request, _role_access_view, access_path, {"limit": "1000"}, uuid=role_uuid)
     access_data = json.loads(access_raw)
 
     result["permissions"] = access_data.get("data", [])
@@ -1741,9 +1665,7 @@ def check_role_permissions(
     is_v2 = is_v2_write_activated(tenant)
 
     if is_v2:
-        return _check_role_permissions_v2(
-            tenant, role_name, include_available_permissions
-        )
+        return _check_role_permissions_v2(tenant, role_name, include_available_permissions)
     return _check_role_permissions_v1(tenant, role_name, include_available_permissions)
 
 
@@ -1754,20 +1676,13 @@ def _check_role_permissions_v1(
 ) -> str:
     """Pre-flight check for a V1 custom role."""
     # Step 1: Find the custom role by name (case-insensitive exact match first, then partial)
-    role = Role.objects.filter(
-        name__iexact=role_name, tenant=tenant, system=False
-    ).first()
+    role = Role.objects.filter(name__iexact=role_name, tenant=tenant, system=False).first()
 
     if not role:
         # Try partial match and suggest (custom roles only)
-        roles = Role.objects.filter(name__icontains=role_name, tenant=tenant).values(
-            "uuid", "name", "system"
-        )[:5]
+        roles = Role.objects.filter(name__icontains=role_name, tenant=tenant).values("uuid", "name", "system")[:5]
         if roles:
-            suggestions = [
-                {"uuid": str(r["uuid"]), "name": r["name"], "system": r["system"]}
-                for r in roles
-            ]
+            suggestions = [{"uuid": str(r["uuid"]), "name": r["name"], "system": r["system"]} for r in roles]
             return json.dumps(
                 {
                     "error": f"Role '{role_name}' not found (exact match)",
@@ -1796,9 +1711,7 @@ def _check_role_permissions_v1(
         "platform_default": getattr(role, "platform_default", False),
     }
 
-    return _build_role_permissions_result(
-        role_info, permissions, include_available_permissions, "v1"
-    )
+    return _build_role_permissions_result(role_info, permissions, include_available_permissions, "v1")
 
 
 def _check_role_permissions_v2(
@@ -1812,9 +1725,9 @@ def _check_role_permissions_v2(
 
     if not role:
         # Try partial match and suggest (custom roles only)
-        roles = RoleV2.objects.filter(
-            name__icontains=role_name, tenant=tenant, type=RoleV2.Types.CUSTOM
-        ).values("uuid", "name", "type")[:5]
+        roles = RoleV2.objects.filter(name__icontains=role_name, tenant=tenant, type=RoleV2.Types.CUSTOM).values(
+            "uuid", "name", "type"
+        )[:5]
         if roles:
             suggestions = [
                 {
@@ -1851,9 +1764,7 @@ def _check_role_permissions_v2(
         "system": role.type != RoleV2.Types.CUSTOM,
     }
 
-    return _build_role_permissions_result(
-        role_info, permissions, include_available_permissions, "v2"
-    )
+    return _build_role_permissions_result(role_info, permissions, include_available_permissions, "v2")
 
 
 def _build_role_permissions_result(
@@ -1904,21 +1815,13 @@ def _build_role_permissions_result(
         if len(parts) == 3:
             app, resource, verb = parts
             if resource == "*" and verb == "*":
-                expanded_permissions.append(
-                    f"{perm_str} → full access to all {app} resources"
-                )
+                expanded_permissions.append(f"{perm_str} → full access to all {app} resources")
             elif resource == "*":
-                expanded_permissions.append(
-                    f"{perm_str} → {verb} access to all {app} resources"
-                )
+                expanded_permissions.append(f"{perm_str} → {verb} access to all {app} resources")
             elif verb == "*":
-                expanded_permissions.append(
-                    f"{perm_str} → full access to {app} {resource} resources"
-                )
+                expanded_permissions.append(f"{perm_str} → full access to {app} {resource} resources")
             else:
-                expanded_permissions.append(
-                    f"{perm_str} → {verb} access to {app} {resource} resources"
-                )
+                expanded_permissions.append(f"{perm_str} → {verb} access to {app} {resource} resources")
 
     # Check for available permissions in covered applications (if requested)
     available_but_not_granted: dict[str, list[str]] = {}
@@ -1939,20 +1842,16 @@ def _build_role_permissions_result(
         "has_wildcard_resource": has_wildcard_resource,
         "has_wildcard_verb": has_wildcard_verb,
         "is_read_only": verbs_included <= {"read"} and not has_wildcard_verb,
-        "can_modify": bool(verbs_included & {"write", "create", "delete"})
-        or has_wildcard_verb,
+        "can_modify": bool(verbs_included & {"write", "create", "delete"}) or has_wildcard_verb,
     }
 
     # Generate recommendations
     recommendations = []
     if not permissions_list:
-        recommendations.append(
-            "WARNING: This role has no permissions. Users with only this role cannot do anything."
-        )
+        recommendations.append("WARNING: This role has no permissions. Users with only this role cannot do anything.")
     if coverage_analysis["is_read_only"]:
         recommendations.append(
-            "This is a read-only role. Users can view but not modify resources in: "
-            + ", ".join(by_application.keys())
+            "This is a read-only role. Users can view but not modify resources in: " + ", ".join(by_application.keys())
         )
     if has_wildcard_resource and has_wildcard_verb:
         recommendations.append(
@@ -1977,14 +1876,10 @@ def _build_role_permissions_result(
             "summary": f"This role contains {len(permissions_list)} permission(s) across "
             f"{len(by_application)} application(s).",
             "total_count": len(permissions_list),
-            "by_application": {
-                app: sorted(perms) for app, perms in sorted(by_application.items())
-            },
+            "by_application": {app: sorted(perms) for app, perms in sorted(by_application.items())},
             "expanded_permissions": expanded_permissions,
             "verbs_included": sorted(verbs_included),
-            "verbs_not_included": (
-                sorted(verbs_not_included) if not has_wildcard_verb else []
-            ),
+            "verbs_not_included": (sorted(verbs_not_included) if not has_wildcard_verb else []),
         },
         "coverage_analysis": coverage_analysis,
         "recommendations": recommendations,
@@ -2096,12 +1991,8 @@ def list_group_principals(
         query_params["principal_type"] = principal_type
 
     path = reverse("v1_management:group-principals", kwargs={"uuid": group_uuid})
-    result = _call_view(
-        request, _group_principals_view, path, query_params, uuid=group_uuid
-    )
-    return _strip_pii_from_principal_list(
-        result, tenant=getattr(request, "tenant", None)
-    )
+    result = _call_view(request, _group_principals_view, path, query_params, uuid=group_uuid)
+    return _strip_pii_from_principal_list(result, tenant=getattr(request, "tenant", None))
 
 
 @register_tool(
@@ -2295,9 +2186,7 @@ def investigate_tam_access(
         requester_email_lower = requester_email.lower() if requester_email else ""
         for car in requests_list:
             info = user_info_map.get(car.user_id, {})
-            full_name = (
-                f"{info.get('first_name', '')} {info.get('last_name', '')}".lower()
-            )
+            full_name = f"{info.get('first_name', '')} {info.get('last_name', '')}".lower()
             email = info.get("email", "").lower()
             if requester_name_lower and requester_name_lower in full_name:
                 filtered_requests.append(car)
@@ -2343,9 +2232,7 @@ def investigate_tam_access(
                     permissions_list.append(perm_str)
                     all_permissions_granted.add(perm_str)
                     # Check if this matches the required permission
-                    if required_permission and _permission_matches(
-                        perm_str, required_permission
-                    ):
+                    if required_permission and _permission_matches(perm_str, required_permission):
                         required_perm_found = True
                         required_perm_role = role.display_name or role.name
 
@@ -2365,9 +2252,7 @@ def investigate_tam_access(
             {
                 "request_id": str(car.request_id),
                 "status": car.status,
-                "start_date": (
-                    car.start_date.strftime("%Y-%m-%d") if car.start_date else None
-                ),
+                "start_date": (car.start_date.strftime("%Y-%m-%d") if car.start_date else None),
                 "end_date": car.end_date.strftime("%Y-%m-%d") if car.end_date else None,
                 "days_remaining": days_remaining,
                 "created": car.created.strftime("%Y-%m-%d") if car.created else None,
@@ -2392,9 +2277,7 @@ def investigate_tam_access(
     analysis: dict[str, Any] = {
         "total_requests_found": len(results),
         "unique_permissions_granted": len(all_permissions_granted),
-        "permissions_by_application": {
-            app: sorted(perms) for app, perms in sorted(perm_by_app.items())
-        },
+        "permissions_by_application": {app: sorted(perms) for app, perms in sorted(perm_by_app.items())},
     }
 
     if required_permission:
@@ -2409,15 +2292,11 @@ def investigate_tam_access(
             required_parts = required_permission.split(":")
             app = required_parts[0] if len(required_parts) >= 1 else ""
 
-            similar_perms = [
-                p for p in all_permissions_granted if p.startswith(f"{app}:")
-            ]
+            similar_perms = [p for p in all_permissions_granted if p.startswith(f"{app}:")]
             analysis["required_permission_check"] = {
                 "permission": required_permission,
                 "granted": False,
-                "similar_permissions_granted": (
-                    sorted(similar_perms) if similar_perms else []
-                ),
+                "similar_permissions_granted": (sorted(similar_perms) if similar_perms else []),
                 "hint": f"The permission '{required_permission}' is NOT granted. "
                 + (
                     f"However, these {app} permissions are granted: {similar_perms}. "
@@ -2481,9 +2360,7 @@ def audit_redhat_access(
     )
 
     if not include_inactive:
-        queryset = queryset.filter(
-            status="approved", start_date__lte=now, end_date__gte=now
-        )
+        queryset = queryset.filter(status="approved", start_date__lte=now, end_date__gte=now)
     else:
         queryset = queryset.filter(status__in=["approved", "pending", "expired"])
 
@@ -2500,13 +2377,9 @@ def audit_redhat_access(
             "organization's console.redhat.com environment."
         ]
         if pending_count:
-            ciso_parts.append(
-                f"There are {pending_count} pending request(s) awaiting approval."
-            )
+            ciso_parts.append(f"There are {pending_count} pending request(s) awaiting approval.")
         if expired_count:
-            ciso_parts.append(
-                f"There are {expired_count} previously expired access grant(s) on record."
-            )
+            ciso_parts.append(f"There are {expired_count} previously expired access grant(s) on record.")
 
         return json.dumps(
             {
@@ -2554,9 +2427,7 @@ def audit_redhat_access(
         logger.warning("mcp: failed to fetch requester info from BOP", exc_info=True)
 
     # Batch query audit logs for all usernames (uses username internally for audit log lookup)
-    all_usernames = {
-        info.get("username") for info in user_info_map.values() if info.get("username")
-    }
+    all_usernames = {info.get("username") for info in user_info_map.values() if info.get("username")}
     audit_by_user: dict[str, list[AuditLog]] = {u: [] for u in all_usernames}
     audit_counts_by_user: dict[str, int] = {}
     if all_usernames:
@@ -2566,10 +2437,7 @@ def audit_redhat_access(
             created__gte=audit_since,
         ).order_by("-created")
         for entry in audit_qs:
-            if (
-                entry.principal_username in audit_by_user
-                and len(audit_by_user[entry.principal_username]) < 10
-            ):
+            if entry.principal_username in audit_by_user and len(audit_by_user[entry.principal_username]) < 10:
                 audit_by_user[entry.principal_username].append(entry)
 
         # Get true total counts per user
@@ -2582,9 +2450,7 @@ def audit_redhat_access(
             .values("principal_username")
             .annotate(count=Count("id"))
         )
-        audit_counts_by_user = {
-            row["principal_username"]: row["count"] for row in counts_qs
-        }
+        audit_counts_by_user = {row["principal_username"]: row["count"] for row in counts_qs}
 
     # Build detailed response
     results: list[dict[str, Any]] = []
@@ -2594,11 +2460,7 @@ def audit_redhat_access(
 
     for car in requests_list:
         days_remaining = (car.end_date - now).days if car.end_date else None
-        is_expiring_soon = (
-            days_remaining is not None
-            and 0 < days_remaining <= 7
-            and car.status == "approved"
-        )
+        is_expiring_soon = days_remaining is not None and 0 < days_remaining <= 7 and car.status == "approved"
         if is_expiring_soon:
             expiring_soon_count += 1
 
@@ -2642,28 +2504,17 @@ def audit_redhat_access(
                             "action": entry.action,
                             "resource_type": entry.resource_type,
                             "description": entry.description,
-                            "date": (
-                                entry.created.strftime("%Y-%m-%d %H:%M")
-                                if entry.created
-                                else None
-                            ),
+                            "date": (entry.created.strftime("%Y-%m-%d %H:%M") if entry.created else None),
                         }
                     )
                 # Summarize activity types
                 action_counts: dict[str, int] = {}
                 for entry in audit_entries:
                     action_counts[entry.action] = action_counts.get(entry.action, 0) + 1
-                summary_parts = [
-                    f"{count} {action}"
-                    for action, count in sorted(action_counts.items())
-                ]
-                audit_activity["summary"] = (
-                    ", ".join(summary_parts) + f" action(s) in last {audit_days} days"
-                )
+                summary_parts = [f"{count} {action}" for action, count in sorted(action_counts.items())]
+                audit_activity["summary"] = ", ".join(summary_parts) + f" action(s) in last {audit_days} days"
             else:
-                audit_activity["summary"] = (
-                    f"No RBAC activity in last {audit_days} days"
-                )
+                audit_activity["summary"] = f"No RBAC activity in last {audit_days} days"
                 unused_access_count += 1
 
         # Determine status display
@@ -2691,9 +2542,7 @@ def audit_redhat_access(
                     }
                 ),
                 "status": status_display,
-                "start_date": (
-                    car.start_date.strftime("%Y-%m-%d") if car.start_date else None
-                ),
+                "start_date": (car.start_date.strftime("%Y-%m-%d") if car.start_date else None),
                 "end_date": car.end_date.strftime("%Y-%m-%d") if car.end_date else None,
                 "days_remaining": days_remaining if car.status == "approved" else None,
                 "roles": roles_data,
@@ -2716,21 +2565,15 @@ def audit_redhat_access(
         "total_active": sum(1 for r in results if "approved" in r["status"]),
         "expiring_soon": expiring_soon_count,
         "unused_access": unused_access_count,
-        "permissions_by_application": {
-            app: count for app, count in sorted(perm_by_app.items())
-        },
+        "permissions_by_application": {app: count for app, count in sorted(perm_by_app.items())},
         "audit_period_days": audit_days,
     }
 
     if expiring_soon_count > 0:
-        summary["warning"] = (
-            f"{expiring_soon_count} access grant(s) expiring within 7 days"
-        )
+        summary["warning"] = f"{expiring_soon_count} access grant(s) expiring within 7 days"
 
     if unused_access_count > 0:
-        summary["note"] = (
-            f"{unused_access_count} user(s) with access but no RBAC activity in last {audit_days} days"
-        )
+        summary["note"] = f"{unused_access_count} user(s) with access but no RBAC activity in last {audit_days} days"
 
     return json.dumps({"active_access": results, "summary": summary}, default=str)
 
@@ -2792,9 +2635,7 @@ def audit_group_for_dissolution(
     # Get all members (users and service accounts)
     all_principals = list(group.principals.all())
     users = [p for p in all_principals if p.type == Principal.Types.USER]
-    service_accounts = [
-        p for p in all_principals if p.type == Principal.Types.SERVICE_ACCOUNT
-    ]
+    service_accounts = [p for p in all_principals if p.type == Principal.Types.SERVICE_ACCOUNT]
 
     # Get roles assigned to this group with their permissions
     group_roles: list[dict[str, Any]] = []
@@ -2827,9 +2668,7 @@ def audit_group_for_dissolution(
         .exclude(uuid=resolved_uuid)
         .prefetch_related(
             "policies__roles__access__permission",
-            Prefetch(
-                "principals", queryset=Principal.objects.filter(id__in=principal_ids)
-            ),
+            Prefetch("principals", queryset=Principal.objects.filter(id__in=principal_ids)),
         )
         .distinct()
     )
@@ -2878,9 +2717,7 @@ def audit_group_for_dissolution(
         lost_permissions = all_permissions_in_group - retained_permissions
 
         # Determine if stranded (only in target group + platform_default, or no other groups at all)
-        non_default_other_groups = [
-            g for g in other_groups_info if not g["is_platform_default"]
-        ]
+        non_default_other_groups = [g for g in other_groups_info if not g["is_platform_default"]]
         is_stranded = len(non_default_other_groups) == 0
 
         # Categorize access impact
@@ -2888,13 +2725,13 @@ def audit_group_for_dissolution(
             if lost_permissions:
                 access_impact = "stranded - will lose all non-default access"
             else:
-                access_impact = (
-                    "stranded - no permissions to lose (target group grants none)"
-                )
+                access_impact = "stranded - no permissions to lose (target group grants none)"
         elif lost_permissions:
             overlap_perms = all_permissions_in_group & retained_permissions
             if overlap_perms:
-                access_impact = f"partial - loses {len(lost_permissions)} perm(s), retains {len(overlap_perms)} overlapping"
+                access_impact = (
+                    f"partial - loses {len(lost_permissions)} perm(s), retains {len(overlap_perms)} overlapping"
+                )
             else:
                 access_impact = f"loses {len(lost_permissions)} permission(s), retains access via other groups"
         else:
@@ -2958,20 +2795,13 @@ def audit_group_for_dissolution(
         if len(stranded_users) <= 5:
             user_list = ", ".join(stranded_users)
         else:
-            user_list = (
-                ", ".join(stranded_users[:5]) + f", +{len(stranded_users) - 5} more"
-            )
-        warnings.append(
-            f"{len(stranded_users)} user(s) ({user_list}) will be demoted to default access only"
-        )
+            user_list = ", ".join(stranded_users[:5]) + f", +{len(stranded_users) - 5} more"
+        warnings.append(f"{len(stranded_users)} user(s) ({user_list}) will be demoted to default access only")
     if stranded_service_accounts:
         if len(stranded_service_accounts) <= 5:
             svc_list = ", ".join(stranded_service_accounts)
         else:
-            svc_list = (
-                ", ".join(stranded_service_accounts[:5])
-                + f", +{len(stranded_service_accounts) - 5} more"
-            )
+            svc_list = ", ".join(stranded_service_accounts[:5]) + f", +{len(stranded_service_accounts) - 5} more"
         warnings.append(
             f"{len(stranded_service_accounts)} service account(s) ({svc_list}) "
             f"will lose all access — automated processes using them will start 403'ing"
@@ -3055,9 +2885,7 @@ def get_workspace(
         query_params["include_ancestry"] = "true"
 
     path = reverse("v2_management:workspace-detail", kwargs={"pk": workspace_uuid})
-    return _call_view(
-        request, _workspace_detail_view, path, query_params, pk=workspace_uuid
-    )
+    return _call_view(request, _workspace_detail_view, path, query_params, pk=workspace_uuid)
 
 
 @register_tool(
@@ -3116,9 +2944,7 @@ def list_role_bindings(
     if granted_subject_id:
         query_params["granted_subject_id"] = granted_subject_id
     if granted_subject_principal_user_id:
-        query_params["granted_subject.principal.user_id"] = (
-            granted_subject_principal_user_id
-        )
+        query_params["granted_subject.principal.user_id"] = granted_subject_principal_user_id
 
     path = reverse("v2_management:role-bindings-list")
     return _call_view(request, _role_binding_list_view, path, query_params)
@@ -3223,9 +3049,7 @@ def check_user_permission(
     if not tenant or not is_v2_write_activated(tenant):
         # V1 path: resolve display name then delegate
         if tenant:
-            _principal, resolved_username, candidates = _lookup_principal(
-                request, username, tenant
-            )
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
             if candidates:
                 return json.dumps(
                     {
@@ -3248,9 +3072,7 @@ def check_user_permission(
         return _check_user_permission_v1(request, username, permission)
 
     # V2 path: resolve display name → principal
-    resolved_principal, resolved_username, candidates = _lookup_principal(
-        request, username, tenant
-    )
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
     if candidates:
         return json.dumps(
             {
@@ -3308,15 +3130,11 @@ def check_user_permission(
 
     for role_uuid in role_uuids:
         role_path = reverse("v2_management:roles-detail", kwargs={"uuid": role_uuid})
-        role_raw = _call_view(
-            request, _role_v2_detail_view, role_path, {}, uuid=role_uuid
-        )
+        role_raw = _call_view(request, _role_v2_detail_view, role_path, {}, uuid=role_uuid)
         role_data = json.loads(role_raw)
 
         for perm in role_data.get("permissions", []):
-            perm_str = (
-                f"{perm['application']}:{perm['resource_type']}:{perm['operation']}"
-            )
+            perm_str = f"{perm['application']}:{perm['resource_type']}:{perm['operation']}"
             if _permission_matches(perm_str, permission):
                 return json.dumps(
                     {
@@ -3345,9 +3163,7 @@ def check_user_permission(
     )
 
 
-def _check_user_permission_v1(
-    request: HttpRequest, username: str, permission: str
-) -> str:
+def _check_user_permission_v1(request: HttpRequest, username: str, permission: str) -> str:
     """Check user permission using V1 access endpoint."""
     application = permission.split(":")[0]
     query_params: dict[str, str] = {
@@ -3481,9 +3297,7 @@ def get_user_state(
     org_version = "v2" if is_v2 else "v1"
 
     # Resolve username or display name
-    resolved_principal, resolved_username, candidates = _lookup_principal(
-        request, username, tenant
-    )
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
     if candidates:
         return json.dumps(
             {
@@ -3502,11 +3316,7 @@ def get_user_state(
     username = resolved_username
 
     result: dict[str, Any] = {
-        **(
-            {"uuid": str(principal.uuid)}
-            if _is_pii_redaction_enabled()
-            else {"username": username}
-        ),
+        **({"uuid": str(principal.uuid)} if _is_pii_redaction_enabled() else {"username": username}),
         "org_version": org_version,
         "groups": [],
         "access": [],
@@ -3518,9 +3328,7 @@ def get_user_state(
 
     # Get groups the user belongs to with prefetched policies and roles
     groups = (
-        Group.objects.filter(principals=principal, tenant=tenant)
-        .prefetch_related("policies__roles")
-        .order_by("name")
+        Group.objects.filter(principals=principal, tenant=tenant).prefetch_related("policies__roles").order_by("name")
     )
     group_list = list(groups)
     all_group_names = [g.name for g in group_list]
@@ -3528,9 +3336,7 @@ def get_user_state(
     # Batch fetch audit activity for all groups (avoids N+1 queries)
     # Use exact UUID matching via resource_uuid field for reliable group identification
     group_uuid_to_name: dict[str, str] = {str(g.uuid): g.name for g in group_list}
-    group_activity_map: dict[str, list[dict[str, Any]]] = {
-        name: [] for name in all_group_names
-    }
+    group_activity_map: dict[str, list[dict[str, Any]]] = {name: [] for name in all_group_names}
 
     if group_list:
         group_uuids = [g.uuid for g in group_list]
@@ -3601,7 +3407,9 @@ def get_user_state(
     user_performed_actions = AuditLog.objects.filter(
         tenant=tenant,
         principal_username=username,
-    ).order_by("-created")[: audit_log_limit * 2]
+    ).order_by(
+        "-created"
+    )[: audit_log_limit * 2]
 
     # Group user actions by target group using exact UUID matching
     user_actions_by_group: dict[str, list[dict[str, Any]]] = {}
@@ -3780,9 +3588,7 @@ def get_rbac_recent_changes(
 
     cutoff = datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)
 
-    entries = AuditLog.objects.filter(tenant=tenant, created__gte=cutoff).order_by(
-        "-created"
-    )
+    entries = AuditLog.objects.filter(tenant=tenant, created__gte=cutoff).order_by("-created")
 
     total_count = entries.count()
     if total_count == 0:
@@ -3828,9 +3634,7 @@ def get_rbac_recent_changes(
     ]
 
     sorted_actors = sorted(by_actor.items(), key=lambda x: x[1], reverse=True)[:10]
-    by_resource_sorted = dict(
-        sorted(by_resource.items(), key=lambda x: x[1], reverse=True)
-    )
+    by_resource_sorted = dict(sorted(by_resource.items(), key=lambda x: x[1], reverse=True))
     by_action_sorted = dict(sorted(by_action.items(), key=lambda x: x[1], reverse=True))
 
     result = {
@@ -3890,16 +3694,12 @@ def investigate_group_changes(
     group = Group.objects.filter(name__iexact=group_name, tenant=tenant).first()
     if not group:
         # Try partial match - first with full name, then with prefix segment
-        groups = Group.objects.filter(name__icontains=group_name, tenant=tenant).values(
-            "uuid", "name"
-        )[:5]
+        groups = Group.objects.filter(name__icontains=group_name, tenant=tenant).values("uuid", "name")[:5]
         if not groups:
             # Try matching on prefix (first segment split by common delimiters)
             segments = re.split(r"[-_\s]", group_name)
             if segments and len(segments[0]) >= 3:
-                groups = Group.objects.filter(
-                    name__icontains=segments[0], tenant=tenant
-                ).values("uuid", "name")[:5]
+                groups = Group.objects.filter(name__icontains=segments[0], tenant=tenant).values("uuid", "name")[:5]
         if groups:
             suggestions = [{"uuid": str(g["uuid"]), "name": g["name"]} for g in groups]
             return json.dumps(
@@ -3991,9 +3791,7 @@ def investigate_group_changes(
         }
 
         if include_authorization:
-            required_perms = _get_required_permissions(
-                entry.resource_type, entry_action
-            )
+            required_perms = _get_required_permissions(entry.resource_type, entry_action)
             cache_key = f"{entry.resource_type}:{entry_action}"
 
             if actor not in auth_cache:
@@ -4006,9 +3804,7 @@ def investigate_group_changes(
             if org_admin_cache[actor]:
                 auth_info = org_admin_auth
             elif cache_key not in auth_cache[actor]:
-                auth_cache[actor][cache_key] = _find_authorizing_role(
-                    actor, tenant, required_perms
-                )
+                auth_cache[actor][cache_key] = _find_authorizing_role(actor, tenant, required_perms)
                 auth_info = auth_cache[actor][cache_key]
             else:
                 auth_info = auth_cache[actor][cache_key]
@@ -4016,8 +3812,7 @@ def investigate_group_changes(
             result_entry["authorized_by"] = auth_info
             if not auth_info:
                 result_entry["authorization_note"] = (
-                    f"User '{actor}' not found or no longer has permissions. "
-                    f"Required: {required_perms}"
+                    f"User '{actor}' not found or no longer has permissions. " f"Required: {required_perms}"
                 )
 
         audit_entries.append(result_entry)
@@ -4054,8 +3849,7 @@ def investigate_group_changes(
     # Check if the role mentioned is currently assigned
     if role_name:
         role_found = any(
-            role_name.lower() in r["name"].lower()
-            or role_name.lower() in r["display_name"].lower()
+            role_name.lower() in r["name"].lower() or role_name.lower() in r["display_name"].lower()
             for r in current_roles
         )
         result["role_currently_assigned"] = role_found
@@ -4063,17 +3857,14 @@ def investigate_group_changes(
             matching_roles = [
                 r
                 for r in current_roles
-                if role_name.lower() in r["name"].lower()
-                or role_name.lower() in r["display_name"].lower()
+                if role_name.lower() in r["name"].lower() or role_name.lower() in r["display_name"].lower()
             ]
             result["matching_current_roles"] = matching_roles
 
     return json.dumps(result, default=str)
 
 
-def _build_expected_perm_full(
-    application: str, expected_permission: str, expected_verb: str
-) -> str:
+def _build_expected_perm_full(application: str, expected_permission: str, expected_verb: str) -> str:
     """Build the full permission string to search for."""
     if expected_permission and application:
         if ":" in expected_permission:
@@ -4096,11 +3887,7 @@ def _check_permission_match(
         if (
             _permission_matches(perm, expected_perm_full)
             or _permission_matches(expected_perm_full, perm)
-            or (
-                expected_verb
-                and perm.endswith(f":{expected_verb}")
-                and perm.startswith(f"{application}:")
-            )
+            or (expected_verb and perm.endswith(f":{expected_verb}") and perm.startswith(f"{application}:"))
         ):
             return True, perm, permission_sources.get(perm, [])
     return False, None, []
@@ -4127,9 +3914,7 @@ def _analyze_expected_permission(
     analysis: dict[str, Any],
 ) -> None:
     """Analyze whether expected permission is granted and update analysis dict in place."""
-    expected_perm_full = _build_expected_perm_full(
-        application, expected_permission, expected_verb
-    )
+    expected_perm_full = _build_expected_perm_full(application, expected_permission, expected_verb)
     if not expected_perm_full:
         return
 
@@ -4146,12 +3931,8 @@ def _analyze_expected_permission(
         analysis["expected_permission_check"] = {
             "looking_for": expected_perm_full,
             "found": True,
-            "matched_permission": (
-                matched_permission if not is_org_admin else "(org admin bypass)"
-            ),
-            "granted_via": (
-                matched_sources if not is_org_admin else [{"role": "Org Admin"}]
-            ),
+            "matched_permission": (matched_permission if not is_org_admin else "(org admin bypass)"),
+            "granted_via": (matched_sources if not is_org_admin else [{"role": "Org Admin"}]),
         }
         if is_org_admin:
             analysis["note"] = "User is org admin and has implicit access to everything"
@@ -4160,9 +3941,7 @@ def _analyze_expected_permission(
         analysis["expected_permission_check"] = {
             "looking_for": expected_perm_full,
             "found": False,
-            "available_verbs_for_app": _get_available_verbs(
-                application, all_permissions
-            ),
+            "available_verbs_for_app": _get_available_verbs(application, all_permissions),
         }
 
 
@@ -4216,9 +3995,7 @@ def investigate_user_access(
     org_version = "v2" if is_v2 else "v1"
 
     # Step 1: Resolve username or display name and get org admin status
-    resolved_principal, resolved_username, candidates = _lookup_principal(
-        request, username, tenant
-    )
+    resolved_principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
     if candidates:
         return json.dumps(
             {
@@ -4367,9 +4144,7 @@ def investigate_user_access(
         analysis["effective_access_error"] = effective_access_error
 
     if application:
-        app_permissions = [
-            p for p in all_permissions if p.startswith(f"{application}:")
-        ]
+        app_permissions = [p for p in all_permissions if p.startswith(f"{application}:")]
         analysis["permissions_for_application"] = sorted(app_permissions)
         analysis["application_permission_count"] = len(app_permissions)
 
@@ -4385,9 +4160,7 @@ def investigate_user_access(
     )
 
     # Add V1-specific gap analysis if permission not found
-    expected_perm_full = _build_expected_perm_full(
-        application, expected_permission, expected_verb
-    )
+    expected_perm_full = _build_expected_perm_full(application, expected_permission, expected_verb)
     if expected_perm_full and analysis.get("has_expected_permission") is False:
         gaps: list[str] = []
         for group_data in groups_data:
@@ -4408,16 +4181,10 @@ def investigate_user_access(
                 for role_data in group_data["roles"]:
                     for perm in role_data["permissions"]:
                         if perm.startswith(f"{application}:"):
-                            app_perms_in_group.append(
-                                f"{role_data['display_name']}: {perm}"
-                            )
+                            app_perms_in_group.append(f"{role_data['display_name']}: {perm}")
                 missing = expected_verb or expected_permission
                 avail = ", ".join(app_perms_in_group[:5])
-                suffix = (
-                    f" (+{len(app_perms_in_group) - 5} more)"
-                    if len(app_perms_in_group) > 5
-                    else ""
-                )
+                suffix = f" (+{len(app_perms_in_group) - 5} more)" if len(app_perms_in_group) > 5 else ""
                 gaps.append(
                     f"Group '{group_name}' grants {application} access but NOT '{missing}'. "
                     f"Available: {avail}{suffix}"
@@ -4471,15 +4238,11 @@ def _investigate_user_access_v2(
 
     # Get direct role bindings for the principal
     direct_binding_ids = set(
-        RoleBindingPrincipal.objects.filter(principal=principal).values_list(
-            "binding_id", flat=True
-        )
+        RoleBindingPrincipal.objects.filter(principal=principal).values_list("binding_id", flat=True)
     )
 
     # Get group-based role bindings with group info
-    group_bindings_qs = RoleBindingGroup.objects.filter(
-        group__in=groups_list
-    ).select_related("group")
+    group_bindings_qs = RoleBindingGroup.objects.filter(group__in=groups_list).select_related("group")
     group_binding_ids: set[int] = set()
     binding_to_group: dict[int, str] = {}
     for rbg in group_bindings_qs:
@@ -4577,9 +4340,7 @@ def _investigate_user_access_v2(
     # Get effective access
     effective_access = _get_user_access_v2(request, principal, tenant)
     if application:
-        effective_access = [
-            a for a in effective_access if a.get("application") == application
-        ]
+        effective_access = [a for a in effective_access if a.get("application") == application]
 
     # Build analysis
     analysis: dict[str, Any] = {
@@ -4589,9 +4350,7 @@ def _investigate_user_access_v2(
     }
 
     if application:
-        app_permissions = [
-            p for p in all_permissions if p.startswith(f"{application}:")
-        ]
+        app_permissions = [p for p in all_permissions if p.startswith(f"{application}:")]
         analysis["permissions_for_application"] = sorted(app_permissions)
         analysis["application_permission_count"] = len(app_permissions)
 
@@ -4607,23 +4366,17 @@ def _investigate_user_access_v2(
     )
 
     # Add V2-specific gap analysis if permission not found
-    expected_perm_full = _build_expected_perm_full(
-        application, expected_permission, expected_verb
-    )
+    expected_perm_full = _build_expected_perm_full(application, expected_permission, expected_verb)
     if expected_perm_full and analysis.get("has_expected_permission") is False:
         gaps: list[str] = []
         for binding_data in bindings_data:
             role_perms = binding_data["role"]["permissions"]
-            has_any_app_access = any(
-                p.startswith(f"{application}:") for p in role_perms
-            )
+            has_any_app_access = any(p.startswith(f"{application}:") for p in role_perms)
             role_name = binding_data["role"]["name"]
             source = binding_data["source_group"] or "direct binding"
 
             if not has_any_app_access and application:
-                gaps.append(
-                    f"Role '{role_name}' (via {source}) has no {application} permissions"
-                )
+                gaps.append(f"Role '{role_name}' (via {source}) has no {application} permissions")
             elif has_any_app_access:
                 app_perms = [p for p in role_perms if p.startswith(f"{application}:")]
                 missing = expected_verb or expected_permission
@@ -4666,23 +4419,17 @@ def _investigate_user_access_v2(
     return json.dumps(result, default=str)
 
 
-def _get_user_access_v2(
-    request: HttpRequest, principal: Principal, tenant: Any
-) -> list[dict[str, Any]]:
+def _get_user_access_v2(request: HttpRequest, principal: Principal, tenant: Any) -> list[dict[str, Any]]:
     """Get user's access permissions using V2 role bindings."""
     access_list: list[dict[str, Any]] = []
     seen_permissions: set[tuple[str, str, str]] = set()
 
     # Get direct role bindings for the principal
-    direct_binding_ids = RoleBindingPrincipal.objects.filter(
-        principal=principal
-    ).values_list("binding_id", flat=True)
+    direct_binding_ids = RoleBindingPrincipal.objects.filter(principal=principal).values_list("binding_id", flat=True)
 
     # Get group-based role bindings
     user_groups = principal.group.filter(tenant=tenant)
-    group_binding_ids = RoleBindingGroup.objects.filter(
-        group__in=user_groups
-    ).values_list("binding_id", flat=True)
+    group_binding_ids = RoleBindingGroup.objects.filter(group__in=user_groups).values_list("binding_id", flat=True)
 
     # Combine all binding IDs
     all_binding_ids = set(direct_binding_ids) | set(group_binding_ids)
@@ -4792,9 +4539,7 @@ def add_principals_to_group(
 
     body = {"principals": [{"username": u} for u in principals]}
     path = reverse("v1_management:group-principals", kwargs={"uuid": resolved_uuid})
-    return _call_view_write(
-        request, _group_principals_write_view, path, body, uuid=resolved_uuid
-    )
+    return _call_view_write(request, _group_principals_write_view, path, body, uuid=resolved_uuid)
 
 
 @register_tool(
@@ -4826,9 +4571,7 @@ def add_roles_to_group(
 
     body = {"roles": [{"uuid": r} for r in roles]}
     path = reverse("v1_management:group-roles", kwargs={"uuid": resolved_uuid})
-    return _call_view_write(
-        request, _group_roles_write_view, path, body, uuid=resolved_uuid
-    )
+    return _call_view_write(request, _group_roles_write_view, path, body, uuid=resolved_uuid)
 
 
 @register_tool(
@@ -5040,9 +4783,7 @@ def guide_user_access_delegation(
         # Check if user exists (reuse shared lookup helper)
         original_input = username
         try:
-            _principal, resolved_username, candidates = _lookup_principal(
-                request, username, tenant
-            )
+            _principal, resolved_username, candidates = _lookup_principal(request, username, tenant)
             if candidates:
                 result["user_info"] = {
                     "error": f"Multiple users match '{original_input}'. Please specify the exact username.",
@@ -5053,13 +4794,9 @@ def guide_user_access_delegation(
                 username = resolved_username
                 user_info: dict = {"username": username}
                 if resolved_username != original_input:
-                    user_info["resolved_from"] = (
-                        f"Display name '{original_input}' matched to '{resolved_username}'"
-                    )
+                    user_info["resolved_from"] = f"Display name '{original_input}' matched to '{resolved_username}'"
                 # Fetch user details (org admin status, active status) via BOP
-                principals_raw = list_principals(
-                    request, usernames=username, match_criteria="exact", limit=1
-                )
+                principals_raw = list_principals(request, usernames=username, match_criteria="exact", limit=1)
                 principals_data = json.loads(principals_raw)
                 if principals_data.get("data"):
                     user_data = principals_data["data"][0]
@@ -5101,9 +4838,7 @@ def guide_user_access_delegation(
                         "hint": "Re-call with the exact username from the candidates list.",
                     }
                 else:
-                    result["user_info"] = {
-                        "error": f"User '{original_input}' not found"
-                    }
+                    result["user_info"] = {"error": f"User '{original_input}' not found"}
         except Exception as e:
             logger.warning(
                 "guide_user_access_delegation: Failed to verify user %s: %s",
@@ -5116,30 +4851,23 @@ def guide_user_access_delegation(
         role_uuid = None
         try:
             if is_v2:
-                roles_raw = search_roles(
-                    request, name=user_access_admin_role_name, limit=10
-                )
+                roles_raw = search_roles(request, name=user_access_admin_role_name, limit=10)
             else:
-                roles_raw = search_roles(
-                    request, name=user_access_admin_role_name, system="true", limit=1
-                )
+                roles_raw = search_roles(request, name=user_access_admin_role_name, system="true", limit=1)
             roles_data = json.loads(roles_raw)
             if roles_data.get("data"):
                 role_data = next(
                     (
                         r
                         for r in roles_data["data"]
-                        if r.get("name", "").lower()
-                        == user_access_admin_role_name.lower()
+                        if r.get("name", "").lower() == user_access_admin_role_name.lower()
                     ),
                     roles_data["data"][0],
                 )
                 role_uuid = role_data.get("uuid") or role_data.get("id")
                 result["role_info"] = {"uuid": role_uuid, "name": role_data.get("name")}
             else:
-                result["role_info"] = {
-                    "error": "Role not found - contact Red Hat support"
-                }
+                result["role_info"] = {"error": "Role not found - contact Red Hat support"}
                 return json.dumps(result)
         except Exception as e:
             logger.warning("guide_user_access_delegation: Failed to find role: %s", e)
@@ -5151,9 +4879,7 @@ def guide_user_access_delegation(
             v2_role = RoleV2.objects.filter(uuid=role_uuid, tenant=tenant).first()
             if v2_role:
                 # Get existing bindings
-                bindings = RoleBinding.objects.filter(
-                    role=v2_role, tenant=tenant
-                ).annotate(
+                bindings = RoleBinding.objects.filter(role=v2_role, tenant=tenant).annotate(
                     principal_count=Count("principal_entries", distinct=True),
                     group_count=Count("group_entries", distinct=True),
                 )
@@ -5173,9 +4899,7 @@ def guide_user_access_delegation(
                     principal__tenant=tenant,
                     binding__role=v2_role,
                 ).exists()
-                user_groups = Group.objects.filter(
-                    principals__username__iexact=username, tenant=tenant
-                )
+                user_groups = Group.objects.filter(principals__username__iexact=username, tenant=tenant)
                 has_via_group = RoleBindingGroup.objects.filter(
                     group__in=user_groups, binding__role=v2_role, binding__tenant=tenant
                 ).exists()
@@ -5183,40 +4907,24 @@ def guide_user_access_delegation(
         else:
             # V1: Check groups with this role
             try:
-                groups_raw = list_groups(
-                    request, role_names=user_access_admin_role_name, limit=100
-                )
+                groups_raw = list_groups(request, role_names=user_access_admin_role_name, limit=100)
                 groups_data = json.loads(groups_raw)
-                groups_with_role = {
-                    g.get("uuid"): g.get("name") for g in groups_data.get("data", [])
-                }
+                groups_with_role = {g.get("uuid"): g.get("name") for g in groups_data.get("data", [])}
                 for group_uuid, name in groups_with_role.items():
-                    result["existing_assignments"].append(
-                        {"type": "group", "uuid": group_uuid, "name": name}
-                    )
+                    result["existing_assignments"].append({"type": "group", "uuid": group_uuid, "name": name})
 
                 # Check if user is in any of these groups
                 user_groups_raw = list_groups(request, username=username, limit=100)
                 user_groups_data = json.loads(user_groups_raw)
-                user_group_uuids = {
-                    g.get("uuid") for g in user_groups_data.get("data", [])
-                }
-                result["user_already_has_role"] = bool(
-                    user_group_uuids & set(groups_with_role.keys())
-                )
+                user_group_uuids = {g.get("uuid") for g in user_groups_data.get("data", [])}
+                result["user_already_has_role"] = bool(user_group_uuids & set(groups_with_role.keys()))
             except Exception as e:
-                logger.warning(
-                    "guide_user_access_delegation: Failed to check groups: %s", e
-                )
+                logger.warning("guide_user_access_delegation: Failed to check groups: %s", e)
 
         return json.dumps(result)
     except Exception:
         logger.exception("guide_user_access_delegation failed")
-        return json.dumps(
-            {
-                "error": "An internal error occurred. Please try again or contact support."
-            }
-        )
+        return json.dumps({"error": "An internal error occurred. Please try again or contact support."})
 
 
 # --- UPDATE tool implementations ---
@@ -5268,9 +4976,7 @@ def update_group(
         body["description"] = description
 
     path = reverse("v1_management:group-detail", kwargs={"uuid": resolved_uuid})
-    return _call_view_write(
-        request, _group_update_view, path, body, method="PUT", uuid=resolved_uuid
-    )
+    return _call_view_write(request, _group_update_view, path, body, method="PUT", uuid=resolved_uuid)
 
 
 @register_tool(
@@ -5306,9 +5012,7 @@ def update_role_v1(
         body["description"] = description
 
     path = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
-    return _call_view_write(
-        request, _role_v1_update_view, path, body, method="PUT", uuid=role_uuid
-    )
+    return _call_view_write(request, _role_v1_update_view, path, body, method="PUT", uuid=role_uuid)
 
 
 @register_tool(
@@ -5343,14 +5047,10 @@ def patch_role_v1(
         body["description"] = description
 
     if not body:
-        return json.dumps(
-            {"error": "At least one of name, display_name, or description is required"}
-        )
+        return json.dumps({"error": "At least one of name, display_name, or description is required"})
 
     path = reverse("v1_management:role-detail", kwargs={"uuid": role_uuid})
-    return _call_view_write(
-        request, _role_v1_patch_view, path, body, method="PATCH", uuid=role_uuid
-    )
+    return _call_view_write(request, _role_v1_patch_view, path, body, method="PATCH", uuid=role_uuid)
 
 
 @register_tool(
@@ -5382,9 +5082,7 @@ def update_role(
         body["description"] = description
 
     path = reverse("v2_management:roles-detail", kwargs={"uuid": role_uuid})
-    return _call_view_write(
-        request, _role_v2_update_view, path, body, method="PUT", uuid=role_uuid
-    )
+    return _call_view_write(request, _role_v2_update_view, path, body, method="PUT", uuid=role_uuid)
 
 
 @register_tool(
@@ -5462,9 +5160,7 @@ def update_workspace(
         body["parent_id"] = parent_id
 
     path = reverse("v2_management:workspace-detail", kwargs={"pk": workspace_id})
-    return _call_view_write(
-        request, _workspace_update_view, path, body, method="PUT", pk=workspace_id
-    )
+    return _call_view_write(request, _workspace_update_view, path, body, method="PUT", pk=workspace_id)
 
 
 @register_tool(
@@ -5523,9 +5219,7 @@ def update_cross_account_request(
     }
 
     path = reverse("v1_api:cross-detail", kwargs={"pk": request_id})
-    return _call_view_write(
-        request, _cross_account_update_view, path, body, method="PUT", pk=request_id
-    )
+    return _call_view_write(request, _cross_account_update_view, path, body, method="PUT", pk=request_id)
 
 
 @register_tool(
@@ -5549,18 +5243,12 @@ def patch_cross_account_request(
     """Patch a cross-account request status."""
     allowed_statuses = {"pending", "approved", "denied", "cancelled", "expired"}
     if status not in allowed_statuses:
-        return json.dumps(
-            {
-                "error": f"Invalid status '{status}'. Must be one of: {sorted(allowed_statuses)}"
-            }
-        )
+        return json.dumps({"error": f"Invalid status '{status}'. Must be one of: {sorted(allowed_statuses)}"})
 
     body: dict[str, Any] = {"status": status}
 
     path = reverse("v1_api:cross-detail", kwargs={"pk": request_id})
-    return _call_view_write(
-        request, _cross_account_patch_view, path, body, method="PATCH", pk=request_id
-    )
+    return _call_view_write(request, _cross_account_patch_view, path, body, method="PATCH", pk=request_id)
 
 
 # --- DELETE tool implementations ---
@@ -5632,9 +5320,7 @@ def remove_principals_from_group(
 ) -> str:
     """Remove principals from a group by delegating to GroupViewSet.principals."""
     if not usernames and not service_accounts:
-        return json.dumps(
-            {"error": "At least one of usernames or service_accounts is required"}
-        )
+        return json.dumps({"error": "At least one of usernames or service_accounts is required"})
 
     resolved_uuid, error = _resolve_group_for_tool(request, group_uuid, group_name)
     if error:
@@ -5648,9 +5334,7 @@ def remove_principals_from_group(
         query_params["service-accounts"] = service_accounts
 
     path = reverse("v1_management:group-principals", kwargs={"uuid": resolved_uuid})
-    return _call_view_delete(
-        request, _group_principals_delete_view, path, query_params, uuid=resolved_uuid
-    )
+    return _call_view_delete(request, _group_principals_delete_view, path, query_params, uuid=resolved_uuid)
 
 
 @register_tool(
@@ -5683,9 +5367,7 @@ def remove_roles_from_group(
 
     query_params: dict[str, str] = {"roles": roles}
     path = reverse("v1_management:group-roles", kwargs={"uuid": resolved_uuid})
-    return _call_view_delete(
-        request, _group_roles_delete_view, path, query_params, uuid=resolved_uuid
-    )
+    return _call_view_delete(request, _group_roles_delete_view, path, query_params, uuid=resolved_uuid)
 
 
 @register_tool(
@@ -5800,9 +5482,7 @@ def _parse_jsonrpc(body: bytes) -> JsonRpcRequest:
         raise JsonRpcError(None, -32700, "Parse error")
 
     if isinstance(payload, list):
-        raise JsonRpcError(
-            None, -32600, "Invalid Request: batch requests are not supported"
-        )
+        raise JsonRpcError(None, -32600, "Invalid Request: batch requests are not supported")
 
     if not isinstance(payload, dict):
         raise JsonRpcError(None, -32600, "Invalid Request: expected a JSON object")
@@ -5814,9 +5494,7 @@ def _parse_jsonrpc(body: bytes) -> JsonRpcRequest:
 
     method = payload.get("method")
     if not isinstance(method, str) or not method:
-        raise JsonRpcError(
-            req_id, -32600, "Invalid Request: method must be a non-empty string"
-        )
+        raise JsonRpcError(req_id, -32600, "Invalid Request: method must be a non-empty string")
 
     raw_params = payload.get("params") or {}
     if req_id is not None and not isinstance(raw_params, dict):
@@ -5865,9 +5543,7 @@ class MCPView(View):
             )
             return _error_response(exc.request_id, exc.code, exc.message)
 
-        logger.info(
-            "mcp: method=%s, org_id=%s, req_id=%s", rpc_req.method, org_id, req_id
-        )
+        logger.info("mcp: method=%s, org_id=%s, req_id=%s", rpc_req.method, org_id, req_id)
 
         if rpc_req.request_id is None:
             return HttpResponse(status=202, content_type="application/json")
@@ -5885,9 +5561,7 @@ class MCPView(View):
             org_id,
             req_id,
         )
-        return _error_response(
-            rpc_req.request_id, -32601, f"Method not found: {rpc_req.method}"
-        )
+        return _error_response(rpc_req.request_id, -32601, f"Method not found: {rpc_req.method}")
 
     def get(self, request: HttpRequest) -> JsonResponse:
         """Return server status for health probes and capability discovery.
@@ -6004,15 +5678,11 @@ def _build_mcp_instructions() -> str:
             ttl = getattr(settings, "MCP_WRITE_CONFIRMATION_TTL", _CONFIRM_TTL_DEFAULT)
             ttl_minutes = max(1, ttl // 60)
             ttl_display = f"{ttl_minutes} minute{'s' if ttl_minutes != 1 else ''}"
-            parts.append(
-                _MCP_INSTRUCTIONS_CONFIRMATION_PROTOCOL.format(ttl_display=ttl_display)
-            )
+            parts.append(_MCP_INSTRUCTIONS_CONFIRMATION_PROTOCOL.format(ttl_display=ttl_display))
     return "".join(parts)
 
 
-def _handle_initialize(
-    request: HttpRequest, request_id: Any, params: dict[str, Any]
-) -> JsonResponse:
+def _handle_initialize(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
     """Handle MCP initialize request."""
     client_info = params.get("clientInfo", {})
     logger.info(
@@ -6290,27 +5960,17 @@ _WRITE_VALIDATORS: dict[str, Callable[[dict[str, Any]], str | None]] = {
         perms_field="permissions",
         per_perm_validator=_validate_v2_perm_entry,
     ),
-    "patch_role_v1": lambda args: _validate_uuid_field(
-        args.get("role_uuid", ""), "role_uuid"
-    ),
+    "patch_role_v1": lambda args: _validate_uuid_field(args.get("role_uuid", ""), "role_uuid"),
     "add_roles_to_group": _validate_add_roles_to_group,
     "create_role_bindings": _validate_create_role_bindings,
-    "delete_role_v1": lambda args: _validate_uuid_field(
-        args.get("role_uuid", ""), "role_uuid"
-    ),
+    "delete_role_v1": lambda args: _validate_uuid_field(args.get("role_uuid", ""), "role_uuid"),
     "bulk_delete_roles": lambda args: _validate_uuid_list(args.get("ids"), "ids"),
     "update_workspace": _validate_workspace_args,
     "move_workspace": _validate_workspace_args,
-    "delete_workspace": lambda args: _validate_uuid_field(
-        args.get("workspace_uuid", ""), "workspace_uuid"
-    ),
+    "delete_workspace": lambda args: _validate_uuid_field(args.get("workspace_uuid", ""), "workspace_uuid"),
     "update_role_binding": _validate_update_role_binding,
-    "update_cross_account_request": lambda args: _validate_uuid_field(
-        args.get("request_id", ""), "request_id"
-    ),
-    "patch_cross_account_request": lambda args: _validate_uuid_field(
-        args.get("request_id", ""), "request_id"
-    ),
+    "update_cross_account_request": lambda args: _validate_uuid_field(args.get("request_id", ""), "request_id"),
+    "patch_cross_account_request": lambda args: _validate_uuid_field(args.get("request_id", ""), "request_id"),
 }
 
 
@@ -6356,15 +6016,11 @@ _CONFIRM_TTL_DEFAULT = 300
 
 def _hash_arguments(tool_name: str, arguments: dict[str, Any]) -> str:
     """Create a stable hash of tool name + arguments for token validation."""
-    payload = json.dumps(
-        {"tool": tool_name, "args": arguments}, sort_keys=True, default=str
-    )
+    payload = json.dumps({"tool": tool_name, "args": arguments}, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _generate_confirmation_token(
-    tool_name: str, arguments: dict[str, Any], org_id: str | None
-) -> str:
+def _generate_confirmation_token(tool_name: str, arguments: dict[str, Any], org_id: str | None) -> str:
     """Generate a single-use confirmation token and store it in the Django cache."""
     token = uuid.uuid4().hex
     args_hash = _hash_arguments(tool_name, arguments)
@@ -6464,9 +6120,7 @@ def _generate_write_preview(tool_name: str, arguments: dict[str, Any]) -> str:
     return f"This will execute write operation '{tool_name}'."
 
 
-def _handle_tools_list(
-    request: HttpRequest, request_id: Any, params: dict[str, Any]
-) -> JsonResponse:
+def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
     """Handle MCP tools/list request using MCPServer's registered tools."""
     v2_available = _is_v2_available()
     write_enabled = _is_write_enabled()
@@ -6525,9 +6179,7 @@ def mcp_shutdown() -> None:
     _shutdown_in_progress.set()
 
     shutdown_timeout = settings.MCP_SHUTDOWN_TIMEOUT_SECONDS
-    logger.info(
-        "mcp: shutting down ThreadPoolExecutor (timeout=%ss)...", shutdown_timeout
-    )
+    logger.info("mcp: shutting down ThreadPoolExecutor (timeout=%ss)...", shutdown_timeout)
     t = threading.Thread(
         target=_MCP_TOOL_EXECUTOR.shutdown,
         kwargs={"wait": True, "cancel_futures": True},
@@ -6535,18 +6187,14 @@ def mcp_shutdown() -> None:
     t.start()
     t.join(timeout=shutdown_timeout)
     if t.is_alive():
-        logger.warning(
-            "mcp: ThreadPoolExecutor shutdown timed out after %ss", shutdown_timeout
-        )
+        logger.warning("mcp: ThreadPoolExecutor shutdown timed out after %ss", shutdown_timeout)
 
     try:
         pool = _get_connection_pool()
         if pool is not None:
             pool.disconnect()
     except Exception:
-        logger.debug(
-            "mcp: Redis connection pool disconnect failed (non-fatal)", exc_info=True
-        )
+        logger.debug("mcp: Redis connection pool disconnect failed (non-fatal)", exc_info=True)
 
     logger.info("mcp: shutdown complete")
 
@@ -6554,9 +6202,7 @@ def mcp_shutdown() -> None:
 atexit.register(mcp_shutdown)
 
 
-def _execute_with_timeout(
-    fn: Callable[..., Any], timeout: int, *args: Any, **kwargs: Any
-) -> Any:
+def _execute_with_timeout(fn: Callable[..., Any], timeout: int, *args: Any, **kwargs: Any) -> Any:
     """Execute a tool function with a timeout.
 
     Uses the module-level ThreadPoolExecutor so threads are reused across
@@ -6597,9 +6243,7 @@ def _check_v1_access(request: HttpRequest, v1_permission: tuple[str, str]) -> bo
     return bool(access.get(resource_type, {}).get(verb, []))
 
 
-def _check_kessel_access(
-    request: HttpRequest, resource_type: str, relation: str
-) -> bool:
+def _check_kessel_access(request: HttpRequest, resource_type: str, relation: str) -> bool:
     """Check Kessel Inventory API permission for the requesting user.
 
     Returns True if access is granted, False otherwise. Fails closed on
@@ -6629,9 +6273,7 @@ def _check_kessel_access(
         return False
 
 
-def _handle_tools_call(
-    request: HttpRequest, request_id: Any, params: dict[str, Any]
-) -> JsonResponse:
+def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
     """Handle MCP tools/call request.
 
     Calls tool functions directly in the sync WSGI context (not through
@@ -6651,9 +6293,7 @@ def _handle_tools_call(
         return _error_response(request_id, -32602, "Missing required field: arguments")
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
-        return _error_response(
-            request_id, -32602, "Invalid params: arguments must be an object"
-        )
+        return _error_response(request_id, -32602, "Invalid params: arguments must be an object")
 
     config = _TOOL_CONFIG.get(tool_name)
     if config is None:
@@ -6661,9 +6301,7 @@ def _handle_tools_call(
         return _error_response(request_id, -32602, f"Unknown tool: {tool_name}")
 
     if config.api_version == ApiVersion.V2 and not _is_v2_available():
-        logger.warning(
-            "mcp: tools/call tool='%s' rejected, V2 APIs not enabled", tool_name
-        )
+        logger.warning("mcp: tools/call tool='%s' rejected, V2 APIs not enabled", tool_name)
         return _error_response(
             request_id,
             -32602,
@@ -6671,9 +6309,7 @@ def _handle_tools_call(
         )
 
     if config.write and not _is_write_enabled():
-        logger.warning(
-            "mcp: tools/call tool='%s' rejected, write mode disabled", tool_name
-        )
+        logger.warning("mcp: tools/call tool='%s' rejected, write mode disabled", tool_name)
         return _error_response(
             request_id,
             -32602,
@@ -6700,9 +6336,7 @@ def _handle_tools_call(
     if config.required_relation:
         tenant = getattr(request, "tenant", None)
         if tenant and is_v2_write_activated(tenant):
-            access_granted = _check_kessel_access(
-                request, config.required_resource_type, config.required_relation
-            )
+            access_granted = _check_kessel_access(request, config.required_resource_type, config.required_relation)
         elif config.v1_permission:
             access_granted = _check_v1_access(request, config.v1_permission)
         else:
@@ -6748,9 +6382,7 @@ def _handle_tools_call(
 
     if config.write and _is_write_confirmation_enabled():
         if confirmation_token:
-            valid, error_msg = _validate_confirmation_token(
-                confirmation_token, tool_name, arguments, org_id
-            )
+            valid, error_msg = _validate_confirmation_token(confirmation_token, tool_name, arguments, org_id)
             if not valid:
                 logger.warning(
                     "mcp: tools/call tool='%s' confirmation failed: %s",
@@ -6759,9 +6391,7 @@ def _handle_tools_call(
                 )
                 _record_metric(tool_name, "confirmation_failed")
                 content = [{"type": "text", "text": json.dumps({"error": error_msg})}]
-                return _success_response(
-                    request_id, {"content": content, "isError": True}
-                )
+                return _success_response(request_id, {"content": content, "isError": True})
             logger.info("mcp: tools/call tool='%s' confirmed, executing", tool_name)
         else:
             token = _generate_confirmation_token(tool_name, arguments, org_id)
@@ -6804,9 +6434,7 @@ def _handle_tools_call(
         if track:
             duration = time.monotonic() - start
             _record_metric(tool_name, "success", duration)
-            logger.info(
-                "mcp: tools/call tool='%s' completed in %.3fs", tool_name, duration
-            )
+            logger.info("mcp: tools/call tool='%s' completed in %.3fs", tool_name, duration)
 
         result_text = _normalize_tool_result(result)
         content = [{"type": "text", "text": result_text}]
@@ -6853,9 +6481,7 @@ def _handle_tools_call(
                 "reason": "timeout",
             },
         )
-        return _error_response(
-            request_id, -32603, f"Tool execution timed out after {timeout}s"
-        )
+        return _error_response(request_id, -32603, f"Tool execution timed out after {timeout}s")
     except TypeError as exc:
         if track:
             _record_metric(tool_name, "invalid_params", time.monotonic() - start)
@@ -6873,9 +6499,7 @@ def _handle_tools_call(
                 "reason": "invalid_params",
             },
         )
-        return _error_response(
-            request_id, -32602, f"Invalid params for tool '{tool_name}'"
-        )
+        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}'")
     except Exception:
         if track:
             _record_metric(tool_name, "error", time.monotonic() - start)
