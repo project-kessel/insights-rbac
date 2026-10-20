@@ -3048,6 +3048,20 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(forwarded_params["limit"], "20")
 
     @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_explicit_limit_overrides_cursor_url_limit(self, mock_call_view):
+        """Positive: explicit nondefault limit takes precedence over the limit embedded in cursor URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url, "limit": 50})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        # Explicit limit=50 must NOT be overwritten by the URL's limit=10.
+        self.assertEqual(forwarded_params["limit"], "50")
+
+    @patch("management.mcp_views._call_view")
     def test_search_roles_v2_cursor_url_without_cursor_param_omits_cursor(self, mock_call_view):
         """Positive: URL with query params but no cursor key does not forward the raw URL as a cursor token."""
         mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})

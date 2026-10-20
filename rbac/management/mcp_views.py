@@ -1548,7 +1548,7 @@ def _search_roles_v2(
                     query_params["permission"] = _url_fallbacks["permission"]
                 if not order_by and "order_by" in _url_fallbacks:
                     query_params["order_by"] = _url_fallbacks["order_by"]
-                if "limit" in _url_fallbacks:
+                if limit == 10 and "limit" in _url_fallbacks:
                     query_params["limit"] = _url_fallbacks["limit"]
             # else: bare token that happens to contain '?' — keep cursor as-is.
 
