@@ -3047,6 +3047,33 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(forwarded_params["name"], "NewName")
         self.assertEqual(forwarded_params["limit"], "20")
 
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_without_cursor_param_omits_cursor(self, mock_call_view):
+        """Positive: URL with query params but no cursor key does not forward the raw URL as a cursor token."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        url_no_cursor = "/api/rbac/v2/roles/?name=Cost*&limit=20"
+        response = self._call_tool("search_roles", {"cursor": url_no_cursor})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertNotIn("cursor", forwarded_params)
+        # Fallback search params from the URL are still applied.
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["limit"], "20")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_bare_cursor_with_question_mark_preserved(self, mock_call_view):
+        """Positive: bare cursor token containing '?' is forwarded as-is."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        bare_token = "cD0xMjM0?NTY3OA=="
+        response = self._call_tool("search_roles", {"cursor": bare_token})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], bare_token)
+
     def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
         """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
         RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
@@ -3069,8 +3096,7 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, 200)
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["org_version"], "v2")
-        if "ignored_filters" in tool_output:
-            self.assertNotIn("offset", tool_output["ignored_filters"])
+        self.assertNotIn("offset", tool_output.get("ignored_filters", {}))
 
     def test_search_roles_v2_cursor_with_offset_both_present(self):
         """Positive: search_roles with both cursor and offset > 0 includes both in result."""
