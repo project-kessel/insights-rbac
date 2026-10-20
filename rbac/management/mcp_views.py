@@ -1529,7 +1529,7 @@ def _search_roles_v2(
                 else:
                     # URL had a query string but no cursor parameter — do not
                     # forward the raw URL as a cursor token.
-                    cursor = None
+                    cursor = ""
 
                 # Supported V2 query parameters that may be embedded in links.next.
                 _url_fallbacks: dict[str, str] = {}
@@ -1552,7 +1552,7 @@ def _search_roles_v2(
                     query_params["limit"] = _url_fallbacks["limit"]
             # else: bare token that happens to contain '?' — keep cursor as-is.
 
-        if cursor is not None:
+        if cursor:
             query_params["cursor"] = cursor
 
     path = reverse("v2_management:roles-list")
