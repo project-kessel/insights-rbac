@@ -1515,8 +1515,33 @@ def _search_roles_v2(
 
         parsed = urlparse(cursor)
         if parsed.query:
-            # Caller passed a URL or partial URL from links.next — extract the bare token.
-            cursor = parse_qs(parsed.query).get("cursor", [cursor])[0]
+            # Caller passed a URL or partial URL from links.next — extract the
+            # bare cursor token *and* preserve search/pagination parameters so
+            # omitted tool arguments don't replace the original filters with
+            # their defaults.
+            url_params = parse_qs(parsed.query)
+            cursor = url_params.get("cursor", [cursor])[0]
+
+            # Supported V2 query parameters that may be embedded in links.next.
+            _url_fallbacks: dict[str, str] = {}
+            for key in ("name", "permission", "resource_type", "order_by", "limit"):
+                values = url_params.get(key)
+                if values:
+                    _url_fallbacks[key] = values[0]
+
+            # Apply URL values only when the caller did not supply them
+            # explicitly (i.e. the argument still has its default value).
+            if not name and "name" in _url_fallbacks:
+                query_params["name"] = _url_fallbacks["name"]
+            if not resource_type and "resource_type" in _url_fallbacks:
+                query_params["resource_type"] = _url_fallbacks["resource_type"]
+            if not permission and "permission" in _url_fallbacks:
+                query_params["permission"] = _url_fallbacks["permission"]
+            if not order_by and "order_by" in _url_fallbacks:
+                query_params["order_by"] = _url_fallbacks["order_by"]
+            if "limit" in _url_fallbacks:
+                query_params["limit"] = _url_fallbacks["limit"]
+
         query_params["cursor"] = cursor
 
     path = reverse("v2_management:roles-list")

@@ -3010,6 +3010,42 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         mock_call_view.assert_called_once()
         forwarded_params = mock_call_view.call_args[0][3]
         self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "10")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_preserves_search_params(self, mock_call_view):
+        """Positive: search_roles preserves name/permission/resource_type/order_by/limit from links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = (
+            "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA=="
+            "&limit=20&name=Cost*&permission=cost-management:*:*"
+            "&resource_type=workspace&order_by=name"
+        )
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "20")
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["permission"], "cost-management:*:*")
+        self.assertEqual(forwarded_params["resource_type"], "workspace")
+        self.assertEqual(forwarded_params["order_by"], "name")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_explicit_args_override_url_params(self, mock_call_view):
+        """Positive: explicit tool arguments take precedence over values embedded in links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&name=OldName&limit=20"
+        response = self._call_tool("search_roles", {"cursor": next_url, "name": "NewName"})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["name"], "NewName")
+        self.assertEqual(forwarded_params["limit"], "20")
 
     def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
         """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
