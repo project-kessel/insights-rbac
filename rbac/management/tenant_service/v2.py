@@ -631,7 +631,7 @@ class V2TenantBootstrapService:
                 tenant_name=f"org{org_id}",
                 org_id=org_id,
                 ready=ready,
-                account_id=account_number_by_org_id.get(org_id),
+                account_id=account_number_by_org_id.get(org_id) or None,
             )
             for org_id in org_ids
             if org_id not in existing_tenants

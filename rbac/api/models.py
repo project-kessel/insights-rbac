@@ -117,6 +117,11 @@ class Tenant(models.Model):
 
     def save(self, *args, **kwargs):
         """Persist tenant, validating org_config only when it is being updated."""
+        # If account_id is an empty string convert it to None to avoid serialization issue
+        if self.account_id == "":
+            self.account_id = None
+            if kwargs.get("update_fields"):
+                kwargs["update_fields"] = {*kwargs["update_fields"], "account_id"}
         if "org_config" in (kwargs.get("update_fields") or ()):
             self.clean()
         super().save(*args, **kwargs)
