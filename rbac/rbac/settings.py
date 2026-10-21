@@ -39,7 +39,6 @@ from app_common_python import DependencyEndpoints, KafkaTopics, LoadedConfig
 from boto3 import client as boto_client
 from corsheaders.defaults import default_headers
 from dateutil.parser import parse as parse_dt
-from feature_flags import FEATURE_FLAGS
 
 from . import database
 from .env import ENVIRONMENT
@@ -512,7 +511,7 @@ try:
     )
     if DESTRUCTIVE_SEEDING_OK_UNTIL.tzinfo is None:
         DESTRUCTIVE_SEEDING_OK_UNTIL = DESTRUCTIVE_SEEDING_OK_UNTIL.replace(tzinfo=pytz.UTC)
-except ValueError as e:
+except ValueError:
     DESTRUCTIVE_SEEDING_OK_UNTIL = datetime.datetime(1970, 1, 1, tzinfo=pytz.UTC)
 
 # disable log messages less than CRITICAL when running unit tests.
@@ -533,7 +532,7 @@ try:
     )
     if INTERNAL_DESTRUCTIVE_API_OK_UNTIL.tzinfo is None:
         INTERNAL_DESTRUCTIVE_API_OK_UNTIL = INTERNAL_DESTRUCTIVE_API_OK_UNTIL.replace(tzinfo=pytz.UTC)
-except ValueError as e:
+except ValueError:
     INTERNAL_DESTRUCTIVE_API_OK_UNTIL = datetime.datetime(1970, 1, 1, tzinfo=pytz.UTC)
 
 KAFKA_ENABLED = ENVIRONMENT.get_value("KAFKA_ENABLED", default=False)

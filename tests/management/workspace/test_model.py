@@ -312,7 +312,7 @@ class Types(WorkspaceBaseTestCase):
                 tenant=tenant_2,
                 parent=root,
             )
-        except ValidationError as e:
+        except ValidationError:
             self.fail("test_multiple_root_and_default_multiple_tenants raised ValidationError unexpectedly")
 
     def test_multiple_standard_per_tenant(self):
@@ -325,20 +325,20 @@ class Types(WorkspaceBaseTestCase):
                     tenant=self.tenant,
                     parent=self.tenant_1_default_workspace,
                 )
-        except ValidationError as e:
+        except ValidationError:
             self.fail("test_multiple_standard_per_tenant raised ValidationError unexpectedly")
 
     def test_standard_can_belong_to_root(self):
         """Test that a standard workspace can belong to a root workspace"""
         try:
             workspace = Workspace.objects.create(
-                name=f"T1 Standard Workspace",
+                name="T1 Standard Workspace",
                 type=Workspace.Types.STANDARD,
                 tenant=self.tenant,
                 parent=self.tenant_1_root_workspace,
             )
             self.assertEqual(workspace.parent, self.tenant_1_root_workspace)
-        except ValidationError as e:
+        except ValidationError:
             self.fail("test_standard_can_belong_to_root raised ValidationError unexpectedly")
 
     def test_invalid_type(self):

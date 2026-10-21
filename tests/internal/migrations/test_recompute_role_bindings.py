@@ -1,7 +1,7 @@
 from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
 from management.group.definer import seed_group
 from management.group.platform import GlobalPolicyIdService
-from management.permission.scope_service import CONCRETE_SCOPES, Scope
+from management.permission.scope_service import CONCRETE_SCOPES
 from management.role.definer import seed_roles
 from management.role.model import BindingMapping
 from management.role.platform import platform_v2_role_uuid_for

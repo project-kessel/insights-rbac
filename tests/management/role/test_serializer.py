@@ -21,7 +21,6 @@ from api.models import Tenant
 from management.models import Permission, Workspace
 from management.role.serializer import RoleSerializer, ResourceDefinitionSerializer
 
-import random
 
 
 class RoleSerializerTest(TestCase):

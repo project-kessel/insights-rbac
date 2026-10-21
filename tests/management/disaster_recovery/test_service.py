@@ -19,7 +19,6 @@ from management.inventory_replicator.types import (
     SubjectReference,
 )
 from management.role.model import Role
-from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.v2_util import bootstrap_tenant_for_v2_test
 

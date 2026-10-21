@@ -16,7 +16,6 @@
 #
 """Tests for the RoleBindingService and Serializer."""
 
-import concurrent.futures
 import uuid
 from unittest.mock import patch
 
@@ -25,7 +24,7 @@ from django.test import TestCase, override_settings
 from management.principal.model import Principal as PrincipalModel
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.inventory_replicator.inventory_replicator import InventoryReplicator, ReplicationEventType
-from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_write_activated
+from management.tenant_mapping.v2_activation import is_v2_write_activated
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,

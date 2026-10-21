@@ -20,7 +20,6 @@ import pickle
 from unittest import skipIf
 from unittest.mock import call, patch
 
-from django.conf import settings
 from django.test import TestCase, override_settings
 from management.cache import TenantCache
 from management.models import Access, Group, Permission, Policy, Principal, ResourceDefinition, Role

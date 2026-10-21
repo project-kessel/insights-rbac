@@ -18,10 +18,8 @@
 
 from datetime import timedelta
 
-from platform import system
-from unittest.mock import Mock, call, patch
+from unittest.mock import call, patch
 
-from uuid import uuid4
 
 from django.test import TestCase, override_settings
 
@@ -37,16 +35,12 @@ from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
     all_of,
-    none_of,
-    one_of,
     relation,
     resource,
-    resource_type,
     subject,
-    subject_type,
 )
 
-from migration_tool.migrate import migrate_data, migrate_groups_for_tenant
+from migration_tool.migrate import migrate_data
 
 from management.group.definer import seed_group, clone_default_group_in_public_schema
 from tests.management.role.test_dual_write import RbacFixture
