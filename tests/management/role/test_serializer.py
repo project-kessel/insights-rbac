@@ -22,7 +22,6 @@ from management.models import Permission, Workspace
 from management.role.serializer import RoleSerializer, ResourceDefinitionSerializer
 
 
-
 class RoleSerializerTest(TestCase):
     """Test the role serializer"""
 

@@ -137,7 +137,7 @@ Offset is the standard for new V2 list endpoints; cursor is reserved for unbound
 - **`V2ResultsSetPagination`** (LimitOffset) is the `BaseV2ViewSet` default and covers most V2 lists. Default limit 10, max 1000. `WorkspacePagination` subclass raises max to 3000 for workspace endpoints. Supports `limit=-1` to disable pagination (fetches count first).
 - **`V2CursorPagination`** (role-bindings), **`RoleV2CursorPagination`** (roles) and **`AuditLogV2CursorPagination`** (audit logs) cover the cursor endpoints. Better for large datasets -- no COUNT query. Default page size 10, max 1000. Roles stay on cursor as a documented exception.
 
-When using `limit=-1`, `V2ResultsSetPagination` calls `queryset.count()` to set `default_limit`. This is an extra query -- acceptable for the small, bounded lists that use offset, but avoid it for large ones (roles, role-bindings).
+When using `limit=-1`, `V2ResultsSetPagination` calls `queryset.count()` to set `default_limit`. This is an extra query, but it is acceptable for the small, bounded lists that use offset. Cursor endpoints (roles, role-bindings, audit logs) load the full queryset into memory, so avoid `limit=-1` on those large datasets.
 
 ## Gunicorn Configuration
 

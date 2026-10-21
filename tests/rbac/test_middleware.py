@@ -1742,7 +1742,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
         import contextvars
         import uuid
 
-
         # Ensure the header is not set
         self.request.META.pop("HTTP_X_RH_INSIGHTS_REQUEST_ID", None)
 
@@ -1777,7 +1776,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
         """When X-RH-INSIGHTS-REQUEST-ID header is present, it is used as-is."""
         import contextvars
 
-
         self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "my-custom-id-123"
 
         response = Mock(status_code=200)
@@ -1804,7 +1802,6 @@ class RequestContextMiddlewareTest(IdentityRequest):
     def test_request_id_crlf_sanitized(self):
         """CRLF characters in X-RH-INSIGHTS-REQUEST-ID header are stripped to prevent log injection."""
         import contextvars
-
 
         self.request.META["HTTP_X_RH_INSIGHTS_REQUEST_ID"] = "legit-id\r\nINFO Injected log line"
 

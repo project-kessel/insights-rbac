@@ -49,7 +49,6 @@ from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 
-
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 class RoleV2ServiceTests(IdentityRequest):
     """Test the RoleV2Service domain service."""

@@ -16,7 +16,6 @@
 #
 """Test the group model."""
 
-
 # from unittest.mock import Mock
 
 from management.models import Access, Permission

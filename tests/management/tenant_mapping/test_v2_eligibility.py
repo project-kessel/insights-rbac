@@ -28,7 +28,6 @@ from management.tenant_mapping.v2_eligibility import (
 from tests.management.role.test_dual_write import RbacFixture
 
 
-
 @override_settings(ATOMIC_RETRY_DISABLED=True)
 @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["ineligible", "bad"])
 class V2EligibilityTestCase(TestCase):
