@@ -4439,7 +4439,8 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
                 **self.request.META,
             )
 
-            self.assertEqual(response.status_code, 204)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(json.loads(response.content)["tuples"], [])
 
     @patch("internal.views.get_inventory_auth_metadata", return_value=[("authorization", "Bearer mocked_valid_token")])
     def test_read_tuples_grpc_error(self, mock_token):

@@ -2054,9 +2054,7 @@ def read_tuples(request):
             subject_namespace=subject_namespace,
         )
 
-        if response_data:
-            return JsonResponse({"tuples": response_data}, status=200)
-        return JsonResponse("No tuples found", status=204, safe=False)
+        return JsonResponse({"tuples": response_data}, status=200)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
         return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)

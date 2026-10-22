@@ -4053,9 +4053,6 @@
               }
             }
           },
-          "204": {
-            "description": "No tuples found."
-          },
           "400": {
             "description": "gRPC Error",
             "content": {

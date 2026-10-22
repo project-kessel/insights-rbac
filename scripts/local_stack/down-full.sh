@@ -72,9 +72,13 @@ remove_project_containers() {
 
 if [[ -f "${HBI_REPO}/dev.yml" ]]; then
   log-info "Stopping Host Inventory (${HBI_COMPOSE_PROJECT})..."
-  down_compose_with_orphans -p "${HBI_COMPOSE_PROJECT}" \
-    -f "${HBI_REPO}/dev.yml" \
-    -f "${REPO_ROOT}/scripts/local_stack/hbi.integration.yml" || log-warn "HBI dev.yml compose down failed (may not be running)"
+  (
+    # Compose validates this required variable even when only stopping services.
+    export UNLEASH_TOKEN="${UNLEASH_TOKEN:-local-dev-token}"
+    down_compose_with_orphans -p "${HBI_COMPOSE_PROJECT}" \
+      -f "${HBI_REPO}/dev.yml" \
+      -f "${REPO_ROOT}/scripts/local_stack/hbi.integration.yml"
+  ) || log-warn "HBI dev.yml compose down failed (may not be running)"
   remove_project_containers "${HBI_COMPOSE_PROJECT}"
 else
   log-warn "HBI compose files not found; skipping HBI teardown"
