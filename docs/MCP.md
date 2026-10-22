@@ -451,7 +451,8 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `limit` | integer | `10` | Max results |
-| `offset` | integer | `0` | Pagination offset |
+| `offset` | integer | `0` | Pagination offset (V1 only; ignored in V2) |
+| `cursor` | string | `""` | Cursor for pagination (V2 only; pass the bare token or the full `links.next` URL — the token is extracted automatically) |
 | `name` | string | `""` | Filter by role name (V2 supports `*` wildcards) |
 | `display_name` | string | `""` | Filter by display name (V1 only) |
 | `permission` | string | `""` | Filter by permission (comma-separated) |
@@ -471,11 +472,19 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 {"method": "tools/call", "params": {"name": "search_roles", "arguments": {"permission": "cost-management:cost_model:read"}}}
 ```
 
-**Returns:** `{meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+**Example V2 cursor-based pagination:**
+```json
+{"method": "tools/call", "params": {"name": "search_roles", "arguments": {"limit": 10, "cursor": "cD0xMjM0NTY3OA=="}}}
+```
+
+**Returns:** `{meta: {count}, links: {next: "..."}, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+- V1 orgs: `links` contains `next` with offset-based pagination
+- V2 orgs: `links` contains `next` with cursor-based pagination; if `offset > 0` is passed, it is listed in `ignored_filters` with guidance to use `cursor` instead.
 
 **Caveats:**
 - The permission filter does not account for ResourceDefinition filters that may narrow effective scope.
 - The `username` filter is V1-only. For V2, it is ignored and returned in `ignored_filters`.
+- The `offset` parameter is V1-only pagination. For V2 orgs, use `cursor` from the previous response's `links.next` instead.
 
 ---
 

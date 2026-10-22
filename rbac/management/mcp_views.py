@@ -49,7 +49,9 @@ from management.cache import _get_connection_pool, _is_mock_redis
 from management.group.view import GroupViewSet
 from management.models import Access, AuditLog, Group, Permission
 from management.permission.view import PermissionViewSet
-from management.permissions.workspace_inventory_access import WorkspaceInventoryAccessChecker
+from management.permissions.workspace_inventory_access import (
+    WorkspaceInventoryAccessChecker,
+)
 from management.principal.model import Principal
 from management.principal.proxy import PrincipalProxy, get_kessel_principal_id
 from management.principal.view import PrincipalView
@@ -57,7 +59,11 @@ from management.role.model import Role
 from management.role.v2_model import RoleV2
 from management.role.v2_view import RoleV2ViewSet
 from management.role.view import RoleViewSet
-from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
+from management.role_binding.model import (
+    RoleBinding,
+    RoleBindingGroup,
+    RoleBindingPrincipal,
+)
 from management.role_binding.view import RoleBindingViewSet
 from management.tenant_mapping.v2_activation import is_v2_write_activated
 from management.utils import is_valid_uuid
@@ -309,7 +315,12 @@ _PRINCIPAL_REDACTED_FIELDS: tuple[str, ...] = ("email", "last_name")
 
 
 def _clone_request(
-    source: HttpRequest, path: str, *, method: str = "GET", body: Any = None, **kwargs: Any
+    source: HttpRequest,
+    path: str,
+    *,
+    method: str = "GET",
+    body: Any = None,
+    **kwargs: Any,
 ) -> HttpRequest:
     """Clone a Django request for internal view delegation.
 
@@ -378,7 +389,12 @@ def _call_view_json(
         return json.dumps({"status": "no_content"})
     content = response.content.decode()
     if response.status_code >= 500:
-        logger.warning("mcp: _call_view_json got HTTP %d from %s: %s", response.status_code, path, content[:500])
+        logger.warning(
+            "mcp: _call_view_json got HTTP %d from %s: %s",
+            response.status_code,
+            path,
+            content[:500],
+        )
         detail = "Internal server error"
     elif response.status_code >= 400:
         try:
@@ -1363,7 +1379,9 @@ def list_role_access(
         "search_roles(permission='<app>:<resource>:<verb>'). Accepts comma-separated permissions. "
         "To see all roles for an application, call search_roles(application='<app>'). "
         "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
-        "V2 orgs support name with '*' wildcards (e.g., name='Cost*') and resource_type filter. "
+        "V2 orgs support name with '*' wildcards (e.g., name='Cost*'), resource_type filter, and "
+        "cursor-based pagination. For V2 pagination, pass the 'cursor' from the previous response's "
+        "links.next; 'offset' is not supported in V2 (use cursor instead). "
         "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
@@ -1372,7 +1390,8 @@ def list_role_access(
         "- Role names are not unique across V1 and V2. The org_version field indicates which API "
         "version the result came from.\n"
         "- The username filter is V1-only. For V2 orgs, it is ignored and returned in ignored_filters "
-        "with guidance to use list_role_bindings instead."
+        "with guidance to use list_role_bindings instead.\n"
+        "- The offset parameter is V1-only. For V2 orgs, use the cursor parameter from links.next instead."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1392,6 +1411,7 @@ def search_roles(
     resource_type: str = "",
     order_by: str = "",
     username: str = "",
+    cursor: str = "",
 ) -> str:
     """Search roles, auto-detecting V1/V2 and delegating to the appropriate view."""
     tenant = getattr(request, "tenant", None)
@@ -1408,9 +1428,19 @@ def search_roles(
             display_name,
             application,
             system,
+            cursor,
         )
     return _search_roles_v1(
-        request, limit, offset, name, display_name, permission, application, system, order_by, username
+        request,
+        limit,
+        offset,
+        name,
+        display_name,
+        permission,
+        application,
+        system,
+        order_by,
+        username,
     )
 
 
@@ -1465,6 +1495,7 @@ def _search_roles_v2(
     display_name: str,
     application: str,
     system: str,
+    cursor: str,
 ) -> str:
     """Search roles using V2 API."""
     query_params: dict[str, str] = {
@@ -1479,6 +1510,50 @@ def _search_roles_v2(
         query_params["permission"] = permission
     if order_by:
         query_params["order_by"] = order_by
+    if cursor:
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(cursor)
+        if parsed.query:
+            # Caller passed a URL or partial URL from links.next — extract the
+            # bare cursor token *and* preserve search/pagination parameters so
+            # omitted tool arguments don't replace the original filters with
+            # their defaults.
+            url_params = parse_qs(parsed.query)
+            _known_v2_params = {"cursor", "name", "permission", "resource_type", "order_by", "limit"}
+            if url_params.keys() & _known_v2_params:
+                # Real URL with recognised V2 query parameters.
+                cursor_values = url_params.get("cursor")
+                if cursor_values:
+                    cursor = cursor_values[0]
+                else:
+                    # URL had a query string but no cursor parameter — do not
+                    # forward the raw URL as a cursor token.
+                    cursor = ""
+
+                # Supported V2 query parameters that may be embedded in links.next.
+                _url_fallbacks: dict[str, str] = {}
+                for key in ("name", "permission", "resource_type", "order_by", "limit"):
+                    values = url_params.get(key)
+                    if values:
+                        _url_fallbacks[key] = values[0]
+
+                # Apply URL values only when the caller did not supply them
+                # explicitly (i.e. the argument still has its default value).
+                if not name and "name" in _url_fallbacks:
+                    query_params["name"] = _url_fallbacks["name"]
+                if not resource_type and "resource_type" in _url_fallbacks:
+                    query_params["resource_type"] = _url_fallbacks["resource_type"]
+                if not permission and "permission" in _url_fallbacks:
+                    query_params["permission"] = _url_fallbacks["permission"]
+                if not order_by and "order_by" in _url_fallbacks:
+                    query_params["order_by"] = _url_fallbacks["order_by"]
+                if limit == 10 and "limit" in _url_fallbacks:
+                    query_params["limit"] = _url_fallbacks["limit"]
+            # else: bare token that happens to contain '?' — keep cursor as-is.
+
+        if cursor:
+            query_params["cursor"] = cursor
 
     path = reverse("v2_management:roles-list")
     raw = _call_view(request, _role_v2_list_view, path, query_params)
@@ -1519,6 +1594,13 @@ def _search_roles_v2(
             "value": system,
             "reason": "V2 roles use 'type' (custom/system/seeded) instead of a boolean 'system' flag.",
             "alternative": "V2 role results include a 'type' field you can filter client-side.",
+        }
+
+    if offset:
+        ignored_filters["offset"] = {
+            "value": str(offset),
+            "reason": "V2 roles use cursor-based pagination instead of offset.",
+            "alternative": "Use the 'cursor' parameter from the previous response's links.next to paginate.",
         }
 
     if ignored_filters:
@@ -1684,7 +1766,12 @@ def _check_role_permissions_v2(
         )[:5]
         if roles:
             suggestions = [
-                {"uuid": str(r["uuid"]), "name": r["name"], "type": r["type"], "system": r["type"] != "custom"}
+                {
+                    "uuid": str(r["uuid"]),
+                    "name": r["name"],
+                    "type": r["type"],
+                    "system": r["type"] != "custom",
+                }
                 for r in roles
             ]
             return json.dumps(
@@ -1745,7 +1832,16 @@ def _build_role_permissions_result(
             has_wildcard_verb = True
 
     # Analyze what verbs are NOT included
-    common_verbs = {"read", "write", "create", "delete", "execute", "order", "link", "unlink"}
+    common_verbs = {
+        "read",
+        "write",
+        "create",
+        "delete",
+        "execute",
+        "order",
+        "link",
+        "unlink",
+    }
     verbs_not_included = common_verbs - verbs_included
 
     # Build expanded permissions explanation
@@ -1819,7 +1915,7 @@ def _build_role_permissions_result(
             "by_application": {app: sorted(perms) for app, perms in sorted(by_application.items())},
             "expanded_permissions": expanded_permissions,
             "verbs_included": sorted(verbs_included),
-            "verbs_not_included": sorted(verbs_not_included) if not has_wildcard_verb else [],
+            "verbs_not_included": (sorted(verbs_not_included) if not has_wildcard_verb else []),
         },
         "coverage_analysis": coverage_analysis,
         "recommendations": recommendations,
@@ -2192,7 +2288,7 @@ def investigate_tam_access(
             {
                 "request_id": str(car.request_id),
                 "status": car.status,
-                "start_date": car.start_date.strftime("%Y-%m-%d") if car.start_date else None,
+                "start_date": (car.start_date.strftime("%Y-%m-%d") if car.start_date else None),
                 "end_date": car.end_date.strftime("%Y-%m-%d") if car.end_date else None,
                 "days_remaining": days_remaining,
                 "created": car.created.strftime("%Y-%m-%d") if car.created else None,
@@ -2236,7 +2332,7 @@ def investigate_tam_access(
             analysis["required_permission_check"] = {
                 "permission": required_permission,
                 "granted": False,
-                "similar_permissions_granted": sorted(similar_perms) if similar_perms else [],
+                "similar_permissions_granted": (sorted(similar_perms) if similar_perms else []),
                 "hint": f"The permission '{required_permission}' is NOT granted. "
                 + (
                     f"However, these {app} permissions are granted: {similar_perms}. "
@@ -2372,7 +2468,9 @@ def audit_redhat_access(
     audit_counts_by_user: dict[str, int] = {}
     if all_usernames:
         audit_qs = AuditLog.objects.filter(
-            tenant=tenant, principal_username__in=all_usernames, created__gte=audit_since
+            tenant=tenant,
+            principal_username__in=all_usernames,
+            created__gte=audit_since,
         ).order_by("-created")
         for entry in audit_qs:
             if entry.principal_username in audit_by_user and len(audit_by_user[entry.principal_username]) < 10:
@@ -2380,7 +2478,11 @@ def audit_redhat_access(
 
         # Get true total counts per user
         counts_qs = (
-            AuditLog.objects.filter(tenant=tenant, principal_username__in=all_usernames, created__gte=audit_since)
+            AuditLog.objects.filter(
+                tenant=tenant,
+                principal_username__in=all_usernames,
+                created__gte=audit_since,
+            )
             .values("principal_username")
             .annotate(count=Count("id"))
         )
@@ -2422,7 +2524,11 @@ def audit_redhat_access(
             )
 
         # Get pre-fetched audit logs for this user
-        audit_activity: dict[str, Any] = {"total_actions": 0, "recent_actions": [], "summary": ""}
+        audit_activity: dict[str, Any] = {
+            "total_actions": 0,
+            "recent_actions": [],
+            "summary": "",
+        }
         if username and car.status == "approved":
             audit_entries = audit_by_user.get(username, [])
             audit_activity["total_actions"] = audit_counts_by_user.get(username, 0)
@@ -2434,7 +2540,7 @@ def audit_redhat_access(
                             "action": entry.action,
                             "resource_type": entry.resource_type,
                             "description": entry.description,
-                            "date": entry.created.strftime("%Y-%m-%d %H:%M") if entry.created else None,
+                            "date": (entry.created.strftime("%Y-%m-%d %H:%M") if entry.created else None),
                         }
                     )
                 # Summarize activity types
@@ -2472,7 +2578,7 @@ def audit_redhat_access(
                     }
                 ),
                 "status": status_display,
-                "start_date": car.start_date.strftime("%Y-%m-%d") if car.start_date else None,
+                "start_date": (car.start_date.strftime("%Y-%m-%d") if car.start_date else None),
                 "end_date": car.end_date.strftime("%Y-%m-%d") if car.end_date else None,
                 "days_remaining": days_remaining if car.status == "approved" else None,
                 "roles": roles_data,
@@ -3475,7 +3581,12 @@ def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, A
                     seen_permissions.add(perm)
                     access_list.append(entry)
         except Exception:
-            logger.warning("mcp: failed to get V1 access for user=%s app=%s", username, app, exc_info=True)
+            logger.warning(
+                "mcp: failed to get V1 access for user=%s app=%s",
+                username,
+                app,
+                exc_info=True,
+            )
 
     return access_list
 
@@ -3844,7 +3955,11 @@ def _analyze_expected_permission(
         return
 
     has_permission, matched_permission, matched_sources = _check_permission_match(
-        expected_perm_full, expected_verb, application, all_permissions, permission_sources
+        expected_perm_full,
+        expected_verb,
+        application,
+        all_permissions,
+        permission_sources,
     )
 
     if has_permission or is_org_admin:
@@ -3852,8 +3967,8 @@ def _analyze_expected_permission(
         analysis["expected_permission_check"] = {
             "looking_for": expected_perm_full,
             "found": True,
-            "matched_permission": matched_permission if not is_org_admin else "(org admin bypass)",
-            "granted_via": matched_sources if not is_org_admin else [{"role": "Org Admin"}],
+            "matched_permission": (matched_permission if not is_org_admin else "(org admin bypass)"),
+            "granted_via": (matched_sources if not is_org_admin else [{"role": "Org Admin"}]),
         }
         if is_org_admin:
             analysis["note"] = "User is org admin and has implicit access to everything"
@@ -4047,7 +4162,12 @@ def investigate_user_access(
             effective_access = data.get("data", [])
         except Exception as e:
             effective_access_error = "Failed to retrieve effective access"
-            logger.warning("mcp: failed to get effective access for user=%s app=%s: %s", username, application, e)
+            logger.warning(
+                "mcp: failed to get effective access for user=%s app=%s: %s",
+                username,
+                application,
+                e,
+            )
 
     # Step 5: Analyze the expected permission
     analysis: dict[str, Any] = {
@@ -4066,7 +4186,13 @@ def investigate_user_access(
 
     # Use shared helper for permission analysis
     _analyze_expected_permission(
-        application, expected_permission, expected_verb, all_permissions, permission_sources, is_org_admin, analysis
+        application,
+        expected_permission,
+        expected_verb,
+        all_permissions,
+        permission_sources,
+        is_org_admin,
+        analysis,
     )
 
     # Add V1-specific gap analysis if permission not found
@@ -4266,7 +4392,13 @@ def _investigate_user_access_v2(
 
     # Use shared helper for permission analysis
     _analyze_expected_permission(
-        application, expected_permission, expected_verb, all_permissions, permission_sources, is_org_admin, analysis
+        application,
+        expected_permission,
+        expected_verb,
+        all_permissions,
+        permission_sources,
+        is_org_admin,
+        analysis,
     )
 
     # Add V2-specific gap analysis if permission not found
@@ -4711,7 +4843,12 @@ def guide_user_access_delegation(
                 # Fuzzy fallback: try display name search
                 original_input = username
                 name_raw = _list_principals_by_name(
-                    request, username, limit=5, offset=0, sort_order="asc", status="enabled"
+                    request,
+                    username,
+                    limit=5,
+                    offset=0,
+                    sort_order="asc",
+                    status="enabled",
                 )
                 name_data = json.loads(name_raw)
                 candidates = name_data.get("data", [])
@@ -4739,7 +4876,11 @@ def guide_user_access_delegation(
                 else:
                     result["user_info"] = {"error": f"User '{original_input}' not found"}
         except Exception as e:
-            logger.warning("guide_user_access_delegation: Failed to verify user %s: %s", username, e)
+            logger.warning(
+                "guide_user_access_delegation: Failed to verify user %s: %s",
+                username,
+                e,
+            )
             result["user_info"] = {"error": f"Could not verify user '{username}'"}
 
         # Find the 'User Access administrator' role
@@ -4790,7 +4931,9 @@ def guide_user_access_delegation(
 
                 # Check if user already has role (direct or via group)
                 has_direct = RoleBindingPrincipal.objects.filter(
-                    principal__username__iexact=username, principal__tenant=tenant, binding__role=v2_role
+                    principal__username__iexact=username,
+                    principal__tenant=tenant,
+                    binding__role=v2_role,
                 ).exists()
                 user_groups = Group.objects.filter(principals__username__iexact=username, tenant=tenant)
                 has_via_group = RoleBindingGroup.objects.filter(
@@ -5014,7 +5157,12 @@ def update_role_binding(
     }
     body: dict[str, Any] = {"roles": roles}
     return _call_view_json(
-        request, _role_binding_update_view, path, method="PUT", body=body, query_params=query_params
+        request,
+        _role_binding_update_view,
+        path,
+        method="PUT",
+        body=body,
+        query_params=query_params,
     )
 
 
@@ -5443,7 +5591,12 @@ class MCPView(View):
         if rpc_req.method == "tools/call":
             return _handle_tools_call(request, rpc_req.request_id, rpc_req.params)
 
-        logger.warning("mcp: unknown method=%s, org_id=%s, req_id=%s", rpc_req.method, org_id, req_id)
+        logger.warning(
+            "mcp: unknown method=%s, org_id=%s, req_id=%s",
+            rpc_req.method,
+            org_id,
+            req_id,
+        )
         return _error_response(rpc_req.request_id, -32601, f"Method not found: {rpc_req.method}")
 
     def get(self, request: HttpRequest) -> JsonResponse:
@@ -5550,7 +5703,11 @@ _TOOL_DESCRIPTION_CONFIRMATION_SUFFIX = (
 
 def _build_mcp_instructions() -> str:
     """Build MCP server instructions based on current feature flags."""
-    parts = [_MCP_INSTRUCTIONS_BASE, _MCP_INSTRUCTIONS_HONEST_CAVEATS, _MCP_INSTRUCTIONS_REMEDIATION]
+    parts = [
+        _MCP_INSTRUCTIONS_BASE,
+        _MCP_INSTRUCTIONS_HONEST_CAVEATS,
+        _MCP_INSTRUCTIONS_REMEDIATION,
+    ]
     if _is_write_enabled():
         parts.append(_MCP_INSTRUCTIONS_WRITE_ACTIONS)
         if _is_write_confirmation_enabled():
@@ -5564,7 +5721,11 @@ def _build_mcp_instructions() -> str:
 def _handle_initialize(request: HttpRequest, request_id: Any, params: dict[str, Any]) -> JsonResponse:
     """Handle MCP initialize request."""
     client_info = params.get("clientInfo", {})
-    logger.info("mcp: initialize, client=%s/%s", client_info.get("name", "unknown"), client_info.get("version", "?"))
+    logger.info(
+        "mcp: initialize, client=%s/%s",
+        client_info.get("name", "unknown"),
+        client_info.get("version", "?"),
+    )
     result = {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {
@@ -5912,13 +6073,19 @@ def _validate_confirmation_token(
     key = f"{_CONFIRM_CACHE_PREFIX}{token}"
     stored = django_cache.get(key)
     if not stored:
-        return False, "Confirmation token is invalid or expired. Please retry the operation."
+        return (
+            False,
+            "Confirmation token is invalid or expired. Please retry the operation.",
+        )
 
     if stored["tool"] != tool_name:
         return False, f"Token was issued for '{stored['tool']}', not '{tool_name}'."
     expected_hash = _hash_arguments(tool_name, arguments)
     if stored["args_hash"] != expected_hash:
-        return False, "Arguments have changed since the confirmation was issued. Please retry."
+        return (
+            False,
+            "Arguments have changed since the confirmation was issued. Please retry.",
+        )
     if stored["org_id"] != (org_id or ""):
         return False, "Token was issued for a different organization."
 
@@ -6049,7 +6216,10 @@ def mcp_shutdown() -> None:
 
     shutdown_timeout = settings.MCP_SHUTDOWN_TIMEOUT_SECONDS
     logger.info("mcp: shutting down ThreadPoolExecutor (timeout=%ss)...", shutdown_timeout)
-    t = threading.Thread(target=_MCP_TOOL_EXECUTOR.shutdown, kwargs={"wait": True, "cancel_futures": True})
+    t = threading.Thread(
+        target=_MCP_TOOL_EXECUTOR.shutdown,
+        kwargs={"wait": True, "cancel_futures": True},
+    )
     t.start()
     t.join(timeout=shutdown_timeout)
     if t.is_alive():
@@ -6221,20 +6391,40 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
 
     validation_error = _validate_tool_arguments(tool_name, arguments)
     if validation_error:
-        logger.warning("mcp: tools/call tool='%s' schema validation failed: %s", tool_name, validation_error)
-        return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {validation_error}")
+        logger.warning(
+            "mcp: tools/call tool='%s' schema validation failed: %s",
+            tool_name,
+            validation_error,
+        )
+        return _error_response(
+            request_id,
+            -32602,
+            f"Invalid params for tool '{tool_name}': {validation_error}",
+        )
 
     if config.write:
         write_error = _validate_write_payload(tool_name, arguments)
         if write_error:
-            logger.warning("mcp: tools/call tool='%s' write payload validation failed: %s", tool_name, write_error)
-            return _error_response(request_id, -32602, f"Invalid params for tool '{tool_name}': {write_error}")
+            logger.warning(
+                "mcp: tools/call tool='%s' write payload validation failed: %s",
+                tool_name,
+                write_error,
+            )
+            return _error_response(
+                request_id,
+                -32602,
+                f"Invalid params for tool '{tool_name}': {write_error}",
+            )
 
     if config.write and _is_write_confirmation_enabled():
         if confirmation_token:
             valid, error_msg = _validate_confirmation_token(confirmation_token, tool_name, arguments, org_id)
             if not valid:
-                logger.warning("mcp: tools/call tool='%s' confirmation failed: %s", tool_name, error_msg)
+                logger.warning(
+                    "mcp: tools/call tool='%s' confirmation failed: %s",
+                    tool_name,
+                    error_msg,
+                )
                 _record_metric(tool_name, "confirmation_failed")
                 content = [{"type": "text", "text": json.dumps({"error": error_msg})}]
                 return _success_response(request_id, {"content": content, "isError": True})
@@ -6242,13 +6432,20 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
         else:
             token = _generate_confirmation_token(tool_name, arguments, org_id)
             preview = _generate_write_preview(tool_name, arguments)
-            logger.info("mcp: tools/call tool='%s' awaiting confirmation, token issued", tool_name)
+            logger.info(
+                "mcp: tools/call tool='%s' awaiting confirmation, token issued",
+                tool_name,
+            )
             _record_metric(tool_name, "confirmation_pending")
             content = [
                 {
                     "type": "text",
                     "text": json.dumps(
-                        {"confirmation_required": True, "message": preview, "confirmation_token": token}
+                        {
+                            "confirmation_required": True,
+                            "message": preview,
+                            "confirmation_token": token,
+                        }
                     ),
                 }
             ]
@@ -6279,7 +6476,10 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
         content = [{"type": "text", "text": result_text}]
         if config.caveats:
             content.append(
-                {"type": "text", "text": f"IMPORTANT — INCLUDE THESE CAVEATS IN YOUR ANSWER:\n{config.caveats}"}
+                {
+                    "type": "text",
+                    "text": f"IMPORTANT — INCLUDE THESE CAVEATS IN YOUR ANSWER:\n{config.caveats}",
+                }
             )
 
         # MCP write tool execution - SEC-MON-REQ-1 compliance (EOI-3 admin_action)
@@ -6372,7 +6572,13 @@ def _success_response(request_id: Any, result: dict[str, Any]) -> JsonResponse:
 
 def _error_response(request_id: Any, code: int, message: str) -> JsonResponse:
     """Create a JSON-RPC error response."""
-    return JsonResponse({"jsonrpc": "2.0", "error": {"code": code, "message": message}, "id": request_id})
+    return JsonResponse(
+        {
+            "jsonrpc": "2.0",
+            "error": {"code": code, "message": message},
+            "id": request_id,
+        }
+    )
 
 
 # --- Health check endpoint (unauthenticated, for Kubernetes probes) ---
