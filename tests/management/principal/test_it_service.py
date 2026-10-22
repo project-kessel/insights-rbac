@@ -828,6 +828,42 @@ class ITServiceTests(IdentityRequest):
         )
 
     @mock.patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_is_service_account_valid_service_access_token(self, request_service_accounts: mock.Mock):
+        """Test that a service access token validates exactly like a regular service account.
+
+        These helpers gate service account authentication, not just group membership, so a service access token
+        failing here would surface as an auth rejection rather than as a visible bug in the UI.
+        """
+        user = User()
+        user.bearer_token = "mocked-bt"
+
+        client_id = str(uuid.uuid4())
+        request_service_accounts.return_value = [
+            {
+                "clientId": client_id,
+                "service_account_type": MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+                "time_expires": 1713876532,
+            }
+        ]
+
+        self.assertTrue(
+            self.it_service.is_service_account_valid_by_client_id(user=user, service_account_client_id=client_id),
+            "a service access token should be validated by client ID like any other service account",
+        )
+
+        self.assertTrue(
+            self.it_service.is_service_account_valid_by_username(
+                user=user, service_account_username=f"service-account-{client_id}"
+            ),
+            "a service access token should be validated by username like any other service account",
+        )
+
+        self.assertTrue(
+            self.it_service.is_service_account_valid_by_username(user=user, service_account_username=client_id),
+            "a service access token should be validated when the bare client ID is given as the username",
+        )
+
+    @mock.patch("management.principal.it_service.ITService.request_service_accounts")
     def test_is_service_account_invalid(self, request_service_accounts: mock.Mock):
         """Tests that the service account is considered invalid when there isn't a match between the response from IT and the requested service account"""
         user = User()
@@ -1326,6 +1362,46 @@ class ITServiceTests(IdentityRequest):
                 f"the given username '{username}' should have not been identified as a service account username",
             )
 
+    def test_username_cra_credential_format_is_not_a_service_account(self) -> None:
+        """Test that the CRA credential format for a service access token is not taken for a username.
+
+        A service access token is presented to the container registry as "|service-account-{client_id}". Per
+        CIAM-ADR-00094 the preferred_username claim stays in the plain form, so the pipe prefixed string should
+        never reach RBAC. It is worth pinning because we derive client IDs by stripping a prefix off the
+        username: silently accepting the pipe would produce a wrong client ID rather than an error.
+        """
+        client_id = uuid.uuid4()
+
+        self.assertFalse(
+            ITService.is_username_service_account(f"|service-account-{client_id}"),
+            "the CRA credential format should not be identified as a service account username",
+        )
+
+    def test_extract_client_id_rejects_cra_credential_format(self) -> None:
+        """Test that a client ID is not extracted out of the CRA credential format for a service access token."""
+        client_id = uuid.uuid4()
+
+        try:
+            ITService.extract_client_id_service_account_username(username=f"|service-account-{client_id}")
+            self.fail("the CRA credential format should have been rejected instead of having a client ID extracted")
+        except serializers.ValidationError as ve:
+            self.assertEqual(
+                "Invalid ClientId for a Service Account username",
+                str(ve.detail.get("detail")),
+                "unexpected error message when the CRA credential format is given",
+            )
+
+        # The bare pipe prefixed client ID should be rejected for the same reason.
+        try:
+            ITService.extract_client_id_service_account_username(username=f"|{client_id}")
+            self.fail("a pipe prefixed client ID should have been rejected")
+        except serializers.ValidationError as ve:
+            self.assertEqual(
+                "Invalid ClientId for a Service Account username",
+                str(ve.detail.get("detail")),
+                "unexpected error message when a pipe prefixed client ID is given",
+            )
+
     def test_extract_client_id_service_account_username(self) -> None:
         """Test that the client ID is correctly extracted from the service account's username"""
         client_id = uuid.uuid4()
@@ -1552,6 +1628,46 @@ class ITServiceTests(IdentityRequest):
                     client_id in service_accounts_not_in_group_set,
                     "a client ID which was part of the group was incorrectly flagged as if it wasn't",
                 )
+
+    def test_generate_service_accounts_report_in_group_service_access_token(self):
+        """Test that a service access token is reported as a group member like any other service account.
+
+        The report is a pure database lookup keyed on service_account_id and never calls IT, so a service access
+        token is indistinguishable from a regular service account here. This pins that no special handling is
+        needed, which is what the console relies on when it shows membership state.
+        """
+        group = Group(name="it-service-sat-group", platform_default=False, system=False, tenant=self.tenant)
+        group.save()
+
+        service_access_token_client_id = uuid.uuid4()
+        regular_client_id = uuid.uuid4()
+        absent_client_id = uuid.uuid4()
+
+        for client_id in (service_access_token_client_id, regular_client_id):
+            group.principals.add(
+                Principal.objects.create(
+                    username=f"service-account-{client_id}",
+                    service_account_id=client_id,
+                    type="service-account",
+                    tenant=self.tenant,
+                )
+            )
+
+        # Call the function under test.
+        result = self.it_service.generate_service_accounts_report_in_group(
+            group=group,
+            client_ids={str(service_access_token_client_id), str(regular_client_id), str(absent_client_id)},
+        )
+
+        self.assertEqual(
+            {
+                str(service_access_token_client_id): True,
+                str(regular_client_id): True,
+                str(absent_client_id): False,
+            },
+            result,
+            "a service access token should be reported as a group member exactly like a regular service account",
+        )
 
     def test_generate_service_accounts_report_in_group_full_match(self):
         """Test that the function under test is able to flag service accounts as all being present in the group."""

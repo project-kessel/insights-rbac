@@ -4164,6 +4164,86 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_and_remove_group_principals_service_access_token(self, sa_mock):
+        """Test that a service access token can be added to and removed from a group like a regular service account.
+
+        Per CIAM-ADR-00090 a service access token is an Organizational Service Account in SSO, served by the same
+        IT endpoint with the same clientId, so the existing membership path should already handle it. The place
+        this could quietly fail is the existence check, which rejects any client ID IT does not return.
+        """
+        # Deliberately a client ID which is not already a group member, so that the add exercises the lazy
+        # principal creation in add_service_accounts rather than re-adding an existing one.
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [
+            {
+                "clientId": sa_uuid,
+                "name": f"service_account_name_{sa_uuid.split('-')[0]}",
+                "description": f"Service Account description {sa_uuid.split('-')[0]}",
+                "owner": "jsmith",
+                "username": "service_account-" + sa_uuid,
+                "time_created": 1706784741,
+                "type": "service-account",
+                "service_account_type": "service-access-token",
+                "time_expires": 1713876532,
+                "userId": f"sa_sub_{sa_uuid}",
+            }
+        ]
+
+        client = APIClient()
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+
+        # Add the service access token to the group.
+        request_body = {"principals": [{"clientId": sa_uuid, "type": "service-account"}]}
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principals = Group.objects.get(uuid=self.group.uuid).principals.filter(
+            type=Principal.Types.SERVICE_ACCOUNT, service_account_id=sa_uuid
+        )
+        self.assertEqual(
+            1,
+            principals.count(),
+            "a service access token should have been added to the group as a service account principal",
+        )
+        self.assertEqual(
+            f"service-account-{sa_uuid}",
+            principals.first().username,
+            "the principal should carry the plain service account username, not the CRA credential format",
+        )
+
+        # It should come back in the group's member list carrying the service access token fields.
+        list_url = f"{url}?principal_type=service-account"
+        response = client.get(list_url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        listed = [sa for sa in response.data.get("data") if str(sa["clientId"]) == sa_uuid]
+        self.assertEqual(1, len(listed), "the service access token should appear in the group's member list")
+        self.assertEqual("service-access-token", listed[0].get("service_account_type"))
+        self.assertEqual(
+            "service-account",
+            listed[0].get("type"),
+            'the "type" field must stay "service-account" for a service access token',
+        )
+
+        # Remove it again.
+        delete_url = f"{url}?service-accounts={sa_uuid}"
+        response = client.delete(delete_url, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            0,
+            Group.objects.get(uuid=self.group.uuid)
+            .principals.filter(type=Principal.Types.SERVICE_ACCOUNT, service_account_id=sa_uuid)
+            .count(),
+            "the service access token should have been removed from the group",
+        )
+
+        # Removing it from the group must not delete the principal itself.
+        self.assertIsNotNone(Principal.objects.get(username=f"service-account-{sa_uuid}"))
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
     def test_add_group_principals_service_account_fail(self, sa_mock):
         """Test adding the service account into group without type in request body returns 400 Bad Request."""
         sa_uuid = self.sa_client_ids[0]
@@ -4979,6 +5059,117 @@ class GroupPrincipalV2SyncTests(IdentityRequest):
             )
         )
         self.assertEqual(admin_group_tuple_count, 1, "Expected admin group membership tuple")
+
+
+class GroupServiceAccessTokenReplicationTests(IdentityRequest):
+    """Test that service access tokens replicate to Kessel exactly like regular service accounts.
+
+    The epic this work belongs to states that authorization needs no change, because a service access token
+    resolves to its bound service account principal. That premise is load-bearing: if replication produced
+    different tuples for a service access token, the scope would grow to include authorization work which has
+    been explicitly ruled out.
+    """
+
+    def setUp(self):
+        """Set up the replication parity tests."""
+        super().setUp()
+        request = self.request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        user.org_id = self.customer_data["org_id"]
+        user.admin = True
+        request.user = user
+
+        self.group = Group(name="satReplicationGroup", tenant=self.tenant)
+        self.group.save()
+
+        # Bootstrap with a no-op replicator so that only the tuples from the request under test are captured.
+        V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
+
+    @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_USER_DOMAIN="redhat", IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_service_access_token_replicates_like_service_account(self, sa_mock, mock_replicate):
+        """Test that adding a service access token to a group produces the same tuples as a regular one."""
+        from management.group.definer import seed_group
+
+        Tenant.objects.get_or_create(tenant_name="public")
+        seed_group()
+
+        tuples = InMemoryTuples()
+        mock_replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        service_access_token_client_id = str(uuid4())
+        regular_client_id = str(uuid4())
+
+        # Both are Organizational Service Accounts as far as IT is concerned; the only difference is the service
+        # access token attributes on one of them.
+        sa_mock.return_value = [
+            {
+                "clientId": service_access_token_client_id,
+                "name": "sat-name",
+                "description": "sat-description",
+                "owner": "jsmith",
+                "username": f"service-account-{service_access_token_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "service_account_type": "service-access-token",
+                "time_expires": 1713876532,
+                "userId": "sat-user-id",
+            },
+            {
+                "clientId": regular_client_id,
+                "name": "sa-name",
+                "description": "sa-description",
+                "owner": "jsmith",
+                "username": f"service-account-{regular_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "userId": "sa-user-id",
+            },
+        ]
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {
+            "principals": [
+                {"clientId": service_access_token_client_id, "type": "service-account"},
+                {"clientId": regular_client_id, "type": "service-account"},
+            ]
+        }
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Each should have produced exactly one group membership tuple, and the two should be identical apart
+        # from the principal they point at.
+        service_access_token_tuples = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(self.group.uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/sat-user-id"),
+            )
+        )
+        regular_tuples = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(self.group.uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/sa-user-id"),
+            )
+        )
+
+        self.assertEqual(
+            1,
+            regular_tuples,
+            "a regular service account should have produced one group membership tuple",
+        )
+        self.assertEqual(
+            regular_tuples,
+            service_access_token_tuples,
+            "a service access token should replicate exactly like a regular service account; a difference here"
+            " would contradict the premise that authorization needs no change for service access tokens",
+        )
 
 
 class GroupViewNonAdminTests(IdentityRequest):
