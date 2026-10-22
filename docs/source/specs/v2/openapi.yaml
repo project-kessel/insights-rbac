@@ -422,7 +422,10 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -473,7 +476,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -661,7 +666,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -686,6 +693,17 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problems.Problem500'
+        '503':
+          description: Service unavailable.
+          headers:
+            Retry-After:
+              required: true
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem503'
       tags:
         - Groups
       requestBody:
@@ -726,7 +744,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -777,7 +797,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2114,7 +2136,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2173,7 +2197,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2371,6 +2397,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2620,6 +2647,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2683,6 +2711,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2734,6 +2763,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2781,7 +2811,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -3437,6 +3469,36 @@ components:
             instance:
               type: string
               format: uri
+    Problems.Problem400ProtectedObject:
+      type: object
+      required:
+        - type
+        - title
+      properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/protected-internal-object
+        title:
+          type: string
+          enum:
+            - An internal object cannot be modified.
+      allOf:
+        - type: object
+          properties:
+            type:
+              $ref: '#/components/schemas/Problems.ProblemType'
+            status:
+              type: number
+              enum:
+                - 400
+            title:
+              type: string
+            detail:
+              type: string
+            instance:
+              type: string
+              format: uri
     Problems.Problem401:
       type: object
       required:
@@ -3641,6 +3703,7 @@ components:
         - http://project-kessel.org/problems/workspace-not-empty
         - http://project-kessel.org/problems/service-unavailable
         - http://project-kessel.org/problems/conflict
+        - http://project-kessel.org/problems/protected-internal-object
     Problems.Workspace.Problem400WorkspaceNotEmpty:
       type: object
       required:

@@ -24,7 +24,7 @@ from management.base_viewsets import BaseV2ViewSet
 from management.notifications.notification_handlers import custom_v2_role_obj_change_notification_handler
 from management.permissions.role_v2_access import RoleV2KesselAccessPermission
 from management.permissions.v2_edit_api_access import V2WriteRequiresWorkspacesEnabled
-from management.problem_details import single_problem_response_with_errors
+from management.problem_details import ProblemType, single_problem_response_with_errors
 from management.role.v2_exceptions import CustomRoleRequiredError, RolesNotFoundError
 from management.role.v2_model import RoleV2
 from management.role.v2_serializer import (
@@ -190,7 +190,12 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             instance = self.get_object()
 
             if instance.type != RoleV2.Types.CUSTOM:
-                raise ValidationError({"uuid": "System roles may not be updated."})
+                return single_problem_response_with_errors(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    problem_type=ProblemType.PROTECTED_OBJECT,
+                    detail="System roles may not be updated.",
+                    source="uuid",
+                )
 
             audit_log = AuditLog()
             audit_log.log_edit(request=request, resource=AuditLog.ROLE_V2, object=instance)
@@ -252,6 +257,7 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             if non_custom.exists():
                 return single_problem_response_with_errors(
                     status_code=status.HTTP_400_BAD_REQUEST,
+                    problem_type=ProblemType.PROTECTED_OBJECT,
                     detail="System roles may not be deleted.",
                     source="ids",
                 )
@@ -285,6 +291,7 @@ class RoleV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         except CustomRoleRequiredError as e:
             return single_problem_response_with_errors(
                 status_code=status.HTTP_400_BAD_REQUEST,
+                problem_type=ProblemType.PROTECTED_OBJECT,
                 detail=str(e),
                 source="ids",
             )
