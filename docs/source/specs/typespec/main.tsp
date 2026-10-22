@@ -234,6 +234,14 @@ model OffsetPaginationLinks {
     last: string | null;
 }
 
+model OffsetPagination {
+    @doc("Pagination metadata")
+    meta: OffsetPaginationMeta;
+
+    @doc("Pagination links")
+    links: OffsetPaginationLinks;
+}
+
 namespace Problems {
     enum ProblemType {
         InsufficientPermission:"http://project-kessel.org/problems/insufficient-permission",
@@ -509,16 +517,8 @@ namespace Workspaces {
         parent_id: UUID;
     }
 
-    model Pagination {
-        @doc("Pagination metadata")
-        meta: OffsetPaginationMeta;
-
-        @doc("Pagination links")
-        links: OffsetPaginationLinks;
-    }
-
-
     @example(#{
+        _: 200,
         meta: #{
             count: 100,
             limit: 10,
@@ -543,7 +543,8 @@ namespace Workspaces {
         ]
     })
     model WorkspaceListResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of workspaces")
         data: Workspace[];
@@ -559,6 +560,7 @@ namespace Workspaces {
           offset: 0
         },
         returnType: #{
+          _: 200,
           meta: #{
             count: 100,
             limit: 10,
@@ -826,6 +828,7 @@ namespace Workspaces {
             }
         },
         returnType: #{
+            _: 200,
             meta: #{
                 count: 2,
                 limit: 10,
@@ -1789,8 +1792,7 @@ model Principal {
 
 model PrincipalListResponse {
     @statusCode _: 200;
-    meta: OffsetPaginationMeta;
-    links: OffsetPaginationLinks;
+    ...OffsetPagination;
     data: Principal[];
 }
 
@@ -2007,15 +2009,8 @@ namespace Principals {
 @doc("Operations about permissions")
 namespace Permissions {
 
-    model Pagination {
-        @doc("Pagination metadata")
-        meta: OffsetPaginationMeta;
-
-        @doc("Pagination links")
-        links: OffsetPaginationLinks;
-    }
-
     @example(#{
+        _: 200,
         meta: #{
             count: 100,
             limit: 10,
@@ -2039,7 +2034,8 @@ namespace Permissions {
         ]
     })
     model PermissionListResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of permissions")
         data: Permission[];
@@ -2053,6 +2049,7 @@ namespace Permissions {
             offset: 0
         },
         returnType: #{
+            _: 200,
             meta: #{
                 count: 100,
                 limit: 10,
@@ -2111,7 +2108,8 @@ namespace Permissions {
     ): PermissionListResponse | Problems.CommonProblems;
 
     model PermissionOptionsResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of distinct values for the requested field")
         data: string[];
@@ -2192,8 +2190,7 @@ namespace Groups {
 
     model GroupListResponse {
         @statusCode _: 200;
-        meta: OffsetPaginationMeta;
-        links: OffsetPaginationLinks;
+        ...OffsetPagination;
         data: Group[];
     }
 
@@ -2262,8 +2259,7 @@ namespace Groups {
 
     model PrincipalListResponse {
         @statusCode _: 200;
-        meta: OffsetPaginationMeta;
-        links: OffsetPaginationLinks;
+        ...OffsetPagination;
         data: Principal[];
     }
 
