@@ -29,6 +29,10 @@ class SubjectType(StrEnum):
     GROUP = "group"
     USER = "user"
     PRINCIPAL = "principal"
+    # Matches Principal.Types.SERVICE_ACCOUNT so that the subject type and the principal type a caller sees on
+    # the principals endpoints read the same. A service access token is bound as a service account: the SA/SAT
+    # distinction is an attribute of the account, not a separate kind of subject.
+    SERVICE_ACCOUNT = "service-account"
 
     @classmethod
     def is_valid(cls, value: str) -> bool:
@@ -75,6 +79,11 @@ class Subject:
     def is_user(self) -> bool:
         """Check if this subject is a user."""
         return self.type == SubjectType.USER
+
+    @property
+    def is_service_account(self) -> bool:
+        """Check if this subject is a service account."""
+        return self.type == SubjectType.SERVICE_ACCOUNT
 
     def __eq__(self, other: object) -> bool:
         """Check equality based on type and entity."""

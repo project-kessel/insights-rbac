@@ -42,6 +42,13 @@ logger = logging.getLogger(__name__)
 
 _SUBJECT_TYPE_GROUP = "group"
 _SUBJECT_TYPE_USER = "user"
+
+# Subject types the granted-subject filter can actually resolve. Deliberately narrower than
+# SubjectType.values(): a type which is valid as a role binding subject but which for_granted_subject() does not
+# handle would fall through to an empty queryset, so the caller would get a silently wrong answer instead of a
+# validation error. Widen this only alongside the corresponding branch in RoleBindingQuerySet.
+GRANTED_SUBJECT_TYPES = (SubjectType.GROUP, SubjectType.USER, SubjectType.PRINCIPAL)
+
 # ── Shared subject-building helper ──────────────────────────────────
 
 
@@ -360,9 +367,9 @@ class RoleBindingListInputSerializer(RoleBindingInputSerializerMixin, serializer
             )
 
         if granted_type:
-            if not SubjectType.is_valid(granted_type):
+            if granted_type not in GRANTED_SUBJECT_TYPES:
                 raise serializers.ValidationError(
-                    f"granted_subject_type must be one of: {', '.join(SubjectType.values())}."
+                    f"granted_subject_type must be one of: {', '.join(GRANTED_SUBJECT_TYPES)}."
                 )
             if attrs.get("subject_type") or attrs.get("subject_id"):
                 raise serializers.ValidationError(

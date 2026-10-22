@@ -58,7 +58,11 @@ class SubjectQuerySet:
             return self.group(id=id)
         elif type == SubjectType.USER:
             return self.user(id=id)
-        raise UnsupportedSubjectTypeError(type, supported=[SubjectType.GROUP, SubjectType.USER])
+        elif type == SubjectType.SERVICE_ACCOUNT:
+            return self.service_account(id=id)
+        raise UnsupportedSubjectTypeError(
+            type, supported=[SubjectType.GROUP, SubjectType.USER, SubjectType.SERVICE_ACCOUNT]
+        )
 
     def group(self, id: str) -> "Subject":
         """Get a group subject by UUID.
@@ -118,6 +122,41 @@ class SubjectQuerySet:
 
         return Subject(type=SubjectType.USER, entity=entity)
 
+    def service_account(self, id: str) -> "Subject":
+        """Get a service account subject by UUID.
+
+        A service access token is looked up here too: it is an Organizational Service Account with an extra
+        attribute, not a separate kind of principal, so it binds exactly like a regular service account.
+
+        Args:
+            id: The service account principal UUID
+
+        Returns:
+            Subject wrapping the Principal
+
+        Raises:
+            NotFoundError: If no service account principal has that UUID
+            InvalidFieldError: If the principal has no user_id
+        """
+        from management.subject.model import Subject, SubjectType
+
+        try:
+            # Constrained to service account principals so that a user's UUID resolves to "not found" here
+            # rather than being bound through the wrong subject type.
+            entity = Principal.objects.get(uuid=id, type=Principal.Types.SERVICE_ACCOUNT)
+        except Principal.DoesNotExist:
+            raise NotFoundError(SubjectType.SERVICE_ACCOUNT, id)
+
+        if entity.user_id is None:
+            raise InvalidFieldError(
+                "subject_id",
+                f"Service account '{id}' does not have a user_id yet. "
+                "This is required for role binding operations. "
+                "The user_id is populated from the identity service when the service account is first used.",
+            )
+
+        return Subject(type=SubjectType.SERVICE_ACCOUNT, entity=entity)
+
     def groups(self, uuids: set[str]) -> dict[str, Group]:
         """Resolve multiple group UUIDs to Group objects.
 
@@ -155,6 +194,35 @@ class SubjectQuerySet:
                 "subject_id",
                 f"The following principals do not have a user_id yet: {', '.join(unsynced)}. "
                 "The user_id is populated when the user is synced from the identity provider.",
+            )
+        return result
+
+    def service_accounts(self, uuids: set[str]) -> dict[str, Principal]:
+        """Resolve multiple service account UUIDs to Principal objects.
+
+        Mirrors ``users()``, including the ``user_id`` check, but constrained to service account principals so
+        that a user's UUID is simply absent from the result rather than silently resolving.
+
+        Args:
+            uuids: Set of principal UUID strings to resolve
+
+        Returns:
+            Dict mapping UUID string to Principal instance
+
+        Raises:
+            InvalidFieldError: If any resolved Principal has no user_id
+        """
+        if not uuids:
+            return {}
+        result = {
+            str(p.uuid): p for p in Principal.objects.filter(uuid__in=uuids, type=Principal.Types.SERVICE_ACCOUNT)
+        }
+        unsynced = [uid for uid, p in result.items() if p.user_id is None]
+        if unsynced:
+            raise InvalidFieldError(
+                "subject_id",
+                f"The following service accounts do not have a user_id yet: {', '.join(unsynced)}. "
+                "The user_id is populated from the identity service when the service account is first used.",
             )
         return result
 

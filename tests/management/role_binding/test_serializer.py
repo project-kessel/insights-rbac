@@ -1088,6 +1088,20 @@ class RoleBindingListInputSerializerTest(TestCase):
         self.assertTrue(s.is_valid(), s.errors)
         self.assertIsNone(s.validated_data["granted_subject_id"])
 
+    def test_granted_subject_type_rejects_service_account(self):
+        """Test that the granted-subject filter rejects a subject type it cannot resolve.
+
+        'service-account' is a valid role binding subject type, but for_granted_subject() has no branch for it
+        and would fall through to an empty queryset. Rejecting it here means a caller gets a validation error
+        rather than a silently empty list. Remove this once the queryset learns to resolve it.
+        """
+        s = RoleBindingListInputSerializer(
+            data={"granted_subject_type": "service-account", "granted_subject_id": str(uuid.uuid4())}
+        )
+
+        self.assertFalse(s.is_valid())
+        self.assertIn("granted_subject_type must be one of", str(s.errors))
+
     # --- granted_subject_type ---
 
     def test_granted_subject_type_valid_inputs(self):
