@@ -41,7 +41,6 @@ from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_service import RoleV2Service
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.role_binding.service import API_PRINCIPAL_SOURCE, RoleBindingService
-from management.subject import SubjectType
 from management.tenant_mapping.model import DefaultAccessType, TenantMapping
 from management.tenant_mapping.v2_activation import set_v2_opt_in_state
 from management.tenant_service.v2 import V2TenantBootstrapService
@@ -4663,7 +4662,7 @@ class RoleBindingAuditLogTests(TransactionalIdentityRequest):
         self._assert_audit_log(
             action="edit",
             description=(
-                f"Updated role bindings for group 'test_group'" f" on workspace 'Test Workspace': 2 role(s) assigned"
+                "Updated role bindings for group 'test_group'" " on workspace 'Test Workspace': 2 role(s) assigned"
             ),
         )
 
@@ -4686,6 +4685,6 @@ class RoleBindingAuditLogTests(TransactionalIdentityRequest):
         self._assert_audit_log(
             action="edit",
             description=(
-                f"Updated role bindings for user 'testuser'" f" on workspace 'Test Workspace': 1 role(s) assigned"
+                "Updated role bindings for user 'testuser'" " on workspace 'Test Workspace': 1 role(s) assigned"
             ),
         )

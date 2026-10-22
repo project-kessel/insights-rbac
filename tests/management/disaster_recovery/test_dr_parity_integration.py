@@ -15,28 +15,22 @@ generation → outbox writing → parity verification.
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from django.test import TestCase, override_settings
-from django.utils import timezone
+from django.test import override_settings
 
 from tests.identity_request import IdentityRequest
 from tests.management.disaster_recovery.helpers import _make_tuple
 
 from api.models import Tenant
-from management.disaster_recovery.corrective_writer import (
-    generate_corrective_actions,
-    write_corrective_events,
-)
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
 from management.disaster_recovery.service import reconcile
 from management.group.model import Group
-from management.parity_check.checker import ParityAccessChecker, ParityCheckResult
+from management.parity_check.checker import ParityAccessChecker
 from management.principal.model import Principal
 from management.inventory_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
-from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
@@ -697,7 +691,7 @@ class DRWorkspaceParityIntegrationTest(IdentityRequest):
         """
         from core.kafka_dr import KafkaEvent
         from management.inventory_replicator.outbox_replicator import InMemoryLog
-        from management.inventory_replicator.inventory_replicator import AggregateTypes, ReplicationEventType
+        from management.inventory_replicator.inventory_replicator import AggregateTypes
         from management.workspace.dr_recovery import generate_corrective_workspace_events
 
         ws_exists_1 = Workspace.objects.create(

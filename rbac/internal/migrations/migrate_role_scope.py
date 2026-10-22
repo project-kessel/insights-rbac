@@ -23,12 +23,11 @@ import logging
 from typing import Callable, Optional
 
 from django.conf import settings
-from django.db import OperationalError
 from management.atomic_transactions import atomic_block, atomic_with_retry
 from management.group.model import Group
 from management.permission.scope_service import ImplicitResourceService
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
-from management.inventory_replicator.inventory_replicator import DualWriteException, InventoryReplicator
+from management.inventory_replicator.inventory_replicator import InventoryReplicator
 from management.role.model import Role, RoleScopeState
 from migration_tool.migrate_binding_scope import (
     migrate_car_bindings,
@@ -47,7 +46,7 @@ class _CheckResult:
 
     def __post_init__(self):
         if self.can_migrate != (self.scope_state is not None):
-            raise TypeError(f"Expected a scope state to be present iff can_migrate is true.")
+            raise TypeError("Expected a scope state to be present iff can_migrate is true.")
 
     @classmethod
     def failed(cls):
@@ -70,7 +69,7 @@ def _check_migration(
     role = Role.objects.filter(pk=role.pk).first()
 
     if role is None:
-        logger.info(f"System role concurrently deleted; not updating binding scopes.")
+        logger.info("System role concurrently deleted; not updating binding scopes.")
         return _CheckResult.failed()
 
     if not role.system:

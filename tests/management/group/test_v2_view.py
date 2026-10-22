@@ -43,7 +43,7 @@ from management.inventory_replicator.inventory_replicator import ReplicationEven
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
-from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import set_v2_opt_in_state
 from management.utils import ProblemType
 from rest_framework import status
 from rest_framework.test import APIClient
