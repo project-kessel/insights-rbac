@@ -16,6 +16,7 @@
 #
 """Test the group viewset."""
 
+import functools
 import json
 import random
 from datetime import timedelta
@@ -24,14 +25,17 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
+from django.db.utils import OperationalError
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from psycopg2.errors import DeadlockDetected, SerializationFailure
 
-from management.atomic_transactions import atomic_with_retry
+from management.atomic_transactions import _is_serialization_or_deadlock
 from management.cache import TenantCache
 from management.group.definer import add_roles
 from management.group.serializer import GroupInputSerializer
+from management.group.view import GroupViewSet
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.models import (
@@ -49,6 +53,7 @@ from management.models import (
 from management.role.inventory_api_dual_write_handler import InventoryApiDualWriteHandler
 from management.role.v2_model import CustomRoleV2
 from management.tenant_mapping.model import TenantMapping
+from management.tenant_mapping.v2_activation import V1WriteBlockedError
 from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
@@ -71,6 +76,58 @@ from tests.v2_util import seed_v2_role_from_v1
 from api.cross_access.model import CrossAccountRequest
 from api.cross_access.util import check_cross_request_expiry
 from api.models import Tenant, User
+
+
+def serialization_failure():
+    """Build an OperationalError that _is_serialization_or_deadlock() recognizes as retryable."""
+    err = OperationalError("could not serialize access")
+    err.__cause__ = SerializationFailure("could not serialize access due to concurrent update")
+    return err
+
+
+def deadlock_detected():
+    """Build an OperationalError that _is_serialization_or_deadlock() recognizes as a deadlock."""
+    err = OperationalError("deadlock detected")
+    err.__cause__ = DeadlockDetected("deadlock detected")
+    return err
+
+
+class RetryAtomicStub:
+    """Test-friendly pgtransaction.atomic: context manager + decorator with retry.
+
+    Real ``pgtransaction.atomic(retry=...)`` refuses to retry inside the transaction that
+    ``TestCase`` wraps every test in, so retry behavior is exercised through this stand-in.
+    """
+
+    def __init__(self, isolation_level=None, retry=0):
+        self._retry = retry
+        self._atomic = None
+
+    def __enter__(self):
+        self._atomic = transaction.atomic()
+        return self._atomic.__enter__()
+
+    def __exit__(self, *exc_info):
+        return self._atomic.__exit__(*exc_info)
+
+    def __call__(self, func):
+        retry = self._retry
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for _ in range(1 + retry):
+                try:
+                    with transaction.atomic():
+                        return func(*args, **kwargs)
+                except OperationalError as exc:
+                    if _is_serialization_or_deadlock(exc):
+                        last_exc = exc
+                        continue
+                    raise
+            raise last_exc
+
+        return wrapper
 
 
 def generate_group_member_relation_entry(group_uuid, principal_user_id):
@@ -1516,7 +1573,8 @@ class GroupViewsetTests(IdentityRequest):
 
             test_data = {"roles": [system_role.uuid, self.dummy_role_id]}
 
-            response = client.post(url, test_data, format="json", **self.headers)
+            with self.captureOnCommitCallbacks(execute=True):
+                response = client.post(url, test_data, format="json", **self.headers)
 
             # Here, we look at all of the calls because there may be multiple replication events.
 
@@ -1734,7 +1792,8 @@ class GroupViewsetTests(IdentityRequest):
             url = reverse("v1_management:group-roles", kwargs={"uuid": self.defGroup.uuid})
             client = APIClient()
             url = "{}?roles={}".format(url, default_role.uuid)
-            response = client.delete(url, format="json", **self.headers)
+            with self.captureOnCommitCallbacks(execute=True):
+                response = client.delete(url, format="json", **self.headers)
             actual_call_arg = mock_method.call_args_list[0][0][0]
             to_remove = actual_call_arg["relations_to_remove"]
             tuple_to_replicate = actual_call_arg["relations_to_add"]
@@ -1874,7 +1933,8 @@ class GroupViewsetTests(IdentityRequest):
             url = reverse("v1_management:group-roles", kwargs={"uuid": self.defGroup.uuid})
             client = APIClient()
             url = "{}?roles={}".format(url, default_role.uuid)
-            response = client.delete(url, format="json", **self.headers)
+            with self.captureOnCommitCallbacks(execute=True):
+                response = client.delete(url, format="json", **self.headers)
             actual_call_arg = mock_method.call_args_list[0][0][0]
             to_remove = actual_call_arg["relations_to_remove"]
             tuple_to_replicate = actual_call_arg["relations_to_add"]
@@ -2033,7 +2093,8 @@ class GroupViewsetTests(IdentityRequest):
 
             self.assertCountEqual([], list(groupC.roles()))
 
-            response = client.post(url, test_data, format="json", **self.headers)
+            with self.captureOnCommitCallbacks(execute=True):
+                response = client.post(url, test_data, format="json", **self.headers)
 
             self.assertCountEqual([self.role, self.roleB], list(groupC.roles()))
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -2254,6 +2315,21 @@ class GroupViewsetTests(IdentityRequest):
         # The group should not have the role from Tenant B
         self.assertNotIn(tenant_b_role, group_roles_after_add)
 
+    def test_head_group_roles_does_not_remove_roles(self):
+        """Test that HEAD, which DRF routes to the GET handler, cannot remove roles."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        url = "{}?roles={}".format(url, self.role.uuid)
+
+        self.policyB.roles.add(self.role)
+        self.policyB.save()
+        self.assertCountEqual([self.role], list(self.group.roles()))
+
+        response = client.head(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertCountEqual([self.role], list(self.group.roles()))
+
     def test_remove_admin_default_group_roles(self):
         """Test that admin_default groups' roles are protected from removal"""
         url = reverse("v1_management:group-roles", kwargs={"uuid": self.adminGroup.uuid})
@@ -2277,7 +2353,8 @@ class GroupViewsetTests(IdentityRequest):
             self.policy.roles.add(self.roleB)
             self.assertCountEqual([self.role, self.roleB], list(self.group.roles()))
 
-            response = client.delete(url, format="json", **self.headers)
+            with self.captureOnCommitCallbacks(execute=True):
+                response = client.delete(url, format="json", **self.headers)
 
             self.assertCountEqual([], list(self.group.roles()))
             self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2418,6 +2495,249 @@ class GroupViewsetTests(IdentityRequest):
         client = APIClient()
         response = client.get(url, **self.headers)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_add_group_roles_returns_503_on_serialization_failure(self):
+        """Test that exhausted serialization retries on role add return HTTP 503."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        with patch(
+            "management.group.view.GroupViewSet._write_group_roles_add",
+            side_effect=serialization_failure(),
+        ):
+            response = client.post(url, test_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            response.data["errors"][0]["detail"],
+            "A conflicting update occurred, please retry the request.",
+        )
+        self.assertEqual(response.data["errors"][0]["source"], "groups")
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_add_group_roles_returns_503_on_deadlock(self):
+        """Test that exhausted deadlock retries on role add return HTTP 503."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        with patch(
+            "management.group.view.GroupViewSet._write_group_roles_add",
+            side_effect=deadlock_detected(),
+        ):
+            response = client.post(url, test_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            response.data["errors"][0]["detail"],
+            "A conflicting update occurred, please retry the request.",
+        )
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_add_group_roles_propagates_non_serialization_operational_error(self):
+        """Test that a non-serialization OperationalError on role add propagates instead of 503."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        with patch(
+            "management.group.view.GroupViewSet._write_group_roles_add",
+            side_effect=OperationalError("connection reset by peer"),
+        ):
+            with self.assertRaises(OperationalError):
+                client.post(url, test_data, format="json", **self.headers)
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_remove_group_roles_returns_503_on_deadlock(self):
+        """Test that exhausted deadlock retries on role remove return HTTP 503."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        url = "{}?roles={}".format(url, self.role.uuid)
+        client = APIClient()
+
+        with patch(
+            "management.group.view.GroupViewSet._write_group_roles_remove",
+            side_effect=deadlock_detected(),
+        ):
+            response = client.delete(url, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            response.data["errors"][0]["detail"],
+            "A conflicting update occurred, please retry the request.",
+        )
+        self.assertEqual(response.data["errors"][0]["source"], "groups")
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_remove_group_roles_propagates_non_serialization_operational_error(self):
+        """Test that a non-serialization OperationalError on role remove propagates instead of 503."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        url = "{}?roles={}".format(url, self.role.uuid)
+        client = APIClient()
+
+        with patch(
+            "management.group.view.GroupViewSet._write_group_roles_remove",
+            side_effect=OperationalError("connection reset by peer"),
+        ):
+            with self.assertRaises(OperationalError):
+                client.delete(url, format="json", **self.headers)
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_add_group_roles_v1_write_blocked_returns_403(self):
+        """Test that a V2-activated tenant gets 403, not a retry or a 503, when adding roles."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        with patch(
+            "management.group.view.assert_v1_write_allowed",
+            side_effect=V1WriteBlockedError(),
+        ):
+            response = client.post(url, test_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            response.data["errors"][0]["detail"],
+            "V1 role-to-group assignment operations are not allowed "
+            "for orgs using workspaces. Use v2 role bindings instead.",
+        )
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_remove_group_roles_v1_write_blocked_returns_403(self):
+        """Test that a V2-activated tenant gets 403, not a retry or a 503, when removing roles."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        url = "{}?roles={}".format(url, self.role.uuid)
+        client = APIClient()
+
+        with patch(
+            "management.group.view.assert_v1_write_allowed",
+            side_effect=V1WriteBlockedError(),
+        ):
+            response = client.delete(url, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertCountEqual([self.role], list(self.group.roles()))
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_remove_group_roles_missing_param_fails_before_write(self):
+        """Test that a missing roles query param returns 400 without entering the retryable write."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+
+        with patch("management.group.view.GroupViewSet._write_group_roles_remove") as mock_write:
+            response = client.delete(url, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_write.assert_not_called()
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    def test_add_group_roles_invalid_payload_fails_before_write(self):
+        """Test that an invalid role payload returns 400 without entering the retryable write."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+
+        with patch("management.group.view.GroupViewSet._write_group_roles_add") as mock_write:
+            response = client.post(url, {"invalid": []}, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_write.assert_not_called()
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    def test_write_group_roles_add_re_fetches_group_under_transaction(self, mock_repl):
+        """Test that the role-add write re-fetches the group instead of reusing the precheck instance."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        original_get_object = GroupViewSet.get_object
+        fetches = []
+
+        def counting_get_object(view):
+            fetches.append(view.request.method)
+            return original_get_object(view)
+
+        with patch("management.group.view.GroupViewSet.get_object", counting_get_object):
+            response = client.post(url, test_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Once for the precheck, once inside the retryable write.
+        self.assertEqual(fetches, ["POST", "POST"])
+
+    @override_settings(ATOMIC_RETRY_DISABLED=True, NOTIFICATIONS_ENABLED=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_add_group_roles_notifications_deferred_via_on_commit(self, send_kafka_message, mock_repl):
+        """Test that role-added notifications only fire once the write transaction commits."""
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        def notification_topics():
+            return [c.args[0] for c in send_kafka_message.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
+
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            response = client.post(url, test_data, format="json", **self.headers)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            # Deferred, so no notification is emitted while the transaction is still open.
+            self.assertEqual(notification_topics(), [])
+
+        self.assertTrue(callbacks)
+        self.assertEqual(notification_topics(), [settings.NOTIFICATIONS_TOPIC])
+
+    @override_settings(PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED=True, NOTIFICATIONS_ENABLED=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_add_group_roles_integration_retries_exhausted_503_no_side_effects(self, send_kafka_message, mock_repl):
+        """Integration: role add retries 9 times, returns 503, and persists nothing.
+
+        Unlike the unit tests above that replace _write_group_roles_add entirely, this lets the
+        decorated method run with retry logic active. The serialization error is raised from
+        add_roles (called inside _write_group_roles_add), verifying that:
+        - the @backfill_atomic(retries=8) decorator retries 9 times (1 + 8),
+        - the outer handler maps exhausted retries to HTTP 503,
+        - no role assignment, outbox entry, or notification is persisted.
+        """
+        call_counter = {"attempts": 0}
+
+        def failing_dual_write(*args, **kwargs):
+            call_counter["attempts"] += 1
+            raise serialization_failure()
+
+        mock_pgtransaction = Mock()
+        mock_pgtransaction.atomic = RetryAtomicStub
+
+        url = reverse("v1_management:group-roles", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        test_data = {"roles": [self.roleB.uuid]}
+
+        with patch("management.atomic_transactions.pgtransaction", mock_pgtransaction):
+            with self.settings(ATOMIC_RETRY_DISABLED=False):
+                with patch(
+                    "management.group.definer.InventoryApiDualWriteGroupHandler",
+                    failing_dual_write,
+                ):
+                    response = client.post(url, test_data, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            response.data["errors"][0]["detail"],
+            "A conflicting update occurred, please retry the request.",
+        )
+        self.assertEqual(response.data["errors"][0]["source"], "groups")
+
+        # 1 initial attempt + 8 retries from @backfill_atomic(retries=8)
+        self.assertEqual(call_counter["attempts"], 9)
+
+        # Every attempt rolled back: no system policy, no role assignment, no replication, no notification
+        self.assertFalse(Policy.objects.filter(group=self.group, system=True).exists())
+        self.assertNotIn(self.roleB, self.group.roles())
+        mock_repl.assert_not_called()
+        self.assertEqual(
+            [c.args[0] for c in send_kafka_message.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC],
+            [],
+        )
 
 
 class GroupPrincipalViewsetTests(GroupViewsetTests):
@@ -4471,11 +4791,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
     )
     def test_add_principals_returns_503_on_serialization_failure(self, mock_request, mock_repl):
         """Test that exhausted serialization retries return HTTP 503."""
-        from django.db.utils import OperationalError
-        from psycopg2.errors import SerializationFailure
-
-        serialization_error = OperationalError("could not serialize access")
-        serialization_error.__cause__ = SerializationFailure("could not serialize access due to concurrent update")
+        serialization_error = serialization_failure()
 
         url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
         client = APIClient()
@@ -4510,11 +4826,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
     )
     def test_add_principals_returns_503_on_deadlock(self, mock_request, mock_repl):
         """Test that exhausted deadlock retries return HTTP 503."""
-        from django.db.utils import OperationalError
-        from psycopg2.errors import DeadlockDetected
-
-        deadlock_error = OperationalError("deadlock detected")
-        deadlock_error.__cause__ = DeadlockDetected("deadlock detected")
+        deadlock_error = deadlock_detected()
 
         url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
         client = APIClient()
@@ -4543,8 +4855,6 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
     )
     def test_add_principals_propagates_non_serialization_operational_error(self, mock_request, mock_repl):
         """Test that non-serialization OperationalError propagates instead of returning 503."""
-        from django.db.utils import OperationalError
-
         bare_error = OperationalError("connection reset by peer")
 
         url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
@@ -4678,57 +4988,14 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         - the outer handler maps exhausted retries to HTTP 503,
         - no principal relation, outbox entry, or notification is persisted.
         """
-        import functools as _functools
-
-        from django.db import transaction as _transaction
-        from django.db.utils import OperationalError
-        from psycopg2.errors import SerializationFailure
-
-        from management.atomic_transactions import _is_serialization_or_deadlock
-
         call_counter = {"attempts": 0}
 
         def failing_add_users(self_view, group, principals_from_response, org_id=None):
             call_counter["attempts"] += 1
-            err = OperationalError("could not serialize access")
-            err.__cause__ = SerializationFailure("could not serialize access due to concurrent update")
-            raise err
-
-        class _TestRetryAtomic:
-            """Test-friendly pgtransaction.atomic: context manager + decorator with retry."""
-
-            def __init__(self, isolation_level=None, retry=0):
-                self._retry = retry
-                self._atomic = None
-
-            def __enter__(self):
-                self._atomic = _transaction.atomic()
-                return self._atomic.__enter__()
-
-            def __exit__(self, *exc_info):
-                return self._atomic.__exit__(*exc_info)
-
-            def __call__(self, func):
-                retry = self._retry
-
-                @_functools.wraps(func)
-                def wrapper(*args, **kwargs):
-                    last_exc = None
-                    for _ in range(1 + retry):
-                        try:
-                            with _transaction.atomic():
-                                return func(*args, **kwargs)
-                        except OperationalError as exc:
-                            if _is_serialization_or_deadlock(exc):
-                                last_exc = exc
-                                continue
-                            raise
-                    raise last_exc
-
-                return wrapper
+            raise serialization_failure()
 
         mock_pgtransaction = Mock()
-        mock_pgtransaction.atomic = _TestRetryAtomic
+        mock_pgtransaction.atomic = RetryAtomicStub
 
         url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
         client = APIClient()
@@ -4737,9 +5004,8 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
 
         with patch("management.atomic_transactions.pgtransaction", mock_pgtransaction):
             with self.settings(ATOMIC_RETRY_DISABLED=False):
-                with patch("management.group.view.backfill_atomic", atomic_with_retry):
-                    with patch("management.group.view.GroupViewSet.add_users", failing_add_users):
-                        response = client.post(url, test_data, format="json", **self.headers)
+                with patch("management.group.view.GroupViewSet.add_users", failing_add_users):
+                    response = client.post(url, test_data, format="json", **self.headers)
 
         # Verify 503 with correct error payload
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)

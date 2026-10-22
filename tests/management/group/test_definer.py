@@ -91,7 +91,8 @@ class GroupDefinerTests(IdentityRequest):
 
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             try:
-                seed_group()
+                with self.captureOnCommitCallbacks(execute=True):
+                    seed_group()
             except Exception:
                 self.fail(msg="update seed_group encountered an exception")
 
