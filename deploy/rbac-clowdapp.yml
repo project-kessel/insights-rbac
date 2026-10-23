@@ -2001,7 +2001,7 @@ parameters:
   value: 'nonprod-hcc-rbac'
 - name: BONFIRE_DEPENDENCIES
   description: A comma separated list of non ClowdApp dependencies for bonfire to deploy
-  value: "model-access-permissions-yml-stage,rbac-config-yml-stage"
+  value: "model-access-permissions-yml-stage,rbac-config-yml-stage,debezium-connector"
 - name: RELATION_API_SERVER
   description: The gRPC API server to use for the relation
   value: "localhost:9000"
