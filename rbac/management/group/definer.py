@@ -222,6 +222,8 @@ def add_roles(group, roles_or_role_ids, tenant, user=None):
             continue
 
         system_policy.roles.add(role)
+        # Send notifications after the transaction commits, so a rolled-back retry attempt
+        # does not emit a Kafka message for a change that never landed.
         transaction.on_commit(
             partial(group_role_change_notification_handler, user, group, role, "added"),
             robust=True,
