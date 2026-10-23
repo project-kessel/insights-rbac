@@ -100,21 +100,26 @@ class RetryAtomicStub:
     """
 
     def __init__(self, isolation_level=None, retry=0):
+        """Store retry count and prepare the inner atomic context manager."""
         self._retry = retry
         self._atomic = None
 
     def __enter__(self):
+        """Enter a ``transaction.atomic`` savepoint."""
         self._atomic = transaction.atomic()
         return self._atomic.__enter__()
 
     def __exit__(self, *exc_info):
+        """Exit the savepoint, propagating any exception."""
         return self._atomic.__exit__(*exc_info)
 
     def __call__(self, func):
+        """Decorate *func* so it retries on serialization/deadlock errors."""
         retry = self._retry
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            """Execute the wrapped function with retry-on-conflict semantics."""
             last_exc = None
             for _ in range(1 + retry):
                 try:
@@ -2655,6 +2660,7 @@ class GroupViewsetTests(IdentityRequest):
         fetches = []
 
         def counting_get_object(view):
+            """Record get_object calls so we can assert re-fetch inside the write."""
             fetches.append(view.request.method)
             return original_get_object(view)
 
@@ -2675,6 +2681,7 @@ class GroupViewsetTests(IdentityRequest):
         test_data = {"roles": [self.roleB.uuid]}
 
         def notification_topics():
+            """Return the list of Kafka calls targeting the NOTIFICATIONS_TOPIC."""
             return [c.args[0] for c in send_kafka_message.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
 
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
@@ -2702,6 +2709,7 @@ class GroupViewsetTests(IdentityRequest):
         call_counter = {"attempts": 0}
 
         def failing_dual_write(*args, **kwargs):
+            """Simulate a serialization failure on every dual-write attempt."""
             call_counter["attempts"] += 1
             raise serialization_failure()
 
@@ -2718,7 +2726,8 @@ class GroupViewsetTests(IdentityRequest):
                     "management.group.definer.InventoryApiDualWriteGroupHandler",
                     failing_dual_write,
                 ):
-                    response = client.post(url, test_data, format="json", **self.headers)
+                    with self.captureOnCommitCallbacks(execute=True) as callbacks:
+                        response = client.post(url, test_data, format="json", **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(
@@ -2729,6 +2738,9 @@ class GroupViewsetTests(IdentityRequest):
 
         # 1 initial attempt + 8 retries from @backfill_atomic(retries=8)
         self.assertEqual(call_counter["attempts"], 9)
+
+        # No on_commit callbacks should have been registered, since every attempt rolled back.
+        self.assertEqual(callbacks, [])
 
         # Every attempt rolled back: no system policy, no role assignment, no replication, no notification
         self.assertFalse(Policy.objects.filter(group=self.group, system=True).exists())
@@ -4991,6 +5003,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         call_counter = {"attempts": 0}
 
         def failing_add_users(self_view, group, principals_from_response, org_id=None):
+            """Simulate a serialization failure on every add_users attempt."""
             call_counter["attempts"] += 1
             raise serialization_failure()
 
