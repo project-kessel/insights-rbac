@@ -5744,7 +5744,9 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["error"], "HTTP 400")
-        self.assertEqual(tool_output["detail"], "V2 orgs may only query applications in the allowed list. Disallowed: rbac")
+        self.assertEqual(
+            tool_output["detail"], "V2 orgs may only query applications in the allowed list. Disallowed: rbac"
+        )
         self.assertEqual(tool_output["tool"], "list_access")
         self.assertEqual(tool_output["endpoint"], "GET /api/v1/access/")
         self.assertIn("must not be interpreted as the user having no access", tool_output["hint"])
