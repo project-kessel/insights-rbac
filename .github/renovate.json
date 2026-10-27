@@ -8,6 +8,16 @@
   },
   "packageRules": [
     {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": ">=3.12 <3.13",
+      "description": "Keep CI on the application's supported Python minor version"
+    },
+    {
       "matchPackageNames": [
         "boto3"
       ],
