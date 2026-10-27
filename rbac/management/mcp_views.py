@@ -753,6 +753,53 @@ def _call_view(
     return response.content.decode()
 
 
+def _call_access_view_v1(request: HttpRequest, query_params: dict[str, str]) -> tuple[int, Any]:
+    """Call GET /api/v1/access/ and return the status code with the parsed body.
+
+    Unlike :func:`_call_view`, the status code is exposed so callers can tell a
+    successful response from a rejection (e.g. the 400 the endpoint returns for
+    V2-opted-in orgs) instead of reading an empty body as "no access".
+    """
+    view_request = _clone_request(request, reverse("v1_management:access"), data=query_params)
+    response = _access_view(view_request)
+    if hasattr(response, "render"):
+        response = response.render()
+    content = response.content.decode()
+    try:
+        body = json.loads(content)
+    except ValueError:
+        body = {"detail": content[:512]}
+    return response.status_code, body
+
+
+def _access_rejection_detail(status_code: int, body: Any) -> str:
+    """Build a short, printable detail string for a rejected /api/v1/access/ call.
+
+    The body may carry the detail in two shapes:
+
+    * Direct ``Response`` — ``{"detail": "..."}`` (top-level key).
+    * V1 exception handler — ``{"errors": [{"detail": "..."}]}`` (flat list).
+
+    We check both, preferring the top-level value, and fall back to the HTTP
+    status code when neither provides a non-empty string.
+    """
+    if not isinstance(body, dict):
+        return f"HTTP {status_code}"
+    # Prefer top-level "detail" (direct Response rejections).
+    detail = body.get("detail")
+    if isinstance(detail, str) and detail:
+        return detail[:512]
+    # Fall back to the first non-empty errors[].detail (V1 exception handler format).
+    errors = body.get("errors")
+    if isinstance(errors, list):
+        for entry in errors:
+            if isinstance(entry, dict):
+                entry_detail = entry.get("detail")
+                if isinstance(entry_detail, str) and entry_detail:
+                    return entry_detail[:512]
+    return f"HTTP {status_code}"
+
+
 # ┌──────────────────────────────────────┬───────────┬────────────────────────────────────────────────────┐
 # │ MCP Tool                             │ Version   │ API Endpoint                                       │
 # ├──────────────────────────────────────┼───────────┼────────────────────────────────────────────────────┤
@@ -1188,14 +1235,24 @@ def _find_authorizing_role(username: str, tenant: Any, required_perms: list[str]
         "currently authenticated user. Set 'username' to query another user's access (requires "
         "org admin or rbac:principal:read permission). Each entry is a permission string "
         "with optional resource definitions that further constrain it. "
-        "IMPORTANT: This is a V1-only endpoint. For V2 organizations, it only accepts applications "
-        "excluded from the V2 migration and does NOT include V2 role binding permissions. For V2 orgs, use "
-        "check_user_permission (which auto-detects V1/V2) or list_role_bindings with "
-        "granted_subject_type='principal' and granted_subject_principal_user_id='<username>'. "
+        "IMPORTANT: This is a V1-only endpoint and does not include V2 role binding permissions. "
+        "For write-activated V2 orgs, the MCP dispatcher blocks applications outside the V2 migration "
+        "exclude list. For V2-opted-in orgs, GET /api/v1/access/ may reject those applications; "
+        "the tool then returns the error object described in the caveats. For write-activated V2 orgs, "
+        "check_user_permission uses V2 bindings. An opt-in-only org still uses V1 for that check, "
+        "so it may repeat the rejection and cannot verify access. If V2 bindings are available, "
+        "inspect list_role_bindings(granted_subject_type='principal', "
+        "granted_subject_principal_user_id='<external user_id>'); user_id is not necessarily the username. "
+        "Alternatively use granted_subject_type='user' with granted_subject_id='<principal UUID>'. "
+        "Inspect role permissions and resource scope; bindings alone do not prove effective access. "
         "Order by: 'application', 'resource_type', 'verb' (prefix with '-' to reverse). "
         "Returns: {meta: {count}, links, data: [{permission, resourceDefinitions: [...]}]}. "
         "Calls: GET /api/v1/access/\n"
         "Caveats:\n"
+        "- When the access endpoint rejects the call (e.g. a V2-opted-in org querying an application "
+        "outside the migration exclude list), the result is {error, detail, tool, endpoint, hint} with "
+        "no 'data' key. That is a rejection, not 'no access' -- never report the user as having no "
+        "permissions in that case.\n"
         "- This shows the flattened effective permissions but not the path: you cannot see which "
         "role or group granted each permission. For V2 orgs, use get_role and list_role_bindings "
         "to trace the full chain."
@@ -1226,8 +1283,27 @@ def list_access(
     if order_by:
         query_params["order_by"] = order_by
 
-    path = reverse("v1_management:access")
-    return _call_view(request, _access_view, path, query_params)
+    status_code, body = _call_access_view_v1(request, query_params)
+    if status_code >= 400:
+        detail = _access_rejection_detail(status_code, body)
+        logger.warning(
+            "mcp: list_access rejected for application=%r username=%r: HTTP %d %r",
+            application,
+            username,
+            status_code,
+            detail,
+        )
+        return json.dumps(
+            {
+                "error": f"HTTP {status_code}",
+                "detail": detail,
+                "tool": "list_access",
+                "endpoint": "GET /api/v1/access/",
+                "hint": "The access data could not be retrieved because the API rejected the request. "
+                "This must not be interpreted as the user having no access.",
+            }
+        )
+    return json.dumps(body)
 
 
 @register_tool(
@@ -2911,15 +2987,16 @@ def get_workspace(
         "Filter by role_id, resource_type, resource_id, subject_type, or subject_id. "
         "ACCESS RESOLUTION: To find what permissions a user has (or which are missing) in V2, "
         "(1) call list_role_bindings(granted_subject_type='principal', "
-        "granted_subject_principal_user_id='<username>') to find all effective bindings "
+        "granted_subject_principal_user_id='<external user_id>') to find bindings "
         "including those inherited through group membership "
-        "(this is the V2 equivalent of list_access(username=X) for V1), "
+        "(user_id is not necessarily the username), or use granted_subject_type='user' "
+        "with granted_subject_id='<principal UUID>', "
         "(2) for each binding extract the role UUID, "
         "(3) call get_role(role_uuid=...) to inspect "
         "the role's permissions, (4) compare against the required permissions to identify "
         "what is granted and what is missing. "
-        "TIP: For a quick yes/no check, use check_user_permission instead — it auto-detects "
-        "V1/V2 and does the full resolution automatically. "
+        "TIP: check_user_permission uses V2 only after write activation; for opt-in-only orgs "
+        "its V1 access request may be rejected. Bindings alone do not prove effective access. "
         "Returns: {meta: {count}, links, data: [{uuid, role, resource, subject, ...}]}. "
         "Calls: GET /api/v2/role-bindings/"
     ),
@@ -3034,6 +3111,9 @@ def _permission_matches(granted_permission: str, requested_permission: str) -> b
         "V1 calls: GET /api/v1/access/?username=X&application=Y (internally). "
         "V2 resolves: role bindings → roles → permissions (internally).\n"
         "Caveats:\n"
+        "- In V1, 'allowed' is null (with 'error' and 'hint') when the GET /api/v1/access/ call was "
+        "rejected. The permission could not be verified, which is not the same as being denied -- "
+        "report it as unknown, not as false.\n"
         "- Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions, "
         "not their effective unlimited access.\n"
         "- ResourceDefinition filters are stored but enforced by the consuming application, not RBAC.\n"
@@ -3187,10 +3267,9 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
         "username": username,
         "limit": "1000",
     }
-    path = reverse("v1_management:access")
 
     try:
-        raw = _call_view(request, _access_view, path, query_params)
+        status_code, data = _call_access_view_v1(request, query_params)
     except Exception as e:
         logger.warning(
             "mcp: check_user_permission failed for user=%s permission=%s application=%s: %s",
@@ -3206,17 +3285,29 @@ def _check_user_permission_v1(request: HttpRequest, username: str, permission: s
             }
         )
 
-    data = json.loads(raw)
-
-    if "detail" in data:
-        detail = data["detail"]
-        if not isinstance(detail, str) or len(detail) > 256:
-            detail = "Access denied or unexpected error"
+    # Any error status means the permission was never evaluated, so "allowed" stays null
+    # rather than false: a 400 (V2-opted-in org) and a 403 (caller cannot query this user)
+    # are both "could not verify", not "denied".
+    if status_code >= 400:
+        detail = _access_rejection_detail(status_code, data)
+        hint = "The permission could not be verified because the GET /api/v1/access/ call was rejected."
+        if status_code in (401, 403):
+            hint += " Requires org admin or rbac:principal:read permission to check another user."
+        logger.warning(
+            "mcp: check_user_permission rejected for user=%r permission=%r application=%r: HTTP %d %r",
+            username,
+            permission,
+            application,
+            status_code,
+            detail,
+        )
         return json.dumps(
             {
-                "allowed": False,
+                "allowed": None,
+                "username": username,
+                "permission": permission,
                 "error": detail,
-                "hint": "Requires org admin or rbac:principal:read permission to check another user.",
+                "hint": hint,
             }
         )
 
@@ -3281,6 +3372,9 @@ _DEFAULT_AUDIT_LOG_LIMIT = 10
         "summary: {group_count, permission_count, actions_by_user, recent_actions_on_groups}}. "
         "The user is identified by UUID in the response (email, last_name redacted).\n"
         "Caveats:\n"
+        "- In V1, an 'access_errors' list is added for applications whose access call was rejected. "
+        "When it is present, 'access' and summary.permission_count are incomplete -- the user may "
+        "have more permissions than shown. Applications that succeeded are still listed in 'access'.\n"
         "- Org admins have implicit full access that bypasses all RBAC checks; "
         "this is not reflected in the returned data.\n"
         "- Permission names are naming conventions only -- RBAC cannot confirm what UI elements "
@@ -3415,7 +3509,9 @@ def get_user_state(
         if is_v2:
             result["access"] = _get_user_access_v2(request, principal, tenant)
         else:
-            result["access"] = _get_user_access_v1(request, username)
+            result["access"], access_errors = _get_user_access_v1(request, username)
+            if access_errors:
+                result["access_errors"] = access_errors
 
     result["summary"]["permission_count"] = len(result["access"])
 
@@ -3482,6 +3578,11 @@ def get_user_state(
         "view_audit_details": "Use list_audit_logs(group_name='<group>', include_authorization=True) for details",
         "trace_role_permissions": "Use get_role(role_uuid='<uuid>') to see all permissions granted by a role",
     }
+    if result.get("access_errors"):
+        result["hints"]["incomplete_access"] = (
+            "The applications in access_errors could not be queried, so 'access' and "
+            "summary.permission_count are incomplete. Do not report them as the user's full access."
+        )
 
     return json.dumps(result, default=str)
 
@@ -3516,19 +3617,23 @@ def lookup_person(
     )
 
 
-def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, Any]]:
+def _get_user_access_v1(request: HttpRequest, username: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Get user's access permissions using V1 API.
 
     The access endpoint requires an application filter, so we first get distinct
     applications the user has access to, then query each.
+
+    Returns (access_list, access_errors). Applications whose access call was
+    rejected are reported in access_errors so the caller does not present them
+    as "no access"; applications that succeeded are still in access_list.
     """
     tenant = getattr(request, "tenant", None)
     if not tenant:
-        return []
+        return [], []
 
     principal = Principal.objects.filter(username=username, tenant=tenant).first()
     if not principal:
-        return []
+        return [], []
 
     # Get distinct applications the user has access to
     applications = (
@@ -3541,8 +3646,8 @@ def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, A
     )
 
     access_list: list[dict[str, Any]] = []
+    access_errors: list[dict[str, Any]] = []
     seen_permissions: set[str] = set()
-    path = reverse("v1_management:access")
 
     for app in applications:
         if not app:
@@ -3553,8 +3658,14 @@ def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, A
             "limit": "1000",
         }
         try:
-            raw = _call_view(request, _access_view, path, query_params)
-            data = json.loads(raw)
+            status_code, data = _call_access_view_v1(request, query_params)
+            if status_code >= 400:
+                detail = _access_rejection_detail(status_code, data)
+                logger.warning(
+                    "mcp: V1 access rejected for user=%r app=%r: HTTP %d %r", username, app, status_code, detail
+                )
+                access_errors.append({"application": app, "status": status_code, "detail": detail})
+                continue
             for entry in data.get("data", []):
                 perm = entry.get("permission", "")
                 if perm and perm not in seen_permissions:
@@ -3562,8 +3673,9 @@ def _get_user_access_v1(request: HttpRequest, username: str) -> list[dict[str, A
                     access_list.append(entry)
         except Exception:
             logger.warning("mcp: failed to get V1 access for user=%s app=%s", username, app, exc_info=True)
+            access_errors.append({"application": app, "status": None, "detail": "Failed to retrieve access"})
 
-    return access_list
+    return access_list, access_errors
 
 
 @register_tool(
@@ -3972,6 +4084,11 @@ def _analyze_expected_permission(
         "(3) do nothing -- audit the role definition first. "
         "Format as 'Reply 1, 2, or 3 -- or no'. Do NOT execute write tools without explicit user selection.\n"
         "Caveats:\n"
+        "- In V1, analysis.effective_access_error is present when the GET /api/v1/access/ call was "
+        "rejected; 'effective_access' is then empty because it could not be retrieved, not because "
+        "the user has no access. Group/role analysis covers explicit memberships only and is partial; "
+        "implicit default grants are not checked. The overall expected permission is unknown, "
+        "except for org admins, whose admin bypass still reports it as granted.\n"
         "- Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions, "
         "not their effective unlimited access.\n"
         "- In V1, roles are assigned to groups -- roles cannot be assigned directly to users. "
@@ -4058,7 +4175,7 @@ def investigate_user_access(
     )
     groups_list = list(groups)
 
-    if not groups_list and not is_org_admin:
+    if not groups_list and not is_org_admin and not application:
         return json.dumps(
             {
                 "user": user_info,
@@ -4066,8 +4183,9 @@ def investigate_user_access(
                 "groups": [],
                 "effective_access": [],
                 "analysis": {
-                    "has_expected_permission": False,
-                    "message": f"User '{username}' is not a member of any groups. No permissions are granted.",
+                    "has_expected_permission": None,
+                    "message": f"User '{username}' is not a member of any groups. "
+                    "Implicit default grants were not checked.",
                     "hint": "Use list_groups() to see available groups, then add the user to appropriate groups.",
                 },
             }
@@ -4121,19 +4239,35 @@ def investigate_user_access(
     effective_access: list[dict[str, Any]] = []
     effective_access_error: str | None = None
     if application:
-        path = reverse("v1_management:access")
         query_params: dict[str, str] = {
             "application": application,
             "username": username,
             "limit": "1000",
         }
         try:
-            raw = _call_view(request, _access_view, path, query_params)
-            data = json.loads(raw)
-            effective_access = data.get("data", [])
+            status_code, data = _call_access_view_v1(request, query_params)
+            if status_code >= 400:
+                detail = _access_rejection_detail(status_code, data)
+                effective_access_error = f"HTTP {status_code}: {detail}"
+                logger.warning(
+                    "mcp: effective access rejected for user=%r app=%r: HTTP %d %r",
+                    username,
+                    application,
+                    status_code,
+                    detail,
+                )
+            else:
+                effective_access = data.get("data", [])
         except Exception as e:
             effective_access_error = "Failed to retrieve effective access"
             logger.warning("mcp: failed to get effective access for user=%s app=%s: %s", username, application, e)
+
+    # Effective access includes implicit default groups absent from explicit memberships.
+    for entry in effective_access:
+        permission = entry.get("permission")
+        if permission and permission not in all_permissions:
+            all_permissions.add(permission)
+            permission_sources[permission] = [{"source": "effective access"}]
 
     # Step 5: Analyze the expected permission
     analysis: dict[str, Any] = {
@@ -4144,6 +4278,9 @@ def investigate_user_access(
 
     if effective_access_error:
         analysis["effective_access_error"] = effective_access_error
+        analysis["group_analysis_scope"] = (
+            "partial: explicit memberships only; implicit default grants are not checked"
+        )
 
     if application:
         app_permissions = [p for p in all_permissions if p.startswith(f"{application}:")]
@@ -4152,8 +4289,23 @@ def investigate_user_access(
 
     # Use shared helper for permission analysis
     _analyze_expected_permission(
-        application, expected_permission, expected_verb, all_permissions, permission_sources, is_org_admin, analysis
+        application,
+        expected_permission,
+        expected_verb,
+        all_permissions,
+        permission_sources,
+        is_org_admin,
+        analysis,
     )
+    # An org admin bypass is independent of the failed lookup, so only non-admin results become unknown.
+    if effective_access_error and not is_org_admin and "expected_permission_check" in analysis:
+        analysis["explicit_group_permission_check"] = analysis.pop("expected_permission_check")
+        analysis["has_expected_permission"] = None
+        analysis["expected_permission_check"] = {
+            "looking_for": _build_expected_perm_full(application, expected_permission, expected_verb),
+            "found": None,
+            "reason": "Effective access could not be retrieved; explicit group analysis is partial.",
+        }
 
     # Add V1-specific gap analysis if permission not found
     expected_perm_full = _build_expected_perm_full(application, expected_permission, expected_verb)
@@ -4211,6 +4363,12 @@ def investigate_user_access(
         "check_role_contents": "Use get_role(role_uuid='...') to see all permissions in a role",
         "add_user_to_group": "Use list_groups(role_names='...') to find groups with a specific role",
     }
+    if effective_access_error:
+        result["hints"]["verify_specific_permission"] = (
+            "The V1 permission check may repeat the rejection. If V2 bindings are available, inspect "
+            "list_role_bindings(granted_subject_type='user', granted_subject_id='<principal UUID>') "
+            "using user.uuid; inspect roles and resource scope. This does not prove effective access."
+        )
 
     return json.dumps(result, default=str)
 
