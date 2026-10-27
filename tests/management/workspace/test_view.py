@@ -1006,11 +1006,10 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         status_code = response.data.get("status")
         detail = response.data.get("detail")
-        instance = response.data.get("instance")
         self.assertIsNotNone(detail)
         self.assertEqual(detail, "This field is required.")
         self.assertEqual(status_code, 400)
-        self.assertEqual(instance, url)
+        self.assertNotIn("instance", response.data)
         self.assertEqual(response.get("content-type"), "application/problem+json")
 
     def test_update_duplicate_workspace(self):
@@ -1280,7 +1279,6 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(
             response_message.get("detail"), f"A workspace with the name '{wsB.name}' already exists under same parent."
         )
-        self.assertEqual(response_message.get("instance"), f"/api/rbac/v2/workspaces/{wsA.id}/")
 
     def test_partial_update_workspace_existing_name_fail(self):
         """Test the workspace name update (PATCH) fail for already existing "name" under same parent."""
@@ -1304,7 +1302,6 @@ class WorkspaceTestsCreateUpdateDelete(TransactionalWorkspaceViewTests):
         self.assertEqual(
             response_message.get("detail"), f"A workspace with the name '{wsB.name}' already exists under same parent."
         )
-        self.assertEqual(response_message.get("instance"), f"/api/rbac/v2/workspaces/{wsA.id}/")
 
     def test_update_workspace_existing_name_success(self):
         """
