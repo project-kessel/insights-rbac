@@ -438,6 +438,7 @@ List access permissions for a principal (V1 API only). By default shows access f
 
 **Caveats:**
 - V1-only endpoint. For V2 organizations, use `check_user_permission` or `list_role_bindings` instead.
+- When `GET /api/v1/access/` rejects the call (e.g. a V2-opted-in org querying an application outside the migration exclude list), the tool returns `{error, detail, tool, endpoint, hint}` instead of `data`. That is a rejection, not "no access".
 - Shows flattened effective permissions but not which role or group granted each one. Use `list_group_roles` + `list_role_access` to trace the full chain.
 
 ---
@@ -1351,6 +1352,7 @@ Investigate why a user has or lacks expected permissions, especially when they b
 **Returns:** V1: `{user, org_version, groups: [{roles: [{permissions}]}], effective_access, analysis, permission_sources}`. V2: `{user, org_version, groups, role_bindings: [{role: {permissions}}], effective_access, analysis}`.
 
 **Caveats:**
+- In V1, `analysis.effective_access_error` is present when `GET /api/v1/access/` rejected the call; `effective_access` is then empty because it could not be retrieved, not because the user has none.
 - Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions.
 - In V1, roles are assigned to groups. In V2, roles are bound to subjects via role bindings.
 - Permission names are naming conventions only.
@@ -1376,6 +1378,7 @@ Check whether a specific user has a specific permission. Returns true/false with
 **Returns:** `{allowed: bool, username, permission, matched_permission, role_name, role_uuid, org_version}`.
 
 **Caveats:**
+- In V1, `allowed` is `null` with an `error` and `hint` when `GET /api/v1/access/` rejected the call: the permission could not be verified, which is not the same as being denied.
 - Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions.
 - ResourceDefinition filters are enforced by the consuming application, not RBAC.
 
@@ -1400,6 +1403,7 @@ Get comprehensive state for a specific user in one call. Returns groups, roles, 
 **Returns:** `{username, org_version, groups: [{name, roles, recent_activity}], access, user_actions: {total_count, by_group, by_type, recent}, summary, hints}`.
 
 **Caveats:**
+- In V1, an `access_errors: [{application, status, detail}]` list is added for applications whose access call was rejected. When it is present, `access` and `summary.permission_count` are incomplete and `hints.incomplete_access` says so. Applications that succeeded are still listed in `access`.
 - Org admins have implicit full access not reflected in the returned data.
 
 ---
