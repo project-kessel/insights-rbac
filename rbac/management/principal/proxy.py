@@ -42,6 +42,7 @@ USER_ENV_HEADER = "x-rh-insights-env"
 CLIENT_ID_HEADER = "x-rh-clientid"
 API_TOKEN_HEADER = "x-rh-apitoken"
 CLIENT_CERT_PATH = "client_cert_path"
+BYPASS_BOP_EMAIL = "local-user@example.test"
 
 bop_request_time_tracking = Histogram(
     "rbac_proxy_request_processing_seconds", "Time spent processing requests to BOP from RBAC"
@@ -116,6 +117,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
     @staticmethod
     def _call_item(item, return_id=False):
+        """Build a normalised principal dict from a raw BOP response item."""
         processed_item = {
             "username": item.get("username"),
             "email": item.get("email"),
@@ -172,14 +174,16 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
         if settings.BYPASS_BOP_VERIFICATION:
             to_return = []
+            local_principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
             if data is None:
-                for principal in Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False):
+                for principal in local_principals:
                     to_return.append(
                         dict(
                             username=principal.username,
                             first_name="foo",
                             last_name="bar",
-                            email="baz",
+                            email=BYPASS_BOP_EMAIL,
+                            is_active=True,
                             user_id="51736777",
                             type=principal.type,
                         )
@@ -191,16 +195,56 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                             username=principal,
                             first_name="foo",
                             last_name="bar",
-                            email="baz",
+                            email=BYPASS_BOP_EMAIL,
+                            is_active=True,
                             user_id=principal,
                             type="user",
                         )
                     )
-            elif "primaryEmail" in data:
-                # We can't fake a lookup for an email address, so we won't try.
-                pass
+            elif "principalStartsWith" in data:
+                principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
+                for principal in principals:
+                    to_return.append(
+                        dict(
+                            username=principal.username,
+                            first_name="foo",
+                            last_name="bar",
+                            email=BYPASS_BOP_EMAIL,
+                            is_active=True,
+                            user_id=principal.user_id,
+                            type=principal.type,
+                        )
+                    )
+            elif "emailStartsWith" in data or "primaryEmail" in data:
+                if "emailStartsWith" in data:
+                    matches_email = BYPASS_BOP_EMAIL.startswith(data["emailStartsWith"])
+                else:
+                    matches_email = data["primaryEmail"] == BYPASS_BOP_EMAIL
+                if matches_email:
+                    for principal in local_principals:
+                        to_return.append(
+                            dict(
+                                username=principal.username,
+                                first_name="foo",
+                                last_name="bar",
+                                email=BYPASS_BOP_EMAIL,
+                                is_active=True,
+                                user_id=principal.user_id,
+                                type=principal.type,
+                            )
+                        )
+            sort_order = (params or {}).get("sortOrder")
+            if sort_order in {"asc", "des"}:
+                to_return.sort(key=lambda principal: principal["username"], reverse=sort_order == "des")
+            if (params or {}).get("status") == "disabled":
+                to_return = []
+            user_count = len(to_return)
+            limit = int((params or {}).get("limit", user_count))
+            offset = int((params or {}).get("offset", 0))
+            page_end = offset + limit
+            to_return = to_return[offset:page_end]
             bop_request_status_count.labels(method=metrics_method, status=200).inc()
-            return dict(data=to_return, status_code=200, userCount=len(to_return))
+            return dict(data=to_return, status_code=200, userCount=user_count)
         headers = {USER_ENV_HEADER: self.user_env, CLIENT_ID_HEADER: self.client_id, API_TOKEN_HEADER: self.api_token}
         unexpected_error = {
             "detail": "Unexpected error.",

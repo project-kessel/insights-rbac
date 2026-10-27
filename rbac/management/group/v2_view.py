@@ -71,7 +71,7 @@ def _catch_principal_errors(fn):
         try:
             return fn(self, *args, **kwargs)
         except ProtectedGroupError as e:
-            return self._error_response(e, status.HTTP_400_BAD_REQUEST)
+            return self._error_response(e, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         except PrincipalNotFoundError as e:
             return self._error_response(e, status.HTTP_404_NOT_FOUND)
 
@@ -166,7 +166,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         except GroupAlreadyExistsError as e:
             return self._already_exists_response(e)
         except ProtectedGroupError as e:
-            return self._error_response(e, status.HTTP_400_BAD_REQUEST)
+            return self._error_response(e, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
 
         self._log_success(request, "V2 Group updated", "UPDATE", group)
         self._send_notification(request, group, "updated")
@@ -187,7 +187,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
                 service.delete(group)
         except ProtectedGroupError as e:
-            return self._error_response(e, status.HTTP_400_BAD_REQUEST)
+            return self._error_response(e, status.HTTP_400_BAD_REQUEST, ProblemType.PROTECTED_OBJECT)
         except GroupHasRoleBindingsError as e:
             return self._error_response(e, status.HTTP_409_CONFLICT)
 
@@ -306,7 +306,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             return (
                 self._error_response(
                     Exception(detail),
-                    proxy_response.get("status_code", status.HTTP_502_BAD_GATEWAY),
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
                 ),
                 set(),
             )
@@ -367,7 +367,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                 logger.exception("Failed to validate service accounts against IT for org_id %s.", request.user.org_id)
                 return (
                     self._error_response(
-                        Exception("Unable to validate service accounts."), status.HTTP_502_BAD_GATEWAY
+                        Exception("Unable to validate service accounts."), status.HTTP_503_SERVICE_UNAVAILABLE
                     ),
                     set(),
                 )
@@ -471,11 +471,16 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
     @staticmethod
     def _error_response(exc, status_code, problem_type=None):
-        return single_problem_response_with_errors(
+        response = single_problem_response_with_errors(
             status_code=status_code,
             problem_type=problem_type,
             detail=str(exc),
         )
+
+        if status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            response.headers["Retry-After"] = "1"
+
+        return response
 
     def _already_exists_response(self, exc):
         return self._error_response(exc, status.HTTP_400_BAD_REQUEST, problem_type=ProblemType.ALREADY_EXISTS)

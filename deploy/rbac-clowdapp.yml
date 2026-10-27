@@ -35,6 +35,7 @@ objects:
     optionalDependencies:
       - kessel-inventory
       - kessel-relations
+      - kessel-kafka-connect
     deployments:
     - name: worker-service
       minReplicas: ${{MIN_WORKER_REPLICAS}}
@@ -1533,6 +1534,21 @@ objects:
               cpu: 50m
               memory: 512Mi
           env: *common_env_vars
+      - name: backfill-default-role-bindings
+        podSpec:
+          image: ${IMAGE}:${IMAGE_TAG}
+          command:
+            - /opt/rbac/rbac/manage.py
+            - backfill_default_role_bindings
+            - "--all"
+          resources:
+            limits:
+              cpu: 300m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 512Mi
+          env: *common_env_vars
       - name: replicate-default-workspaces
         podSpec:
           image: ${IMAGE}:${IMAGE_TAG}
@@ -1985,7 +2001,7 @@ parameters:
   value: 'nonprod-hcc-rbac'
 - name: BONFIRE_DEPENDENCIES
   description: A comma separated list of non ClowdApp dependencies for bonfire to deploy
-  value: "model-access-permissions-yml-stage,rbac-config-yml-stage"
+  value: "model-access-permissions-yml-stage,rbac-config-yml-stage,debezium-connector"
 - name: RELATION_API_SERVER
   description: The gRPC API server to use for the relation
   value: "localhost:9000"

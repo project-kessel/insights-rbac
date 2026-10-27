@@ -18,6 +18,7 @@
 
 from unittest.mock import patch
 
+from django.test import override_settings
 from rest_framework import status
 import requests
 
@@ -111,6 +112,39 @@ def mocked_requests_get_200_except(url, *args, **kwargs):  # pylint: disable=unu
 
 class PrincipalProxyTest(IdentityRequest):
     """Test PrincipalProxy object."""
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    def test__request_principals_bypass_respects_descending_sort_order(self):
+        """The local BOP bypass should preserve BOP's requested username ordering."""
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"sortOrder": "des"},
+            data={"users": ["alice", "carol", "bob"]},
+        )
+
+        self.assertEqual([principal["username"] for principal in result["data"]], ["carol", "bob", "alice"])
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    def test__request_principals_bypass_respects_pagination(self):
+        """The local BOP bypass should return one page while preserving the total count."""
+        for index in range(3):
+            Principal.objects.create(
+                tenant=self.tenant,
+                username=f"local-user-{index}",
+                user_id=f"local-pagination-{index}",
+            )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"limit": 2, "offset": 1},
+        )
+
+        self.assertEqual([principal["username"] for principal in result["data"]], ["local-user-1", "local-user-2"])
+        self.assertEqual(result["userCount"], 3)
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",

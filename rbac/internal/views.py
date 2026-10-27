@@ -18,6 +18,7 @@
 """View for internal tenant management."""
 
 import datetime
+import functools
 import json
 import logging
 import uuid
@@ -30,6 +31,7 @@ from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connection, transaction
 from django.db.migrations.recorder import MigrationRecorder
+from django.db.models import Q
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.html import escape
@@ -72,8 +74,11 @@ from management.group.inventory_api_dual_write_group_handler import (
 from management.inventory_checker.inventory_api_check import (
     BootstrappedTenantInventoryChecker,
     CrossAccountRequestInventoryChecker,
+    CustomRolePermissionChecker,
     GroupPrincipalInventoryChecker,
+    RoleBindingInventoryChecker,
     RoleRelationInventoryChecker,
+    SeededRoleHierarchyChecker,
     WorkspaceRelationInventoryChecker,
 )
 from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
@@ -83,14 +88,19 @@ from management.inventory_replicator.inventory_replicator import (
     ReplicationEventType,
 )
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
+from management.inventory_replicator.types import RelationTuple
 from management.models import (
     BindingMapping,
+    CustomRoleV2,
     Group,
     Permission,
     Principal,
     ResourceDefinition,
     Role,
+    RoleBinding,
+    SeededRoleV2,
 )
+from management.permission.scope_service import ImplicitResourceService
 from management.principal.proxy import (
     API_TOKEN_HEADER,
     CLIENT_ID_HEADER,
@@ -138,6 +148,7 @@ from management.utils import (
     get_principal,
     groups_for_principal,
 )
+from management.workspace.inventory_api_dual_write_workspace_handler import InventoryApiDualWriteWorkspaceHandler
 from management.workspace.model import Workspace
 from management.workspace.serializer import WorkspaceSerializer
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator, InMemoryTuples
@@ -167,6 +178,10 @@ BootstrappedTenantChecker = BootstrappedTenantInventoryChecker()
 GroupPrincipalChecker = GroupPrincipalInventoryChecker()
 WorkspaceRelationChecker = WorkspaceRelationInventoryChecker()
 RoleRelationChecker = RoleRelationInventoryChecker()
+RoleBindingChecker = RoleBindingInventoryChecker()
+CustomRolePermissionCheckerInstance = CustomRolePermissionChecker()
+CrossAccountRequestChecker = CrossAccountRequestInventoryChecker()
+SeededRoleHierarchyCheckerInstance = SeededRoleHierarchyChecker()
 
 
 def tenant_is_modified(tenant_name=None, org_id=None):
@@ -2054,9 +2069,7 @@ def read_tuples(request):
             subject_namespace=subject_namespace,
         )
 
-        if response_data:
-            return JsonResponse({"tuples": response_data}, status=200)
-        return JsonResponse("No tuples found", status=204, safe=False)
+        return JsonResponse({"tuples": response_data}, status=200)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
         return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
@@ -2497,6 +2510,987 @@ def check_cross_account_request(request, request_id):
             },
             status=500,
         )
+
+
+def verify_migration(request, org_id):
+    """GET to verify a tenant's data was correctly migrated from Relations (SpiceDB) to Inventory.
+
+    GET /_private/api/inventory/verify_migration/<org_id>/
+        ?role_limit=<n>&binding_limit=<n>&group_limit=<n>&car_limit=<n>&workspace_limit=<n>
+        &dry_run=<true|false>
+
+    See _run_tenant_migration_checks for exactly what is checked. Seeded/system role hierarchy is
+    intentionally excluded here: it is platform-global, not tenant-scoped, and is checked instead
+    by GET /_private/api/inventory/verify_migration/ (verify_migration_global).
+
+    `dry_run=true` validates the migration's tuple-generation logic (see
+    _run_tenant_migration_checks and validate_generated_tuples) with zero Inventory gRPC calls,
+    instead of checking against the real Inventory API. This proves the tuple-generation code is
+    sound, but does NOT verify that Inventory has the tuples, or that the Inventory gRPC client
+    code (management.inventory_checker.inventory_api_check) is working.
+
+    The `*_limit` params (default 50, must be non-negative integers) cap how many of each resource
+    are checked, since every item checked makes its own Inventory gRPC call(s).
+    """
+    if request.method != "GET":
+        return HttpResponse('Invalid method, only "GET" is allowed.', status=405)
+
+    try:
+        role_limit = _parse_verify_migration_limit(request, "role_limit")
+        binding_limit = _parse_verify_migration_limit(request, "binding_limit")
+        group_limit = _parse_verify_migration_limit(request, "group_limit")
+        car_limit = _parse_verify_migration_limit(request, "car_limit")
+        workspace_limit = _parse_verify_migration_limit(request, "workspace_limit")
+    except ValueError as e:
+        return JsonResponse({"detail": str(e)}, status=400)
+
+    dry_run = _parse_verify_migration_dry_run(request)
+
+    tenant = get_object_or_404(Tenant, org_id=org_id)
+    if not hasattr(tenant, "tenant_mapping"):
+        return JsonResponse({"detail": f"No tenant mapping for org_id: {org_id}"}, status=404)
+
+    checks, failed_checks = _run_tenant_migration_checks(
+        tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+    )
+
+    return JsonResponse(_build_verify_migration_report(org_id, checks, failed_checks, dry_run=dry_run), status=200)
+
+
+def _run_tenant_migration_checks(
+    tenant: Tenant,
+    role_limit: int,
+    binding_limit: int,
+    group_limit: int,
+    car_limit: int,
+    workspace_limit: int,
+    dry_run: bool = False,
+) -> tuple[dict, list[str]]:
+    """Run every tenant-scoped relations-to-inventory migration check for a single tenant.
+
+    Shared by the single-org endpoint (verify_migration) and the multi-org endpoint
+    (verify_migration_global), so there is exactly one implementation of each check -- no risk of
+    the two endpoints drifting apart and leaving a gap that only one of them catches.
+
+    Covers every relation shape the relations-to-inventory migration dual-writes for a tenant:
+      - bootstrap: tenant/workspace/platform/default-group tuples created when a tenant is bootstrapped
+      - workspaces: workspace parent relations (the workspace hierarchy)
+      - roles: V2 role relations produced by the role dual-write handler (custom roles)
+      - bindings: V2 role binding relations (resource#binding, binding#role, binding#subject) for
+        bindings created through the V2 RoleBinding model (e.g. the role-bindings-by-subject API)
+      - group_role_bindings: the same binding relation shape as "bindings", but for role
+        assignments represented as BindingMapping rows instead of RoleBinding rows -- the
+        legacy/V1-compatible representation still used whenever a group (including a custom group
+        holding a *system* role, the most common real-world assignment) is given a role via the
+        group/policy APIs rather than the V2 role-bindings-by-subject API. Custom (non-system)
+        roles' BindingMapping-derived relations are also exercised indirectly by "roles" above, but
+        system roles are excluded there, so this is the only section that verifies a system role's
+        binding to one of this tenant's groups. BindingMapping doesn't carry a tenant FK (system
+        roles belong to the public tenant), so mappings are found by searching for this tenant's
+        group UUIDs inside each mapping's JSON "groups" list
+      - role_permissions: custom role permission tuples (role#<permission>@principal:*)
+      - group_principals: group membership relations
+      - cross_account_requests: relations created for approved cross-account requests targeting
+        this org
+      - cross_account_requests_removed: relations removed when a cross-account request targeting
+        this org expired or was denied after approval -- the inverse of cross_account_requests; a
+        relation still present here is the failure case, since it means the grant was never
+        cleaned up. Roles still granted to the same user via a different, currently-approved CAR
+        are excluded from this check, since an expired/denied CAR's role can't be distinguished
+        from one that was never actually approved in the first place, and removal can't be checked
+        for a role another active CAR still legitimately grants
+
+    This is read-only: nothing is written to the database or to Inventory. For roles and
+    cross-account requests, the relation tuples are recomputed by re-running the same dual-write
+    handlers used in production against an in-memory replicator, inside a transaction that is
+    always rolled back -- this re-derives what *should* exist without ever writing it. Workspaces
+    and group memberships also go through their production dual-write handlers
+    (InventoryApiDualWriteWorkspaceHandler, InventoryApiDualWriteGroupHandler), but don't need a
+    transaction since their tuple-generation methods are pure (no DB writes happen even without
+    one). Role bindings, group role bindings (BindingMapping), and role permissions are read
+    directly off existing DB state via their own pure tuple-generation methods, with no handler
+    involved at all.
+
+    When `dry_run` is True, no Inventory gRPC calls are made at all: for workspaces, roles,
+    bindings, group_role_bindings, role_permissions, group_principals, and cross_account_requests,
+    the same tuple-generation code still runs, and each tuple is validated via `validate_generated_tuples`
+    instead of checked against Inventory -- proving the migration's tuple-generation logic is
+    sound, but NOT that Inventory actually has the tuple or that the Inventory gRPC client code
+    (inventory_checker.inventory_api_check) works. For workspaces specifically, dry_run exercises
+    all three of InventoryApiDualWriteWorkspaceHandler's generation methods: the create and delete
+    paths (whose output is structurally identical, just validated together), plus the update
+    (move) path's "no change" guard -- confirming that re-parenting a workspace to its current
+    parent correctly emits no relations, since a missing guard there would mean every workspace
+    read emits spurious events during a real move. It does not exercise the update path's
+    "actually changed" branch, since that needs a real previous parent, which isn't available from
+    current DB state alone. Bootstrap is reported as just the resource ids in scope, since
+    BootstrappedTenantChecker fuses tuple-building and the gRPC check together and has no separate
+    tuple-building step to call in isolation.
+
+    A failure in one item (e.g. a single role or a transient gRPC error) is recorded against that
+    item only and does not abort the rest of the report, so a single bad item can't hide the
+    results for an otherwise-healthy tenant.
+
+    Returns a (checks, failed_checks) tuple: `checks` is a dict of section name -> result, ready
+    to merge into a report's "checks", and `failed_checks` lists the names of any failing sections.
+    In dry_run mode, a section only "fails" if a generated tuple fails its round-trip validation.
+    """
+    org_id = tenant.org_id
+    checks: dict = {}
+    failed_checks: list[str] = []
+
+    try:
+        default_workspace = Workspace.objects.default(tenant=tenant)
+        root_workspace = Workspace.objects.root(tenant=tenant)
+        ungrouped = Workspace.objects.filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).first()
+        if dry_run:
+            checks["bootstrap"] = {
+                "dry_run": True,
+                "root_workspace_id": str(root_workspace.id),
+                "default_workspace_id": str(default_workspace.id),
+                "ungrouped_workspace_id": str(ungrouped.id) if ungrouped else None,
+            }
+        else:
+            bootstrap_correct, bootstrap_checks = BootstrappedTenantChecker.check_bootstrapped_tenant(
+                org_id=tenant.org_id,
+                tenant_mapping=tenant.tenant_mapping,
+                root_workspace_id=str(root_workspace.id),
+                default_workspace_id=str(default_workspace.id),
+                ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+            )
+            checks["bootstrap"] = {"correct": bootstrap_correct, "relations_checked": bootstrap_checks}
+            if not bootstrap_correct:
+                failed_checks.append("bootstrap")
+    except Exception as e:
+        logger.exception(f"Error checking bootstrap relations for tenant {org_id}")
+        checks["bootstrap"] = {"error": str(e)}
+        failed_checks.append("bootstrap")
+
+    try:
+        workspaces = list(
+            Workspace.objects.filter(tenant=tenant, parent__isnull=False).exclude(type=Workspace.Types.ROOT)[
+                :workspace_limit
+            ]
+        )
+        if dry_run:
+            workspace_results = []
+            workspaces_all_correct = True
+            for workspace in workspaces:
+                add_handler = InventoryApiDualWriteWorkspaceHandler(
+                    workspace=workspace, event_type=ReplicationEventType.CREATE_WORKSPACE
+                )
+                add_handler.generate_relations_to_add_workspace()
+
+                remove_handler = InventoryApiDualWriteWorkspaceHandler(
+                    workspace=workspace, event_type=ReplicationEventType.DELETE_WORKSPACE
+                )
+                remove_handler.generate_relations_to_remove_workspace()
+
+                # Moving a workspace to its current parent must be a no-op.
+                noop_handler = InventoryApiDualWriteWorkspaceHandler(
+                    workspace=workspace, event_type=ReplicationEventType.UPDATE_WORKSPACE
+                )
+                noop_handler.generate_relations_to_update_workspace(previous_parent=workspace.parent)
+
+                # getattr: unset when replication is disabled.
+                add_tuples = getattr(add_handler, "relations_to_add", [])
+                remove_tuples = getattr(remove_handler, "relations_to_remove", [])
+                update_noop_add = getattr(noop_handler, "relations_to_add", [])
+                update_noop_remove = getattr(noop_handler, "relations_to_remove", [])
+                update_noop_correct = not update_noop_add and not update_noop_remove
+
+                # add/remove produce the same tuple for an unchanged parent; dedupe before counting.
+                generated_tuples = list({*add_tuples, *remove_tuples})
+                if not generated_tuples:
+                    workspace_results.append(
+                        {
+                            "workspace_id": str(workspace.id),
+                            "parent_id": str(workspace.parent_id),
+                            "tuples_generated": 0,
+                            "verified": False,
+                        }
+                    )
+                    continue
+                validation = validate_generated_tuples(generated_tuples)
+                workspace_results.append(
+                    {
+                        "workspace_id": str(workspace.id),
+                        "parent_id": str(workspace.parent_id),
+                        "tuples_generated": len(generated_tuples),
+                        "checked": False,
+                        "validation": validation,
+                        "update_noop_correct": update_noop_correct,
+                    }
+                )
+                if not validation["valid"] or not update_noop_correct:
+                    workspaces_all_correct = False
+            checks["workspaces"] = {
+                "dry_run": True,
+                "correct": workspaces_all_correct,
+                "workspaces_checked": workspace_results,
+            }
+            if not workspaces_all_correct:
+                failed_checks.append("workspaces")
+        else:
+            workspace_pairs = [(str(w.id), str(w.parent_id)) for w in workspaces]
+            if workspace_pairs:
+                workspaces_correct, workspace_checks = WorkspaceRelationChecker.check_workspace_descendants(
+                    workspace_pairs
+                )
+            else:
+                workspaces_correct, workspace_checks = True, []
+            checks["workspaces"] = {"correct": workspaces_correct, "relations_checked": workspace_checks}
+            if not workspaces_correct:
+                failed_checks.append("workspaces")
+    except Exception as e:
+        logger.exception(f"Error checking workspace relations for tenant {org_id}")
+        checks["workspaces"] = {"error": str(e)}
+        failed_checks.append("workspaces")
+
+    role_results = []
+    roles_all_correct = True
+    for role in Role.objects.filter(tenant=tenant, system=False)[:role_limit]:
+        try:
+            tuples = InMemoryTuples()
+            with transaction.atomic():
+                locked_role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
+                relations_dual_write_handler = InventoryApiDualWriteHandler(
+                    role=locked_role,
+                    event_type=ReplicationEventType.UPDATE_CUSTOM_ROLE,
+                    tenant=locked_role.tenant,
+                    replicator=InMemoryRelationReplicator(tuples),
+                )
+                # Load the existing binding-mapping/v2-role UUIDs from the DB first, matching
+                # RoleViewSet.perform_update -- otherwise replicate_new_or_updated_role fabricates
+                # brand-new UUIDs instead of reusing the ones actually persisted/replicated, and
+                # the check below would compare against relations that were never really written.
+                relations_dual_write_handler.prepare_for_update()
+                relations_dual_write_handler.replicate_new_or_updated_role(locked_role)
+                # Ensure that we don't accidentally update any models.
+                transaction.set_rollback(True)
+
+            if dry_run:
+                result, valid = _dry_run_validation_result(
+                    {"role_uuid": str(role.uuid), "role_name": role.name}, tuples
+                )
+                role_results.append(result)
+                if not valid:
+                    roles_all_correct = False
+                continue
+
+            if len(tuples) == 0:
+                # No tuples generated -- check_role([]) would trivially return True (all() on an
+                # empty list), so report this as unverified rather than falsely claiming "correct".
+                role_results.append(
+                    {"role_uuid": str(role.uuid), "role_name": role.name, "tuples_generated": 0, "verified": False}
+                )
+                continue
+
+            serialized_relations = [json_format.MessageToDict(rel.as_message()) for rel in tuples]
+            role_correct = RoleRelationChecker.check_role(serialized_relations, role.uuid)
+            role_results.append(
+                {
+                    "role_uuid": str(role.uuid),
+                    "role_name": role.name,
+                    "tuples_generated": len(tuples),
+                    "correct": role_correct,
+                }
+            )
+            if not role_correct:
+                roles_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking role {role.uuid} for tenant {org_id}")
+            role_results.append({"role_uuid": str(role.uuid), "role_name": role.name, "error": str(e)})
+            roles_all_correct = False
+    checks["roles"] = {"correct": roles_all_correct, "roles_checked": role_results}
+    if dry_run:
+        checks["roles"]["dry_run"] = True
+    if not roles_all_correct:
+        failed_checks.append("roles")
+
+    binding_results = []
+    bindings_all_correct = True
+    bindings = RoleBinding.objects.filter(tenant=tenant).prefetch_related(
+        "group_entries__group", "principal_entries__principal"
+    )[:binding_limit]
+    for binding in bindings:
+        try:
+            binding_tuples = binding.all_tuples()
+            if dry_run:
+                result, valid = _dry_run_validation_result({"binding_uuid": str(binding.uuid)}, binding_tuples)
+                binding_results.append(result)
+                if not valid:
+                    bindings_all_correct = False
+                continue
+            binding_correct = RoleBindingChecker.check_role_binding(binding_tuples, str(binding.uuid))
+            binding_results.append(
+                {
+                    "binding_uuid": str(binding.uuid),
+                    "tuples_generated": len(binding_tuples),
+                    "correct": binding_correct,
+                }
+            )
+            if not binding_correct:
+                bindings_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking role binding {binding.uuid} for tenant {org_id}")
+            binding_results.append({"binding_uuid": str(binding.uuid), "error": str(e)})
+            bindings_all_correct = False
+    checks["bindings"] = {"correct": bindings_all_correct, "bindings_checked": binding_results}
+    if dry_run:
+        checks["bindings"]["dry_run"] = True
+    if not bindings_all_correct:
+        failed_checks.append("bindings")
+
+    group_binding_results = []
+    group_bindings_all_correct = True
+    tenant_group_uuids = list(Group.objects.filter(tenant=tenant).values_list("uuid", flat=True)[:group_limit])
+    if tenant_group_uuids:
+        group_mapping_filter = functools.reduce(
+            lambda acc, group_uuid: acc | Q(mappings__contains={"groups": [str(group_uuid)]}),
+            tenant_group_uuids[1:],
+            Q(mappings__contains={"groups": [str(tenant_group_uuids[0])]}),
+        )
+        group_bindings = (
+            BindingMapping.objects.filter(group_mapping_filter).distinct().select_related("role")[:binding_limit]
+        )
+    else:
+        group_bindings = BindingMapping.objects.none()
+    for mapping in group_bindings:
+        try:
+            mapping_tuples = mapping.as_tuples()
+            if dry_run:
+                result, valid = _dry_run_validation_result(
+                    {"binding_mapping_id": mapping.id, "role_uuid": str(mapping.role.uuid)}, mapping_tuples
+                )
+                group_binding_results.append(result)
+                if not valid:
+                    group_bindings_all_correct = False
+                continue
+            mapping_correct = RoleBindingChecker.check_role_binding(mapping_tuples, str(mapping.id))
+            group_binding_results.append(
+                {
+                    "binding_mapping_id": mapping.id,
+                    "role_uuid": str(mapping.role.uuid),
+                    "tuples_generated": len(mapping_tuples),
+                    "correct": mapping_correct,
+                }
+            )
+            if not mapping_correct:
+                group_bindings_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking BindingMapping {mapping.id} for tenant {org_id}")
+            group_binding_results.append({"binding_mapping_id": mapping.id, "error": str(e)})
+            group_bindings_all_correct = False
+    checks["group_role_bindings"] = {"correct": group_bindings_all_correct, "bindings_checked": group_binding_results}
+    if dry_run:
+        checks["group_role_bindings"]["dry_run"] = True
+    if not group_bindings_all_correct:
+        failed_checks.append("group_role_bindings")
+
+    permission_results = []
+    permissions_all_correct = True
+    custom_roles = (
+        CustomRoleV2.objects.filter(tenant=tenant)
+        .select_related("v1_source")
+        .prefetch_related("permissions")[:role_limit]
+    )
+    for role in custom_roles:
+        # role.uuid is the V2 RoleV2 uuid, distinct from the v1 Role.uuid checked in "roles" above.
+        v1_role_uuid = str(role.v1_source.uuid) if role.v1_source_id else None
+        try:
+            permission_tuples = [CustomRoleV2._permission_tuple(role, perm) for perm in role.permissions.all()]
+            if dry_run:
+                result, valid = _dry_run_validation_result(
+                    {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid}, permission_tuples
+                )
+                permission_results.append(result)
+                if not valid:
+                    permissions_all_correct = False
+                continue
+            role_permissions_correct = CustomRolePermissionCheckerInstance.check_custom_role_permissions(
+                permission_tuples, str(role.uuid)
+            )
+            permission_results.append(
+                {
+                    "v2_role_uuid": str(role.uuid),
+                    "v1_role_uuid": v1_role_uuid,
+                    "tuples_generated": len(permission_tuples),
+                    "correct": role_permissions_correct,
+                }
+            )
+            if not role_permissions_correct:
+                permissions_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking role permissions for V2 role {role.uuid} in tenant {org_id}")
+            permission_results.append({"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid, "error": str(e)})
+            permissions_all_correct = False
+    checks["role_permissions"] = {"correct": permissions_all_correct, "roles_checked": permission_results}
+    if dry_run:
+        checks["role_permissions"]["dry_run"] = True
+    if not permissions_all_correct:
+        failed_checks.append("role_permissions")
+
+    group_results = []
+    groups_all_correct = True
+    for group in Group.objects.filter(tenant=tenant).prefetch_related("principals")[:group_limit]:
+        try:
+            principals = list(group.principals.all())
+            handler = InventoryApiDualWriteGroupHandler(
+                group=group, event_type=ReplicationEventType.ADD_PRINCIPALS_TO_GROUP
+            )
+            handler.generate_relations_to_add_principals(principals)
+            # getattr: unset when replication is disabled.
+            relationships = getattr(handler, "relations_to_add", [])
+            if not relationships:
+                if principals:
+                    # Principals exist but no relation tuples could be built for them -- report as
+                    # unverified rather than silently skipping (check_relationships([]) on an empty
+                    # list would otherwise look identical to "nothing to check").
+                    group_results.append({"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False})
+                continue
+            if dry_run:
+                result, valid = _dry_run_validation_result({"group_uuid": str(group.uuid)}, relationships)
+                group_results.append(result)
+                if not valid:
+                    groups_all_correct = False
+                continue
+            result = GroupPrincipalChecker.check_relationships(relationships)
+            group_correct = all(pr["relation_exists"] for pr in result["principal_relations"])
+            group_results.append(
+                {"group_uuid": str(group.uuid), "tuples_generated": len(relationships), "correct": group_correct}
+            )
+            if not group_correct:
+                groups_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking group {group.uuid} for tenant {org_id}")
+            group_results.append({"group_uuid": str(group.uuid), "error": str(e)})
+            groups_all_correct = False
+    checks["group_principals"] = {"correct": groups_all_correct, "groups_checked": group_results}
+    if dry_run:
+        checks["group_principals"]["dry_run"] = True
+    if not groups_all_correct:
+        failed_checks.append("group_principals")
+
+    car_results = []
+    cars_all_correct = True
+    approved_cars = CrossAccountRequest.objects.filter(
+        target_org=tenant.org_id, status=CrossAccountRequest.STATUS_APPROVED
+    ).prefetch_related("roles")[:car_limit]
+    for car in approved_cars:
+        try:
+            cross_account_roles = list(car.roles.all())
+            if not cross_account_roles:
+                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                continue
+
+            tuples = InMemoryTuples()
+            with transaction.atomic():
+                car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
+                    cross_account_request=car,
+                    event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
+                    replicator=InMemoryRelationReplicator(tuples),
+                )
+                car_dual_write_handler.generate_relations_to_add_roles(cross_account_roles)
+                car_dual_write_handler.replicate()
+                # Ensure that we don't accidentally update any models.
+                transaction.set_rollback(True)
+
+            if dry_run:
+                result, valid = _dry_run_validation_result({"request_id": str(car.request_id)}, tuples)
+                car_results.append(result)
+                if not valid:
+                    cars_all_correct = False
+                continue
+
+            if len(tuples) == 0:
+                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "verified": False})
+                continue
+
+            car_correct = CrossAccountRequestChecker.check_cross_account_request(list(tuples), str(car.request_id))
+            car_results.append(
+                {"request_id": str(car.request_id), "tuples_generated": len(tuples), "correct": car_correct}
+            )
+            if not car_correct:
+                cars_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking cross account request {car.request_id} for tenant {org_id}")
+            car_results.append({"request_id": str(car.request_id), "error": str(e)})
+            cars_all_correct = False
+    checks["cross_account_requests"] = {"correct": cars_all_correct, "requests_checked": car_results}
+    if dry_run:
+        checks["cross_account_requests"]["dry_run"] = True
+    if not cars_all_correct:
+        failed_checks.append("cross_account_requests")
+
+    removed_car_results = []
+    removed_cars_all_correct = True
+    # "expired" covers CARs cleaned up automatically; "denied" covers a previously-approved CAR
+    # whose relations were removed via CrossAccessRequestViewSet.update_status's
+    # DENY_CROSS_ACCOUNT_REQUEST path. Never-approved "pending" CARs that are later denied never
+    # had relations added, so checking them here is harmless (tuples_generated will be 0).
+    expired_cars = CrossAccountRequest.objects.filter(
+        target_org=tenant.org_id, status__in=["expired", "denied"]
+    ).prefetch_related("roles")[:car_limit]
+    # Exclude roles still granted to the same user via another active CAR -- otherwise removal
+    # would be falsely flagged as failed.
+    active_roles_by_user: dict[str, set] = {}
+    for active_car in CrossAccountRequest.objects.filter(
+        target_org=tenant.org_id, status=CrossAccountRequest.STATUS_APPROVED
+    ).prefetch_related("roles"):
+        active_roles_by_user.setdefault(active_car.user_id, set()).update(role.pk for role in active_car.roles.all())
+    for car in expired_cars:
+        try:
+            still_active_role_pks = active_roles_by_user.get(car.user_id, set())
+            all_car_roles = list(car.roles.all())
+            if not all_car_roles:
+                removed_car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                continue
+
+            cross_account_roles = [role for role in all_car_roles if role.pk not in still_active_role_pks]
+            if not cross_account_roles:
+                removed_car_results.append(
+                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                )
+                continue
+
+            with transaction.atomic():
+                car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
+                    cross_account_request=car,
+                    event_type=ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
+                )
+                car_dual_write_handler.generate_relations_to_remove_roles(cross_account_roles)
+                # getattr: unset when replication is disabled.
+                remove_tuples = getattr(car_dual_write_handler, "relations_to_remove", [])
+                # Ensure that we don't accidentally update any models.
+                transaction.set_rollback(True)
+
+            if dry_run:
+                result, valid = _dry_run_validation_result({"request_id": str(car.request_id)}, remove_tuples)
+                removed_car_results.append(result)
+                if not valid:
+                    removed_cars_all_correct = False
+                continue
+
+            if len(remove_tuples) == 0:
+                removed_car_results.append(
+                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                )
+                continue
+
+            # Inverted from the "add" check above: still present here means removal failed.
+            relations_still_present = CrossAccountRequestChecker.check_cross_account_request(
+                remove_tuples, str(car.request_id)
+            )
+            removal_correct = not relations_still_present
+            removed_car_results.append(
+                {
+                    "request_id": str(car.request_id),
+                    "tuples_generated": len(remove_tuples),
+                    "relations_still_present": relations_still_present,
+                    "correct": removal_correct,
+                }
+            )
+            if not removal_correct:
+                removed_cars_all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking removed cross account request {car.request_id} for tenant {org_id}")
+            removed_car_results.append({"request_id": str(car.request_id), "error": str(e)})
+            removed_cars_all_correct = False
+    checks["cross_account_requests_removed"] = {
+        "correct": removed_cars_all_correct,
+        "requests_checked": removed_car_results,
+    }
+    if dry_run:
+        checks["cross_account_requests_removed"]["dry_run"] = True
+    if not removed_cars_all_correct:
+        failed_checks.append("cross_account_requests_removed")
+
+    return checks, failed_checks
+
+
+def _build_verify_migration_report(org_id: str, checks: dict, failed_checks: list[str], dry_run: bool = False) -> dict:
+    """Assemble a verify_migration report dict from a checks/failed_checks pair.
+
+    Shared by the single-org and multi-org endpoints so the response shape (overall_status,
+    failed_checks, summary) is identical for both.
+    """
+    return {
+        "org_id": org_id,
+        "dry_run": dry_run,
+        "checks": checks,
+        "overall_status": "fail" if failed_checks else "pass",
+        "failed_checks": failed_checks,
+        "summary": {
+            "sections_checked": len(checks),
+            "sections_passed": len(checks) - len(failed_checks),
+            "sections_failed": len(failed_checks),
+        },
+    }
+
+
+def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
+    """Check platform-global seeded role parent-child hierarchy tuples.
+
+    Seeded (system) role hierarchy is the one relation shape the relations-to-inventory migration
+    dual-writes that is NOT scoped to a single tenant -- it is shared across all orgs -- so it is
+    checked once here rather than per-tenant in _run_tenant_migration_checks.
+
+    Read-only: hierarchy tuples are recomputed from current DB state (SeededRoleV2 + its
+    v1_source) by calling SeedingInventoryApiDualWriteHandler._check_create_admin_platform_relation()
+    directly -- the same production method the seeding dual-write path uses -- so this exercises
+    the actual migrated logic rather than a reimplementation of it. Nothing is written to the
+    database or to Inventory. When `dry_run` is True, no Inventory gRPC call is made -- each tuple
+    is instead validated via `validate_generated_tuples`.
+    """
+    role_results = []
+    all_correct = True
+
+    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related("v1_source__access")
+    implicit_resource_service = ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+
+    for seeded_role in seeded_roles:
+        v1_role = seeded_role.v1_source
+        if v1_role is None:
+            logger.warning(f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate hierarchy tuples")
+            continue
+        try:
+            handler = SeedingInventoryApiDualWriteHandler(role=v1_role)
+            # seeded_roles is non-empty here (we're iterating it), so this was built above.
+            assert implicit_resource_service is not None
+            handler.implicit_resource_service = implicit_resource_service
+            hierarchy_tuples = handler._check_create_admin_platform_relation(v1_role, for_removal=False)
+            if not hierarchy_tuples:
+                continue
+
+            if dry_run:
+                result, valid = _dry_run_validation_result(
+                    {
+                        "role_uuid": str(seeded_role.uuid),
+                        "role_name": seeded_role.name,
+                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    },
+                    hierarchy_tuples,
+                )
+                role_results.append(result)
+                if not valid:
+                    all_correct = False
+                continue
+
+            role_correct = SeededRoleHierarchyCheckerInstance.check_seeded_role_hierarchy(
+                hierarchy_tuples, str(seeded_role.uuid)
+            )
+            role_results.append(
+                {
+                    "role_uuid": str(seeded_role.uuid),
+                    "role_name": seeded_role.name,
+                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "tuples_generated": len(hierarchy_tuples),
+                    "correct": role_correct,
+                }
+            )
+            if not role_correct:
+                all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking seeded role hierarchy for role {seeded_role.uuid}")
+            role_results.append(
+                {
+                    "role_uuid": str(seeded_role.uuid),
+                    "role_name": seeded_role.name,
+                    "error": str(e),
+                }
+            )
+            all_correct = False
+
+    result = {
+        "correct": all_correct,
+        "total_seeded_roles": seeded_roles.count(),
+        "roles_checked": role_results,
+    }
+    if dry_run:
+        result["dry_run"] = True
+    return result
+
+
+def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
+    """Check platform-global seeded role permission tuples (role#<permission>@principal:*).
+
+    Seeded (system) role permissions are, like seeded role hierarchy (see
+    _run_seeded_role_hierarchy_check), shared across all orgs rather than scoped to a single
+    tenant, so they are checked once here instead of per-tenant in _run_tenant_migration_checks.
+    This is distinct from "role_permissions" in _run_tenant_migration_checks, which only covers
+    CustomRoleV2 -- seeded roles are intentionally excluded there.
+
+    Read-only: permission tuples are recomputed from current DB state (SeededRoleV2 + its
+    v1_source) by calling SeedingInventoryApiDualWriteHandler._generate_relations_for_role()
+    directly -- the same production method the seeding dual-write path uses to build both
+    hierarchy and permission relations together -- so this exercises the actual migrated logic
+    rather than a reimplementation of it. The "child" hierarchy relations it also returns are
+    discarded here since those are covered by _run_seeded_role_hierarchy_check. Nothing is written
+    to the database or to Inventory. When `dry_run` is True, no Inventory gRPC call is made --
+    each tuple is instead validated via `validate_generated_tuples`.
+    """
+    role_results = []
+    all_correct = True
+
+    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related("v1_source__access")
+    implicit_resource_service = ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+
+    for seeded_role in seeded_roles:
+        v1_role = seeded_role.v1_source
+        if v1_role is None:
+            logger.warning(f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate permission tuples")
+            continue
+        try:
+            handler = SeedingInventoryApiDualWriteHandler(role=v1_role)
+            # seeded_roles is non-empty here (we're iterating it), so this was built above.
+            assert implicit_resource_service is not None
+            handler.implicit_resource_service = implicit_resource_service
+            all_relations = handler._generate_relations_for_role(for_removal=False)
+            permission_tuples = [rel for rel in all_relations if rel.relation != "child"]
+            if not permission_tuples:
+                continue
+
+            if dry_run:
+                result, valid = _dry_run_validation_result(
+                    {
+                        "role_uuid": str(seeded_role.uuid),
+                        "role_name": seeded_role.name,
+                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    },
+                    permission_tuples,
+                )
+                role_results.append(result)
+                if not valid:
+                    all_correct = False
+                continue
+
+            role_correct = CustomRolePermissionCheckerInstance.check_custom_role_permissions(
+                permission_tuples, str(seeded_role.uuid)
+            )
+            role_results.append(
+                {
+                    "role_uuid": str(seeded_role.uuid),
+                    "role_name": seeded_role.name,
+                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "tuples_generated": len(permission_tuples),
+                    "correct": role_correct,
+                }
+            )
+            if not role_correct:
+                all_correct = False
+        except Exception as e:
+            logger.exception(f"Error checking seeded role permissions for role {seeded_role.uuid}")
+            role_results.append(
+                {
+                    "role_uuid": str(seeded_role.uuid),
+                    "role_name": seeded_role.name,
+                    "error": str(e),
+                }
+            )
+            all_correct = False
+
+    result = {
+        "correct": all_correct,
+        "total_seeded_roles": seeded_roles.count(),
+        "roles_checked": role_results,
+    }
+    if dry_run:
+        result["dry_run"] = True
+    return result
+
+
+def verify_migration_global(request):
+    """GET to verify relations-to-inventory migration correctness without picking a single org.
+
+    GET /_private/api/inventory/verify_migration/
+        ?org_ids=<csv>&org_limit=<n>&smoke_test=<true|false>&role_limit=<n>&binding_limit=<n>
+        &group_limit=<n>&car_limit=<n>&workspace_limit=<n>&dry_run=<true|false>
+
+    `dry_run=true` validates the migration's tuple-generation logic (see
+    _run_tenant_migration_checks and validate_generated_tuples) with zero Inventory gRPC calls,
+    instead of checking against the real Inventory API.
+
+    Runs the platform-global seeded role checks (hierarchy tuples, see
+    _run_seeded_role_hierarchy_check; and permission tuples, see
+    _run_seeded_role_permissions_check), plus the full per-tenant check suite (see
+    _run_tenant_migration_checks -- the exact same
+    function GET /_private/api/inventory/verify_migration/<org_id>/ uses, so there is a single
+    implementation of each check shared by both endpoints) for a set of tenants:
+
+      - `org_ids`: comma-separated list of org_ids to check. If omitted, no tenants are checked
+        unless `org_limit` or `smoke_test` is also given -- real tenant data is never touched just
+        by hitting this endpoint with no scope at all.
+      - `org_limit`: if given (and `org_ids` is not), checks the `org_limit` most recently created
+        ready tenants instead. Every tenant checked makes its own batch of Inventory gRPC calls, so
+        an unbounded scan risks timing out the request.
+      - `smoke_test=true`: if given (and neither `org_ids` nor `org_limit` is), auto-selects a
+        single, most-recently-created ready tenant to run the per-tenant check suite against. For
+        sanity-checking that the tuple-generation logic itself is sound (especially combined with
+        `dry_run=true`) without having to look up a specific org_id -- not a substitute for
+        targeting a real org with `org_ids` when you actually care about that org's data. The
+        response's "smoke_test" field reports whether this path was taken.
+
+    With none of `org_ids`, `org_limit`, or `smoke_test` given, only the platform-global seeded
+    role checks run; "tenants_checked" is empty.
+
+    Tenants without a tenant_mapping are skipped (listed under "tenants_skipped"), not treated as
+    failures -- they haven't been bootstrapped yet, so there's nothing to verify. A failure in one
+    tenant does not prevent the rest from being checked.
+
+    Read-only, for the same reasons documented on _run_tenant_migration_checks.
+    """
+    if request.method != "GET":
+        return HttpResponse('Invalid method, only "GET" is allowed.', status=405)
+
+    org_limit_given = request.GET.get("org_limit") is not None
+
+    try:
+        org_limit = _parse_verify_migration_limit(request, "org_limit", default=10)
+        role_limit = _parse_verify_migration_limit(request, "role_limit")
+        binding_limit = _parse_verify_migration_limit(request, "binding_limit")
+        group_limit = _parse_verify_migration_limit(request, "group_limit")
+        car_limit = _parse_verify_migration_limit(request, "car_limit")
+        workspace_limit = _parse_verify_migration_limit(request, "workspace_limit")
+    except ValueError as e:
+        return JsonResponse({"detail": str(e)}, status=400)
+
+    dry_run = _parse_verify_migration_dry_run(request)
+    smoke_test = _parse_verify_migration_bool(request, "smoke_test")
+
+    org_ids_param = request.GET.get("org_ids")
+    if org_ids_param:
+        org_ids = [org_id.strip() for org_id in org_ids_param.split(",") if org_id.strip()]
+        tenants = list(Tenant.objects.filter(org_id__in=org_ids))
+    elif org_limit_given:
+        tenants = list(Tenant.objects.filter(ready=True).exclude(tenant_name="public").order_by("-id")[:org_limit])
+    elif smoke_test:
+        tenants = list(Tenant.objects.filter(ready=True).exclude(tenant_name="public").order_by("-id")[:1])
+    else:
+        # No org scope requested -- don't touch any tenant data, just run the platform-global
+        # seeded role checks below.
+        tenants = []
+
+    seeded_role_hierarchy = _run_seeded_role_hierarchy_check(dry_run=dry_run)
+    seeded_role_permissions = _run_seeded_role_permissions_check(dry_run=dry_run)
+    overall_failed = not seeded_role_hierarchy["correct"] or not seeded_role_permissions["correct"]
+
+    tenant_reports = []
+    tenants_skipped = []
+    tenants_passed = 0
+    tenants_failed = 0
+
+    for tenant in tenants:
+        if not hasattr(tenant, "tenant_mapping"):
+            tenants_skipped.append({"org_id": tenant.org_id, "reason": "No tenant mapping"})
+            continue
+
+        checks, failed_checks = _run_tenant_migration_checks(
+            tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+        )
+        tenant_report = _build_verify_migration_report(tenant.org_id, checks, failed_checks, dry_run=dry_run)
+        tenant_reports.append(tenant_report)
+
+        if failed_checks:
+            tenants_failed += 1
+            overall_failed = True
+        else:
+            tenants_passed += 1
+
+    return JsonResponse(
+        {
+            "dry_run": dry_run,
+            "smoke_test": smoke_test,
+            "checks": {
+                "seeded_role_hierarchy": seeded_role_hierarchy,
+                "seeded_role_permissions": seeded_role_permissions,
+            },
+            "tenants_checked": tenant_reports,
+            "tenants_skipped": tenants_skipped,
+            "overall_status": "fail" if overall_failed else "pass",
+            "summary": {
+                "total_tenants_considered": len(tenants),
+                "tenants_checked": len(tenant_reports),
+                "tenants_passed": tenants_passed,
+                "tenants_failed": tenants_failed,
+                "tenants_skipped": len(tenants_skipped),
+            },
+        },
+        status=200,
+    )
+
+
+def _parse_verify_migration_bool(request, name: str) -> bool:
+    """Parse a verify_migration query param as a boolean."""
+    return request.GET.get(name, "").lower() in ("true", "1", "yes")
+
+
+def _parse_verify_migration_dry_run(request) -> bool:
+    """Parse the dry_run query param as a boolean."""
+    return _parse_verify_migration_bool(request, "dry_run")
+
+
+def validate_generated_tuples(tuples) -> dict:
+    """Exercise the real protobuf conversion/round-trip for locally-generated relation tuples.
+
+    Field-level validation (non-empty ids, allowed id/type characters, etc.) already happens when
+    each RelationTuple is constructed, so any malformed tuple would have raised before reaching
+    here. This additionally proves the tuple survives the same proto round-trip
+    (as_message -> from_message -> as_message equality) that real replication relies on, without
+    making any network call -- i.e. it validates the migration's tuple-generation logic, not
+    whether Inventory actually has the tuple or whether the Inventory gRPC client code works.
+
+    Returns a dict with a per-tuple pass/fail list and an overall "valid" flag, safe to embed
+    directly in a dry_run report section.
+    """
+    tuple_results = []
+    all_valid = True
+    for rel in tuples:
+        try:
+            RelationTuple.validate_message(rel.as_message())
+            tuple_results.append({"tuple": rel.stringify(), "valid": True})
+        except Exception as e:
+            tuple_results.append({"tuple": rel.stringify(), "valid": False, "error": str(e)})
+            all_valid = False
+    return {"valid": all_valid, "tuples": tuple_results}
+
+
+def _dry_run_validation_result(extra_fields: dict, tuples) -> tuple[dict, bool]:
+    """Build a dry_run result dict for one checked item, validating its generated tuples.
+
+    Shared by every verify_migration dry_run section that follows the "validate these tuples,
+    record the result, flag the section if invalid" pattern -- `extra_fields` supplies the
+    item-identifying keys (e.g. role_uuid) that differ per section, and is merged ahead of the
+    common tuples_generated/checked/validation keys to keep field order as before.
+
+    Returns (result_dict, valid) -- the caller appends result_dict to its results list and flips
+    its section's all_correct flag when valid is False.
+    """
+    validation = validate_generated_tuples(tuples)
+    result = {**extra_fields, "tuples_generated": len(tuples), "checked": False, "validation": validation}
+    return result, validation["valid"]
+
+
+# verify_migration *_limit query params cap how many items of each resource are checked, since
+# every item checked makes its own Inventory gRPC call (and roles/CARs also take a brief row lock).
+# This upper bound keeps a single request from fanning out into an unbounded number of gRPC calls.
+VERIFY_MIGRATION_MAX_LIMIT = 500
+
+
+def _parse_verify_migration_limit(request, name: str, default: int = 50) -> int:
+    """Parse a verify_migration limit query param, raising ValueError if invalid or out of range."""
+    raw_value = request.GET.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        raise ValueError(f"'{name}' must be an integer.")
+    if value < 0:
+        raise ValueError(f"'{name}' must be a non-negative integer.")
+    if value > VERIFY_MIGRATION_MAX_LIMIT:
+        raise ValueError(f"'{name}' must not exceed {VERIFY_MIGRATION_MAX_LIMIT}.")
+    return value
 
 
 def send_kafka_test_message(request):
@@ -3652,3 +4646,58 @@ def update_tenant_v2_opt_in(request, org_id: str):
         return JsonResponse({"v2_opted_in": requested_state})
     else:
         raise AssertionError(f"Unexpected method: {request.method}")
+
+
+@require_http_methods(["POST"])
+def backfill_default_role_bindings_view(request):
+    """Backfill default role bindings for V2 opted-in tenants.
+
+    POST /_private/api/utils/backfill_default_role_bindings/
+
+    Query params:
+        org_ids: comma-separated org IDs to restrict the backfill to (optional)
+        batch_size: how many tenant mappings to read at a time (default: 500)
+
+    Returns:
+        JSON response with the backfill result summary.
+    """
+    from internal.migrations.backfill_role_bindings import DEFAULT_BATCH_SIZE, backfill_default_role_bindings
+
+    raw_org_ids = request.GET.get("org_ids")
+    if raw_org_ids is None:
+        org_ids = None
+    else:
+        org_ids = [org_id.strip() for org_id in raw_org_ids.split(",") if org_id.strip()]
+        if not org_ids:
+            return JsonResponse({"detail": "org_ids must contain at least one org ID."}, status=400)
+
+    try:
+        batch_size = int(request.GET.get("batch_size", DEFAULT_BATCH_SIZE))
+    except (ValueError, TypeError):
+        return JsonResponse({"detail": "batch_size must be a positive integer."}, status=400)
+
+    if batch_size <= 0:
+        return JsonResponse({"detail": "batch_size must be a positive integer."}, status=400)
+
+    try:
+        result = backfill_default_role_bindings(org_ids=org_ids, batch_size=batch_size)
+        summary = {
+            "tenants_processed": result.tenants_processed,
+            "already_complete": result.already_complete,
+            "tenants_backfilled": result.tenants_backfilled,
+            "incomplete": result.incomplete,
+            "incomplete_orgs": result.incomplete_orgs,
+            "errors": result.errors,
+            "failed_orgs": result.failed_orgs,
+            "aborted": result.aborted,
+        }
+        if result.aborted:
+            response_status = 500
+        elif result.errors or result.incomplete:
+            response_status = 422
+        else:
+            response_status = 200
+        return JsonResponse(summary, status=response_status)
+    except Exception:
+        logger.exception("Error running default role binding backfill")
+        return JsonResponse({"detail": "Error running backfill"}, status=500)

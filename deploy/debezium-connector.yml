@@ -9,6 +9,7 @@ objects:
     name: ${CONNECTOR_NAME}
     annotations:
       strimzi.io/use-connector-resources: "true"
+      bonfire.dependencies: kessel-kafkaconnect
     labels:
       strimzi.io/cluster: ${KAFKA_CONNECT_INSTANCE}
   spec:

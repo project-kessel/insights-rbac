@@ -53,6 +53,12 @@ services:
       POD_CPU_LIMIT: "1"
       GUNICORN_WORKER_MULTIPLIER: "1"
       GUNICORN_THREAD_LIMIT: "2"
+      # The IQE workspace hierarchy access tests expect /access to expand
+      # workspace grants to their descendants.
+      WORKSPACE_HIERARCHY_ENABLED: "True"
+      # Keep the local custom-role app allowlist aligned with the ephemeral
+      # deployment and IQE allowlist coverage.
+      ROLE_CREATE_ALLOW_LIST: "catalog,catalog_local_test,cost-management,remediations,inventory,drift,policies,advisor,approval,vulnerability,compliance,automation-analytics,notifications,patch,integrations,ros,staleness,config-manager"
       READ_YOUR_WRITES_WORKSPACE_ENABLED: "True"
       READ_YOUR_WRITES_TIMEOUT_SECONDS: "30"
       SERVICE_PSKS: '{"inventory":{"secret":"local-dev-psk"}}'

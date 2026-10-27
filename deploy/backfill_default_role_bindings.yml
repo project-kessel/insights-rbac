@@ -1,0 +1,19 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: backfill-default-role-bindings
+objects:
+  - apiVersion: cloud.redhat.com/v1alpha1
+    kind: ClowdJobInvocation
+    metadata:
+      labels:
+        app: rbac
+      name: backfill-default-role-bindings-${RUN_NUMBER}
+    spec:
+      appName: rbac
+      jobs:
+        - backfill-default-role-bindings
+parameters:
+  - name: RUN_NUMBER
+    description: Used to track and re-run the job
+    value: '1'
