@@ -5744,7 +5744,7 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         tool_output = self._get_tool_output(response)
         self.assertEqual(tool_output["error"], "HTTP 400")
-        self.assertIn("V2 orgs may only query applications", tool_output["detail"])
+        self.assertEqual(tool_output["detail"], "V2 orgs may only query applications in the allowed list. Disallowed: rbac")
         self.assertEqual(tool_output["tool"], "list_access")
         self.assertEqual(tool_output["endpoint"], "GET /api/v1/access/")
         self.assertIn("must not be interpreted as the user having no access", tool_output["hint"])
@@ -5831,7 +5831,10 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         access_errors = tool_output["access_errors"]
         self.assertEqual([error["application"] for error in access_errors], ["rbac"])
         self.assertEqual(access_errors[0]["status"], 400)
-        self.assertIn("V2 orgs may only query applications", access_errors[0]["detail"])
+        self.assertEqual(
+            access_errors[0]["detail"],
+            "V2 orgs may only query applications in the allowed list. Disallowed: rbac",
+        )
         self.assertIn("incomplete", tool_output["hints"]["incomplete_access"])
 
     def test_investigate_user_access_reports_effective_access_error(self):
@@ -5842,6 +5845,67 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("HTTP 400", tool_output["analysis"]["effective_access_error"])
         self.assertIn("V2 orgs may only query applications", tool_output["analysis"]["effective_access_error"])
         self.assertEqual(tool_output["effective_access"], [])
+
+    def test_list_access_empty_application_reports_exact_rejection(self):
+        """Negative: list_access with empty application on opted-in tenant returns the exact detail."""
+        response = self._call_tool("list_access", {"application": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(
+            tool_output["detail"],
+            "V2 orgs must specify an application from the allowed list.",
+        )
+        self.assertNotIn("data", tool_output)
+
+
+@override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True, V2_MIGRATION_APP_EXCLUDE_LIST=["approval"])
+class MCPV1AccessRejectionWriteActivatedTests(MCPToolTestMixin, IdentityRequest):
+    """Tests for GET /api/v1/access/ rejections on a V2 write-activated tenant.
+
+    The tenant is both opted in and write-activated, confirming that the same
+    structured error objects are returned regardless of the activation level.
+    """
+
+    def setUp(self):
+        """Set up a V2 write-activated tenant."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.test_username = self.user_data["username"]
+        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
+
+    def test_list_access_empty_application_on_write_activated_tenant(self):
+        """Negative: list_access with empty application on write-activated tenant returns exact detail."""
+        response = self._call_tool("list_access", {"application": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(
+            tool_output["detail"],
+            "V2 orgs must specify an application from the allowed list.",
+        )
+        self.assertNotIn("data", tool_output)
+
+    def test_list_access_disallowed_application_on_write_activated_tenant(self):
+        """Negative: list_access with disallowed application on write-activated tenant returns exact detail."""
+        response = self._call_tool("list_access", {"application": "rbac"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(
+            tool_output["detail"],
+            "V2 orgs may only query applications in the allowed list. Disallowed: rbac",
+        )
+        self.assertNotIn("data", tool_output)
 
 
 class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
