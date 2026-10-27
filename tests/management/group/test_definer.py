@@ -92,11 +92,17 @@ class GroupDefinerTests(IdentityRequest):
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             try:
                 with self.captureOnCommitCallbacks(execute=True):
-                    seed_group()
+                    group, admin_group = seed_group()
             except Exception:
                 self.fail(msg="update seed_group encountered an exception")
 
-            group = Group.objects.get(platform_default=True, tenant=self.public_tenant)
+            # Assert return values match the persisted default groups
+            persisted_group = Group.objects.get(platform_default=True, tenant=self.public_tenant)
+            persisted_admin_group = Group.objects.get(admin_default=True, tenant=self.public_tenant)
+            self.assertEqual(group.pk, persisted_group.pk)
+            self.assertEqual(admin_group.pk, persisted_admin_group.pk)
+
+            group = persisted_group
             self.assertEqual(group.system, True)
             self.assertRaises(Role.DoesNotExist, group.roles().get, name=role_to_remove.name)
             self.assertIsNotNone(group.roles().get(name=new_platform_role.name))
