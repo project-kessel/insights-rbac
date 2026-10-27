@@ -5791,6 +5791,34 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("could not be verified", tool_output["hint"])
         self.assertIn("Requires org admin", tool_output["hint"])
 
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(400, {"errors": [{"detail": "Simulated V1 exception error.", "status": "400"}]}),
+    )
+    def test_list_access_extracts_detail_from_v1_errors_format(self, _mock_access):
+        """Negative: list_access reads detail from the V1 errors[] shape when top-level detail is absent."""
+        response = self._call_tool("list_access", {"application": "rbac"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(tool_output["detail"], "Simulated V1 exception error.")
+        self.assertNotIn("data", tool_output)
+
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(403, {"errors": [{"detail": "You do not have permission.", "status": "403"}]}),
+    )
+    def test_check_user_permission_extracts_detail_from_v1_errors_format(self, _mock_access):
+        """Negative: check_user_permission reads detail from the V1 errors[] shape."""
+        response = self._call_tool(
+            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:read"}
+        )
+
+        tool_output = self._get_tool_output(response)
+        self.assertIsNone(tool_output["allowed"])
+        self.assertEqual(tool_output["error"], "You do not have permission.")
+        self.assertIn("could not be verified", tool_output["hint"])
+
     def test_get_user_state_reports_access_errors_and_keeps_successful_access(self):
         """Negative: get_user_state lists rejected applications while keeping the ones that worked."""
         response = self._call_tool("get_user_state", {"username": self.test_username})

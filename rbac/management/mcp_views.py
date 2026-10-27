@@ -760,11 +760,31 @@ def _call_access_view_v1(request: HttpRequest, query_params: dict[str, str]) -> 
 
 
 def _access_rejection_detail(status_code: int, body: Any) -> str:
-    """Build a short, printable detail string for a rejected /api/v1/access/ call."""
-    detail = body.get("detail") if isinstance(body, dict) else None
-    if not isinstance(detail, str) or not detail:
+    """Build a short, printable detail string for a rejected /api/v1/access/ call.
+
+    The body may carry the detail in two shapes:
+
+    * Direct ``Response`` — ``{"detail": "..."}`` (top-level key).
+    * V1 exception handler — ``{"errors": [{"detail": "..."}]}`` (flat list).
+
+    We check both, preferring the top-level value, and fall back to the HTTP
+    status code when neither provides a non-empty string.
+    """
+    if not isinstance(body, dict):
         return f"HTTP {status_code}"
-    return detail[:512]
+    # Prefer top-level "detail" (direct Response rejections).
+    detail = body.get("detail")
+    if isinstance(detail, str) and detail:
+        return detail[:512]
+    # Fall back to the first non-empty errors[].detail (V1 exception handler format).
+    errors = body.get("errors")
+    if isinstance(errors, list):
+        for entry in errors:
+            if isinstance(entry, dict):
+                entry_detail = entry.get("detail")
+                if isinstance(entry_detail, str) and entry_detail:
+                    return entry_detail[:512]
+    return f"HTTP {status_code}"
 
 
 # ┌──────────────────────────────────────┬───────────┬────────────────────────────────────────────────────┐
