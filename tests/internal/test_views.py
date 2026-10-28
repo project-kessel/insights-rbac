@@ -5732,7 +5732,7 @@ class VerifyMigrationEndpointTests(BaseInternalViewsetTests):
     def test_verify_migration_skips_migrated_v1_roles_on_v2_tenants(self):
         """Test that V1 roles migrated to V2 are skipped instead of failing with V1WriteBlockedError."""
         v1_role = Role.objects.create(name="migrated-role", tenant=self.tenant, system=False)
-        CustomRoleV2.objects.create(name="migrated-role-v2", tenant=self.tenant, v1_source=v1_role)
+        v2_role = CustomRoleV2.objects.create(name="migrated-role-v2", tenant=self.tenant, v1_source=v1_role)
         with transaction.atomic():
             ensure_v2_write_activated(self.tenant)
 
@@ -5746,6 +5746,13 @@ class VerifyMigrationEndpointTests(BaseInternalViewsetTests):
         self.assertTrue(body["checks"]["roles"]["correct"])
         checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
         self.assertNotIn(str(v1_role.uuid), checked_uuids)
+        # The migrated role's V2 counterpart must appear in role_permissions with the
+        # owner tuple included so the role#owner@tenant relation is still verified.
+        perm_entries = body["checks"]["role_permissions"]["roles_checked"]
+        v2_entry = next((e for e in perm_entries if e.get("v2_role_uuid") == str(v2_role.uuid)), None)
+        self.assertIsNotNone(v2_entry, "migrated V2 role should appear in role_permissions")
+        # dry_run: tuples_generated should include the owner tuple (>= 1 even with no permissions)
+        self.assertGreaterEqual(v2_entry["tuples_generated"], 1)
 
     def test_verify_migration_does_not_skip_v1_source_roles_on_v1_tenants(self):
         """Test that roles with v1_source are still verified on V1 tenants (V2 writes not activated)."""
@@ -5758,8 +5765,14 @@ class VerifyMigrationEndpointTests(BaseInternalViewsetTests):
         )
         self.assertEqual(response.status_code, 200)
         body = response.json()
+        # Assert the roles section is correct (not just that the role appears in the list —
+        # an error entry also contains role_uuid, so presence alone is insufficient).
+        self.assertTrue(body["checks"]["roles"]["correct"])
         checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
         self.assertIn(str(v1_role.uuid), checked_uuids)
+        # Confirm the entry has no error (dry_run entries have "checked" and "validation" keys).
+        role_entry = next(e for e in body["checks"]["roles"]["roles_checked"] if e.get("role_uuid") == str(v1_role.uuid))
+        self.assertNotIn("error", role_entry)
 
     def test_verify_migration_checks_system_role_group_binding_mapping(self):
         """Test that a system role bound to a custom group via BindingMapping is verified.

@@ -115,6 +115,7 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
+from management.role.relations import role_owner_relationship
 from management.role.model import Access
 from management.role.serializer import BindingMappingSerializer
 from management.tasks import (
@@ -2763,7 +2764,8 @@ def _run_tenant_migration_checks(
     roles_all_correct = True
     # V1 roles that have been migrated to a V2 CustomRoleV2 cannot be replayed through the
     # V1 dual-write handler -- on tenants with V2 writes activated it raises V1WriteBlockedError.
-    # Their V2 counterparts are validated by the "role_permissions" section below instead.
+    # Their V2 counterparts are validated by the "role_permissions" section below instead
+    # (both permission tuples AND the role#owner@tenant relation).
     # Only skip when V2 writes are active: on V1 tenants, dual-write also creates CustomRoleV2
     # rows with v1_source, but the handler still works fine there and must still be verified.
     v2_active = is_v2_write_activated(tenant)
@@ -2918,6 +2920,9 @@ def _run_tenant_migration_checks(
 
     permission_results = []
     permissions_all_correct = True
+    # Compute once for the owner-relation check below; None for the public tenant
+    # (which cannot host custom roles anyway).
+    tenant_resource_id = tenant.tenant_resource_id()
     custom_roles = (
         CustomRoleV2.objects.filter(tenant=tenant)
         .select_related("v1_source")
@@ -2928,6 +2933,14 @@ def _run_tenant_migration_checks(
         v1_role_uuid = str(role.v1_source.uuid) if role.v1_source_id else None
         try:
             permission_tuples = [CustomRoleV2._permission_tuple(role, perm) for perm in role.permissions.all()]
+            # Include the role#owner@tenant relation so migrated roles whose
+            # V1 counterpart is skipped in "roles" (V2-active tenants) still
+            # have their owner tuple verified.  Non-migrated custom roles also
+            # benefit -- they were never checked by the "roles" section.
+            if tenant_resource_id is not None:
+                permission_tuples.append(
+                    role_owner_relationship(role_uuid=str(role.uuid), tenant_resource_id=tenant_resource_id)
+                )
             if dry_run:
                 result, valid = _dry_run_validation_result(
                     {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid}, permission_tuples
