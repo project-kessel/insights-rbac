@@ -5739,6 +5739,12 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
 
     def test_list_access_reports_rejection_instead_of_empty_data(self):
         """Negative: list_access surfaces the rejection rather than reporting no access."""
+        from management.access.view import v1_access_by_v2_org_total
+
+        before = v1_access_by_v2_org_total.labels(
+            org_id=self.customer_data["org_id"], application="rbac", caller_type="user"
+        )._value.get()
+
         response = self._call_tool("list_access", {"application": "rbac"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -5751,6 +5757,11 @@ class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(tool_output["endpoint"], "GET /api/v1/access/")
         self.assertIn("must not be interpreted as the user having no access", tool_output["hint"])
         self.assertNotIn("data", tool_output)
+
+        after = v1_access_by_v2_org_total.labels(
+            org_id=self.customer_data["org_id"], application="rbac", caller_type="user"
+        )._value.get()
+        self.assertEqual(after, before + 1)
 
     def test_list_access_excluded_application_returns_data(self):
         """Positive: list_access still returns access data for an excluded application."""
