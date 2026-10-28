@@ -65,7 +65,7 @@ from kessel.inventory.v1beta2 import (
     streamed_list_subjects_request_pb2,
     subject_reference_pb2,
 )
-from management.atomic_transactions import atomic_with_retry, run_atomic_with_retry
+from management.atomic_transactions import atomic_block, atomic_with_retry, run_atomic_with_retry
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
 from management.group.inventory_api_dual_write_group_handler import (
@@ -2370,7 +2370,10 @@ def check_role(request, role_uuid):
         tuples = InMemoryTuples()
 
         if role.system:
-            with transaction.atomic():
+            # atomic_block (SERIALIZABLE, set before any query): the dual-write handlers
+            # internally use @atomic (pgtransaction SERIALIZABLE), which cannot nest inside a
+            # plain transaction that has already run queries.
+            with atomic_block():
                 relations_dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role,
                     replicator=InMemoryRelationReplicator(tuples),
@@ -2382,7 +2385,8 @@ def check_role(request, role_uuid):
                 transaction.set_rollback(True)
         else:
             # We have to lock the role before passing it to InventoryApiDualWriteHandler.
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the system branch.
+            with atomic_block():
                 role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
 
                 relations_dual_write_handler = InventoryApiDualWriteHandler(
@@ -2465,7 +2469,10 @@ def check_cross_account_request(request, request_id):
 
         tuples = InMemoryTuples()
 
-        with transaction.atomic():
+        # atomic_block (SERIALIZABLE, set before any query): the cross-access dual-write
+        # handler's internal methods use @atomic (pgtransaction SERIALIZABLE), which cannot
+        # nest inside a plain transaction that has already run queries.
+        with atomic_block():
             handler = InventoryApiDualWriteCrossAccessHandler(
                 cross_account_request=car,
                 event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
@@ -2752,7 +2759,11 @@ def _run_tenant_migration_checks(
     for role in Role.objects.filter(tenant=tenant, system=False)[:role_limit]:
         try:
             tuples = InMemoryTuples()
-            with transaction.atomic():
+            # atomic_block (SERIALIZABLE, set before any query) rather than transaction.atomic:
+            # the dual-write handlers internally use @atomic (pgtransaction SERIALIZABLE), and
+            # nesting that inside a plain transaction that has already run queries makes
+            # PostgreSQL reject the inner "SET TRANSACTION ISOLATION LEVEL".
+            with atomic_block():
                 locked_role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
                 relations_dual_write_handler = InventoryApiDualWriteHandler(
                     role=locked_role,
@@ -2985,7 +2996,8 @@ def _run_tenant_migration_checks(
                 continue
 
             tuples = InMemoryTuples()
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the roles section above.
+            with atomic_block():
                 car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request=car,
                     event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
@@ -3054,7 +3066,8 @@ def _run_tenant_migration_checks(
                 )
                 continue
 
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the roles section above.
+            with atomic_block():
                 car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request=car,
                     event_type=ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
