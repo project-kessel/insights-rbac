@@ -5747,6 +5747,20 @@ class VerifyMigrationEndpointTests(BaseInternalViewsetTests):
         checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
         self.assertNotIn(str(v1_role.uuid), checked_uuids)
 
+    def test_verify_migration_does_not_skip_v1_source_roles_on_v1_tenants(self):
+        """Test that roles with v1_source are still verified on V1 tenants (V2 writes not activated)."""
+        v1_role = Role.objects.create(name="dual-write-role", tenant=self.tenant, system=False)
+        CustomRoleV2.objects.create(name="dual-write-role-v2", tenant=self.tenant, v1_source=v1_role)
+        # V2 writes NOT activated — tenant is still on V1
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true", **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
+        self.assertIn(str(v1_role.uuid), checked_uuids)
+
     def test_verify_migration_checks_system_role_group_binding_mapping(self):
         """Test that a system role bound to a custom group via BindingMapping is verified.
 

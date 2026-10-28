@@ -140,7 +140,12 @@ from management.tasks import (
 )
 from management.tenant_mapping.exceptions import TenantNotBootstrappedError
 from management.tenant_mapping.model import TenantMapping
-from management.tenant_mapping.v2_activation import InvalidV2OptOutError, is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import (
+    InvalidV2OptOutError,
+    is_v2_opted_in,
+    is_v2_write_activated,
+    set_v2_opt_in_state,
+)
 from management.tenant_service.v2 import V2TenantBootstrapService
 from management.utils import (
     create_client_channel_inventory,
@@ -2759,12 +2764,16 @@ def _run_tenant_migration_checks(
     # V1 roles that have been migrated to a V2 CustomRoleV2 cannot be replayed through the
     # V1 dual-write handler -- on tenants with V2 writes activated it raises V1WriteBlockedError.
     # Their V2 counterparts are validated by the "role_permissions" section below instead.
-    migrated_v1_role_ids = set(
-        CustomRoleV2.objects.filter(v1_source__tenant=tenant).values_list("v1_source_id", flat=True)
-    )
-    for role in Role.objects.filter(tenant=tenant, system=False)[:role_limit]:
-        if role.pk in migrated_v1_role_ids:
-            continue
+    # Only skip when V2 writes are active: on V1 tenants, dual-write also creates CustomRoleV2
+    # rows with v1_source, but the handler still works fine there and must still be verified.
+    v2_active = is_v2_write_activated(tenant)
+    role_qs = Role.objects.filter(tenant=tenant, system=False)
+    if v2_active:
+        migrated_v1_role_ids = set(
+            CustomRoleV2.objects.filter(v1_source__tenant=tenant).values_list("v1_source_id", flat=True)
+        )
+        role_qs = role_qs.exclude(pk__in=migrated_v1_role_ids)
+    for role in role_qs[:role_limit]:
         try:
             tuples = InMemoryTuples()
             # atomic_block (SERIALIZABLE, set before any query) rather than transaction.atomic:
