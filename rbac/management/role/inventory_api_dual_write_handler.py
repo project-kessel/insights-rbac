@@ -17,6 +17,7 @@
 
 """Class to handle Dual Write API related operations."""
 
+import itertools
 import logging
 from abc import ABC
 from typing import Any, Iterable, Optional
@@ -63,6 +64,10 @@ from migration_tool.utils import create_relationship
 from api.models import Tenant
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+# Upper bound on the relations a single DELETE_SYSTEM_ROLE event may carry, so that deleting a
+# widely-assigned role does not produce one unbounded outbox message.
+DELETE_SYSTEM_ROLE_RELATIONS_PER_EVENT = 1000
 
 
 class BaseInventoryApiDualWriteHandler(ABC):
@@ -141,16 +146,43 @@ class SeedingInventoryApiDualWriteHandler(BaseInventoryApiDualWriteHandler):
             self._generate_relations_for_role(),
         )
 
-    def replicate_deleted_system_role(self):
-        """Replicate deletion of system role."""
+    def replicate_deleted_system_role(self, extra_remove: Iterable[RelationTuple] = ()):
+        """Replicate deletion of system role.
+
+        [extra_remove] holds relations owned by records that cascade away with the role (its role
+        bindings and binding mappings). They are removed together with the role's own relations,
+        split across several events so that a widely-assigned role does not produce one unbounded
+        event. It may be a lazy iterable, and is only consumed when replication is enabled.
+        """
         if not self.replication_enabled():
             return
 
-        self._replicate(
-            ReplicationEventType.DELETE_SYSTEM_ROLE,
-            self._create_metadata_from_role(),
-            self._generate_relations_for_role(for_removal=True),
-            [],
+        remove = itertools.chain(self._generate_relations_for_role(for_removal=True), extra_remove)
+        events = 0
+        replicated = 0
+
+        for batch in itertools.batched(remove, DELETE_SYSTEM_ROLE_RELATIONS_PER_EVENT):
+            events += 1
+            replicated += len(batch)
+            self._replicate(
+                ReplicationEventType.DELETE_SYSTEM_ROLE,
+                self._create_metadata_from_role(),
+                list(batch),
+                [],
+            )
+
+        if events == 0:
+            # A role with no relations at all still goes through _replicate once, to keep logging
+            # the empty-event warning.
+            self._replicate(ReplicationEventType.DELETE_SYSTEM_ROLE, self._create_metadata_from_role(), [], [])
+            return
+
+        logger.info(
+            "[Dual Write] Removed %s relation(s) across %s event(s) for deleted system role(%s): '%s'",
+            replicated,
+            events,
+            self.role.uuid,
+            self.role.name,
         )
 
     def _check_create_admin_platform_relation(self, role, *, for_removal: bool):
