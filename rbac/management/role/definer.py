@@ -26,7 +26,9 @@ from typing import Iterator
 from core.utils import destructive_ok
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, QuerySet
+from django.db.models import CharField, F, QuerySet
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.utils import timezone
 from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from management.atomic_transactions import atomic, atomic_with_retry
@@ -215,28 +217,33 @@ def _role_binding_relations_to_remove(role: Role) -> Iterator[RelationTuple]:
     Streamed rather than collected so that a role bound in every tenant does not have all of its
     relations in memory at once.
     """
-    migrated_binding_uuids: set[str] = set()
-
     for binding in (
         RoleBinding.objects.filter(role__v1_source=role)
         .select_related("role")
         .prefetch_related("group_entries__group", "principal_entries__principal")
         .iterator(chunk_size=1000)
     ):
-        migrated_binding_uuids.add(str(binding.uuid))
         yield from binding.all_tuples()
 
     # A V1 group assignment of a system role is tracked by a BindingMapping, which is only migrated
     # to a RoleBinding lazily. Mappings not migrated yet still own live relations, which the loop
     # above cannot see. A migrated mapping shares its RoleBinding's UUID, hence its tuples, so it is
     # skipped to keep the same relation out of two events.
-    for mapping in BindingMapping.objects.filter(role=role).iterator(chunk_size=1000):
-        v2_binding = mapping.get_role_binding()
-
-        if str(v2_binding.id) in migrated_binding_uuids:
-            continue
-
-        yield from v2_binding.as_tuples()
+    #
+    # Deduplication is pushed to the database so the Python process does not need to retain every
+    # migrated binding UUID in memory.
+    migrated_uuids = (
+        RoleBinding.objects.filter(role__v1_source=role)
+        .annotate(uuid_str=Cast("uuid", output_field=CharField()))
+        .values("uuid_str")
+    )
+    for mapping in (
+        BindingMapping.objects.filter(role=role)
+        .annotate(binding_id=KeyTextTransform("id", "mappings"))
+        .exclude(binding_id__in=migrated_uuids)
+        .iterator(chunk_size=1000)
+    ):
+        yield from mapping.get_role_binding().as_tuples()
 
 
 # SERIALIZABLE for the same reason as _make_role above.
