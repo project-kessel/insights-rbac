@@ -20,22 +20,33 @@ from unittest.mock import ANY, call, mock_open, patch
 from uuid import UUID
 
 from django.conf import settings
-from django.test.utils import override_settings
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext, override_settings
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.models import (
     Access,
+    BindingMapping,
+    CustomRoleV2,
     ExtRoleRelation,
     Group,
     Permission,
     PlatformRoleV2,
     ResourceDefinition,
     Role,
+    RoleBinding,
     SeededRoleV2,
 )
 from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.inventory_replicator.inventory_replicator import ReplicationEvent, ReplicationEventType
-from management.role.definer import _seed_platform_roles, seed_permissions, seed_roles
+from management.role.definer import (
+    _lock_role_for_deletion,
+    _role_binding_relations_to_remove,
+    _seed_platform_roles,
+    replicate_system_role_deletion,
+    seed_permissions,
+    seed_roles,
+)
 from management.role.platform import (
     ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
     admin_platform_parent_scopes_for_seeded_system_role,
@@ -45,6 +56,7 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
+from management.role_binding.model import RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType
 from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
@@ -511,6 +523,263 @@ class RoleDefinerTests(IdentityRequest):
 
         # verify role was deleted from the database
         self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_removes_role_binding_relations(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_replicate,
+    ):
+        """Seeding a system role away removes its role bindings' relations, and only those."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        relation_tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(relation_tuples)
+        mock_replicate.side_effect = replicator.replicate
+
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role_to_delete = fixture.new_system_role(name="dummy_role_delete", permissions=["inventory:hosts:read"])
+        group, principals = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role_to_delete),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        binding.update_principals([("group", principals[0])])
+
+        # A binding on an unrelated role, sharing the same workspace and group, must be left alone.
+        other_binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=CustomRoleV2.objects.create(name="unrelated_role", tenant=self.tenant),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        other_binding.update_groups([group])
+
+        binding_relations = binding.all_tuples()
+        other_binding_relations = other_binding.all_tuples()
+        for relation_tuple in [*binding_relations, *other_binding_relations]:
+            relation_tuples.add(relation_tuple)
+
+        seed_roles()
+
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+        self.assertFalse(RoleBinding.objects.filter(id=binding.id).exists())
+        for relation_tuple in binding_relations:
+            self.assertNotIn(relation_tuple, relation_tuples)
+
+        self.assertTrue(RoleBinding.objects.filter(id=other_binding.id).exists())
+        for relation_tuple in other_binding_relations:
+            self.assertIn(relation_tuple, relation_tuples)
+
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_removes_unmigrated_binding_mapping_relations(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_replicate,
+    ):
+        """A BindingMapping never migrated to a RoleBinding still has its relations removed."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        relation_tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(relation_tuples)
+        mock_replicate.side_effect = replicator.replicate
+
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role_to_delete = fixture.new_system_role(name="dummy_role_delete", permissions=["inventory:hosts:read"])
+        group, _ = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        v2_role = SeededRoleV2.objects.get(v1_source=role_to_delete)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        mapping = BindingMapping.for_role_binding(binding.as_migration_value(), role_to_delete, v2_role)
+        mapping.save(force_insert=True)
+        mapping_relations = mapping.as_tuples()
+        # The binding's role, resource and group relations -- a seeded role contributes no
+        # permissions of its own to a mapping.
+        self.assertEqual(len(mapping_relations), 3)
+
+        # Legacy state: the mapping was written before RoleBinding existed and never migrated.
+        binding.delete()
+
+        for relation_tuple in mapping_relations:
+            relation_tuples.add(relation_tuple)
+
+        seed_roles()
+
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+        self.assertFalse(BindingMapping.objects.filter(id=mapping.id).exists())
+        for relation_tuple in mapping_relations:
+            self.assertNotIn(relation_tuple, relation_tuples)
+
+    def test_role_binding_relations_to_remove_does_not_repeat_migrated_mapping(self):
+        """A mapping already migrated to a RoleBinding contributes its relations only once."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="dummy_role_bound", permissions=["inventory:hosts:read"])
+        group, _ = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        v2_role = SeededRoleV2.objects.get(v1_source=role)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        mapping = BindingMapping.for_role_binding(binding.as_migration_value(), role, v2_role)
+        mapping.save(force_insert=True)
+
+        self.assertCountEqual(_role_binding_relations_to_remove(role), binding.all_tuples())
+
+    def test_role_binding_relations_stream_subjects_and_deduplicate_sources(self):
+        """Subject streams match snapshots without per-binding queries or duplicate principals."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="streamed_role", permissions=["inventory:hosts:read"])
+        groups_and_users = [
+            fixture.new_group(name=f"stream_group_{i}", users=[f"stream_user_{i}"], tenant=self.tenant)
+            for i in range(3)
+        ]
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group for group, _ in groups_and_users])
+        principals = [principals[0] for _, principals in groups_and_users]
+        binding.update_principals([("first", principal) for principal in principals])
+        RoleBindingPrincipal.objects.create(binding=binding, principal=principals[0], source="second")
+        other_binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=binding.role,
+            resource_type="workspace",
+            resource_id="another-workspace",
+        )
+        other_binding.update_principals([("first", principals[0])])
+        expected = binding.all_tuples() + other_binding.all_tuples()
+
+        with (
+            self.assertNumQueries(4),
+            patch.object(RoleBinding, "all_tuples", side_effect=AssertionError),
+            patch("management.role.definer._BINDING_RELATION_CHUNK_SIZE", 2),
+        ):
+            actual = list(_role_binding_relations_to_remove(role))
+
+        self.assertCountEqual(actual, expected)
+        self.assertEqual(len(actual), len(set(actual)))
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=False)
+    @patch("management.role.definer.RoleBinding")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_skips_binding_query_when_replication_disabled(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_role_binding,
+    ):
+        """No role binding is loaded when replication is disabled, but the role is still deleted."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        role_to_delete = Role.objects.create(name="dummy_role_delete", system=True, tenant=self.public_tenant)
+
+        seed_roles()
+
+        mock_role_binding.objects.filter.assert_not_called()
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+    @patch("management.role.definer.SeedingInventoryApiDualWriteHandler")
+    def test_replicate_system_role_deletion_locks_role_before_collecting_relations(self, mock_handler_class):
+        """The role, its binding mappings and role bindings are locked before relations are collected."""
+        role = Role.objects.create(name="dummy_role_lock", system=True, tenant=self.public_tenant)
+        mock_handler = mock_handler_class.return_value
+        mock_handler.replication_enabled.return_value = True
+        calls = []
+        mock_handler.replicate_deleted_system_role.side_effect = lambda extra_remove: calls.append("replicate")
+
+        with patch("management.role.definer._lock_role_for_deletion") as mock_lock:
+            mock_lock.side_effect = lambda r: calls.append("lock")
+            replicate_system_role_deletion(role)
+
+        mock_lock.assert_called_once_with(role)
+        self.assertEqual(calls, ["lock", "replicate"])
+
+    def test_lock_role_for_deletion_locks_role_rows(self):
+        """Locking inside a transaction succeeds with bindings and mappings present."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="dummy_role_lock_rows", permissions=["inventory:hosts:read"])
+        v2_role = SeededRoleV2.objects.get(v1_source=role)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        BindingMapping.for_role_binding(binding.as_migration_value(), role, v2_role).save(force_insert=True)
+
+        with transaction.atomic(), CaptureQueriesContext(connection) as queries:
+            _lock_role_for_deletion(role)
+
+        locking = [q["sql"] for q in queries.captured_queries if "FOR UPDATE" in q["sql"]]
+        locked_tables = [
+            table
+            for sql in locking
+            for table in (
+                "management_role",
+                "management_bindingmapping",
+                "management_rolev2",
+                "management_rolebinding",
+            )
+            if f'FROM "{table}"' in sql
+        ]
+        # BindingMapping must be locked before RoleV2: the V1 group-role removal path locks a mapping
+        # and then inserts a RoleBinding, which key-share locks its RoleV2. The reverse order deadlocks.
+        self.assertEqual(
+            locked_tables,
+            ["management_role", "management_bindingmapping", "management_rolev2", "management_rolebinding"],
+            locking,
+        )
 
     @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(
