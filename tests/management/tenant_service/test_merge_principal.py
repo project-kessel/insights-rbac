@@ -13,6 +13,7 @@ from management.role.v2_model import CustomRoleV2
 from management.tenant_service.tenant_service import (
     _ensure_principal_with_user_id_in_tenant,
     merge_obsolete_principal_into_survivor,
+    rewrite_principal_user_id,
 )
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
@@ -188,22 +189,39 @@ class MergePrincipalTests(IdentityRequest):
         self.assertEqual(survivor.user_id, "54181241")
         self.assertEqual(list(group.principals.all()), [survivor])
 
-    def test_ensure_principal_raises_on_user_id_mismatch(self):
-        """A principal with a different non-empty user_id raises RuntimeError."""
+    def test_ensure_principal_rewrites_mismatched_user_id_and_merges_owner(self):
+        """Mismatch with another owner of the BOP user_id rewrites and merges the owner."""
         obsolete = Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
         principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
+        obsolete_group = Group.objects.create(name="legacy", tenant=self.tenant)
+        principal_group = Group.objects.create(name="engineering", tenant=self.tenant)
+        obsolete_group.principals.add(obsolete)
+        principal_group.principals.add(principal)
+
         user = User()
         user.username = "jdross@redhat.com"
         user.user_id = "54181241"
         user.org_id = self.tenant.org_id
 
         tracker = _ReplicationTracker()
-        with self.assertRaises(RuntimeError):
-            _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
+        result = _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
+        self.assertIsNone(result)
 
         principal.refresh_from_db()
-        self.assertEqual(principal.user_id, "99999999")
-        self.assertTrue(Principal.objects.filter(pk=obsolete.pk).exists())
+        self.assertEqual(principal.user_id, "54181241")
+        self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
+        self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy"])
+
+        expected_removed = [
+            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "99999999"),
+            Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
+        ]
+        expected_added = [
+            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "54181241"),
+            Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
+        ]
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
 
     def test_ensure_principal_upsert_integrity_error_creates_survivor_when_missing(self):
         """upsert IntegrityError path creates survivor principal when insert fails on user_id uniqueness."""
@@ -233,6 +251,32 @@ class MergePrincipalTests(IdentityRequest):
         self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
         survivor = Principal.objects.get(username="jdross@redhat.com", tenant=self.tenant)
         self.assertEqual(survivor.user_id, "54181241")
+
+    def test_resolve_user_id_conflict_refreshes_stale_in_memory_user_id(self):
+        """After a failed save, in-memory user_id may already be the target; refresh before rewrite."""
+        from management.tenant_service.tenant_service import _resolve_user_id_conflict
+
+        obsolete = Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
+        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
+        group = Group.objects.create(name="engineering", tenant=self.tenant)
+        group.principals.add(principal)
+
+        # Simulate assign path: caller set principal.user_id to the target before save() failed.
+        principal.user_id = "54181241"
+        tracker = _ReplicationTracker()
+        _resolve_user_id_conflict(principal, "54181241", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "54181241")
+        self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
+        self.assertCountEqual(
+            tracker.tuples_removed,
+            [Group.relationship_to_user_id_for_group(str(group.uuid), "99999999")],
+        )
+        self.assertCountEqual(
+            tracker.tuples_added,
+            [Group.relationship_to_user_id_for_group(str(group.uuid), "54181241")],
+        )
 
     def test_ensure_principal_noop_when_principal_already_has_user_id(self):
         """No merge when the matched principal already has the expected user_id."""
@@ -264,3 +308,147 @@ class MergePrincipalTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "7919876")
         self.assertEqual(Principal.objects.count(), 1)
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
+class RewritePrincipalUserIdTests(IdentityRequest):
+    """Tests for in-place principal user_id rewrite with SpiceDB tuple replication."""
+
+    def setUp(self):
+        super().setUp()
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+    def test_rewrite_noop_when_user_id_already_matches(self):
+        """No DB or replication work when the principal already has the target user_id."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="51856862"
+        )
+        group = Group.objects.create(name="admins", tenant=self.tenant)
+        group.principals.add(principal)
+
+        tracker = _ReplicationTracker()
+        rewrite_principal_user_id(principal, "51856862", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+        self.assertEqual(tracker.tuples_added, [])
+        self.assertEqual(tracker.tuples_removed, [])
+
+    def test_rewrite_updates_user_id_and_replicates_group_member_tuples(self):
+        """In-place rewrite removes old group member tuples and adds new ones."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+        group = Group.objects.create(name="admins", tenant=self.tenant)
+        group.principals.add(principal)
+
+        tracker = _ReplicationTracker()
+        rewrite_principal_user_id(principal, "51856862", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+        self.assertEqual(list(group.principals.all()), [principal])
+
+        expected_removed = Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")
+        expected_added = Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")
+        self.assertCountEqual(tracker.tuples_removed, [expected_removed])
+        self.assertCountEqual(tracker.tuples_added, [expected_added])
+
+    def test_rewrite_replicates_direct_role_binding_subject_tuples(self):
+        """Direct role-binding subject tuples are rewritten from old user_id to new."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+        role = CustomRoleV2.objects.create(name="rewrite-test-role", tenant=self.tenant)
+        binding = RoleBinding.objects.create(
+            role=role,
+            resource_type="workspace",
+            resource_id="00000000-0000-0000-0000-000000000001",
+            tenant=self.tenant,
+        )
+        RoleBindingPrincipal.objects.create(binding=binding, principal=principal, source="direct")
+
+        tracker = _ReplicationTracker()
+        rewrite_principal_user_id(principal, "51856862", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+
+        expected_removed = binding._user_subject_tuple(
+            Principal(username="tmp", tenant=self.tenant, user_id="16777216")
+        )
+        # Rebuild expected with the same binding uuid after rewrite (principal now has new id).
+        expected_added = binding._user_subject_tuple(principal)
+        self.assertCountEqual(tracker.tuples_removed, [expected_removed])
+        self.assertCountEqual(tracker.tuples_added, [expected_added])
+        self.assertTrue(
+            RoleBindingPrincipal.objects.filter(binding=binding, principal=principal, source="direct").exists()
+        )
+
+    def test_rewrite_with_no_memberships_only_updates_user_id(self):
+        """Principal with no groups/bindings still gets user_id updated; no replication."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+
+        tracker = _ReplicationTracker()
+        rewrite_principal_user_id(principal, "51856862", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+        self.assertEqual(tracker.tuples_added, [])
+        self.assertEqual(tracker.tuples_removed, [])
+
+    def test_rewrite_raises_when_principal_user_id_missing(self):
+        """Rewrite requires an existing user_id; missing ids use the assign/merge path instead."""
+        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant)
+        tracker = _ReplicationTracker()
+        with self.assertRaises(ValueError):
+            rewrite_principal_user_id(principal, "51856862", tracker)
+
+    def test_rewrite_raises_on_cross_tenant_owner_of_new_user_id(self):
+        """Refuse to merge an owner of the new user_id from another tenant."""
+        other_tenant = Tenant.objects.create(
+            tenant_name="other-tenant",
+            account_id="99999999",
+            org_id="99999999",
+            ready=True,
+        )
+        Principal.objects.create(username="other@example.com", tenant=other_tenant, user_id="51856862")
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+
+        tracker = _ReplicationTracker()
+        with self.assertRaises(RuntimeError):
+            rewrite_principal_user_id(principal, "51856862", tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "16777216")
+
+    def test_ensure_principal_rewrites_mismatched_user_id_in_place(self):
+        """Ensure path rewrites a stale user_id when the BOP id is free."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+        group = Group.objects.create(name="admins", tenant=self.tenant)
+        group.principals.add(principal)
+
+        user = User()
+        user.username = "teppo.haapala@apotti.fi"
+        user.user_id = 51856862
+        user.org_id = self.tenant.org_id
+
+        tracker = _ReplicationTracker()
+        _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+        self.assertCountEqual(
+            tracker.tuples_removed,
+            [Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")],
+        )
+        self.assertCountEqual(
+            tracker.tuples_added,
+            [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")],
+        )
