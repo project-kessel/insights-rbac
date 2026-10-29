@@ -286,6 +286,17 @@ def _resolve_user_id_conflict(
     user_id: str,
     replicator: InventoryReplicator,
 ) -> None:
+    """Resolve a user_id uniqueness conflict after a failed principal save.
+
+    Refreshes the survivor from the database (callers may have mutated user_id in memory
+    before the IntegrityError), then either rewrites the survivor's stale user_id or merges
+    the obsolete owner of user_id into the survivor.
+
+    Raises:
+        ValueError: if user_id is missing.
+        RuntimeError: if the conflict owner cannot be found and the survivor does not hold
+            the target user_id.
+    """
     normalized_user_id = _normalize_user_id(user_id)
     if normalized_user_id is None:
         raise ValueError(f"Cannot resolve user_id conflict without user_id. survivor_id={survivor.pk}")
@@ -318,6 +329,13 @@ def _ensure_principal_with_user_id_in_tenant(
     *,
     replicator: InventoryReplicator,
 ):
+    """Ensure a principal exists for user in tenant with the correct user_id.
+
+    Handles four scenarios: creation (upsert), assignment of a missing user_id, in-place
+    rewrite of a mismatched (stale) user_id, and merge when the target user_id belongs to an
+    obsolete principal in the same tenant. IntegrityError on save is caught and delegated to
+    _resolve_user_id_conflict.
+    """
     created = False
     principal = None
 
