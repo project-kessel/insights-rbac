@@ -5893,8 +5893,8 @@ class MCPV1AccessRejectionWriteActivatedTests(MCPToolTestMixin, IdentityRequest)
 
         bootstrap_tenant_for_v2_test(self.tenant)
         ensure_v2_write_activated(self.tenant)
-        self.tenant.tenant_mapping.refresh_from_db()
-        self.assertIsNotNone(self.tenant.tenant_mapping.v2_write_activated_at)
+        # cls.tenant is shared across tests, so its cached tenant_mapping can point at a rolled-back row.
+        self.assertIsNotNone(TenantMapping.objects.get(tenant=self.tenant).v2_write_activated_at)
 
     def test_list_access_empty_application_on_write_activated_tenant(self):
         """Negative: list_access with empty application on write-activated tenant returns exact detail."""
