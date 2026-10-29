@@ -19,6 +19,7 @@
 from abc import abstractmethod
 import logging
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
 from rest_framework import status
@@ -554,6 +555,32 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertFalse(Tenant.objects.filter(id=tenant1.id).exists())
         self.assertFalse(Tenant.objects.filter(id=tenant2.id).exists())
 
+    @patch("management.principal.proxy.PrincipalProxy.fetch_account_org_mapping")
+    def test_populate_tenant_org_id_bop_failure_does_not_mutate_tenants(self, mock_fetch_bop):
+        """Test that a BOP failure (None result) does not create, update, or delete any tenants."""
+        # Create test tenants with account_id but no org_id
+        tenant1 = Tenant.objects.create(tenant_name="acct_bop_fail_1", account_id="900001", org_id=None)
+        tenant2 = Tenant.objects.create(tenant_name="acct_bop_fail_2", account_id="900002", org_id=None)
+
+        # Count tenants before
+        tenant_count_before = Tenant.objects.count()
+
+        # Mock BOP response - returns None (failure)
+        mock_fetch_bop.return_value = None
+
+        response = self.client.post("/_private/api/utils/populate_tenant_org_id/", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        response_data = json.loads(response.content.decode())
+        self.assertIn("error", response_data)
+
+        # Verify no tenants were mutated
+        self.assertEqual(Tenant.objects.count(), tenant_count_before)
+        tenant1.refresh_from_db()
+        tenant2.refresh_from_db()
+        self.assertIsNone(tenant1.org_id)
+        self.assertIsNone(tenant2.org_id)
+
     def test_get_invalid_default_admin_groups(self):
         """Test that we can get invalid groups."""
         invalid_admin_default_group = Group.objects.create(
@@ -612,6 +639,23 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(Group.objects.filter(id=valid_admin_default_group.id).exists(), True)
         self.assertEqual(Group.objects.filter(id=invalid_admin_default_group.id).exists(), False)
 
+    def test_get_org_admin_numeric_path_dispatches(self):
+        """Test that a numeric org_or_account path segment dispatches to the view (route contract)."""
+        response = self.client.get(
+            "/_private/api/utils/get_org_admin/123456/?type=account_id",
+            **self.request.META,
+        )
+        # 500 is expected because BOP is not mocked, but the view was reached (not 404)
+        self.assertNotEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_get_org_admin_nonnumeric_path_rejected(self):
+        """Test that a nonnumeric org_or_account path segment is rejected with 404 (route contract)."""
+        response = self.client.get(
+            "/_private/api/utils/get_org_admin/abc-xyz/?type=account_id",
+            **self.request.META,
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_get_org_admin_type_not_set(self):
         """Test that we get a bad request for not using type query param."""
         response = self.client.get(f"/_private/api/utils/get_org_admin/123456/", **self.request.META)
@@ -651,6 +695,23 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         expected_message = "Unable to connect for URL"
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertIn(expected_message, response.content.decode())
+
+    @patch("internal.views.requests")
+    def test_get_org_admin_timeout(self, mock_requests):
+        """Test getting the org admin and timing out on BOP request."""
+        import requests as real_requests
+
+        mock_requests.get.side_effect = real_requests.exceptions.Timeout("Connection timed out")
+        mock_requests.exceptions = real_requests.exceptions
+        response = self.client.get(
+            "/_private/api/utils/get_org_admin/123456/?type=account_id",
+            **self.request.META,
+        )
+        expected_message = "Unable to connect for URL"
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertIn(expected_message, response.content.decode())
+        mock_requests.get.assert_called_once()
+        self.assertEqual(mock_requests.get.call_args.kwargs.get("timeout"), settings.OUTBOUND_HTTP_TIMEOUT)
 
     @patch("internal.views.requests")
     def test_get_org_admin_account(self, mock_proxy):
