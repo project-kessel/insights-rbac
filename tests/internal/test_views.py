@@ -31,7 +31,6 @@ from django.utils import timezone
 from unittest.mock import MagicMock
 from unittest.mock import patch
 from kessel.inventory.v1beta2 import check_response_pb2, allowed_pb2
-import pytz
 import json
 import uuid
 from grpc import RpcError
@@ -50,7 +49,6 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
-from management.role.user_source import SourceKey
 from management.tenant_mapping.model import TenantMapping
 from management.tenant_mapping.v2_activation import is_v2_opted_in, set_v2_opt_in_state, ensure_v2_write_activated
 from management.tenant_service.v1 import V1TenantBootstrapService
@@ -66,19 +64,15 @@ from migration_tool.in_memory_tuples import (
 )
 from migration_tool.utils import create_relationship
 from kessel.inventory.v1beta2 import (
-    inventory_service_pb2_grpc,
     reporter_reference_pb2,
     resource_reference_pb2,
     subject_reference_pb2,
     streamed_list_objects_response_pb2,
     streamed_list_subjects_response_pb2,
-    check_response_pb2,
-    allowed_pb2,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
 from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
 from tests.management.role.test_dual_write import RbacFixture
-from tests.rbac.test_middleware import EnvironmentVarGuard
 from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
 
@@ -248,7 +242,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         Group.objects.create(name="System Group", system=True, tenant=unmodified_tenant_2)
         Role.objects.create(name="System Role", system=True, tenant=unmodified_tenant_2)
 
-        response = self.client.get(f"/_private/api/tenant/unmodified/", **self.request.META)
+        response = self.client.get("/_private/api/tenant/unmodified/", **self.request.META)
         response_data = json.loads(response.content)
         self.assertCountEqual(response_data["unmodified_tenants"], [self.tenant.org_id, unmodified_tenant_2.org_id])
 
@@ -258,25 +252,25 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         # the public schema is created in migrations but excluded from the internal view
         self.assertEqual(Tenant.objects.count(), 5)
 
-        response = self.client.get(f"/_private/api/tenant/unmodified/?limit=2", **self.request.META)
+        response = self.client.get("/_private/api/tenant/unmodified/?limit=2", **self.request.META)
         response_data = json.loads(response.content)
         self.assertEqual(response_data["total_tenants_count"], 2)
 
-        response = self.client.get(f"/_private/api/tenant/unmodified/?limit=2&offset=3", **self.request.META)
+        response = self.client.get("/_private/api/tenant/unmodified/?limit=2&offset=3", **self.request.META)
         response_data = json.loads(response.content)
         self.assertEqual(response_data["total_tenants_count"], 1)
 
     @patch("management.tasks.run_migrations_in_worker.delay")
     def test_run_migrations(self, migration_mock):
         """Test that we can trigger migrations."""
-        response = self.client.post(f"/_private/api/migrations/run/", **self.request.META)
+        response = self.client.post("/_private/api/migrations/run/", **self.request.META)
         migration_mock.assert_called_once()
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.content.decode(), "Migrations are running in a background worker.")
 
     def test_list_migration_progress_without_migration_name(self):
         """Test that we get a 400 when no migration name supplied."""
-        url = f"/_private/api/migrations/progress/"
+        url = "/_private/api/migrations/progress/"
         response = self.client.get(url, **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
@@ -287,7 +281,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     @patch("management.tasks.run_seeds_in_worker.delay")
     def test_run_seeds_with_defaults(self, seed_mock):
         """Test that we can trigger seeds with defaults."""
-        response = self.client.post(f"/_private/api/seeds/run/", **self.request.META)
+        response = self.client.post("/_private/api/seeds/run/", **self.request.META)
         seed_mock.assert_called_once_with({})
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.content.decode(), "Seeds are running in a background worker.")
@@ -295,7 +289,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     @patch("management.tasks.run_seeds_in_worker.delay")
     def test_run_seeds_with_seed_types(self, seed_mock):
         """Test that we can trigger seeds with seed types."""
-        response = self.client.post(f"/_private/api/seeds/run/?seed_types=roles,groups", **self.request.META)
+        response = self.client.post("/_private/api/seeds/run/?seed_types=roles,groups", **self.request.META)
         seed_mock.assert_called_once_with({"roles": True, "groups": True})
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.content.decode(), "Seeds are running in a background worker.")
@@ -304,7 +298,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_seeds_with_force_create(self, seed_mock):
         """Test that we can trigger seeds with force create flag."""
         response = self.client.post(
-            f"/_private/api/seeds/run/?seed_types=roles&force_create_relationships=true", **self.request.META
+            "/_private/api/seeds/run/?seed_types=roles&force_create_relationships=true", **self.request.META
         )
         seed_mock.assert_called_once_with({"roles": True, "force_create_relationships": True})
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
@@ -314,7 +308,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_seeds_with_force_update(self, seed_mock):
         """Test that we can trigger seeds with force update flags."""
         response = self.client.post(
-            f"/_private/api/seeds/run/?seed_types=roles&force_update_relationships=true", **self.request.META
+            "/_private/api/seeds/run/?seed_types=roles&force_update_relationships=true", **self.request.META
         )
         seed_mock.assert_called_once_with({"roles": True, "force_update_relationships": True})
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
@@ -323,7 +317,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     @patch("management.tasks.run_seeds_in_worker.delay")
     def test_run_seeds_with_invalid_types(self, seed_mock):
         """Test that we get a 400 when invalid seed types supplied."""
-        response = self.client.post(f"/_private/api/seeds/run/?seed_types=foo,bar", **self.request.META)
+        response = self.client.post("/_private/api/seeds/run/?seed_types=foo,bar", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         seed_mock.assert_not_called()
         self.assertEqual(
@@ -348,7 +342,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_seeds_with_both_force_flags(self, seed_mock):
         """Test that we get a 400 when both force flags are true."""
         response = self.client.post(
-            f"/_private/api/seeds/run/?force_create_relationships=true&force_update_relationships=true",
+            "/_private/api/seeds/run/?force_create_relationships=true&force_update_relationships=true",
             **self.request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -361,7 +355,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     @patch("management.tasks.run_seeds_in_worker.delay")
     def test_run_seeds_with_invalid_options(self, seed_mock):
         """Test that we get a 400 when invalid option supplied."""
-        response = self.client.post(f"/_private/api/seeds/run/?foo=true", **self.request.META)
+        response = self.client.post("/_private/api/seeds/run/?foo=true", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         seed_mock.assert_not_called()
         self.assertEqual(
@@ -373,7 +367,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_seeds_with_skip_notifications(self, seed_mock):
         """Test that we can trigger seeds with skip_notifications=true."""
         response = self.client.post(
-            f"/_private/api/seeds/run/?seed_types=roles&skip_notifications=true", **self.request.META
+            "/_private/api/seeds/run/?seed_types=roles&skip_notifications=true", **self.request.META
         )
         seed_mock.assert_called_once_with({"roles": True, "skip_notifications": True})
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
@@ -381,7 +375,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     @patch("management.tasks.run_seeds_in_worker.delay")
     def test_run_seeds_with_invalid_skip_notifications(self, seed_mock):
         """Test that we get a 400 when an invalid skip_notifications value is supplied."""
-        response = self.client.post(f"/_private/api/seeds/run/?skip_notifications=yes", **self.request.META)
+        response = self.client.post("/_private/api/seeds/run/?skip_notifications=yes", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         seed_mock.assert_not_called()
         self.assertEqual(
@@ -404,15 +398,15 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_setting_ready_flag_for_tenants(self):
         """Test that we can get the total of not ready tenants and set them to true."""
         Tenant.objects.create(tenant_name="acct_not_ready", org_id="1234")
-        response = self.client.get(f"/_private/api/utils/set_tenant_ready/", **self.request.META)
+        response = self.client.get("/_private/api/utils/set_tenant_ready/", **self.request.META)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.content.decode(), "Total of 1 tenants not set to be ready.")
 
-        response = self.client.post(f"/_private/api/utils/set_tenant_ready/", **self.request.META)
+        response = self.client.post("/_private/api/utils/set_tenant_ready/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-        response = self.client.post(f"/_private/api/utils/set_tenant_ready/?max_expected=2", **self.request.META)
+        response = self.client.post("/_private/api/utils/set_tenant_ready/?max_expected=2", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response.content.decode(), "Total of 1 tenants has been updated. 0 tenant with ready flag equal to false."
@@ -568,7 +562,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             tenant=self.public_tenant,
             name="Valid Default Admin Group",
         )
-        response = self.client.get(f"/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
+        response = self.client.get("/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         response_data = json.loads(response.content)
         self.assertEqual(response_data["invalid_default_admin_groups_count"], 1)
@@ -586,7 +580,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
 
     def test_delete_invalid_default_admin_groups_disallowed(self):
         """Test that we cannot delete invalid groups when disallowed."""
-        response = self.client.delete(f"/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
+        response = self.client.delete("/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.content.decode(), "Destructive operations disallowed.")
 
@@ -606,7 +600,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             name="Valid Default Admin Group",
         )
         self.assertEqual(Group.objects.count(), 3)
-        response = self.client.delete(f"/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
+        response = self.client.delete("/_private/api/utils/invalid_default_admin_groups/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(Group.objects.count(), 2)
         self.assertEqual(Group.objects.filter(id=valid_admin_default_group.id).exists(), True)
@@ -614,7 +608,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
 
     def test_get_org_admin_type_not_set(self):
         """Test that we get a bad request for not using type query param."""
-        response = self.client.get(f"/_private/api/utils/get_org_admin/123456/", **self.request.META)
+        response = self.client.get("/_private/api/utils/get_org_admin/123456/", **self.request.META)
         option_key = "type"
         valid_values = ["account_id", "org_id"]
         expected_message = (
@@ -626,7 +620,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_get_org_admin_bad_type(self):
         """Test that we get a bad request for not using type query param."""
         response = self.client.get(
-            f"/_private/api/utils/get_org_admin/123456/?type=foobar",
+            "/_private/api/utils/get_org_admin/123456/?type=foobar",
             **self.request.META,
         )
         option_key = "type"
@@ -637,7 +631,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
 
     def test_get_org_admin_post(self):
         """Test that we get a bad request for not using GET method."""
-        response = self.client.post(f"/_private/api/utils/get_org_admin/123456/", **self.request.META)
+        response = self.client.post("/_private/api/utils/get_org_admin/123456/", **self.request.META)
         expected_message = 'Invalid method, only "GET" is allowed.'
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertEqual(response.content.decode(), expected_message)
@@ -713,7 +707,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_delete_selective_roles(self):
         """Test that we can delete selective roles when allowed and no roles."""
         # No name specified
-        response = self.client.delete(f"/_private/api/utils/role/", **self.request.META)
+        response = self.client.delete("/_private/api/utils/role/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
         # No role found
@@ -905,7 +899,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_migrations_of_data(self, migration_mock):
         """Test that we can trigger migrations of data to migrate from V1 to V2."""
         response = self.client.post(
-            f"/_private/api/utils/data_migration/?exclude_apps=rbac,costmanagement&orgs=acct00001,acct00002",
+            "/_private/api/utils/data_migration/?exclude_apps=rbac,costmanagement&orgs=acct00001,acct00002",
             **self.request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
@@ -926,7 +920,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         with self.settings(V2_MIGRATION_APP_EXCLUDE_LIST=["fooapp"]):
             migration_mock.reset_mock()
             response = self.client.post(
-                f"/_private/api/utils/data_migration/",
+                "/_private/api/utils/data_migration/",
                 **self.request.META,
             )
             migration_mock.assert_called_once_with(
@@ -942,7 +936,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         with self.settings(V2_MIGRATION_APP_EXCLUDE_LIST=[]):
             migration_mock.reset_mock()
             response = self.client.post(
-                f"/_private/api/utils/data_migration/",
+                "/_private/api/utils/data_migration/",
                 **self.request.META,
             )
             migration_mock.assert_called_once_with(
@@ -958,7 +952,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_run_migrations_of_data_outbox_replication(self, migration_mock):
         """Test that we can trigger migrations of data to migrate from V1 to V2."""
         response = self.client.post(
-            f"/_private/api/utils/data_migration/?exclude_apps=rbac,costmanagement&orgs=acct00001,acct00002"
+            "/_private/api/utils/data_migration/?exclude_apps=rbac,costmanagement&orgs=acct00001,acct00002"
             "&write_relationships=outbox",
             **self.request.META,
         )
@@ -1147,7 +1141,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
 
         payload = {"org_ids": [org_id]}
         response = self.client.post(
-            f"/_private/api/utils/bootstrap_tenant/",
+            "/_private/api/utils/bootstrap_tenant/",
             data=payload,
             **self.request.META,
             content_type="application/json",
@@ -1170,7 +1164,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual("Workspace matching query does not exist.", str(default_assertion.exception))
 
         response = self.client.post(
-            f"/_private/api/utils/bootstrap_tenant/",
+            "/_private/api/utils/bootstrap_tenant/",
             data=payload,
             **self.request.META,
             content_type="application/json",
@@ -1441,7 +1435,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
             self.assertEqual("Workspace matching query does not exist.", str(default_assertion.exception))
 
         response = self.client.post(
-            f"/_private/api/utils/bootstrap_tenant/",
+            "/_private/api/utils/bootstrap_tenant/",
             data=payload,
             **self.request.META,
             content_type="application/json",
@@ -2295,7 +2289,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         """Test that the uppercase username would be updated to lowercase."""
         # Only POST is allowed
         response = self.client.delete(
-            f"/_private/api/utils/username_lower/",
+            "/_private/api/utils/username_lower/",
             **self.request.META,
             content_type="application/json",
         )
@@ -2313,7 +2307,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         )
 
         response = self.client.get(
-            f"/_private/api/utils/username_lower/",
+            "/_private/api/utils/username_lower/",
             **self.request.META,
             content_type="application/json",
         )
@@ -2324,7 +2318,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         )
 
         response = self.client.post(
-            f"/_private/api/utils/username_lower/",
+            "/_private/api/utils/username_lower/",
             **self.request.META,
             content_type="application/json",
         )
@@ -2353,7 +2347,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
     def test_delete_principal(self, _):
         """Test that we can delete principal."""
         # No username specified
-        response = self.client.delete(f"/_private/api/utils/principal/", **self.request.META)
+        response = self.client.delete("/_private/api/utils/principal/", **self.request.META)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
         tenant = Tenant.objects.create(tenant_name="test_tenant", org_id="12345")
@@ -2414,7 +2408,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertTrue(car.roles.filter(id=system_role.id).exists())
         self.assertTrue(car.roles.filter(id=custom_role.id).exists())
         response = self.client.get(
-            f"/_private/api/cars/clean/",
+            "/_private/api/cars/clean/",
             **self.request.META,
             content_type="application/json",
         )
@@ -2426,7 +2420,7 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         system_role.refresh_from_db()
 
         response = self.client.post(
-            f"/_private/api/cars/clean/",
+            "/_private/api/cars/clean/",
             **self.request.META,
             content_type="application/json",
         )
@@ -3532,7 +3526,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3551,7 +3545,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3574,7 +3568,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3593,7 +3587,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3627,7 +3621,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
         # Send the request without 'detail=true' query param
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3635,7 +3629,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the request with 'detail=true' query param
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/?detail=true",
+            "/_private/api/utils/resource_definitions/?detail=true",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3664,7 +3658,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3672,7 +3666,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 0 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3691,7 +3685,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3699,7 +3693,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 1 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3722,7 +3716,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3730,7 +3724,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 0 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3749,7 +3743,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3757,7 +3751,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 1 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3776,7 +3770,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3784,7 +3778,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 1 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3803,7 +3797,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3811,7 +3805,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 1 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3830,7 +3824,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         )
 
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3838,7 +3832,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         self.assertEqual(response.content, b"Updated 1 bad resource definitions")
 
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
 
@@ -3874,7 +3868,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the GET request to check we have fixable resource definitions
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3882,7 +3876,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the PATCH request to fix all resource definitions
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3890,7 +3884,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the GET request to check we don't have fixable resource definitions
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3940,7 +3934,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the GET request to get details resource definitions ids
         response = self.client.get(
-            f"/_private/api/utils/resource_definitions/?detail=true",
+            "/_private/api/utils/resource_definitions/?detail=true",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3957,7 +3951,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the PATCH request to fix all resource definitions
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -4029,7 +4023,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
 
         # Send the PATCH request to fix all resource definitions
         response = self.client.patch(
-            f"/_private/api/utils/resource_definitions/",
+            "/_private/api/utils/resource_definitions/",
             **self.internal_request.META,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -4048,7 +4042,7 @@ class InternalViewsetResourceDefinitionTests(IdentityRequest):
         tenant = Tenant.objects.create(org_id="111", account_id="111")
         Tenant.objects.create(account_id="112")
         response = self.client.get(
-            f"/_private/api/utils/bootstrap_pending_tenants/",
+            "/_private/api/utils/bootstrap_pending_tenants/",
             **self.internal_request.META,
         )
 
@@ -4088,7 +4082,7 @@ class InternalS2SViewsetTests(IdentityRequest):
             Workspace.objects.filter(tenant=bootstraped_tenant.tenant, type=Workspace.Types.UNGROUPED_HOSTS).exists()
         )
         response = self.client.get(
-            f"/_private/_s2s/workspaces/ungrouped/",
+            "/_private/_s2s/workspaces/ungrouped/",
             data=payload,
             **self.service_headers,
             content_type="application/json",
@@ -4112,7 +4106,7 @@ class InternalS2SViewsetTests(IdentityRequest):
 
         # Get existing ungrouped workspace
         response = self.client.get(
-            f"/_private/_s2s/workspaces/ungrouped/",
+            "/_private/_s2s/workspaces/ungrouped/",
             **self.service_headers,
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -4143,7 +4137,7 @@ class InternalS2SViewsetTests(IdentityRequest):
 
         # Call the endpoint
         response = self.client.get(
-            f"/_private/_s2s/workspaces/ungrouped/",
+            "/_private/_s2s/workspaces/ungrouped/",
             **self.service_headers,
             content_type="application/json",
         )
@@ -4221,7 +4215,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/lookup_resource/",
+                "/_private/api/inventory/lookup_resource/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4261,7 +4255,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/lookup_resource/",
+                "/_private/api/inventory/lookup_resource/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4286,7 +4280,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/lookup_resource/",
+            "/_private/api/inventory/lookup_resource/",
             request_body,
             format="json",
             **self.request.META,
@@ -4315,7 +4309,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/lookup_resource/",
+            "/_private/api/inventory/lookup_resource/",
             request_body,
             format="json",
             **self.request.META,
@@ -4344,7 +4338,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/lookup_resource/",
+            "/_private/api/inventory/lookup_resource/",
             request_body,
             format="json",
             **self.request.META,
@@ -4386,7 +4380,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/read_tuples/",
+                "/_private/api/inventory/read_tuples/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4434,7 +4428,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/read_tuples/",
+                "/_private/api/inventory/read_tuples/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4465,7 +4459,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/read_tuples/",
+                "/_private/api/inventory/read_tuples/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4499,7 +4493,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/read_tuples/",
+                "/_private/api/inventory/read_tuples/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4529,7 +4523,7 @@ class InternalRelationsViewsetTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/read_tuples/",
+            "/_private/api/inventory/read_tuples/",
             request_body,
             format="json",
             **self.request.META,
@@ -4775,7 +4769,7 @@ class InternalInventoryCheckEndpointTests(BaseInternalViewsetTests):
             }
 
             response = self.client.post(
-                f"/_private/api/inventory/check/",
+                "/_private/api/inventory/check/",
                 request_body,
                 format="json",
                 **self.request.META,
@@ -4799,7 +4793,7 @@ class InternalInventoryCheckEndpointTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/check/",
+            "/_private/api/inventory/check/",
             request_body,
             format="json",
             **self.request.META,
@@ -4825,7 +4819,7 @@ class InternalInventoryCheckEndpointTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/check/",
+            "/_private/api/inventory/check/",
             request_body,
             format="json",
             **self.request.META,
@@ -4851,7 +4845,7 @@ class InternalInventoryCheckEndpointTests(BaseInternalViewsetTests):
         }
 
         response = self.client.post(
-            f"/_private/api/inventory/check/",
+            "/_private/api/inventory/check/",
             request_body,
             format="json",
             **self.request.META,

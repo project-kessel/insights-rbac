@@ -37,7 +37,7 @@ from management.role.definer import seed_roles
 from management.role.v2_model import CustomRoleV2, PlatformRoleV2, RoleV2, SeededRoleV2
 from management.role.v2_role_scope import v2_role_excluded_application_permission_ids_cache
 from management.role.v2_service import RoleV2Service
-from management.tenant_mapping.v2_activation import is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import set_v2_opt_in_state
 from management.tenant_service import V2TenantBootstrapService
 from management.utils import PRINCIPAL_CACHE, as_uuid
 from rest_framework import status
@@ -2054,7 +2054,7 @@ class RoleV2ViewSetTests(IdentityRequest):
         response = self.client.put(update_url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        self._assert_audit_log(action=AuditLog.EDIT, description=f"V2 role A Better Role:\nEdited name")
+        self._assert_audit_log(action=AuditLog.EDIT, description="V2 role A Better Role:\nEdited name")
 
     # ==========================================================================
     # Tests for POST /api/v2/roles:bulkDelete/ (bulk destroy)

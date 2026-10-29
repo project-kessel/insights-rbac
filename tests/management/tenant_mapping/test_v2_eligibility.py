@@ -26,9 +26,6 @@ from management.tenant_mapping.v2_eligibility import (
     check_v2_eligibility,
 )
 from tests.management.role.test_dual_write import RbacFixture
-from tests.v2_util import bootstrap_tenant_for_v2_test
-
-from api.models import Tenant
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
