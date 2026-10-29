@@ -195,8 +195,10 @@ class MergePrincipalTests(IdentityRequest):
         principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
         obsolete_group = Group.objects.create(name="legacy", tenant=self.tenant)
         principal_group = Group.objects.create(name="engineering", tenant=self.tenant)
+        shared_group = Group.objects.create(name="shared", tenant=self.tenant)
         obsolete_group.principals.add(obsolete)
         principal_group.principals.add(principal)
+        shared_group.principals.add(obsolete, principal)
 
         user = User()
         user.username = "jdross@redhat.com"
@@ -210,14 +212,17 @@ class MergePrincipalTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "54181241")
         self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
-        self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy"])
+        self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy", "shared"])
 
         expected_removed = [
             Group.relationship_to_user_id_for_group(str(principal_group.uuid), "99999999"),
+            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "99999999"),
             Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
+            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "54181241"),
         ]
         expected_added = [
             Group.relationship_to_user_id_for_group(str(principal_group.uuid), "54181241"),
+            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "54181241"),
             Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
         ]
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
@@ -327,7 +332,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         group.principals.add(principal)
 
         tracker = _ReplicationTracker()
-        rewrite_principal_user_id(principal, "51856862", tracker)
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
@@ -343,7 +348,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         group.principals.add(principal)
 
         tracker = _ReplicationTracker()
-        rewrite_principal_user_id(principal, "51856862", tracker)
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
@@ -369,7 +374,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         RoleBindingPrincipal.objects.create(binding=binding, principal=principal, source="direct")
 
         tracker = _ReplicationTracker()
-        rewrite_principal_user_id(principal, "51856862", tracker)
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
@@ -392,7 +397,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         )
 
         tracker = _ReplicationTracker()
-        rewrite_principal_user_id(principal, "51856862", tracker)
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
