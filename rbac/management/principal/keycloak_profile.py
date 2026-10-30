@@ -36,12 +36,14 @@ from typing import Any
 
 import requests
 from django.core.cache import cache
+from requests import HTTPError
 
 LOGGER = logging.getLogger(__name__)
 
 ORG_ADMIN_REALM_ROLE = "org-admin"
-CACHE_KEY = "rbac:keycloak_principal_profiles"
+CACHE_KEY_PREFIX = "rbac:keycloak_principal_profiles"
 CACHE_TTL_SECONDS = 60
+FAILURE_RETRY_SECONDS = 30
 TOKEN_REFRESH_MARGIN = 0.8
 REQUEST_TIMEOUT = 15
 PAGE_SIZE = 100
@@ -56,7 +58,27 @@ def keycloak_configured() -> bool:
     )
 
 
-_LOCAL_CACHE: dict[str, Any] = {"expires_at": 0.0, "profiles": {}}
+def _profile_cache_key() -> str:
+    """Return a cache key scoped to the configured Keycloak URL and realm."""
+    base_url = os.environ.get("KEYCLOAK_URL", "").rstrip("/")
+    realm = os.environ.get("KEYCLOAK_REALM", "kubernetes")
+    return f"{CACHE_KEY_PREFIX}:{base_url}:{realm}"
+
+
+_LOCAL_CACHE: dict[str, Any] = {
+    "cache_key": "",
+    "expires_at": 0.0,
+    "profiles": {},
+    "failure_until": 0.0,
+}
+
+
+def _reset_local_cache() -> None:
+    """Clear the in-process profile cache (tests / config changes)."""
+    _LOCAL_CACHE["cache_key"] = ""
+    _LOCAL_CACHE["expires_at"] = 0.0
+    _LOCAL_CACHE["profiles"] = {}
+    _LOCAL_CACHE["failure_until"] = 0.0
 
 
 def get_keycloak_profiles() -> dict[str, dict[str, Any]]:
@@ -64,20 +86,30 @@ def get_keycloak_profiles() -> dict[str, dict[str, Any]]:
 
     Profile dict keys: first_name, last_name, email, is_org_admin, enabled.
     Uses an in-process TTL cache plus Django cache when available so Redis outages
-    cannot break the principals API.
+    cannot break the principals API. Failed fetches are negatively cached briefly
+    so unreachable Keycloak does not block every principals request.
     """
     if not keycloak_configured():
         return {}
 
     now = time.monotonic()
+    cache_key = _profile_cache_key()
+    if _LOCAL_CACHE["cache_key"] != cache_key:
+        _reset_local_cache()
+        _LOCAL_CACHE["cache_key"] = cache_key
+
+    if now < float(_LOCAL_CACHE["failure_until"]):
+        return {}
+
     if _LOCAL_CACHE["profiles"] and now < float(_LOCAL_CACHE["expires_at"]):
         return _LOCAL_CACHE["profiles"]
 
     try:
-        cached = cache.get(CACHE_KEY)
+        cached = cache.get(cache_key)
         if isinstance(cached, dict):
             _LOCAL_CACHE["profiles"] = cached
             _LOCAL_CACHE["expires_at"] = now + CACHE_TTL_SECONDS
+            _LOCAL_CACHE["failure_until"] = 0.0
             return cached
     except Exception:  # noqa: BLE001 — Django cache is optional
         LOGGER.debug("Django cache unavailable for Keycloak profiles", exc_info=True)
@@ -86,12 +118,16 @@ def get_keycloak_profiles() -> dict[str, dict[str, Any]]:
         profiles = _fetch_profiles_from_keycloak()
     except Exception:  # noqa: BLE001 — enrichment must never break principals API
         LOGGER.exception("Keycloak principal enrichment failed; using bypass defaults")
+        _LOCAL_CACHE["profiles"] = {}
+        _LOCAL_CACHE["expires_at"] = now + FAILURE_RETRY_SECONDS
+        _LOCAL_CACHE["failure_until"] = now + FAILURE_RETRY_SECONDS
         return {}
 
     _LOCAL_CACHE["profiles"] = profiles
     _LOCAL_CACHE["expires_at"] = now + CACHE_TTL_SECONDS
+    _LOCAL_CACHE["failure_until"] = 0.0
     try:
-        cache.set(CACHE_KEY, profiles, CACHE_TTL_SECONDS)
+        cache.set(cache_key, profiles, CACHE_TTL_SECONDS)
     except Exception:  # noqa: BLE001 — cache is best-effort
         LOGGER.debug("Failed to cache Keycloak principal profiles", exc_info=True)
     return profiles
@@ -168,16 +204,27 @@ class _KeycloakAdminClient:
         return users
 
     def list_org_admin_usernames(self) -> set[str]:
-        """Return usernames that hold the realm role ``org-admin``."""
+        """Return usernames that hold a direct realm role ``org-admin``.
+
+        Cost on-prem assigns ``org-admin`` as a direct realm role (JWT → Envoy
+        ``is_org_admin``). Group/composite effective membership is out of scope
+        for this enrichment path.
+        """
         usernames: set[str] = set()
         offset = 0
         while True:
-            page = self._get(
-                f"/roles/{ORG_ADMIN_REALM_ROLE}/users",
-                {"first": offset, "max": PAGE_SIZE},
-            )
+            try:
+                page = self._get(
+                    f"/roles/{ORG_ADMIN_REALM_ROLE}/users",
+                    {"first": offset, "max": PAGE_SIZE},
+                )
+            except HTTPError as exc:
+                # Missing role → treat as no org-admins; still return user profiles.
+                if exc.response is not None and exc.response.status_code == 404:
+                    LOGGER.info("Keycloak realm role %s not found; treating as no org-admins", ORG_ADMIN_REALM_ROLE)
+                    return set()
+                raise
             if not isinstance(page, list):
-                # Role may not exist yet — treat as no org-admins.
                 if isinstance(page, dict):
                     LOGGER.warning("Unexpected Keycloak response listing org-admin users: %s", page)
                 break

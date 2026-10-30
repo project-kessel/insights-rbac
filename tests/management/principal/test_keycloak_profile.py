@@ -20,16 +20,25 @@
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
+from requests import HTTPError, Response
 
 from management.principal import keycloak_profile as kp
 
 
 class KeycloakProfileTests(SimpleTestCase):
     def setUp(self):
-        kp.cache.delete(kp.CACHE_KEY)
+        kp._reset_local_cache()
+        try:
+            kp.cache.delete(kp._profile_cache_key())
+        except Exception:  # noqa: BLE001
+            pass
 
     def tearDown(self):
-        kp.cache.delete(kp.CACHE_KEY)
+        kp._reset_local_cache()
+        try:
+            kp.cache.delete(kp._profile_cache_key())
+        except Exception:  # noqa: BLE001
+            pass
 
     def test_keycloak_configured_requires_env(self):
         with patch.dict("os.environ", {}, clear=True):
@@ -122,3 +131,35 @@ class KeycloakProfileTests(SimpleTestCase):
     )
     def test_get_keycloak_profiles_swallows_errors(self, _mock_fetch):
         self.assertEqual(kp.get_keycloak_profiles(), {})
+        # Negative cache: second call must not retry the fetch immediately.
+        _mock_fetch.reset_mock()
+        self.assertEqual(kp.get_keycloak_profiles(), {})
+        _mock_fetch.assert_not_called()
+
+    @override_settings(
+        CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
+    )
+    @patch.dict(
+        "os.environ",
+        {
+            "KEYCLOAK_URL": "http://keycloak:8080",
+            "KEYCLOAK_REALM": "kubernetes",
+            "KEYCLOAK_CLIENT_ID": "rbac-sync-client",
+            "KEYCLOAK_CLIENT_SECRET": "secret",
+        },
+        clear=False,
+    )
+    def test_profile_cache_key_includes_url_and_realm(self):
+        self.assertIn("http://keycloak:8080", kp._profile_cache_key())
+        self.assertIn("kubernetes", kp._profile_cache_key())
+
+    def test_list_org_admin_usernames_missing_role_returns_empty(self):
+        client = kp._KeycloakAdminClient.__new__(kp._KeycloakAdminClient)
+        response = Response()
+        response.status_code = 404
+
+        def raise_404(*_args, **_kwargs):
+            raise HTTPError(response=response)
+
+        client._get = raise_404  # type: ignore[method-assign]
+        self.assertEqual(client.list_org_admin_usernames(), set())

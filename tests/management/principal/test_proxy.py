@@ -216,6 +216,13 @@ class PrincipalProxyTest(IdentityRequest):
                 "is_org_admin": False,
                 "enabled": True,
             },
+            "outsider": {
+                "first_name": "Out",
+                "last_name": "SIDER",
+                "email": "outsider@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
         },
     )
     def test__request_principals_bypass_enriches_from_keycloak(self, _mock_profiles):
@@ -245,6 +252,18 @@ class PrincipalProxyTest(IdentityRequest):
             params={"admin_only": "true"},
         )
         self.assertEqual([p["username"] for p in admin_only["data"]], ["alice"])
+
+        # Username not in this tenant must not receive Keycloak PII / org-admin.
+        filtered = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            data={"users": ["outsider"]},
+        )
+        outsider = filtered["data"][0]
+        self.assertEqual(outsider["username"], "outsider")
+        self.assertEqual(outsider["email"], "outsider@local")
+        self.assertEqual(outsider["first_name"], "")
+        self.assertIs(outsider["is_org_admin"], False)
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",

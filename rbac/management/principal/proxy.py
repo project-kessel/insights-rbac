@@ -220,9 +220,13 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             local_principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
             kc_profiles = get_keycloak_profiles()
 
-            def payload_for(principal=None, username=None):
+            def payload_for(principal=None, username=None, *, allow_keycloak_profile=True):
                 name = principal.username if principal is not None else username
-                profile = kc_profiles.get(str(name).casefold(), {}) if name else {}
+                if allow_keycloak_profile and name:
+                    profile = kc_profiles.get(str(name).casefold(), {})
+                else:
+                    # Unknown-to-tenant usernames must not leak realm-wide Keycloak PII.
+                    profile = {}
                 return self._bypass_principal_payload(principal=principal, username=username, profile=profile)
 
             if data is None:
@@ -235,7 +239,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                     if principal is not None:
                         to_return.append(payload_for(principal=principal))
                     else:
-                        to_return.append(payload_for(username=username))
+                        to_return.append(payload_for(username=username, allow_keycloak_profile=False))
             elif "principalStartsWith" in data:
                 principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
                 for principal in principals:

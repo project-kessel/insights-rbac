@@ -219,8 +219,9 @@ class PrincipalViewsetTests(IdentityRequest):
         # Check we list only 1 principal even we have 3 in db (rest 2 belongs to different tenant)
         self.assertEqual(len(Principal.objects.all()), 3)
 
+    @patch("management.principal.proxy.get_keycloak_profiles", return_value={})
     @override_settings(BYPASS_BOP_VERIFICATION=True)
-    def test_read_principal_list_username_only_false_success(self):
+    def test_read_principal_list_username_only_false_success(self, _mock_keycloak_profiles):
         """Test that we can read a list of principals with username_only=false."""
         url = f'{reverse("v1_management:principals")}?username_only=false'
         client = APIClient()
