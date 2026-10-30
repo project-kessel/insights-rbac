@@ -3,19 +3,19 @@
 # create-workspace.sh — Full workspace create + Read-Your-Writes (RYW) test
 #
 # Ensures local Docker infrastructure is running, wires RBAC to a *real* Kessel
-# Relations API (not the mock server), then creates workspace(s) via the v2 API
+# Inventory API (not the mock server), then creates workspace(s) via the v2 API
 # and verifies the full pipeline:
 #
-#   Outbox → Debezium → Kafka → Consumer → Kessel Relations → pg_notify → RYW
+#   Outbox → Debezium → Kafka → Consumer → Inventory API → SpiceDB → pg_notify → RYW
 #
 # Prerequisites (real Kessel):
-#   Port-forward stage Kessel Relations API to localhost before running, e.g.:
+#   Port-forward stage Kessel Inventory API to localhost before running, e.g.:
 #     oc project kessel-stage
-#     oc port-forward svc/kessel-relations-api 9000:9000
+#     oc port-forward svc/kessel-inventory-api 9000:9000
 #
 #   Export OAuth credentials so the consumer can obtain JWT tokens:
-#     export RELATIONS_API_CLIENT_ID=...
-#     export RELATIONS_API_CLIENT_SECRET=...
+#     export INVENTORY_API_CLIENT_ID=...
+#     export INVENTORY_API_CLIENT_SECRET=...
 #
 # Usage:
 #   make docker-local-up          # preferred: all services in Docker
@@ -438,13 +438,13 @@ check_real_kessel() {
     fi
 
     if is_full_kessel_stack_running; then
-        log-info "Full Kessel local stack detected — using local Relations API (${KESSEL_HOST}:${KESSEL_PORT}) and SpiceDB"
-        wait_for_port "$KESSEL_HOST" "$KESSEL_PORT" "Kessel Relations API" 10 || true
+        log-info "Full Kessel local stack detected — using local Inventory API (${INVENTORY_API_ENDPOINT}) and SpiceDB"
+        wait_for_port "${INVENTORY_API_ENDPOINT%:*}" "${INVENTORY_API_ENDPOINT##*:}" "Kessel Inventory API" 10 || true
         wait_for_port "$SPICEDB_HOST" "$SPICEDB_PORT" "SpiceDB (zed)" 10 || true
         return 0
     fi
 
-    log-info "Checking Kessel port-forwards (Relations API + SpiceDB for zed)..."
+    log-info "Checking Kessel port-forwards (Inventory API + SpiceDB for zed)..."
 
     if [ -x "$ZED_LOCAL_SCRIPT" ]; then
         "$ZED_LOCAL_SCRIPT" ensure-forwards || {
@@ -453,11 +453,11 @@ check_real_kessel() {
             exit 1
         }
     else
-        if ! wait_for_port "$KESSEL_HOST" "$KESSEL_PORT" "Kessel Relations API" 5; then
-            log-err "Cannot reach Kessel on ${KESSEL_ADDR_HOST}."
-            log-err "Port-forward the Relations API before running this script, e.g.:"
+        if ! wait_for_port "$KESSEL_HOST" "$KESSEL_PORT" "Kessel Inventory API" 5; then
+            log-err "Cannot reach Kessel Inventory API on ${KESSEL_ADDR_HOST}."
+            log-err "Port-forward the Inventory API before running this script, e.g.:"
             log-err "  oc project kessel-stage"
-            log-err "  oc port-forward svc/kessel-relations-api ${KESSEL_PORT}:9000"
+            log-err "  oc port-forward svc/kessel-inventory-api ${KESSEL_PORT}:9000"
             exit 1
         fi
         if ! wait_for_port "$SPICEDB_HOST" "$SPICEDB_PORT" "SpiceDB (zed)" 3; then
@@ -466,8 +466,8 @@ check_real_kessel() {
         fi
     fi
 
-    if [ -z "${RELATIONS_API_CLIENT_ID:-}" ] || [ -z "${RELATIONS_API_CLIENT_SECRET:-}" ]; then
-        log-warn "RELATIONS_API_CLIENT_ID / RELATIONS_API_CLIENT_SECRET not set."
+    if [ -z "${INVENTORY_API_CLIENT_ID:-}" ] || [ -z "${INVENTORY_API_CLIENT_SECRET:-}" ]; then
+        log-warn "INVENTORY_API_CLIENT_ID / INVENTORY_API_CLIENT_SECRET not set."
         log-warn "The Kafka consumer may fail JWT auth against stage Kessel without OAuth credentials."
         log-warn "Export credentials from Vault or your SSO client registration."
     else
@@ -485,12 +485,9 @@ V2_BOOTSTRAP_TENANT=True
 REPLICATION_TO_RELATION_ENABLED=true
 READ_YOUR_WRITES_WORKSPACE_ENABLED=True
 READ_YOUR_WRITES_TIMEOUT_SECONDS=${READ_YOUR_WRITES_TIMEOUT_SECONDS}
-RELATION_API_SERVER=${KESSEL_ADDR_CONTAINER}
 INVENTORY_API_SERVER=${KESSEL_ADDR_CONTAINER}
-RELATIONS_API_CLIENT_ID=${RELATIONS_API_CLIENT_ID:-}
-RELATIONS_API_CLIENT_SECRET=${RELATIONS_API_CLIENT_SECRET:-}
-INVENTORY_API_CLIENT_ID=${INVENTORY_API_CLIENT_ID:-${RELATIONS_API_CLIENT_ID:-}}
-INVENTORY_API_CLIENT_SECRET=${INVENTORY_API_CLIENT_SECRET:-${RELATIONS_API_CLIENT_SECRET:-}}
+INVENTORY_API_CLIENT_ID=${INVENTORY_API_CLIENT_ID:-}
+INVENTORY_API_CLIENT_SECRET=${INVENTORY_API_CLIENT_SECRET:-}
 BYPASS_BOP_VERIFICATION=True
 PRINCIPAL_USER_DOMAIN=redhat
 WORKSPACE_HIERARCHY_DEPTH_LIMIT=5
@@ -667,7 +664,7 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Full local workspace create test with real Kessel Relations API and RYW.
+Full local workspace create test with real Kessel and RYW.
 
 Options:
   --count N       Number of workspaces to create (default: 1)
@@ -680,8 +677,8 @@ Options:
   --help          Show this help
 
 Environment:
-  KESSEL_HOST              Host for Relations API port-forward (default: localhost)
-  KESSEL_PORT              Relations API port (default: 9000)
+  KESSEL_HOST              Host for Kessel Inventory API port-forward (default: localhost)
+  KESSEL_PORT              Kessel Inventory API port (default: 9000)
   SPICEDB_HOST/PORT         SpiceDB for zed (default: localhost:50051)
   KESSEL_ADDR_CONTAINER    Address containers use (default: host.docker.internal:\$KESSEL_PORT)
   API_URL                  RBAC API URL (default: http://localhost:9080)
@@ -690,8 +687,8 @@ Environment:
   CHECK_HBI                auto|true|false — verify workspace in Kessel Inventory (default: auto)
   FULL_KESSEL_CONSUMER_WAIT_SECONDS
                            wait for the full-stack Kafka consumer (default: 30)
-  RELATIONS_API_CLIENT_ID  OAuth client id for Kessel JWT (required for stage)
-  RELATIONS_API_CLIENT_SECRET  OAuth client secret for Kessel JWT
+  INVENTORY_API_CLIENT_ID  OAuth client id for Kessel JWT (required for stage)
+  INVENTORY_API_CLIENT_SECRET  OAuth client secret for Kessel JWT
   ZED_SPICEDB_PSK          SpiceDB PSK for a stage zed context (local stack token is automatic)
 
 Prerequisites:
@@ -705,7 +702,7 @@ Prerequisites:
 
   Option B (stage Kessel via port-forward):
     ./scripts/zed_local.sh ensure-forwards
-    export RELATIONS_API_CLIENT_ID / RELATIONS_API_CLIENT_SECRET
+    export INVENTORY_API_CLIENT_ID / INVENTORY_API_CLIENT_SECRET
     pipenv install --dev
 
 Zed (SpiceDB):
