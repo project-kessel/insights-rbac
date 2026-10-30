@@ -426,10 +426,14 @@ def _ensure_principal_with_user_id_in_tenant(
         return
 
     if not _is_missing_user_id(principal.user_id):
-        # Same username, wrong non-empty user_id (e.g. stale BOP id). Rewrite in place and
-        # replicate remove(old)+add(new) for group membership and direct role bindings.
-        rewrite_principal_user_id(principal, user_id, replicator)
-        return
+        # Same username with a conflicting non-empty user_id is unexpected data corruption.
+        # Do not auto-rewrite on the Kafka/bootstrap ensure path; remediate via the internal
+        # bootstrap_users_from_user_ids utility (one-off rewrite).
+        raise RuntimeError(
+            f"Principal user_id does not match BOP user_id. "
+            f"username={principal.username} principal_user_id={principal.user_id} "
+            f"bop_user_id={user_id} org_id={tenant.org_id}"
+        )
 
     obsolete = Principal.objects.filter(user_id=user_id, tenant=tenant).exclude(pk=principal.pk).first()
     if obsolete is not None:
