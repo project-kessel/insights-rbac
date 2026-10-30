@@ -147,13 +147,14 @@ def merge_obsolete_principal_into_survivor(
         replicator,
     )
 
-    logger.info(
-        "Merged obsolete principal into survivor. obsolete_username=%s survivor_username=%s user_id=%s groups=%d",
-        obsolete_username,
-        survivor.username,
-        user_id,
-        survivor.group.count(),
-    )
+    if logger.isEnabledFor(logging.INFO):
+        logger.info(
+            "Merged obsolete principal into survivor. obsolete_username=%s survivor_username=%s user_id=%s groups=%d",
+            obsolete_username,
+            survivor.username,
+            user_id,
+            survivor.group.count(),
+        )
 
 
 def _group_member_tuples_for_principal(principal: Principal) -> list:
@@ -196,7 +197,7 @@ def _relation_tuples_for_principal_user_id(principal: Principal, user_id: str) -
     )
 
 
-@atomic
+@transaction.atomic
 def rewrite_principal_user_id(
     principal: Principal,
     new_user_id: str,
@@ -245,6 +246,15 @@ def rewrite_principal_user_id(
         obsolete_groups = list(obsolete.group.all())
         tuples_to_remove.extend(_transfer_group_memberships(obsolete, principal, obsolete_groups))
         _transfer_role_binding_entries(obsolete, principal)
+        logger.warning(
+            "Deleting obsolete principal during user_id rewrite. "
+            "obsolete_username=%s obsolete_pk=%d survivor_username=%s new_user_id=%s org_id=%s",
+            obsolete.username,
+            obsolete.pk,
+            principal.username,
+            normalized_new,
+            principal.tenant.org_id,
+        )
         obsolete.delete()
 
     try:
@@ -262,12 +272,34 @@ def rewrite_principal_user_id(
     try:
         mapping = TenantMapping.objects.get(tenant=principal.tenant)
         m2m_group_uuids = set(principal.group.values_list("uuid", flat=True))
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            if default_uuid not in m2m_group_uuids:
-                tuples_to_remove.append(Group.relationship_to_user_id_for_group(str(default_uuid), old_user_id))
-                tuples_to_add.append(Group.relationship_to_user_id_for_group(str(default_uuid), normalized_new))
+        # Every user is a member of the platform-default group — always transition.
+        if mapping.default_group_uuid not in m2m_group_uuids:
+            tuples_to_remove.append(
+                Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), old_user_id)
+            )
+            tuples_to_add.append(
+                Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), normalized_new)
+            )
+        # Admin-default group: always remove the old user_id tuple, but do NOT add the
+        # new one.  Admin status is unavailable at this level; the caller's
+        # _default_group_tuple_edits (V2 sync path) handles admin-group membership
+        # correctly based on user.admin.  Not adding the tuple here prevents granting
+        # admin-group access to non-admin users through a user_id rewrite.
+        if mapping.default_admin_group_uuid not in m2m_group_uuids:
+            tuples_to_remove.append(
+                Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), old_user_id)
+            )
     except TenantMapping.DoesNotExist:
         pass
+
+    # Deduplicate: when the obsolete principal shared groups with this principal under the
+    # same user_id, the same tuple appears in both add and remove lists.  These cancel out
+    # (the SpiceDB tuple already exists and should stay) — strip them so the consumer never
+    # sees a conflicting add+remove for the same relation.
+    common = set(tuples_to_add) & set(tuples_to_remove)
+    if common:
+        tuples_to_add = [t for t in tuples_to_add if t not in common]
+        tuples_to_remove = [t for t in tuples_to_remove if t not in common]
 
     if tuples_to_add or tuples_to_remove:
         info = {
@@ -288,14 +320,16 @@ def rewrite_principal_user_id(
             )
         )
 
-    logger.info(
-        "Rewrote principal user_id. username=%s old_user_id=%s new_user_id=%s " "merged_from_username=%s groups=%d",
-        principal.username,
-        old_user_id,
-        normalized_new,
-        obsolete_username,
-        principal.group.count(),
-    )
+    if logger.isEnabledFor(logging.INFO):
+        logger.info(
+            "Rewrote principal user_id. username=%s old_user_id=%s new_user_id=%s "
+            "merged_from_username=%s groups=%d",
+            principal.username,
+            old_user_id,
+            normalized_new,
+            obsolete_username,
+            principal.group.count(),
+        )
 
 
 def _resolve_user_id_conflict(
@@ -404,7 +438,8 @@ def _ensure_principal_with_user_id_in_tenant(
 
     principal.user_id = user_id
     try:
-        principal.save()
+        with transaction.atomic():
+            principal.save()
     except IntegrityError:
         _resolve_user_id_conflict(principal, user_id, replicator)
 
