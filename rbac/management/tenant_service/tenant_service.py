@@ -36,18 +36,14 @@ def _is_missing_user_id(user_id) -> bool:
 
 def _transfer_role_binding_entries(obsolete: Principal, survivor: Principal) -> None:
     """Move direct role-binding entries from obsolete to survivor."""
-    binding_ids = set(
-        obsolete.role_binding_entries.values_list("binding_id", flat=True)
-    )
+    binding_ids = set(obsolete.role_binding_entries.values_list("binding_id", flat=True))
     if not binding_ids:
         return
 
     # Lock the bindings and evaluate; only consider entries from locked bindings
     # to avoid picking up new bindings committed by concurrent transactions.
     locked_binding_ids = set(
-        RoleBinding.objects.select_for_update()
-        .filter(pk__in=binding_ids)
-        .values_list("pk", flat=True)
+        RoleBinding.objects.select_for_update().filter(pk__in=binding_ids).values_list("pk", flat=True)
     )
     entries = list(
         RoleBindingPrincipal.objects.select_related("binding").filter(
@@ -73,11 +69,7 @@ def _transfer_group_memberships(
     tuples_to_remove: list[RelationTuple] = []
     for group in obsolete_groups:
         if obsolete.user_id:
-            tuples_to_remove.append(
-                Group.relationship_to_user_id_for_group(
-                    str(group.uuid), obsolete.user_id
-                )
-            )
+            tuples_to_remove.append(Group.relationship_to_user_id_for_group(str(group.uuid), obsolete.user_id))
         group.principals.add(survivor)
         group.principals.remove(obsolete)
     return tuples_to_remove
@@ -173,9 +165,7 @@ def _group_member_tuples_for_principal(principal: Principal) -> list:
     return tuples_to_add
 
 
-def _group_member_tuples_for_user_id(
-    principal: Principal, user_id: str
-) -> list[RelationTuple]:
+def _group_member_tuples_for_user_id(principal: Principal, user_id: str) -> list[RelationTuple]:
     """Build group#member tuples for principal's current groups using an explicit user_id."""
     return [
         Group.relationship_to_user_id_for_group(str(group.uuid), user_id)
@@ -183,9 +173,7 @@ def _group_member_tuples_for_user_id(
     ]
 
 
-def _role_binding_subject_tuples_for_user_id(
-    principal: Principal, user_id: str
-) -> list[RelationTuple]:
+def _role_binding_subject_tuples_for_user_id(principal: Principal, user_id: str) -> list[RelationTuple]:
     """Build role_binding#subject tuples for principal's direct bindings using an explicit user_id."""
     # Build via temporary user_id so RoleBinding.subject_tuple stays the single source of truth.
     original_user_id = principal.user_id
@@ -194,9 +182,7 @@ def _role_binding_subject_tuples_for_user_id(
         binding_ids_seen: set[int] = set()
         tuples: list[RelationTuple] = []
         entries = (
-            RoleBindingPrincipal.objects.filter(principal=principal)
-            .select_related("binding")
-            .select_for_update()
+            RoleBindingPrincipal.objects.filter(principal=principal).select_related("binding").select_for_update()
         )
         for entry in entries:
             if entry.binding_id in binding_ids_seen:
@@ -208,13 +194,11 @@ def _role_binding_subject_tuples_for_user_id(
         principal.user_id = original_user_id
 
 
-def _relation_tuples_for_principal_user_id(
-    principal: Principal, user_id: str
-) -> list[RelationTuple]:
+def _relation_tuples_for_principal_user_id(principal: Principal, user_id: str) -> list[RelationTuple]:
     """Group membership and direct role-binding subject tuples for a principal as user_id."""
-    return _group_member_tuples_for_user_id(
+    return _group_member_tuples_for_user_id(principal, user_id) + _role_binding_subject_tuples_for_user_id(
         principal, user_id
-    ) + _role_binding_subject_tuples_for_user_id(principal, user_id)
+    )
 
 
 @atomic
@@ -237,9 +221,7 @@ def rewrite_principal_user_id(
     """
     normalized_new = _normalize_user_id(new_user_id)
     if normalized_new is None:
-        raise ValueError(
-            f"Cannot rewrite principal without new user_id. principal_id={principal.pk}"
-        )
+        raise ValueError(f"Cannot rewrite principal without new user_id. principal_id={principal.pk}")
 
     old_user_id = _normalize_user_id(principal.user_id)
     if old_user_id is None:
@@ -253,11 +235,7 @@ def rewrite_principal_user_id(
     # Collect removes for the old id while the principal still has its current memberships.
     tuples_to_remove = _relation_tuples_for_principal_user_id(principal, old_user_id)
 
-    obsolete = (
-        Principal.objects.filter(user_id=normalized_new)
-        .exclude(pk=principal.pk)
-        .first()
-    )
+    obsolete = Principal.objects.filter(user_id=normalized_new).exclude(pk=principal.pk).first()
     obsolete_username = None
     if obsolete is not None:
         if obsolete.tenant_id != principal.tenant_id:
@@ -269,9 +247,7 @@ def rewrite_principal_user_id(
             )
         obsolete_username = obsolete.username
         obsolete_groups = list(obsolete.group.all())
-        tuples_to_remove.extend(
-            _transfer_group_memberships(obsolete, principal, obsolete_groups)
-        )
+        tuples_to_remove.extend(_transfer_group_memberships(obsolete, principal, obsolete_groups))
         _transfer_role_binding_entries(obsolete, principal)
         logger.warning(
             "Deleting obsolete principal during user_id rewrite. "
@@ -304,14 +280,10 @@ def rewrite_principal_user_id(
         # Every user is a member of the platform-default group — always transition.
         if mapping.default_group_uuid not in m2m_group_uuids:
             tuples_to_remove.append(
-                Group.relationship_to_user_id_for_group(
-                    str(mapping.default_group_uuid), old_user_id
-                )
+                Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), old_user_id)
             )
             tuples_to_add.append(
-                Group.relationship_to_user_id_for_group(
-                    str(mapping.default_group_uuid), normalized_new
-                )
+                Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), normalized_new)
             )
         # Admin-default group: always remove the old user_id tuple, but do NOT add the
         # new one.  Admin status is unavailable at this level; the caller's
@@ -320,9 +292,7 @@ def rewrite_principal_user_id(
         # admin-group access to non-admin users through a user_id rewrite.
         if mapping.default_admin_group_uuid not in m2m_group_uuids:
             tuples_to_remove.append(
-                Group.relationship_to_user_id_for_group(
-                    str(mapping.default_admin_group_uuid), old_user_id
-                )
+                Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), old_user_id)
             )
     except TenantMapping.DoesNotExist:
         pass
@@ -376,19 +346,13 @@ def _resolve_user_id_conflict(
     """
     normalized_user_id = _normalize_user_id(user_id)
     if normalized_user_id is None:
-        raise ValueError(
-            f"Cannot resolve user_id conflict without user_id. survivor_id={survivor.pk}"
-        )
+        raise ValueError(f"Cannot resolve user_id conflict without user_id. survivor_id={survivor.pk}")
 
     # Always use persisted state: callers may have set survivor.user_id in memory before a
     # failed save() (IntegrityError), which would make rewrite see old==new and no-op.
     survivor.refresh_from_db()
 
-    obsolete = (
-        Principal.objects.filter(user_id=normalized_user_id)
-        .exclude(pk=survivor.pk)
-        .first()
-    )
+    obsolete = Principal.objects.filter(user_id=normalized_user_id).exclude(pk=survivor.pk).first()
     if obsolete is None:
         if survivor.user_id == normalized_user_id:
             return
@@ -409,9 +373,7 @@ def _resolve_user_id_conflict(
                 f"actual={survivor.user_id}"
             )
         return
-    merge_obsolete_principal_into_survivor(
-        survivor, obsolete, user_id=normalized_user_id, replicator=replicator
-    )
+    merge_obsolete_principal_into_survivor(survivor, obsolete, user_id=normalized_user_id, replicator=replicator)
 
 
 def _ensure_principal_with_user_id_in_tenant(
@@ -444,9 +406,7 @@ def _ensure_principal_with_user_id_in_tenant(
         except IntegrityError:
             if user_id is None:
                 raise
-            survivor, _ = Principal.objects.get_or_create(
-                username=user.username, tenant=tenant
-            )
+            survivor, _ = Principal.objects.get_or_create(username=user.username, tenant=tenant)
             _resolve_user_id_conflict(survivor, user_id, replicator)
             return
     else:
@@ -478,15 +438,9 @@ def _ensure_principal_with_user_id_in_tenant(
             f"bop_user_id={user_id} org_id={tenant.org_id}"
         )
 
-    obsolete = (
-        Principal.objects.filter(user_id=user_id, tenant=tenant)
-        .exclude(pk=principal.pk)
-        .first()
-    )
+    obsolete = Principal.objects.filter(user_id=user_id, tenant=tenant).exclude(pk=principal.pk).first()
     if obsolete is not None:
-        merge_obsolete_principal_into_survivor(
-            principal, obsolete, user_id=user_id, replicator=replicator
-        )
+        merge_obsolete_principal_into_survivor(principal, obsolete, user_id=user_id, replicator=replicator)
         return
 
     principal.user_id = user_id
@@ -519,8 +473,6 @@ class TenantBootstrapService(Protocol):
         """Bootstrap a user in a tenant."""
         ...
 
-    def new_bootstrapped_tenant(
-        self, org_id: str, account_number: Optional[str] = None
-    ) -> BootstrappedTenant:
+    def new_bootstrapped_tenant(self, org_id: str, account_number: Optional[str] = None) -> BootstrappedTenant:
         """Create a new tenant."""
         ...

@@ -314,9 +314,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_noop_when_user_id_already_matches(self):
         """No DB or replication work when the principal already has the target user_id."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="51856862"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="51856862")
         group = Group.objects.create(name="admins", tenant=self.tenant)
         group.principals.add(principal)
 
@@ -330,9 +328,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_updates_user_id_and_replicates_group_member_tuples(self):
         """In-place rewrite removes old group member tuples and adds new ones."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
         group = Group.objects.create(name="admins", tenant=self.tenant)
         group.principals.add(principal)
 
@@ -359,9 +355,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_replicates_direct_role_binding_subject_tuples(self):
         """Direct role-binding subject tuples are rewritten from old user_id to new."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
         role = CustomRoleV2.objects.create(name="rewrite-test-role", tenant=self.tenant)
         binding = RoleBinding.objects.create(
             role=role,
@@ -399,9 +393,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_with_no_memberships_only_updates_user_id(self):
         """Principal with no M2M groups/bindings still replicates default-group tuples."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
 
         tracker = _ReplicationTracker()
         self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
@@ -440,9 +432,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
             ready=True,
         )
         Principal.objects.create(username="other@example.com", tenant=other_tenant, user_id="51856862")
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
 
         tracker = _ReplicationTracker()
         with self.assertRaises(RuntimeError):
@@ -501,9 +491,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_in_place_with_group_and_default_tuples(self):
         """In-place rewrite updates user_id and replicates M2M + default-group tuples."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
         group = Group.objects.create(name="admins", tenant=self.tenant)
         group.principals.add(principal)
 
@@ -528,9 +516,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_removes_default_group_tuples_for_old_user_id(self):
         """Default-group tuples (not in M2M) are removed for old user_id; admin tuple not re-added."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
         mapping = TenantMapping.objects.get(tenant=self.tenant)
 
         tracker = _ReplicationTracker()
@@ -564,9 +550,7 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
     def test_rewrite_catches_integrity_error_on_concurrent_claim(self):
         """Concurrent claim of user_id between lookup and save is caught and resolved."""
-        principal = Principal.objects.create(
-            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
-        )
+        principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
 
         original_save = Principal.save
         call_count = {"n": 0}
