@@ -37,6 +37,7 @@ from management.mcp_views import (
     _check_kessel_access,
     _check_v1_access,
     _execute_with_timeout,
+    _handle_tools_list,
     _permission_matches,
     _sanitize_validation_error,
     _shutdown_in_progress,
@@ -6100,6 +6101,187 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
         self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
         output = json.loads(data["result"]["content"][0]["text"])
         self.assertEqual(output.get("name"), "MCP Created Role", f"Got output: {output}")
+
+
+_V1_TOOL_NAMES = {name for name, config in _TOOL_CONFIG.items() if config.api_version == ApiVersion.V1}
+
+
+@override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["cost-management", "approval"])
+class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
+    """Test that V1 tools are blocked and hidden for V2 write-activated tenants."""
+
+    def setUp(self):
+        """Set up V1 tool gating tests."""
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.principal = Principal.objects.create(username="test_user", tenant=self.tenant)
+        V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
+        self.group = Group.objects.create(name="Gating Group", tenant=self.tenant)
+
+    def tearDown(self):
+        """Tear down V1 tool gating tests."""
+        Group.objects.all().delete()
+        Principal.objects.all().delete()
+        super().tearDown()
+
+    def _assert_blocked(self, response, tool_name):
+        """Assert the response is the blocked-V1-tool result naming the V2 alternative, and return its output."""
+        data = response.json()
+        self.assertIn("result", data, f"Expected result but got: {data}")
+        self.assertTrue(data["result"]["isError"])
+        output = self._get_tool_output(response)
+        v2_alternative = _TOOL_CONFIG[tool_name].v2_alternative
+        self.assertEqual(output["v2_alternative"], v2_alternative)
+        self.assertTrue(
+            output["error"].startswith(
+                f"Tool '{tool_name}' is a V1 tool and is not available for this organization because it "
+                f"uses RBAC V2. Use '{v2_alternative}' instead."
+            ),
+            output["error"],
+        )
+        self.assertNotIn("confirmation_token", output)
+        return output
+
+    def test_nine_v1_tools_registered(self):
+        """The V1 tool set matches the tools this gate is designed for."""
+        self.assertEqual(
+            _V1_TOOL_NAMES,
+            {
+                "list_access",
+                "list_group_roles",
+                "list_role_access",
+                "add_roles_to_group",
+                "create_role_v1",
+                "update_role_v1",
+                "patch_role_v1",
+                "remove_roles_from_group",
+                "delete_role_v1",
+            },
+        )
+
+    def test_every_v1_tool_has_registered_non_v1_alternative(self):
+        """Every V1 tool names a registered, non-V1 tool as its v2_alternative."""
+        for name in _V1_TOOL_NAMES:
+            with self.subTest(tool=name):
+                alternative = _TOOL_CONFIG[name].v2_alternative
+                self.assertTrue(alternative)
+                self.assertIn(alternative, _TOOL_CONFIG)
+                self.assertNotEqual(_TOOL_CONFIG[alternative].api_version, ApiVersion.V1)
+
+    def test_non_v1_tools_have_no_v2_alternative(self):
+        """v2_alternative is only set on V1 tools."""
+        for name, config in _TOOL_CONFIG.items():
+            if config.api_version != ApiVersion.V1:
+                with self.subTest(tool=name):
+                    self.assertEqual(config.v2_alternative, "")
+
+    # --- tools/list ---
+
+    def test_tools_list_hides_v1_tools_except_list_access_for_write_activated_tenant(self):
+        """Write-activated tenants see list_access but no other V1 tool."""
+        ensure_v2_write_activated(self.tenant)
+
+        tool_names = set(self._get_tool_names())
+
+        self.assertEqual(tool_names & _V1_TOOL_NAMES, {"list_access"})
+        self.assertIn("search_roles", tool_names)
+        self.assertIn("list_groups", tool_names)
+
+    def test_tools_list_shows_v1_tools_for_v1_tenant(self):
+        """Tenants that are not write-activated see all V1 tools."""
+        tool_names = set(self._get_tool_names())
+
+        self.assertEqual(tool_names & _V1_TOOL_NAMES, _V1_TOOL_NAMES)
+
+    def test_tools_list_shows_v1_tools_for_opted_in_not_write_activated_tenant(self):
+        """Opt-in alone does not hide V1 tools."""
+        TenantMapping.objects.filter(tenant=self.tenant).update(v2_opted_in_at=timezone.now())
+
+        tool_names = set(self._get_tool_names())
+
+        self.assertEqual(tool_names & _V1_TOOL_NAMES, _V1_TOOL_NAMES)
+
+    def test_tools_list_without_tenant_is_unchanged(self):
+        """tools/list without a tenant skips the write-activation check and lists V1 tools."""
+        from django.test import RequestFactory
+
+        request = RequestFactory().post(self.url)
+        with patch("management.mcp_views.is_v2_write_activated") as mock_activated:
+            response = _handle_tools_list(request, 1, {})
+
+        mock_activated.assert_not_called()
+        tool_names = {t["name"] for t in json.loads(response.content)["result"]["tools"]}
+        self.assertEqual(tool_names & _V1_TOOL_NAMES, _V1_TOOL_NAMES)
+
+    # --- tools/call ---
+
+    @override_settings(MCP_WRITE_ENABLED=True)
+    def test_every_v1_tool_blocked_for_write_activated_tenant(self):
+        """Every V1 tool call is rejected for write-activated tenants, before the permission check."""
+        ensure_v2_write_activated(self.tenant)
+
+        for name in _V1_TOOL_NAMES:
+            with self.subTest(tool=name):
+                self._assert_blocked(self._call_tool(name, {}), name)
+
+        self._kessel_mock.assert_not_called()
+        self._v1_access_mock.assert_not_called()
+
+    def test_list_group_roles_blocked_for_write_activated_tenant(self):
+        """A V1 read tool returns the blocked result for write-activated tenants."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        self._assert_blocked(response, "list_group_roles")
+
+    @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=True)
+    def test_v1_write_tool_blocked_before_confirmation(self):
+        """A blocked V1 write tool without a token gets the blocked error, not a confirmation token."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool(
+            "create_role_v1",
+            {"name": "Blocked Role", "access": [{"permission": "rbac:role:read", "resourceDefinitions": []}]},
+        )
+
+        output = self._assert_blocked(response, "create_role_v1")
+        self.assertNotIn("confirmation_required", output)
+        self.assertFalse(Role.objects.filter(name="Blocked Role", tenant=self.tenant).exists())
+
+    def test_list_group_roles_allowed_for_opted_in_not_write_activated_tenant(self):
+        """Opt-in alone does not block V1 tools."""
+        TenantMapping.objects.filter(tenant=self.tenant).update(v2_opted_in_at=timezone.now())
+
+        response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        data = response.json()
+        self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+        self.assertIn("data", self._get_tool_output(response))
+
+    def test_list_access_allowed_for_excluded_applications(self):
+        """list_access is callable when every application is in the V2 migration exclude list."""
+        ensure_v2_write_activated(self.tenant)
+
+        for application in ("approval", "approval,cost-management", " approval , cost-management ", "approval,"):
+            with self.subTest(application=application):
+                response = self._call_tool("list_access", {"application": application})
+
+                data = response.json()
+                self.assertFalse(data["result"]["isError"], f"Tool returned error: {data['result']}")
+                self.assertIn("data", self._get_tool_output(response))
+
+    def test_list_access_blocked_for_non_excluded_applications(self):
+        """list_access is blocked for blank, partially excluded, or non-excluded applications."""
+        ensure_v2_write_activated(self.tenant)
+
+        for application in ("", " , ", "approval,inventory", "inventory"):
+            with self.subTest(application=application):
+                response = self._call_tool("list_access", {"application": application})
+
+                output = self._assert_blocked(response, "list_access")
+                self.assertEqual(output["v2_excluded_applications"], ["approval", "cost-management"])
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
