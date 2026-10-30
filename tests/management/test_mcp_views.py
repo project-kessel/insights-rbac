@@ -6380,6 +6380,7 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
         output = self._get_tool_output(response)
         self.assertIn("confirmation_required", output)
         self.assertIn("confirmation_token", output)
+        self.assertFalse(Role.objects.filter(name="V1 Role", tenant=self.tenant).exists())
 
     def test_remove_roles_from_group_blocked_message_includes_note(self):
         """The blocked message for remove_roles_from_group includes the full-list guidance."""

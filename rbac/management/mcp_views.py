@@ -1289,7 +1289,10 @@ def list_permission_options(
     requires_auth=True,
     api_version=ApiVersion.V1,
     v2_alternative="list_role_bindings",
-    v2_alternative_note="Use granted_subject_type='group' and granted_subject_id='<group uuid>'.",
+    v2_alternative_note=(
+        "Use granted_subject_type='group' and granted_subject_id='<group uuid>' "
+        "to list roles assigned to the group. This does not return roles outside the group."
+    ),
 )
 def list_group_roles(
     request: HttpRequest,
@@ -4941,7 +4944,10 @@ def update_role_v1(
     write=True,
     api_version=ApiVersion.V1,
     v2_alternative="update_role",
-    v2_alternative_note="'update_role' is a full replacement — the 'permissions' parameter is required and replaces the entire permission list.",
+    v2_alternative_note=(
+        "'update_role' is a full replacement — the 'permissions' parameter is required "
+        "and replaces the entire permission list."
+    ),
 )
 def patch_role_v1(
     request: HttpRequest,
@@ -5261,7 +5267,10 @@ def remove_principals_from_group(
     write=True,
     api_version=ApiVersion.V1,
     v2_alternative="update_role_binding",
-    v2_alternative_note="Read current bindings first, then send the full desired list — any existing bindings not in the list are removed.",
+    v2_alternative_note=(
+        "Read current bindings first, then send the full desired list — "
+        "any existing bindings not in the list are removed."
+    ),
 )
 def remove_roles_from_group(
     request: HttpRequest,
@@ -6055,8 +6064,7 @@ def _v1_tool_blocked_response(
 
     v2_alternative = config.v2_alternative if _is_v2_available() else None
     message = (
-        f"{tool_name} uses the V1 API, which this organization no longer uses because it has "
-        "migrated to RBAC V2."
+        f"{tool_name} uses the V1 API, which this organization no longer uses because it has " "migrated to RBAC V2."
     )
     if v2_alternative:
         message += f" Use '{v2_alternative}' instead."
