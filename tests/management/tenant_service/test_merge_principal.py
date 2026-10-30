@@ -227,12 +227,8 @@ class MergePrincipalTests(IdentityRequest):
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
         # default_group_uuid: always transitioned (every user is a member)
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999")
-        )
-        expected_added.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241")
-        )
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241"))
         # default_admin_group_uuid: old tuple removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
@@ -297,12 +293,8 @@ class MergePrincipalTests(IdentityRequest):
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
         # default_group_uuid: always transitioned
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999")
-        )
-        expected_added.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241")
-        )
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241"))
         # default_admin_group_uuid: old removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
@@ -386,12 +378,8 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
         # default_group_uuid: always transitioned
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
-        )
-        expected_added.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
-        )
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862"))
         # default_admin_group_uuid: old removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
@@ -427,12 +415,8 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
         # default_group_uuid: always transitioned
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
-        )
-        expected_added.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
-        )
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862"))
         # default_admin_group_uuid: old removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
@@ -524,12 +508,8 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
         # default_group_uuid: always transitioned
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
-        )
-        expected_added.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
-        )
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862"))
         # default_admin_group_uuid: old removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
@@ -554,19 +534,14 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         default_uuid = str(mapping.default_group_uuid)
         admin_uuid = str(mapping.default_admin_group_uuid)
         # Both old tuples are always removed
-        self.assertIn(
-            Group.relationship_to_user_id_for_group(default_uuid, "16777216"), tracker.tuples_removed
-        )
-        self.assertIn(
-            Group.relationship_to_user_id_for_group(admin_uuid, "16777216"), tracker.tuples_removed
-        )
+        self.assertIn(Group.relationship_to_user_id_for_group(default_uuid, "16777216"), tracker.tuples_removed)
+        self.assertIn(Group.relationship_to_user_id_for_group(admin_uuid, "16777216"), tracker.tuples_removed)
         # Only the platform-default group tuple is re-added for the new user_id;
         # admin-group tuple is NOT added (admin status gated at caller level)
-        self.assertIn(
-            Group.relationship_to_user_id_for_group(default_uuid, "51856862"), tracker.tuples_added
-        )
+        self.assertIn(Group.relationship_to_user_id_for_group(default_uuid, "51856862"), tracker.tuples_added)
         self.assertNotIn(
-            Group.relationship_to_user_id_for_group(admin_uuid, "51856862"), tracker.tuples_added,
+            Group.relationship_to_user_id_for_group(admin_uuid, "51856862"),
+            tracker.tuples_added,
             "Admin-group tuple must not be added during rewrite — admin status is unknown",
         )
 
