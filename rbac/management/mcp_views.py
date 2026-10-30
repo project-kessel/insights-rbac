@@ -36,6 +36,7 @@ from typing import Any, Callable
 import jsonschema
 from django.conf import settings
 from django.core.cache import cache as django_cache
+from django.db import DatabaseError
 from django.db.models import Count, Prefetch
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.test import RequestFactory
@@ -239,6 +240,7 @@ class ToolConfig:
     caveats: str = ""
     redacted_fields: tuple[str, ...] = ()
     v2_alternative: str = ""
+    v2_alternative_note: str = ""
 
 
 _TOOL_CONFIG: dict[str, ToolConfig] = {}
@@ -256,6 +258,7 @@ def register_tool(
     caveats: str = "",
     redacted_fields: tuple[str, ...] = (),
     v2_alternative: str = "",
+    v2_alternative_note: str = "",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a tool with both MCPServer and _TOOL_CONFIG.
 
@@ -291,6 +294,7 @@ def register_tool(
             caveats=resolved_caveats,
             redacted_fields=redacted_fields,
             v2_alternative=v2_alternative,
+            v2_alternative_note=v2_alternative_note,
         )
 
         if passes_request:
@@ -1192,8 +1196,8 @@ def _find_authorizing_role(username: str, tenant: Any, required_perms: list[str]
         "Calls: GET /api/v1/access/\n"
         "Caveats:\n"
         "- This shows the flattened effective permissions but not the path: you cannot see which "
-        "role or group granted each permission. Use list_group_roles + list_role_access to trace "
-        "the full chain."
+        "role or group granted each permission. For V2 orgs, use get_role and list_role_bindings "
+        "to trace the full chain."
     ),
     requires_auth=True,
     api_version=ApiVersion.V1,
@@ -1284,7 +1288,8 @@ def list_permission_options(
     ),
     requires_auth=True,
     api_version=ApiVersion.V1,
-    v2_alternative="list_role_bindings_by_subject",
+    v2_alternative="list_role_bindings",
+    v2_alternative_note="Use granted_subject_type='group' and granted_subject_id='<group uuid>'.",
 )
 def list_group_roles(
     request: HttpRequest,
@@ -2840,7 +2845,7 @@ def get_workspace(
         "including those inherited through group membership "
         "(this is the V2 equivalent of list_access(username=X) for V1), "
         "(2) for each binding extract the role UUID, "
-        "(3) call get_role(role_uuid=...) or list_role_access(role_uuid=...) to inspect "
+        "(3) call get_role(role_uuid=...) to inspect "
         "the role's permissions, (4) compare against the required permissions to identify "
         "what is granted and what is missing. "
         "TIP: For a quick yes/no check, use check_user_permission instead — it auto-detects "
@@ -4936,6 +4941,7 @@ def update_role_v1(
     write=True,
     api_version=ApiVersion.V1,
     v2_alternative="update_role",
+    v2_alternative_note="'update_role' is a full replacement — the 'permissions' parameter is required and replaces the entire permission list.",
 )
 def patch_role_v1(
     request: HttpRequest,
@@ -5255,6 +5261,7 @@ def remove_principals_from_group(
     write=True,
     api_version=ApiVersion.V1,
     v2_alternative="update_role_binding",
+    v2_alternative_note="Read current bindings first, then send the full desired list — any existing bindings not in the list are removed.",
 )
 def remove_roles_from_group(
     request: HttpRequest,
@@ -6026,9 +6033,9 @@ def _is_v2_write_activated_request(request: HttpRequest) -> bool:
         return False
     try:
         return is_v2_write_activated(tenant)
-    except Exception:
+    except DatabaseError as exc:
         logger.exception("mcp: V2 write-activation check failed for tenant org_id=%s", getattr(tenant, "org_id", "?"))
-        raise V2ActivationCheckError("Database error checking V2 write-activation status")
+        raise V2ActivationCheckError("Database error checking V2 write-activation status") from exc
 
 
 def _v1_tool_blocked_response(
@@ -6041,35 +6048,38 @@ def _v1_tool_blocked_response(
     :func:`~management.role.v2_service.is_v1_list_access_allowed_for_v2_tenant`).
     Returns None when the call may proceed.
     """
-    v2_alternative = config.v2_alternative if _is_v2_available() else None
-    if v2_alternative:
-        suffix = f" Use '{v2_alternative}' instead."
-    else:
-        suffix = " No V2 alternative is available in this deployment."
-    error: dict[str, Any] = {
-        "error": (
-            f"Tool '{tool_name}' is a V1 tool and is not available for this organization because it "
-            f"uses RBAC V2.{suffix}"
-        ),
-        "v2_alternative": v2_alternative,
-    }
-    if tool_name == "patch_role_v1" and v2_alternative:
-        error["error"] += (
-            f" Note: '{v2_alternative}' is a full replacement — the 'permissions' parameter is "
-            "required and replaces the entire permission list."
-        )
     if tool_name == _V2_EXCLUDED_APPS_V1_TOOL:
         applications = {app.strip() for app in str(arguments.get("application", "")).split(",") if app.strip()}
         if is_v1_list_access_allowed_for_v2_tenant(applications):
             return None
-        error["error"] += (
-            f" '{tool_name}' is only available when every 'application' value is excluded from "
-            "the V2 migration (see v2_excluded_applications)."
-        )
-        error["v2_excluded_applications"] = sorted(v2_role_excluded_applications())
 
-    logger.warning("mcp: tools/call tool='%s' rejected, V1 tool for V2 write-activated tenant", tool_name)
-    _record_metric(tool_name, "v1_tool_blocked")
+    v2_alternative = config.v2_alternative if _is_v2_available() else None
+    message = (
+        f"{tool_name} uses the V1 API, which this organization no longer uses because it has "
+        "migrated to RBAC V2."
+    )
+    if v2_alternative:
+        message += f" Use '{v2_alternative}' instead."
+        if config.v2_alternative_note:
+            message += f" Note: {config.v2_alternative_note}"
+    else:
+        message += " No V2 alternative is available in this deployment."
+
+    error: dict[str, Any] = {
+        "error": "tool_not_available_for_v2_org",
+        "tool": tool_name,
+        "message": message,
+        "use_instead": v2_alternative,
+    }
+    if tool_name == _V2_EXCLUDED_APPS_V1_TOOL:
+        error["message"] += (
+            f" '{tool_name}' is only available when every 'application' value is excluded from "
+            "the V2 migration (see allowed_applications)."
+        )
+        error["allowed_applications"] = sorted(v2_role_excluded_applications())
+
+    logger.warning("mcp: tools/call tool='%s' rejected, V1-only tool for V2 org", tool_name)
+    _record_metric(tool_name, "v2_org_blocked")
     content = [{"type": "text", "text": json.dumps(error)}]
     return _success_response(request_id, {"content": content, "isError": True})
 
@@ -6079,6 +6089,8 @@ def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, 
 
     V1 tools are hidden for V2 write-activated tenants, except ``list_access``
     which remains callable for applications excluded from the V2 migration.
+    When the exclude list is empty, ``list_access`` is also hidden because it
+    would be advertised then rejected on every call.
     """
     v2_available = _is_v2_available()
     write_enabled = _is_write_enabled()
@@ -6086,14 +6098,16 @@ def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, 
         hide_v1_tools = _is_v2_write_activated_request(request)
     except V2ActivationCheckError:
         return _error_response(request_id, -32603, "Internal error: unable to determine V2 activation status")
+    excluded_apps = v2_role_excluded_applications() if hide_v1_tools else frozenset()
     overrides = _get_all_description_overrides()
     tools_data = []
     for tool in _get_tools():
         config = _TOOL_CONFIG.get(tool.name, ToolConfig(fn=lambda: ""))
         if not v2_available and config.api_version == ApiVersion.V2:
             continue
-        if hide_v1_tools and config.api_version == ApiVersion.V1 and tool.name != _V2_EXCLUDED_APPS_V1_TOOL:
-            continue
+        if hide_v1_tools and config.api_version == ApiVersion.V1:
+            if tool.name != _V2_EXCLUDED_APPS_V1_TOOL or not excluded_apps:
+                continue
         description = overrides.get(tool.name, tool.description or "")
         if config.write and not write_enabled:
             description = f"[DISABLED -- write mode off] {description}"

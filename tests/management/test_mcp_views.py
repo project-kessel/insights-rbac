@@ -6136,14 +6136,10 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
         self.assertTrue(data["result"]["isError"])
         output = self._get_tool_output(response)
         v2_alternative = _TOOL_CONFIG[tool_name].v2_alternative
-        self.assertEqual(output["v2_alternative"], v2_alternative)
-        self.assertTrue(
-            output["error"].startswith(
-                f"Tool '{tool_name}' is a V1 tool and is not available for this organization because it "
-                f"uses RBAC V2. Use '{v2_alternative}' instead."
-            ),
-            output["error"],
-        )
+        self.assertEqual(output["error"], "tool_not_available_for_v2_org")
+        self.assertEqual(output["tool"], tool_name)
+        self.assertEqual(output["use_instead"], v2_alternative)
+        self.assertIn("migrated to RBAC V2", output["message"])
         self.assertNotIn("confirmation_token", output)
         return output
 
@@ -6285,7 +6281,7 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
                 response = self._call_tool("list_access", {"application": application})
 
                 output = self._assert_blocked(response, "list_access")
-                self.assertEqual(output["v2_excluded_applications"], ["approval", "cost-management"])
+                self.assertEqual(output["allowed_applications"], ["approval", "cost-management"])
 
     @override_settings(MCP_WRITE_ENABLED=True)
     def test_patch_role_v1_blocked_message_includes_permissions_note(self):
@@ -6295,8 +6291,8 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
         response = self._call_tool("patch_role_v1", {"role_uuid": str(uuid.uuid4()), "name": "X"})
 
         output = self._assert_blocked(response, "patch_role_v1")
-        self.assertIn("full replacement", output["error"])
-        self.assertIn("'permissions' parameter is required", output["error"])
+        self.assertIn("full replacement", output["message"])
+        self.assertIn("'permissions' parameter is required", output["message"])
 
     @override_settings(V2_APIS_ENABLED=False)
     def test_blocked_v1_tool_no_v2_alternative_when_v2_disabled(self):
@@ -6308,12 +6304,14 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
         data = response.json()
         self.assertTrue(data["result"]["isError"])
         output = self._get_tool_output(response)
-        self.assertIsNone(output["v2_alternative"])
-        self.assertIn("No V2 alternative is available", output["error"])
+        self.assertIsNone(output["use_instead"])
+        self.assertIn("No V2 alternative is available", output["message"])
 
     def test_tools_list_db_error_returns_json_rpc_error(self):
         """Database error during V2 activation check returns JSON-RPC -32603 in tools/list."""
-        with patch("management.mcp_views.is_v2_write_activated", side_effect=Exception("DB down")):
+        from django.db import DatabaseError
+
+        with patch("management.mcp_views.is_v2_write_activated", side_effect=DatabaseError("DB down")):
             response = self.client.post(
                 self.url,
                 data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
@@ -6328,15 +6326,81 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
 
     def test_tools_call_db_error_returns_json_rpc_error(self):
         """Database error during V2 activation check returns JSON-RPC -32603 in tools/call."""
+        from django.db import DatabaseError
+
         ensure_v2_write_activated(self.tenant)
 
-        with patch("management.mcp_views.is_v2_write_activated", side_effect=Exception("DB down")):
+        with patch("management.mcp_views.is_v2_write_activated", side_effect=DatabaseError("DB down")):
             response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
 
         data = response.json()
         self.assertIn("error", data)
         self.assertEqual(data["error"]["code"], -32603)
         self.assertIn("V2 activation status", data["error"]["message"])
+
+    def test_blocked_call_records_v2_org_blocked_metric(self):
+        """A blocked V1 tool call records the v2_org_blocked metric."""
+        ensure_v2_write_activated(self.tenant)
+
+        with patch("management.mcp_views._record_metric") as mock_metric:
+            self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        mock_metric.assert_called_once_with("list_group_roles", "v2_org_blocked")
+
+    def test_allowed_list_access_does_not_record_blocked_metric(self):
+        """An allowed list_access call does not record the v2_org_blocked metric."""
+        ensure_v2_write_activated(self.tenant)
+
+        with patch("management.mcp_views._record_metric") as mock_metric:
+            self._call_tool("list_access", {"application": "approval"})
+
+        for call_args in mock_metric.call_args_list:
+            self.assertNotEqual(call_args[0][1], "v2_org_blocked")
+
+    @override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=[])
+    def test_tools_list_hides_list_access_when_exclude_list_empty(self):
+        """list_access is hidden when V2_MIGRATION_APP_EXCLUDE_LIST is empty."""
+        ensure_v2_write_activated(self.tenant)
+
+        tool_names = set(self._get_tool_names())
+
+        self.assertNotIn("list_access", tool_names)
+        self.assertEqual(tool_names & _V1_TOOL_NAMES, set())
+
+    @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=True)
+    def test_create_role_v1_allowed_for_plain_v1_tenant(self):
+        """A plain V1 tenant (not opted in) can call create_role_v1 and gets the confirmation flow."""
+        response = self._call_tool(
+            "create_role_v1",
+            {"name": "V1 Role", "access": [{"permission": "rbac:role:read", "resourceDefinitions": []}]},
+        )
+
+        data = response.json()
+        self.assertIn("result", data)
+        output = self._get_tool_output(response)
+        self.assertIn("confirmation_required", output)
+        self.assertIn("confirmation_token", output)
+
+    def test_remove_roles_from_group_blocked_message_includes_note(self):
+        """The blocked message for remove_roles_from_group includes the full-list guidance."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool(
+            "remove_roles_from_group",
+            {"group_uuid": str(self.group.uuid), "roles": str(uuid.uuid4())},
+        )
+
+        output = self._assert_blocked(response, "remove_roles_from_group")
+        self.assertIn("full desired list", output["message"])
+
+    def test_list_group_roles_blocked_message_includes_note(self):
+        """The blocked message for list_group_roles includes granted_subject_type guidance."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        output = self._assert_blocked(response, "list_group_roles")
+        self.assertIn("granted_subject_type='group'", output["message"])
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)

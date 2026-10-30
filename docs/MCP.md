@@ -438,7 +438,7 @@ List access permissions for a principal (V1 API only). By default shows access f
 
 **Caveats:**
 - V1-only endpoint. For V2 organizations, use `check_user_permission` or `list_role_bindings` instead. V2 write-activated organizations can only call it for applications in `V2_MIGRATION_APP_EXCLUDE_LIST`.
-- Shows flattened effective permissions but not which role or group granted each one. Use `list_group_roles` + `list_role_access` to trace the full chain.
+- Shows flattened effective permissions but not which role or group granted each one. For V2 orgs, use `get_role` and `list_role_bindings` to trace the full chain.
 
 ---
 
@@ -1505,7 +1505,7 @@ Every `ApiVersion.V1` tool must set `v2_alternative` on `@register_tool`, naming
 | V1 tool | `v2_alternative` |
 |---------|------------------|
 | `list_access` | `check_user_permission` |
-| `list_group_roles` | `list_role_bindings_by_subject` |
+| `list_group_roles` | `list_role_bindings` |
 | `list_role_access` | `get_role` |
 | `add_roles_to_group` | `create_role_bindings` |
 | `create_role_v1` | `create_role` |
