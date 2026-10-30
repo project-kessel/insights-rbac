@@ -3,7 +3,7 @@
 import logging
 from typing import NamedTuple, Optional, Protocol
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from management.atomic_transactions import atomic
 from management.group.model import Group
 from management.inventory_replicator.inventory_replicator import (
@@ -247,10 +247,27 @@ def rewrite_principal_user_id(
         _transfer_role_binding_entries(obsolete, principal)
         obsolete.delete()
 
-    principal.user_id = normalized_new
-    principal.save()
+    try:
+        with transaction.atomic():
+            principal.user_id = normalized_new
+            principal.save()
+    except IntegrityError:
+        _resolve_user_id_conflict(principal, normalized_new, replicator)
+        return
 
     tuples_to_add = _relation_tuples_for_principal_user_id(principal, normalized_new)
+
+    # Default-group tuples are managed via TenantMapping in SpiceDB, not through the
+    # Django M2M relation, so _relation_tuples_for_principal_user_id does not cover them.
+    try:
+        mapping = TenantMapping.objects.get(tenant=principal.tenant)
+        m2m_group_uuids = set(principal.group.values_list("uuid", flat=True))
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            if default_uuid not in m2m_group_uuids:
+                tuples_to_remove.append(Group.relationship_to_user_id_for_group(str(default_uuid), old_user_id))
+                tuples_to_add.append(Group.relationship_to_user_id_for_group(str(default_uuid), normalized_new))
+    except TenantMapping.DoesNotExist:
+        pass
 
     if tuples_to_add or tuples_to_remove:
         info = {
