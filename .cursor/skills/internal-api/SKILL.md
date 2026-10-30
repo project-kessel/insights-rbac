@@ -59,6 +59,8 @@ When a user asks to call an internal API:
 
 ### Bootstrap users from BOP user IDs
 
+Input is BOP **`user_id`s** (not usernames). Also remediates same-username / wrong-`user_id` principals (`would_rewrite_user_id` / `rewritten`).
+
 Dry run first:
 
 ```bash
