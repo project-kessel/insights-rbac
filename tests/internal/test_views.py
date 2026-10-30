@@ -6714,11 +6714,11 @@ class InternalBootstrapUsersFromUserIdsTests(BaseInternalViewsetTests):
     def test_dry_run_would_rewrite_mismatched_user_id(self, request_filtered_principals):
         """Same username with a stale user_id is reported as would_rewrite_user_id."""
         principal = Principal.objects.create(
-            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
         )
         request_filtered_principals.return_value = {
             "status_code": 200,
-            "data": [self._bop_user("51856862", "teppo.haapala@apotti.fi")],
+            "data": [self._bop_user("51856862", "testuser@example.com")],
         }
 
         response = self._post(["51856862"], dry_run=True)
@@ -6739,7 +6739,7 @@ class InternalBootstrapUsersFromUserIdsTests(BaseInternalViewsetTests):
         replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
 
         principal = Principal.objects.create(
-            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+            username="testuser@example.com", tenant=self.tenant, user_id="16777216"
         )
         group = Group.objects.create(name="admins", tenant=self.tenant)
         group.principals.add(principal)
@@ -6750,7 +6750,7 @@ class InternalBootstrapUsersFromUserIdsTests(BaseInternalViewsetTests):
 
         request_filtered_principals.return_value = {
             "status_code": 200,
-            "data": [self._bop_user("51856862", "teppo.haapala@apotti.fi")],
+            "data": [self._bop_user("51856862", "testuser@example.com")],
         }
 
         response = self._post(["51856862"])
