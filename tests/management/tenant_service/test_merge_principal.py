@@ -215,24 +215,35 @@ class MergePrincipalTests(IdentityRequest):
         self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
         self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy", "shared"])
 
+        # Tuples for shared/legacy groups with user_id 54181241 appear in both add and
+        # remove — they cancel out (tuple already exists in SpiceDB, should stay).
         expected_removed = [
             Group.relationship_to_user_id_for_group(str(principal_group.uuid), "99999999"),
             Group.relationship_to_user_id_for_group(str(shared_group.uuid), "99999999"),
-            Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
-            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "54181241"),
         ]
         expected_added = [
             Group.relationship_to_user_id_for_group(str(principal_group.uuid), "54181241"),
-            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "54181241"),
-            Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
         ]
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "99999999"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "54181241"))
+        # default_group_uuid: always transitioned (every user is a member)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999")
+        )
+        expected_added.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241")
+        )
+        # default_admin_group_uuid: old tuple removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
+        )
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
+        # Add and remove lists must be disjoint after deduplication
+        self.assertFalse(
+            set(tracker.tuples_added) & set(tracker.tuples_removed),
+            "Tuples in both add and remove lists would cause inconsistent SpiceDB state",
+        )
 
     def test_ensure_principal_upsert_integrity_error_creates_survivor_when_missing(self):
         """upsert IntegrityError path creates survivor principal when insert fails on user_id uniqueness."""
@@ -285,9 +296,17 @@ class MergePrincipalTests(IdentityRequest):
         expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "54181241")]
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "99999999"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "54181241"))
+        # default_group_uuid: always transitioned
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999")
+        )
+        expected_added.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241")
+        )
+        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
+        )
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
 
@@ -366,9 +385,17 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")]
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        # default_group_uuid: always transitioned
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
+        )
+        expected_added.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
+        )
+        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
+        )
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
 
@@ -399,9 +426,17 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         expected_added = [binding._user_subject_tuple(principal)]
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        # default_group_uuid: always transitioned
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
+        )
+        expected_added.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
+        )
+        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
+        )
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
         self.assertTrue(
@@ -421,11 +456,17 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         self.assertEqual(principal.user_id, "51856862")
         # Default-group tuples are still replicated even without M2M memberships
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        expected_removed = []
-        expected_added = []
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        # default_group_uuid: always transitioned
+        expected_removed = [
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216"),
+        ]
+        expected_added = [
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862"),
+        ]
+        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
+        )
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
 
@@ -482,15 +523,23 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
         # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
-            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
-            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        # default_group_uuid: always transitioned
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216")
+        )
+        expected_added.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862")
+        )
+        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
+        )
 
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
 
     def test_rewrite_removes_default_group_tuples_for_old_user_id(self):
-        """Default-group tuples (not in M2M) are removed for old user_id and added for new."""
+        """Default-group tuples (not in M2M) are removed for old user_id; admin tuple not re-added."""
         principal = Principal.objects.create(
             username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
         )
@@ -504,18 +553,22 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
         default_uuid = str(mapping.default_group_uuid)
         admin_uuid = str(mapping.default_admin_group_uuid)
-        expected_removed = [
-            Group.relationship_to_user_id_for_group(default_uuid, "16777216"),
-            Group.relationship_to_user_id_for_group(admin_uuid, "16777216"),
-        ]
-        expected_added = [
-            Group.relationship_to_user_id_for_group(default_uuid, "51856862"),
-            Group.relationship_to_user_id_for_group(admin_uuid, "51856862"),
-        ]
-        for t in expected_removed:
-            self.assertIn(t, tracker.tuples_removed)
-        for t in expected_added:
-            self.assertIn(t, tracker.tuples_added)
+        # Both old tuples are always removed
+        self.assertIn(
+            Group.relationship_to_user_id_for_group(default_uuid, "16777216"), tracker.tuples_removed
+        )
+        self.assertIn(
+            Group.relationship_to_user_id_for_group(admin_uuid, "16777216"), tracker.tuples_removed
+        )
+        # Only the platform-default group tuple is re-added for the new user_id;
+        # admin-group tuple is NOT added (admin status gated at caller level)
+        self.assertIn(
+            Group.relationship_to_user_id_for_group(default_uuid, "51856862"), tracker.tuples_added
+        )
+        self.assertNotIn(
+            Group.relationship_to_user_id_for_group(admin_uuid, "51856862"), tracker.tuples_added,
+            "Admin-group tuple must not be added during rewrite — admin status is unknown",
+        )
 
     def test_rewrite_catches_integrity_error_on_concurrent_claim(self):
         """Concurrent claim of user_id between lookup and save is caught and resolved."""
