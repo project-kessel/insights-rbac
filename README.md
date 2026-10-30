@@ -215,7 +215,6 @@ Useful endpoints after startup:
 | Service | Endpoint |
 | --- | --- |
 | RBAC API and metrics | http://localhost:9080 and http://localhost:9080/metrics |
-| Kessel Relations API | http://localhost:9000 |
 | Kessel Inventory API | http://localhost:9081 |
 | Kafka Connect | http://localhost:8083 |
 | Host Inventory API | http://localhost:8080 |
