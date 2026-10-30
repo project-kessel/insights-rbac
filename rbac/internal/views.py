@@ -65,7 +65,11 @@ from kessel.inventory.v1beta2 import (
     streamed_list_subjects_request_pb2,
     subject_reference_pb2,
 )
-from management.atomic_transactions import atomic_block, atomic_with_retry, run_atomic_with_retry
+from management.atomic_transactions import (
+    atomic_block,
+    atomic_with_retry,
+    run_atomic_with_retry,
+)
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
 from management.group.inventory_api_dual_write_group_handler import (
@@ -81,7 +85,9 @@ from management.inventory_checker.inventory_api_check import (
     SeededRoleHierarchyChecker,
     WorkspaceRelationInventoryChecker,
 )
-from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
+from management.inventory_replicator.inventory_api_replicator import (
+    InventoryApiReplicator,
+)
 from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEvent,
@@ -154,7 +160,9 @@ from management.utils import (
     get_principal,
     groups_for_principal,
 )
-from management.workspace.inventory_api_dual_write_workspace_handler import InventoryApiDualWriteWorkspaceHandler
+from management.workspace.inventory_api_dual_write_workspace_handler import (
+    InventoryApiDualWriteWorkspaceHandler,
+)
 from management.workspace.model import Workspace
 from management.workspace.serializer import WorkspaceSerializer
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator, InMemoryTuples
@@ -225,7 +233,9 @@ def list_unmodified_tenants(request):
         tenant_qs = Tenant.objects.filter(ready=True).exclude(tenant_name="public")
     to_return = []
     for tenant_obj in tenant_qs:
-        if tenant_is_unmodified(tenant_name=tenant_obj.tenant_name, org_id=tenant_obj.org_id):
+        if tenant_is_unmodified(
+            tenant_name=tenant_obj.tenant_name, org_id=tenant_obj.org_id
+        ):
             to_return.append(tenant_obj.org_id)
     payload = {
         "unmodified_tenants": to_return,
@@ -243,7 +253,9 @@ def list_tenants(request):
     limit = int(request.GET.get("limit", 0))
     offset = int(request.GET.get("offset", 0))
     ready = request.GET.get("ready")
-    tenant_qs = Tenant.objects.exclude(tenant_name="public").values("id", "tenant_name", "account_id", "org_id")
+    tenant_qs = Tenant.objects.exclude(tenant_name="public").values(
+        "id", "tenant_name", "account_id", "org_id"
+    )
 
     if ready == "true":
         tenant_qs = tenant_qs.filter(ready=True)
@@ -340,7 +352,9 @@ def tenant_org_config(request, org_id):
             try:
                 tenant.save(update_fields=["org_config"])
             except ValidationError as e:
-                return JsonResponse({"error": Tenant.org_config_error_message(e)}, status=400)
+                return JsonResponse(
+                    {"error": Tenant.org_config_error_message(e)}, status=400
+                )
             transaction.on_commit(lambda: TENANTS.delete_tenant(org_id))
 
         logger.info(
@@ -357,7 +371,9 @@ def tenant_org_config(request, org_id):
         )
         return JsonResponse(_tenant_org_config_payload(tenant))
 
-    return JsonResponse({"error": 'Invalid method, only "GET" and "PATCH" are allowed.'}, status=405)
+    return JsonResponse(
+        {"error": 'Invalid method, only "GET" and "PATCH" are allowed.'}, status=405
+    )
 
 
 def run_migrations(request):
@@ -378,7 +394,9 @@ def run_migrations(request):
             },
         )
         run_migrations_in_worker.delay()
-        return HttpResponse("Migrations are running in a background worker.", status=202)
+        return HttpResponse(
+            "Migrations are running in a background worker.", status=202
+        )
     return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
 
 
@@ -401,7 +419,9 @@ def migration_progress(request):
         incomplete_tenants = []
 
         if limit:
-            tenant_qs = Tenant.objects.exclude(tenant_name="public")[offset : (limit + offset)]  # noqa: E203
+            tenant_qs = Tenant.objects.exclude(tenant_name="public")[
+                offset : (limit + offset)
+            ]  # noqa: E203
         else:
             tenant_qs = Tenant.objects.exclude(tenant_name="public")
         tenant_count = tenant_qs.count()
@@ -482,9 +502,13 @@ def get_org_admin(request, org_or_account):
         elif api_type_param == "org_id":
             path = f"/v3/accounts/{org_or_account}/users?admin_only=true"
         else:
-            return HttpResponse(f'Valid options for "{option_key}": {valid_values}.', status=400)
+            return HttpResponse(
+                f'Valid options for "{option_key}": {valid_values}.', status=400
+            )
 
-        url = "{}://{}:{}{}{}".format(PROXY.protocol, PROXY.host, PROXY.port, PROXY.path, path)
+        url = "{}://{}:{}{}{}".format(
+            PROXY.protocol, PROXY.host, PROXY.port, PROXY.path, path
+        )
         try:
             headers = {
                 USER_ENV_HEADER: PROXY.user_env,
@@ -504,7 +528,9 @@ def get_org_admin(request, org_or_account):
             }
         except requests.exceptions.ConnectionError as conn:
             bop_request_status_count.labels(method="GET", status=500).inc()
-            return HttpResponse(f"Unable to connect for URL {url} with error: {conn}", status=500)
+            return HttpResponse(
+                f"Unable to connect for URL {url} with error: {conn}", status=500
+            )
         if response.status_code == status.HTTP_200_OK:
             response_data = {}
             data = resp.get("data", [])
@@ -528,9 +554,13 @@ def get_org_admin(request, org_or_account):
                 ] = f"{request_path}?type={api_type_param}&limit={limit}&offset={count - limit}"
             response_data["data"] = data
             bop_request_status_count.labels(method=request.method, status=200).inc()
-            return HttpResponse(json.dumps(response_data), status=resp.get("status_code"))
+            return HttpResponse(
+                json.dumps(response_data), status=resp.get("status_code")
+            )
         else:
-            bop_request_status_count.labels(method=request.method, status=response.status_code).inc()
+            bop_request_status_count.labels(
+                method=request.method, status=response.status_code
+            ).inc()
             response_data = response.json()
             return HttpResponse(json.dumps(response_data), status=response.status_code)
 
@@ -582,8 +612,12 @@ def user_lookup(request):
             user_org_id,
         )
     except Exception as err:
-        logger.error(f"error querying for tenant with org_id: '{user_org_id}' in rbac, err: {err}")
-        _log_user_lookup(caller, f"User lookup: error resolving tenant ({search_param})")
+        logger.error(
+            f"error querying for tenant with org_id: '{user_org_id}' in rbac, err: {err}"
+        )
+        _log_user_lookup(
+            caller, f"User lookup: error resolving tenant ({search_param})"
+        )
         return handle_error(
             f"Internal error - failed to query rbac for tenant with org_id: '{user_org_id}'",
             500,
@@ -598,11 +632,19 @@ def user_lookup(request):
             user_tenant=user_tenant,
         )
     except Exception as err:
-        logger.error(f"error querying for principal with username: '{username}' in rbac, err: {err}")
-        _log_user_lookup(caller, f"User lookup: error resolving principal ({search_param})")
-        return handle_error(f"Internal error - failed to query rbac for user: '{username}'", 500)
+        logger.error(
+            f"error querying for principal with username: '{username}' in rbac, err: {err}"
+        )
+        _log_user_lookup(
+            caller, f"User lookup: error resolving principal ({search_param})"
+        )
+        return handle_error(
+            f"Internal error - failed to query rbac for user: '{username}'", 500
+        )
 
-    groups = groups_for_principal(principal, user_tenant, is_org_admin=user["is_org_admin"])
+    groups = groups_for_principal(
+        principal, user_tenant, is_org_admin=user["is_org_admin"]
+    )
 
     user_groups = []
     for group in groups:
@@ -614,7 +656,9 @@ def user_lookup(request):
             permissions = []
             for access in accesses:
                 permission = access.permission
-                permissions.append(f"{permission.application} | {permission.resource_type} | {permission.verb}")
+                permissions.append(
+                    f"{permission.application} | {permission.resource_type} | {permission.verb}"
+                )
 
             user_roles.append(
                 {
@@ -635,7 +679,9 @@ def user_lookup(request):
 
     result["groups"] = user_groups
 
-    _log_user_lookup(caller, f"User lookup: found '{username}' ({search_param})", principal=principal)
+    _log_user_lookup(
+        caller, f"User lookup: found '{username}' ({search_param})", principal=principal
+    )
 
     return HttpResponse(
         json.dumps(result, cls=DjangoJSONEncoder),
@@ -661,7 +707,9 @@ def _log_user_lookup(caller, description, principal=None):
 def validate_user_lookup_input(username, email):
     """Validate input from user_lookup endpoint."""
     if not username and not email:
-        raise ValueError("you must provide either 'email' or 'username' as query params")
+        raise ValueError(
+            "you must provide either 'email' or 'username' as query params"
+        )
 
     if username and username.isspace():
         raise ValueError("username contains only whitespace")
@@ -685,9 +733,13 @@ def get_user_from_bop(username, email):
         raise Exception("must provide username or email to query bop for user")
 
     query_options = {"query_by": query_by, "include_permissions": True}
-    logger.debug(f"querying bop for user with options: '{query_options}' and principal: '{principal}'")
+    logger.debug(
+        f"querying bop for user with options: '{query_options}' and principal: '{principal}'"
+    )
 
-    resp = PROXY.request_filtered_principals(principals=[principal], limit=1, offset=0, options=query_options)
+    resp = PROXY.request_filtered_principals(
+        principals=[principal], limit=1, offset=0, options=query_options
+    )
 
     if isinstance(resp, dict) and "errors" in resp:
         status = resp.get("status_code")
@@ -704,30 +756,32 @@ def get_user_from_bop(username, email):
 
     user = users[0]
 
-    if ("username" not in user) or (not user["username"]) or (user["username"].isspace()):
-        logger.error(
-            f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'username' field"""
-        )
+    if (
+        ("username" not in user)
+        or (not user["username"])
+        or (user["username"].isspace())
+    ):
+        logger.error(f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'username' field""")
         raise Exception(
             f"invalid user data for user '{query_by}={principal}': user found in bop but no username exists"
         )
 
     if "is_org_admin" not in user:
         user["is_org_admin"] = False
-        logger.warning(
-            f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'is_org_admin' field"""
-        )
+        logger.warning(f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'is_org_admin' field""")
 
     if "org_id" not in user:
-        logger.error(
-            f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'org_id' field"""
+        logger.error(f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'org_id' field""")
+        raise Exception(
+            f"invalid user data for user '{query_by}={principal}': user found in bop but no org_id exists"
         )
-        raise Exception(f"invalid user data for user '{query_by}={principal}': user found in bop but no org_id exists")
 
-    logger.debug(f"successfully queried bop for user: '{user}' with queryBy: '{query_by}'")
+    logger.debug(
+        f"successfully queried bop for user: '{user}' with queryBy: '{query_by}'"
+    )
 
     return user
 
@@ -753,7 +807,9 @@ def run_seeds(request):
 
         for option in request.GET.keys():
             if option not in valid_options:
-                return HttpResponse(f"Valid query parameters: {valid_options}.", status=400)
+                return HttpResponse(
+                    f"Valid query parameters: {valid_options}.", status=400
+                )
 
         args = {}
         seed_types_param = request.GET.get(type_option)
@@ -761,7 +817,9 @@ def run_seeds(request):
         if seed_types_param:
             seed_types = seed_types_param.split(",")
             if not all([value in valid_values for value in seed_types]):
-                return HttpResponse(f'Valid options for "{type_option}": {valid_values}.', status=400)
+                return HttpResponse(
+                    f'Valid options for "{type_option}": {valid_values}.', status=400
+                )
             args = {type: True for type in seed_types}
 
         for option in [
@@ -782,7 +840,9 @@ def run_seeds(request):
                         status=400,
                     )
 
-        if args.get(force_create_option, False) and args.get(force_update_option, False):
+        if args.get(force_create_option, False) and args.get(
+            force_update_option, False
+        ):
             return HttpResponse(
                 f"{force_create_option} and {force_update_option} cannot both be set to true.",
                 status=400,
@@ -814,7 +874,9 @@ def car_expiry(request):
     if request.method == "POST":
         logger.info("Running cross-account request expiration check.")
         cross_account_cleanup.delay()
-        return HttpResponse("Expiry checks are running in a background worker.", status=202)
+        return HttpResponse(
+            "Expiry checks are running in a background worker.", status=202
+        )
     return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
 
 
@@ -824,14 +886,16 @@ def cars_clean(request):
     GET or POST /_private/api/cars/clean/
     """
     if request.method not in ("GET", "POST"):
-        return HttpResponse('Invalid method, only "GET" and "POST" are allowed.', status=405)
+        return HttpResponse(
+            'Invalid method, only "GET" and "POST" are allowed.', status=405
+        )
     if request.method == "POST" and not destructive_ok("api"):
         return HttpResponse("Destructive operations disallowed.", status=400)
 
     with transaction.atomic():
-        request_roles = RequestsRoles.objects.filter(role__system=False).prefetch_related(
-            "role", "cross_account_request"
-        )
+        request_roles = RequestsRoles.objects.filter(
+            role__system=False
+        ).prefetch_related("role", "cross_account_request")
         if request.method == "GET":
             result = {
                 str(request_role.cross_account_request.request_id): (
@@ -856,7 +920,9 @@ def set_tenant_ready(request):
     tenant_qs = Tenant.objects.exclude(tenant_name="public").filter(ready=False)
     if request.method == "GET":
         tenant_count = tenant_qs.count()
-        return HttpResponse(f"Total of {tenant_count} tenants not set to be ready.", status=200)
+        return HttpResponse(
+            f"Total of {tenant_count} tenants not set to be ready.", status=200
+        )
 
     if request.method == "POST":
         if not destructive_ok("api"):
@@ -921,10 +987,16 @@ def populate_tenant_org_id_view(request):
     if request.method == "POST":
         try:
             # Find tenants with empty org_id (initial query to get account_ids)
-            tenants_query = Tenant.objects.filter(org_id__isnull=True).exclude(tenant_name="public")
+            tenants_query = Tenant.objects.filter(org_id__isnull=True).exclude(
+                tenant_name="public"
+            )
 
             # Get list of account_ids that need org_id mapping
-            account_ids = list(tenants_query.values_list("account_id", flat=True).filter(account_id__isnull=False))
+            account_ids = list(
+                tenants_query.values_list("account_id", flat=True).filter(
+                    account_id__isnull=False
+                )
+            )
 
             if not account_ids:
                 return JsonResponse(
@@ -953,17 +1025,25 @@ def populate_tenant_org_id_view(request):
 
             # If BOP returns no mappings, use empty dict so all tenants will be deleted
             if not account_org_mapping:
-                logger.warning("No account-org mappings returned from BOP. All tenants will be deleted.")
+                logger.warning(
+                    "No account-org mappings returned from BOP. All tenants will be deleted."
+                )
                 account_org_mapping = {}
 
             # Populate tenants with org_id (with transaction and row locking)
-            logger.info(f"Processing tenants: {len(account_ids)} checked, {len(account_org_mapping)} BOP mappings")
+            logger.info(
+                f"Processing tenants: {len(account_ids)} checked, {len(account_org_mapping)} BOP mappings"
+            )
             with transaction.atomic():
                 # Re-fetch tenants with select_for_update to prevent concurrent modifications
                 tenants_without_org_id = (
-                    Tenant.objects.select_for_update().filter(org_id__isnull=True).exclude(tenant_name="public")
+                    Tenant.objects.select_for_update()
+                    .filter(org_id__isnull=True)
+                    .exclude(tenant_name="public")
                 )
-                stats = populate_tenant_org_id(tenants_without_org_id, account_org_mapping)
+                stats = populate_tenant_org_id(
+                    tenants_without_org_id, account_org_mapping
+                )
 
             response_data = {
                 "message": "Tenant org_id population completed.",
@@ -988,7 +1068,9 @@ def invalid_default_admin_groups(request):
     GET /_private/api/utils/invalid_default_admin_groups/
     DELETE /_private/api/utils/invalid_default_admin_groups/
     """
-    logger.info(f"Invalid default admin groups: {request.method} {request.user.username}")
+    logger.info(
+        f"Invalid default admin groups: {request.method} {request.user.username}"
+    )
     public_tenant = Tenant.objects.get(tenant_name="public")
     invalid_default_admin_groups_list = Group.objects.filter(
         admin_default=True, system=False, platform_default=False
@@ -1009,7 +1091,9 @@ def invalid_default_admin_groups(request):
             return HttpResponse("Destructive operations disallowed.", status=400)
         invalid_default_admin_groups_list.delete()
         return HttpResponse(status=204)
-    return HttpResponse('Invalid method, only "DELETE" and "GET" are allowed.', status=405)
+    return HttpResponse(
+        'Invalid method, only "DELETE" and "GET" are allowed.', status=405
+    )
 
 
 def role_removal(request):
@@ -1030,7 +1114,9 @@ def role_removal(request):
             )
         role_name = escape(role_name)
         # Add tenant public to prevent deletion of custom roles
-        role_obj = get_object_or_404(Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public"))
+        role_obj = get_object_or_404(
+            Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public")
+        )
         with transaction.atomic():
             try:
                 dual_write_handler = SeedingInventoryApiDualWriteHandler(role_obj)
@@ -1130,7 +1216,9 @@ def ocm_performance(request):
     if request.method == "POST":
         logger.info("Running OCM performance tests.")
         run_ocm_performance_in_worker.delay()
-        return HttpResponse("OCM performance tests are running in a background worker.", status=202)
+        return HttpResponse(
+            "OCM performance tests are running in a background worker.", status=202
+        )
     return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
 
 
@@ -1158,7 +1246,9 @@ def data_migration(request):
     logger.info("Running V1 data migration.")
 
     args = {
-        "exclude_apps": get_param_list(request, "exclude_apps", default=settings.V2_MIGRATION_APP_EXCLUDE_LIST),
+        "exclude_apps": get_param_list(
+            request, "exclude_apps", default=settings.V2_MIGRATION_APP_EXCLUDE_LIST
+        ),
         "orgs": get_param_list(request, "orgs"),
         "write_relationships": request.GET.get("write_relationships", "False"),
         "skip_roles": request.GET.get("skip_roles", "False").lower() == "true",
@@ -1176,7 +1266,9 @@ def data_migration(request):
         },
     )
     migrate_data_in_worker.delay(args)
-    return HttpResponse("Data migration from V1 to V2 are running in a background worker.", status=202)
+    return HttpResponse(
+        "Data migration from V1 to V2 are running in a background worker.", status=202
+    )
 
 
 def bootstrap_pending_tenants(request):
@@ -1283,7 +1375,9 @@ def bootstrap_tenant(request):
     logger.info("Running bootstrap tenant.")
 
     if not request.body:
-        return HttpResponse('Invalid request, must supply "org_ids" or "tenants" in body.', status=400)
+        return HttpResponse(
+            'Invalid request, must supply "org_ids" or "tenants" in body.', status=400
+        )
 
     try:
         raw_body = request.body.decode("utf-8")
@@ -1296,9 +1390,13 @@ def bootstrap_tenant(request):
             try:
                 legacy_body = json.loads(raw_body.replace("'", '"'))
             except json.JSONDecodeError:
-                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+                return HttpResponse(
+                    str(primary_exc), status=400, content_type="text/plain"
+                )
             if isinstance(legacy_body, dict) and "tenants" in legacy_body:
-                return HttpResponse(str(primary_exc), status=400, content_type="text/plain")
+                return HttpResponse(
+                    str(primary_exc), status=400, content_type="text/plain"
+                )
             body = legacy_body
         tenants_to_bootstrap = parse_bootstrap_tenant_request(body)
     except UnicodeDecodeError:
@@ -1342,7 +1440,9 @@ def bootstrap_tenant(request):
                     tenant = get_object_or_404(Tenant, org_id=org_id)
                 bootstrap_service.bootstrap_tenant(tenant, force=force)
                 if ungrouped_hosts_id is not None:
-                    get_or_create_ungrouped_workspace(tenant, workspace_id=ungrouped_hosts_id)
+                    get_or_create_ungrouped_workspace(
+                        tenant, workspace_id=ungrouped_hosts_id
+                    )
     except UngroupedWorkspaceError as exc:
         return HttpResponse(str(exc), status=400, content_type="text/plain")
     # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
@@ -1359,7 +1459,9 @@ def bootstrap_tenant(request):
             "create_missing": create_missing,
         },
     )
-    return HttpResponse(f"Bootstrapping tenants with org_ids {org_ids} were finished.", status=200)
+    return HttpResponse(
+        f"Bootstrapping tenants with org_ids {org_ids} were finished.", status=200
+    )
 
 
 def list_or_delete_bindings_for_role(request, role_uuid):
@@ -1368,7 +1470,9 @@ def list_or_delete_bindings_for_role(request, role_uuid):
     GET or DELETE /_private/api/utils/bindings/?role__is_system=True
     """
     if request.method not in ["GET", "DELETE"]:
-        return HttpResponse('Invalid method, only "GET" or "DELETE" is allowed.', status=405)
+        return HttpResponse(
+            'Invalid method, only "GET" or "DELETE" is allowed.', status=405
+        )
     if not role_uuid:
         return HttpResponse(
             'Invalid request, must supply the "role_uuid" query parameter.',
@@ -1388,7 +1492,9 @@ def list_or_delete_bindings_for_role(request, role_uuid):
     if request.method == "GET":
         serializer = BindingMappingSerializer(bindings, many=True)
         result = serializer.data or []
-        return HttpResponse(json.dumps(result), content_type="application/json", status=200)
+        return HttpResponse(
+            json.dumps(result), content_type="application/json", status=200
+        )
     else:
         info = delete_bindings(bindings)
         return HttpResponse(json.dumps(info), status=200)
@@ -1432,7 +1538,9 @@ def clean_binding_mapping(request, binding_id):
             # Get existing groups from the database
             existing_groups = {
                 str(group_uuid)
-                for group_uuid in Group.objects.filter(uuid__in=group_uuids).values_list("uuid", flat=True)
+                for group_uuid in Group.objects.filter(
+                    uuid__in=group_uuids
+                ).values_list("uuid", flat=True)
             }
 
             # Find missing groups
@@ -1458,7 +1566,9 @@ def clean_binding_mapping(request, binding_id):
                 )
 
             mapping.save()
-        return HttpResponse(f"Binding mapping {json.dumps(mapping.mappings)} cleaned.", status=200)
+        return HttpResponse(
+            f"Binding mapping {json.dumps(mapping.mappings)} cleaned.", status=200
+        )
     except Exception as e:
         return handle_error(str(e), 400)
 
@@ -1490,14 +1600,20 @@ def migration_resources(request):
         if not destructive_ok("api"):
             return HttpResponse("Destructive operations disallowed.", status=400)
         run_migration_resource_deletion.delay({"resource": resource, "org_id": org_id})
-        logger.info(f"Deleting resources of type {resource}. Requested by '{request.user.username}'")
-        return HttpResponse("Resource deletion is running in a background worker.", status=202)
+        logger.info(
+            f"Deleting resources of type {resource}. Requested by '{request.user.username}'"
+        )
+        return HttpResponse(
+            "Resource deletion is running in a background worker.", status=202
+        )
     elif request.method == "GET":
         resource_objs = get_resources(resource, org_id)
         pg = WSGIRequestResultsSetPagination()
         page = pg.paginate_queryset(resource_objs, request)
         page = [str(record.id) for record in page]
-        return HttpResponse(json.dumps(page), content_type="application/json", status=200)
+        return HttpResponse(
+            json.dumps(page), content_type="application/json", status=200
+        )
     return HttpResponse(f"Invalid method, {request.method}", status=405)
 
 
@@ -1514,7 +1630,9 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
 
     # The default query created with "ready=false" flag otherwise is used query that checks that tenant
     # does not have records in all tables.
-    only_ready_false_flag = request.GET.get("only_ready_false_flag", "true").strip().lower() == "true"
+    only_ready_false_flag = (
+        request.GET.get("only_ready_false_flag", "true").strip().lower() == "true"
+    )
 
     query = "FROM api_tenant WHERE tenant_name <> 'public' "
 
@@ -1524,9 +1642,7 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
     if only_ready_false_flag:
         query += "AND NOT ready"
     else:
-        query += (
-            "AND NOT EXISTS (SELECT 1 FROM management_principal WHERE management_principal.tenant_id = api_tenant.id) "
-        )
+        query += "AND NOT EXISTS (SELECT 1 FROM management_principal WHERE management_principal.tenant_id = api_tenant.id) "
         query += """AND NOT (
                   EXISTS    (SELECT 1
                              FROM   management_tenantmapping
@@ -1589,7 +1705,9 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
         if not destructive_ok("api"):
             return HttpResponse("Destructive operations disallowed.", status=400)
 
-        run_reset_imported_tenants.delay({"query": query, "limit": limit, "excluded": excluded})
+        run_reset_imported_tenants.delay(
+            {"query": query, "limit": limit, "excluded": excluded}
+        )
 
         # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
         logger.info(
@@ -1640,7 +1758,9 @@ def get_role_response(role: Role) -> HttpResponse:
             "platform_default": role.platform_default,
         },
     }
-    return HttpResponse(json.dumps(response_data), content_type="application/json", status=200)
+    return HttpResponse(
+        json.dumps(response_data), content_type="application/json", status=200
+    )
 
 
 def roles(request, uuid: str) -> HttpResponse:
@@ -1660,7 +1780,9 @@ def roles(request, uuid: str) -> HttpResponse:
 
             invalid_keys = set(body.keys()) - ALLOWED_ROLE_UPDATE_ATTRIBUTES
             if invalid_keys:
-                return handle_error(f"Invalid attributes: {', '.join(invalid_keys)}", 400)
+                return handle_error(
+                    f"Invalid attributes: {', '.join(invalid_keys)}", 400
+                )
 
             if "system" in body:
                 role.system = str_to_bool(body["system"])
@@ -1743,7 +1865,9 @@ def correct_resource_definitions(request):
                     for row in list_rows + string_rows + hbi_rows + operation_rows
                 ]
 
-            return HttpResponse(json.dumps(response), content_type="application/json", status=200)
+            return HttpResponse(
+                json.dumps(response), content_type="application/json", status=200
+            )
 
         with connection.cursor() as cursor:
             cursor.execute("SELECT COUNT(*)" + list_query)
@@ -1758,14 +1882,20 @@ def correct_resource_definitions(request):
             cursor.execute("SELECT COUNT(*)" + operations_query)
             count += cursor.fetchone()[0]
 
-        return HttpResponse(f"{count} resource definitions would be corrected", status=200)
+        return HttpResponse(
+            f"{count} resource definitions would be corrected", status=200
+        )
 
     elif request.method == "PATCH":
         resource_definition_id = query_params.get("id")
 
         if resource_definition_id:
-            resource_definition = get_object_or_404(ResourceDefinition, id=resource_definition_id)
-            resource_definition.attributeFilter = normalize_attribute_filter(resource_definition.attributeFilter)
+            resource_definition = get_object_or_404(
+                ResourceDefinition, id=resource_definition_id
+            )
+            resource_definition.attributeFilter = normalize_attribute_filter(
+                resource_definition.attributeFilter
+            )
             resource_definition.save()
             return HttpResponse(
                 f"Resource definition id = {resource_definition_id} updated.",
@@ -1778,7 +1908,9 @@ def correct_resource_definitions(request):
             result = cursor.fetchall()
             for id in result:
                 resource_definition = ResourceDefinition.objects.get(id=id[0])
-                resource_definition.attributeFilter = normalize_attribute_filter(resource_definition.attributeFilter)
+                resource_definition.attributeFilter = normalize_attribute_filter(
+                    resource_definition.attributeFilter
+                )
                 resource_definition.save()
                 count += 1
 
@@ -1786,7 +1918,9 @@ def correct_resource_definitions(request):
             result = cursor.fetchall()
             for id in result:
                 resource_definition = ResourceDefinition.objects.get(id=id[0])
-                resource_definition.attributeFilter = normalize_attribute_filter(resource_definition.attributeFilter)
+                resource_definition.attributeFilter = normalize_attribute_filter(
+                    resource_definition.attributeFilter
+                )
                 resource_definition.save()
                 count += 1
 
@@ -1804,15 +1938,19 @@ def correct_resource_definitions(request):
             result = cursor.fetchall()
             for id in result:
                 resource_definition = ResourceDefinition.objects.get(id=id[0])
-                resource_definition.attributeFilter = normalize_operation_in_attribute_filter(
-                    resource_definition.attributeFilter
+                resource_definition.attributeFilter = (
+                    normalize_operation_in_attribute_filter(
+                        resource_definition.attributeFilter
+                    )
                 )
                 resource_definition.save()
                 count += 1
 
         return HttpResponse(f"Updated {count} bad resource definitions", status=200)
 
-    return HttpResponse('Invalid method, only "GET" or "PATCH" are allowed.', status=405)
+    return HttpResponse(
+        'Invalid method, only "GET" or "PATCH" are allowed.', status=405
+    )
 
 
 def normalize_attribute_filter(attribute_filter):
@@ -1858,14 +1996,20 @@ def normalize_operation_in_attribute_filter(attribute_filter):
 def username_lower(request):
     """Update the username for the principal to be lowercase."""
     if request.method not in ["POST", "GET"]:
-        return HttpResponse("Invalid request method, only POST/GET are allowed.", status=405)
+        return HttpResponse(
+            "Invalid request method, only POST/GET are allowed.", status=405
+        )
     if request.method == "POST" and not destructive_ok("api"):
         return HttpResponse("Destructive operations disallowed.", status=400)
 
     pre_names = []
     updated_names = []
     with transaction.atomic():
-        principals = Principal.objects.filter(type="user").filter(username__regex=r"[A-Z]").order_by("username")
+        principals = (
+            Principal.objects.filter(type="user")
+            .filter(username__regex=r"[A-Z]")
+            .order_by("username")
+        )
         for principal in principals:
             pre_names.append(principal.username)
             principal.username = principal.username.lower()
@@ -1888,27 +2032,42 @@ def principal_removal(request):
     """
     logger.info(f"Principal edit or removal: {request.method} {request.user.username}")
     if request.method not in ["DELETE", "GET"]:
-        return HttpResponse('Invalid method, only "DELETE" or "GET" is allowed.', status=405)
+        return HttpResponse(
+            'Invalid method, only "DELETE" or "GET" is allowed.', status=405
+        )
 
     if not request.GET.get("usernames"):
-        return HttpResponse("Please provided a list of usernames with comma separated.", status=400)
+        return HttpResponse(
+            "Please provided a list of usernames with comma separated.", status=400
+        )
     if not request.GET.get("user_type"):
         return HttpResponse("Please provided a type of principal.", status=400)
     usernames = request.GET.get("usernames").split(",")
     user_type = request.GET.get("user_type")
 
-    principals = Principal.objects.filter(username__in=usernames).filter(type=user_type).prefetch_related("tenant")
+    principals = (
+        Principal.objects.filter(username__in=usernames)
+        .filter(type=user_type)
+        .prefetch_related("tenant")
+    )
     active_users = {}
     if request.GET.get("user_type") == "user":
-        resp = PROXY.request_filtered_principals(usernames, org_id=None, options={"return_id": True})
+        resp = PROXY.request_filtered_principals(
+            usernames, org_id=None, options={"return_id": True}
+        )
 
         if isinstance(resp, dict) and "errors" in resp:
             return HttpResponse(resp.get("errors"), status=400)
 
-        active_users = {(principal_data["username"], principal_data["org_id"]) for principal_data in resp["data"]}
+        active_users = {
+            (principal_data["username"], principal_data["org_id"])
+            for principal_data in resp["data"]
+        }
 
     principals_delete = [
-        principal for principal in principals if (principal.username, principal.tenant.org_id) not in active_users
+        principal
+        for principal in principals
+        if (principal.username, principal.tenant.org_id) not in active_users
     ]
 
     principal_usernames = [principal.username for principal in principals_delete]
@@ -1961,7 +2120,9 @@ def retrieve_ungrouped_workspace(request):
             if created:
                 tenant_bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
                 tenant_bootstrap_service.bootstrap_tenant(tenant)
-                logger.info(f"[Tenant Bootstrap]Retrieving ungrouped workspace for org_id: {org_id}")
+                logger.info(
+                    f"[Tenant Bootstrap]Retrieving ungrouped workspace for org_id: {org_id}"
+                )
             ungrouped_hosts = get_or_create_ungrouped_workspace(tenant)
             data = WorkspaceSerializer(ungrouped_hosts).data
         return HttpResponse(
@@ -2021,7 +2182,9 @@ def lookup_resource(request):
                     resource=resource_reference_pb2.ResourceReference(
                         resource_id=subject_resource_id,
                         resource_type=subject_resource_type,
-                        reporter=reporter_reference_pb2.ReporterReference(type=subject_resource_reporter_type),
+                        reporter=reporter_reference_pb2.ReporterReference(
+                            type=subject_resource_reporter_type
+                        ),
                     )
                 ),
             )
@@ -2035,7 +2198,9 @@ def lookup_resource(request):
         return JsonResponse("No resource found", status=204, safe=False)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
-        return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
+        return JsonResponse(
+            {"detail": "Error occurred in gRPC call", "error": str(e)}, status=400
+        )
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
@@ -2066,7 +2231,9 @@ def read_tuples(request):
     subject_namespace = req_data["filter"]["subject_filter"]["subject_namespace"]
     subject_type = req_data["filter"]["subject_filter"]["subject_type"]
     subject_id = req_data["filter"]["subject_filter"]["subject_id"]
-    subject_relation = req_data.get("filter", {}).get("subject_filter", {}).get("relation") or None
+    subject_relation = (
+        req_data.get("filter", {}).get("subject_filter", {}).get("relation") or None
+    )
 
     try:
         replicator = InventoryApiReplicator()
@@ -2084,7 +2251,9 @@ def read_tuples(request):
         return JsonResponse({"tuples": response_data}, status=200)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
-        return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
+        return JsonResponse(
+            {"detail": "Error occurred in gRPC call", "error": str(e)}, status=400
+        )
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
@@ -2120,18 +2289,22 @@ def lookup_subjects(request):
         with create_client_channel_inventory(settings.INVENTORY_API_SERVER) as channel:
             stub = inventory_service_pb2_grpc.KesselInventoryServiceStub(channel)
 
-            request_data = streamed_list_subjects_request_pb2.StreamedListSubjectsRequest(
-                resource=resource_reference_pb2.ResourceReference(
-                    resource_id=resource_id,
-                    resource_type=resource_type,
-                    reporter=reporter_reference_pb2.ReporterReference(type=resource_reporter_type),
-                ),
-                relation=relation,
-                subject_type=representation_type_pb2.RepresentationType(
-                    resource_type=subject_type,
-                    reporter_type=subject_reporter_type,
-                ),
-                subject_relation=subject_relation,
+            request_data = (
+                streamed_list_subjects_request_pb2.StreamedListSubjectsRequest(
+                    resource=resource_reference_pb2.ResourceReference(
+                        resource_id=resource_id,
+                        resource_type=resource_type,
+                        reporter=reporter_reference_pb2.ReporterReference(
+                            type=resource_reporter_type
+                        ),
+                    ),
+                    relation=relation,
+                    subject_type=representation_type_pb2.RepresentationType(
+                        resource_type=subject_type,
+                        reporter_type=subject_reporter_type,
+                    ),
+                    subject_relation=subject_relation,
+                )
             )
 
             metadata = get_inventory_auth_metadata()
@@ -2143,7 +2316,9 @@ def lookup_subjects(request):
         return JsonResponse("No subjects found", status=204, safe=False)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
-        return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
+        return JsonResponse(
+            {"detail": "Error occurred in gRPC call", "error": str(e)}, status=400
+        )
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
@@ -2165,7 +2340,9 @@ def group_assignments(request, group_uuid):
     relations_dual_write_handler.generate_relations_to_add_principals(principals)
     relationships = relations_dual_write_handler.relations_to_add
     try:
-        relation_assignments = relations_dual_write_handler._replicator.check_relationships(relationships)
+        relation_assignments = (
+            relations_dual_write_handler._replicator.check_relationships(relationships)
+        )
     except RpcError as e:
         return JsonResponse(
             {
@@ -2212,14 +2389,18 @@ def check_inventory(request):
             resource_ref = resource_reference_pb2.ResourceReference(
                 resource_id=resource_id,
                 resource_type=resource_type,
-                reporter=reporter_reference_pb2.ReporterReference(type=resource_reporter_type),
+                reporter=reporter_reference_pb2.ReporterReference(
+                    type=resource_reporter_type
+                ),
             )
 
             subject = subject_reference_pb2.SubjectReference(
                 resource=resource_reference_pb2.ResourceReference(
                     resource_id=subject_resource_id,
                     resource_type=subject_resource_type,
-                    reporter=reporter_reference_pb2.ReporterReference(type=subject_resource_reporter_type),
+                    reporter=reporter_reference_pb2.ReporterReference(
+                        type=subject_resource_reporter_type
+                    ),
                 )
             )
 
@@ -2239,7 +2420,9 @@ def check_inventory(request):
         return JsonResponse("No relation found", status=204, safe=False)
     except RpcError as e:
         logger.error(f"gRPC error: {str(e)}")
-        return JsonResponse({"detail": "Error occurred in gRPC call", "error": str(e)}, status=400)
+        return JsonResponse(
+            {"detail": "Error occurred in gRPC call", "error": str(e)}, status=400
+        )
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return JsonResponse(
@@ -2255,18 +2438,24 @@ def check_bootstrapped_tenants(request, org_id):
     """POST to check if bootstrapped tenant is correct on inventory api."""
     tenant = get_object_or_404(Tenant, org_id=org_id)
     if not hasattr(tenant, "tenant_mapping"):
-        return JsonResponse({"detail": f"No tenant mapping for org_id: {org_id}"}, status=404)
+        return JsonResponse(
+            {"detail": f"No tenant mapping for org_id: {org_id}"}, status=404
+        )
 
     default_workspace = Workspace.objects.default(tenant=tenant)
     root_workspace = Workspace.objects.root(tenant=tenant)
-    ungrouped = Workspace.objects.filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).first()
+    ungrouped = Workspace.objects.filter(
+        tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS
+    ).first()
     try:
-        bootstrap_tenants_correct, checks = BootstrappedTenantChecker.check_bootstrapped_tenant(
-            org_id=tenant.org_id,
-            tenant_mapping=tenant.tenant_mapping,
-            root_workspace_id=str(root_workspace.id),
-            default_workspace_id=str(default_workspace.id),
-            ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+        bootstrap_tenants_correct, checks = (
+            BootstrappedTenantChecker.check_bootstrapped_tenant(
+                org_id=tenant.org_id,
+                tenant_mapping=tenant.tenant_mapping,
+                root_workspace_id=str(root_workspace.id),
+                default_workspace_id=str(default_workspace.id),
+                ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+            )
         )
         return JsonResponse(
             {
@@ -2308,8 +2497,10 @@ def check_workspace_relation(request, workspace_uuid):
         try:
             if workspace_pairs:
                 workspace_uuid = str(workspace_uuid)
-                workspace_descendants_correct, _ = WorkspaceRelationChecker.check_workspace_descendants(
-                    workspace_pairs
+                workspace_descendants_correct, _ = (
+                    WorkspaceRelationChecker.check_workspace_descendants(
+                        workspace_pairs
+                    )
                 )
                 response = {
                     "org_id": workspace.tenant.org_id,
@@ -2347,7 +2538,9 @@ def check_workspace_relation(request, workspace_uuid):
                 status=400,
             )
         try:
-            workspace_correct = WorkspaceRelationChecker.check_workspace(workspace_uuid, workspace_parent_id)
+            workspace_correct = WorkspaceRelationChecker.check_workspace(
+                workspace_uuid, workspace_parent_id
+            )
             workspace_check_response = {
                 "org_id": workspace.tenant.org_id,
                 "workspace_id": workspace_uuid_str,
@@ -2413,7 +2606,9 @@ def check_role(request, role_uuid):
                 # Ensure that we don't accidentally update any models.
                 transaction.set_rollback(True)
 
-        serialized_relations = [json_format.MessageToDict(rel.as_message()) for rel in tuples]
+        serialized_relations = [
+            json_format.MessageToDict(rel.as_message()) for rel in tuples
+        ]
         role_correct = RoleRelationChecker.check_role(serialized_relations, role.uuid)
 
         return JsonResponse(
@@ -2460,7 +2655,9 @@ def check_cross_account_request(request, request_id):
 
         if car.status != CrossAccountRequest.STATUS_APPROVED:
             return JsonResponse(
-                {"detail": f"Cross account request {request_id} is not approved (status: {car.status})."},
+                {
+                    "detail": f"Cross account request {request_id} is not approved (status: {car.status})."
+                },
                 status=400,
             )
 
@@ -2497,7 +2694,9 @@ def check_cross_account_request(request, request_id):
             transaction.set_rollback(True)
 
         car_checker = CrossAccountRequestInventoryChecker()
-        car_correct = car_checker.check_cross_account_request(list(tuples), str(car.request_id))
+        car_correct = car_checker.check_cross_account_request(
+            list(tuples), str(car.request_id)
+        )
 
         return JsonResponse(
             {
@@ -2522,7 +2721,9 @@ def check_cross_account_request(request, request_id):
             status=400,
         )
     except Exception:
-        logger.exception("Unexpected error during inventory cross account request check")
+        logger.exception(
+            "Unexpected error during inventory cross account request check"
+        )
         return JsonResponse(
             {
                 "detail": "Unexpected error during inventory cross account request check",
@@ -2567,13 +2768,24 @@ def verify_migration(request, org_id):
 
     tenant = get_object_or_404(Tenant, org_id=org_id)
     if not hasattr(tenant, "tenant_mapping"):
-        return JsonResponse({"detail": f"No tenant mapping for org_id: {org_id}"}, status=404)
+        return JsonResponse(
+            {"detail": f"No tenant mapping for org_id: {org_id}"}, status=404
+        )
 
     checks, failed_checks = _run_tenant_migration_checks(
-        tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+        tenant,
+        role_limit,
+        binding_limit,
+        group_limit,
+        car_limit,
+        workspace_limit,
+        dry_run=dry_run,
     )
 
-    return JsonResponse(_build_verify_migration_report(org_id, checks, failed_checks, dry_run=dry_run), status=200)
+    return JsonResponse(
+        _build_verify_migration_report(org_id, checks, failed_checks, dry_run=dry_run),
+        status=200,
+    )
 
 
 def _run_tenant_migration_checks(
@@ -2665,7 +2877,9 @@ def _run_tenant_migration_checks(
     try:
         default_workspace = Workspace.objects.default(tenant=tenant)
         root_workspace = Workspace.objects.root(tenant=tenant)
-        ungrouped = Workspace.objects.filter(tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS).first()
+        ungrouped = Workspace.objects.filter(
+            tenant=tenant, type=Workspace.Types.UNGROUPED_HOSTS
+        ).first()
         if dry_run:
             checks["bootstrap"] = {
                 "dry_run": True,
@@ -2674,14 +2888,19 @@ def _run_tenant_migration_checks(
                 "ungrouped_workspace_id": str(ungrouped.id) if ungrouped else None,
             }
         else:
-            bootstrap_correct, bootstrap_checks = BootstrappedTenantChecker.check_bootstrapped_tenant(
-                org_id=tenant.org_id,
-                tenant_mapping=tenant.tenant_mapping,
-                root_workspace_id=str(root_workspace.id),
-                default_workspace_id=str(default_workspace.id),
-                ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+            bootstrap_correct, bootstrap_checks = (
+                BootstrappedTenantChecker.check_bootstrapped_tenant(
+                    org_id=tenant.org_id,
+                    tenant_mapping=tenant.tenant_mapping,
+                    root_workspace_id=str(root_workspace.id),
+                    default_workspace_id=str(default_workspace.id),
+                    ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
+                )
             )
-            checks["bootstrap"] = {"correct": bootstrap_correct, "relations_checked": bootstrap_checks}
+            checks["bootstrap"] = {
+                "correct": bootstrap_correct,
+                "relations_checked": bootstrap_checks,
+            }
             if not bootstrap_correct:
                 failed_checks.append("bootstrap")
     except Exception as e:
@@ -2691,29 +2910,34 @@ def _run_tenant_migration_checks(
 
     try:
         workspaces = list(
-            Workspace.objects.filter(tenant=tenant, parent__isnull=False).exclude(type=Workspace.Types.ROOT)[
-                :workspace_limit
-            ]
+            Workspace.objects.filter(tenant=tenant, parent__isnull=False).exclude(
+                type=Workspace.Types.ROOT
+            )[:workspace_limit]
         )
         if dry_run:
             workspace_results = []
             workspaces_all_correct = True
             for workspace in workspaces:
                 add_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.CREATE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.CREATE_WORKSPACE,
                 )
                 add_handler.generate_relations_to_add_workspace()
 
                 remove_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.DELETE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.DELETE_WORKSPACE,
                 )
                 remove_handler.generate_relations_to_remove_workspace()
 
                 # Moving a workspace to its current parent must be a no-op.
                 noop_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.UPDATE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.UPDATE_WORKSPACE,
                 )
-                noop_handler.generate_relations_to_update_workspace(previous_parent=workspace.parent)
+                noop_handler.generate_relations_to_update_workspace(
+                    previous_parent=workspace.parent
+                )
 
                 # getattr: unset when replication is disabled.
                 add_tuples = getattr(add_handler, "relations_to_add", [])
@@ -2757,12 +2981,17 @@ def _run_tenant_migration_checks(
         else:
             workspace_pairs = [(str(w.id), str(w.parent_id)) for w in workspaces]
             if workspace_pairs:
-                workspaces_correct, workspace_checks = WorkspaceRelationChecker.check_workspace_descendants(
-                    workspace_pairs
+                workspaces_correct, workspace_checks = (
+                    WorkspaceRelationChecker.check_workspace_descendants(
+                        workspace_pairs
+                    )
                 )
             else:
                 workspaces_correct, workspace_checks = True, []
-            checks["workspaces"] = {"correct": workspaces_correct, "relations_checked": workspace_checks}
+            checks["workspaces"] = {
+                "correct": workspaces_correct,
+                "relations_checked": workspace_checks,
+            }
             if not workspaces_correct:
                 failed_checks.append("workspaces")
     except Exception as e:
@@ -2783,9 +3012,13 @@ def _run_tenant_migration_checks(
     v2_write_activated = is_v2_write_activated(tenant)
     if v2_write_activated:
         migrated_v1_role_ids = set(
-            CustomRoleV2.objects.filter(v1_source__tenant=tenant).values_list("v1_source_id", flat=True)
+            CustomRoleV2.objects.filter(v1_source__tenant=tenant).values_list(
+                "v1_source_id", flat=True
+            )
         )
-        roles_queryset = Role.objects.filter(tenant=tenant, system=False).exclude(pk__in=migrated_v1_role_ids)
+        roles_queryset = Role.objects.filter(tenant=tenant, system=False).exclude(
+            pk__in=migrated_v1_role_ids
+        )
     else:
         roles_queryset = Role.objects.filter(tenant=tenant, system=False)
     for role in roles_queryset[:role_limit]:
@@ -2815,7 +3048,9 @@ def _run_tenant_migration_checks(
             # nesting that inside a plain transaction that has already run queries makes
             # PostgreSQL reject the inner "SET TRANSACTION ISOLATION LEVEL".
             with atomic_block():
-                locked_role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
+                locked_role = get_object_or_404(
+                    Role.objects.select_for_update(), pk=role.pk
+                )
                 relations_dual_write_handler = InventoryApiDualWriteHandler(
                     role=locked_role,
                     event_type=ReplicationEventType.UPDATE_CUSTOM_ROLE,
@@ -2844,12 +3079,21 @@ def _run_tenant_migration_checks(
                 # No tuples generated -- check_role([]) would trivially return True (all() on an
                 # empty list), so report this as unverified rather than falsely claiming "correct".
                 role_results.append(
-                    {"role_uuid": str(role.uuid), "role_name": role.name, "tuples_generated": 0, "verified": False}
+                    {
+                        "role_uuid": str(role.uuid),
+                        "role_name": role.name,
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
-            serialized_relations = [json_format.MessageToDict(rel.as_message()) for rel in tuples]
-            role_correct = RoleRelationChecker.check_role(serialized_relations, role.uuid)
+            serialized_relations = [
+                json_format.MessageToDict(rel.as_message()) for rel in tuples
+            ]
+            role_correct = RoleRelationChecker.check_role(
+                serialized_relations, role.uuid
+            )
             role_results.append(
                 {
                     "role_uuid": str(role.uuid),
@@ -2862,7 +3106,9 @@ def _run_tenant_migration_checks(
                 roles_all_correct = False
         except Exception as e:
             logger.exception(f"Error checking role {role.uuid} for tenant {org_id}")
-            role_results.append({"role_uuid": str(role.uuid), "role_name": role.name, "error": str(e)})
+            role_results.append(
+                {"role_uuid": str(role.uuid), "role_name": role.name, "error": str(e)}
+            )
             roles_all_correct = False
     checks["roles"] = {"correct": roles_all_correct, "roles_checked": role_results}
     if dry_run:
@@ -2879,12 +3125,16 @@ def _run_tenant_migration_checks(
         try:
             binding_tuples = binding.all_tuples()
             if dry_run:
-                result, valid = _dry_run_validation_result({"binding_uuid": str(binding.uuid)}, binding_tuples)
+                result, valid = _dry_run_validation_result(
+                    {"binding_uuid": str(binding.uuid)}, binding_tuples
+                )
                 binding_results.append(result)
                 if not valid:
                     bindings_all_correct = False
                 continue
-            binding_correct = RoleBindingChecker.check_role_binding(binding_tuples, str(binding.uuid))
+            binding_correct = RoleBindingChecker.check_role_binding(
+                binding_tuples, str(binding.uuid)
+            )
             binding_results.append(
                 {
                     "binding_uuid": str(binding.uuid),
@@ -2895,10 +3145,15 @@ def _run_tenant_migration_checks(
             if not binding_correct:
                 bindings_all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking role binding {binding.uuid} for tenant {org_id}")
+            logger.exception(
+                f"Error checking role binding {binding.uuid} for tenant {org_id}"
+            )
             binding_results.append({"binding_uuid": str(binding.uuid), "error": str(e)})
             bindings_all_correct = False
-    checks["bindings"] = {"correct": bindings_all_correct, "bindings_checked": binding_results}
+    checks["bindings"] = {
+        "correct": bindings_all_correct,
+        "bindings_checked": binding_results,
+    }
     if dry_run:
         checks["bindings"]["dry_run"] = True
     if not bindings_all_correct:
@@ -2906,15 +3161,20 @@ def _run_tenant_migration_checks(
 
     group_binding_results = []
     group_bindings_all_correct = True
-    tenant_group_uuids = list(Group.objects.filter(tenant=tenant).values_list("uuid", flat=True)[:group_limit])
+    tenant_group_uuids = list(
+        Group.objects.filter(tenant=tenant).values_list("uuid", flat=True)[:group_limit]
+    )
     if tenant_group_uuids:
         group_mapping_filter = functools.reduce(
-            lambda acc, group_uuid: acc | Q(mappings__contains={"groups": [str(group_uuid)]}),
+            lambda acc, group_uuid: acc
+            | Q(mappings__contains={"groups": [str(group_uuid)]}),
             tenant_group_uuids[1:],
             Q(mappings__contains={"groups": [str(tenant_group_uuids[0])]}),
         )
         group_bindings = (
-            BindingMapping.objects.filter(group_mapping_filter).distinct().select_related("role")[:binding_limit]
+            BindingMapping.objects.filter(group_mapping_filter)
+            .distinct()
+            .select_related("role")[:binding_limit]
         )
     else:
         group_bindings = BindingMapping.objects.none()
@@ -2923,13 +3183,19 @@ def _run_tenant_migration_checks(
             mapping_tuples = mapping.as_tuples()
             if dry_run:
                 result, valid = _dry_run_validation_result(
-                    {"binding_mapping_id": mapping.id, "role_uuid": str(mapping.role.uuid)}, mapping_tuples
+                    {
+                        "binding_mapping_id": mapping.id,
+                        "role_uuid": str(mapping.role.uuid),
+                    },
+                    mapping_tuples,
                 )
                 group_binding_results.append(result)
                 if not valid:
                     group_bindings_all_correct = False
                 continue
-            mapping_correct = RoleBindingChecker.check_role_binding(mapping_tuples, str(mapping.id))
+            mapping_correct = RoleBindingChecker.check_role_binding(
+                mapping_tuples, str(mapping.id)
+            )
             group_binding_results.append(
                 {
                     "binding_mapping_id": mapping.id,
@@ -2941,10 +3207,17 @@ def _run_tenant_migration_checks(
             if not mapping_correct:
                 group_bindings_all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking BindingMapping {mapping.id} for tenant {org_id}")
-            group_binding_results.append({"binding_mapping_id": mapping.id, "error": str(e)})
+            logger.exception(
+                f"Error checking BindingMapping {mapping.id} for tenant {org_id}"
+            )
+            group_binding_results.append(
+                {"binding_mapping_id": mapping.id, "error": str(e)}
+            )
             group_bindings_all_correct = False
-    checks["group_role_bindings"] = {"correct": group_bindings_all_correct, "bindings_checked": group_binding_results}
+    checks["group_role_bindings"] = {
+        "correct": group_bindings_all_correct,
+        "bindings_checked": group_binding_results,
+    }
     if dry_run:
         checks["group_role_bindings"]["dry_run"] = True
     if not group_bindings_all_correct:
@@ -2965,17 +3238,22 @@ def _run_tenant_migration_checks(
             # permission tuples: before migrated V1 roles were excluded from the "roles" section
             # above, the V1 handler generated their owner tuples -- skipping that replay must
             # not lose owner-tuple coverage.
-            permission_tuples = CustomRoleV2._permission_and_owner_tuples(role, role.permissions.all())
+            permission_tuples = CustomRoleV2._permission_and_owner_tuples(
+                role, role.permissions.all()
+            )
             if dry_run:
                 result, valid = _dry_run_validation_result(
-                    {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid}, permission_tuples
+                    {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid},
+                    permission_tuples,
                 )
                 permission_results.append(result)
                 if not valid:
                     permissions_all_correct = False
                 continue
-            role_permissions_correct = CustomRolePermissionCheckerInstance.check_custom_role_permissions(
-                permission_tuples, str(role.uuid)
+            role_permissions_correct = (
+                CustomRolePermissionCheckerInstance.check_custom_role_permissions(
+                    permission_tuples, str(role.uuid)
+                )
             )
             permission_results.append(
                 {
@@ -2988,10 +3266,21 @@ def _run_tenant_migration_checks(
             if not role_permissions_correct:
                 permissions_all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking role permissions for V2 role {role.uuid} in tenant {org_id}")
-            permission_results.append({"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid, "error": str(e)})
+            logger.exception(
+                f"Error checking role permissions for V2 role {role.uuid} in tenant {org_id}"
+            )
+            permission_results.append(
+                {
+                    "v2_role_uuid": str(role.uuid),
+                    "v1_role_uuid": v1_role_uuid,
+                    "error": str(e),
+                }
+            )
             permissions_all_correct = False
-    checks["role_permissions"] = {"correct": permissions_all_correct, "roles_checked": permission_results}
+    checks["role_permissions"] = {
+        "correct": permissions_all_correct,
+        "roles_checked": permission_results,
+    }
     if dry_run:
         checks["role_permissions"]["dry_run"] = True
     if not permissions_all_correct:
@@ -2999,7 +3288,9 @@ def _run_tenant_migration_checks(
 
     group_results = []
     groups_all_correct = True
-    for group in Group.objects.filter(tenant=tenant).prefetch_related("principals")[:group_limit]:
+    for group in Group.objects.filter(tenant=tenant).prefetch_related("principals")[
+        :group_limit
+    ]:
         try:
             principals = list(group.principals.all())
             handler = InventoryApiDualWriteGroupHandler(
@@ -3013,18 +3304,32 @@ def _run_tenant_migration_checks(
                     # Principals exist but no relation tuples could be built for them -- report as
                     # unverified rather than silently skipping (check_relationships([]) on an empty
                     # list would otherwise look identical to "nothing to check").
-                    group_results.append({"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False})
+                    group_results.append(
+                        {
+                            "group_uuid": str(group.uuid),
+                            "tuples_generated": 0,
+                            "verified": False,
+                        }
+                    )
                 continue
             if dry_run:
-                result, valid = _dry_run_validation_result({"group_uuid": str(group.uuid)}, relationships)
+                result, valid = _dry_run_validation_result(
+                    {"group_uuid": str(group.uuid)}, relationships
+                )
                 group_results.append(result)
                 if not valid:
                     groups_all_correct = False
                 continue
             result = GroupPrincipalChecker.check_relationships(relationships)
-            group_correct = all(pr["relation_exists"] for pr in result["principal_relations"])
+            group_correct = all(
+                pr["relation_exists"] for pr in result["principal_relations"]
+            )
             group_results.append(
-                {"group_uuid": str(group.uuid), "tuples_generated": len(relationships), "correct": group_correct}
+                {
+                    "group_uuid": str(group.uuid),
+                    "tuples_generated": len(relationships),
+                    "correct": group_correct,
+                }
             )
             if not group_correct:
                 groups_all_correct = False
@@ -3032,7 +3337,10 @@ def _run_tenant_migration_checks(
             logger.exception(f"Error checking group {group.uuid} for tenant {org_id}")
             group_results.append({"group_uuid": str(group.uuid), "error": str(e)})
             groups_all_correct = False
-    checks["group_principals"] = {"correct": groups_all_correct, "groups_checked": group_results}
+    checks["group_principals"] = {
+        "correct": groups_all_correct,
+        "groups_checked": group_results,
+    }
     if dry_run:
         checks["group_principals"]["dry_run"] = True
     if not groups_all_correct:
@@ -3047,7 +3355,13 @@ def _run_tenant_migration_checks(
         try:
             cross_account_roles = list(car.roles.all())
             if not cross_account_roles:
-                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "correct": True,
+                    }
+                )
                 continue
 
             tuples = InMemoryTuples()
@@ -3058,33 +3372,54 @@ def _run_tenant_migration_checks(
                     event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
                     replicator=InMemoryRelationReplicator(tuples),
                 )
-                car_dual_write_handler.generate_relations_to_add_roles(cross_account_roles)
+                car_dual_write_handler.generate_relations_to_add_roles(
+                    cross_account_roles
+                )
                 car_dual_write_handler.replicate()
                 # Ensure that we don't accidentally update any models.
                 transaction.set_rollback(True)
 
             if dry_run:
-                result, valid = _dry_run_validation_result({"request_id": str(car.request_id)}, tuples)
+                result, valid = _dry_run_validation_result(
+                    {"request_id": str(car.request_id)}, tuples
+                )
                 car_results.append(result)
                 if not valid:
                     cars_all_correct = False
                 continue
 
             if len(tuples) == 0:
-                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "verified": False})
+                car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
+                )
                 continue
 
-            car_correct = CrossAccountRequestChecker.check_cross_account_request(list(tuples), str(car.request_id))
+            car_correct = CrossAccountRequestChecker.check_cross_account_request(
+                list(tuples), str(car.request_id)
+            )
             car_results.append(
-                {"request_id": str(car.request_id), "tuples_generated": len(tuples), "correct": car_correct}
+                {
+                    "request_id": str(car.request_id),
+                    "tuples_generated": len(tuples),
+                    "correct": car_correct,
+                }
             )
             if not car_correct:
                 cars_all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking cross account request {car.request_id} for tenant {org_id}")
+            logger.exception(
+                f"Error checking cross account request {car.request_id} for tenant {org_id}"
+            )
             car_results.append({"request_id": str(car.request_id), "error": str(e)})
             cars_all_correct = False
-    checks["cross_account_requests"] = {"correct": cars_all_correct, "requests_checked": car_results}
+    checks["cross_account_requests"] = {
+        "correct": cars_all_correct,
+        "requests_checked": car_results,
+    }
     if dry_run:
         checks["cross_account_requests"]["dry_run"] = True
     if not cars_all_correct:
@@ -3105,19 +3440,33 @@ def _run_tenant_migration_checks(
     for active_car in CrossAccountRequest.objects.filter(
         target_org=tenant.org_id, status=CrossAccountRequest.STATUS_APPROVED
     ).prefetch_related("roles"):
-        active_roles_by_user.setdefault(active_car.user_id, set()).update(role.pk for role in active_car.roles.all())
+        active_roles_by_user.setdefault(active_car.user_id, set()).update(
+            role.pk for role in active_car.roles.all()
+        )
     for car in expired_cars:
         try:
             still_active_role_pks = active_roles_by_user.get(car.user_id, set())
             all_car_roles = list(car.roles.all())
             if not all_car_roles:
-                removed_car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                removed_car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "correct": True,
+                    }
+                )
                 continue
 
-            cross_account_roles = [role for role in all_car_roles if role.pk not in still_active_role_pks]
+            cross_account_roles = [
+                role for role in all_car_roles if role.pk not in still_active_role_pks
+            ]
             if not cross_account_roles:
                 removed_car_results.append(
-                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
@@ -3127,14 +3476,20 @@ def _run_tenant_migration_checks(
                     cross_account_request=car,
                     event_type=ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,
                 )
-                car_dual_write_handler.generate_relations_to_remove_roles(cross_account_roles)
+                car_dual_write_handler.generate_relations_to_remove_roles(
+                    cross_account_roles
+                )
                 # getattr: unset when replication is disabled.
-                remove_tuples = getattr(car_dual_write_handler, "relations_to_remove", [])
+                remove_tuples = getattr(
+                    car_dual_write_handler, "relations_to_remove", []
+                )
                 # Ensure that we don't accidentally update any models.
                 transaction.set_rollback(True)
 
             if dry_run:
-                result, valid = _dry_run_validation_result({"request_id": str(car.request_id)}, remove_tuples)
+                result, valid = _dry_run_validation_result(
+                    {"request_id": str(car.request_id)}, remove_tuples
+                )
                 removed_car_results.append(result)
                 if not valid:
                     removed_cars_all_correct = False
@@ -3142,13 +3497,19 @@ def _run_tenant_migration_checks(
 
             if len(remove_tuples) == 0:
                 removed_car_results.append(
-                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
             # Inverted from the "add" check above: still present here means removal failed.
-            relations_still_present = CrossAccountRequestChecker.check_cross_account_request(
-                remove_tuples, str(car.request_id)
+            relations_still_present = (
+                CrossAccountRequestChecker.check_cross_account_request(
+                    remove_tuples, str(car.request_id)
+                )
             )
             removal_correct = not relations_still_present
             removed_car_results.append(
@@ -3162,8 +3523,12 @@ def _run_tenant_migration_checks(
             if not removal_correct:
                 removed_cars_all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking removed cross account request {car.request_id} for tenant {org_id}")
-            removed_car_results.append({"request_id": str(car.request_id), "error": str(e)})
+            logger.exception(
+                f"Error checking removed cross account request {car.request_id} for tenant {org_id}"
+            )
+            removed_car_results.append(
+                {"request_id": str(car.request_id), "error": str(e)}
+            )
             removed_cars_all_correct = False
     checks["cross_account_requests_removed"] = {
         "correct": removed_cars_all_correct,
@@ -3177,7 +3542,9 @@ def _run_tenant_migration_checks(
     return checks, failed_checks
 
 
-def _build_verify_migration_report(org_id: str, checks: dict, failed_checks: list[str], dry_run: bool = False) -> dict:
+def _build_verify_migration_report(
+    org_id: str, checks: dict, failed_checks: list[str], dry_run: bool = False
+) -> dict:
     """Assemble a verify_migration report dict from a checks/failed_checks pair.
 
     Shared by the single-org and multi-org endpoints so the response shape (overall_status,
@@ -3214,20 +3581,28 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
     role_results = []
     all_correct = True
 
-    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related("v1_source__access")
-    implicit_resource_service = ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related(
+        "v1_source__access"
+    )
+    implicit_resource_service = (
+        ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+    )
 
     for seeded_role in seeded_roles:
         v1_role = seeded_role.v1_source
         if v1_role is None:
-            logger.warning(f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate hierarchy tuples")
+            logger.warning(
+                f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate hierarchy tuples"
+            )
             continue
         try:
             handler = SeedingInventoryApiDualWriteHandler(role=v1_role)
             # seeded_roles is non-empty here (we're iterating it), so this was built above.
             assert implicit_resource_service is not None
             handler.implicit_resource_service = implicit_resource_service
-            hierarchy_tuples = handler._check_create_admin_platform_relation(v1_role, for_removal=False)
+            hierarchy_tuples = handler._check_create_admin_platform_relation(
+                v1_role, for_removal=False
+            )
             if not hierarchy_tuples:
                 continue
 
@@ -3236,7 +3611,11 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
                     {
                         "role_uuid": str(seeded_role.uuid),
                         "role_name": seeded_role.name,
-                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                        "v1_role_name": (
+                            seeded_role.v1_source.name
+                            if seeded_role.v1_source
+                            else None
+                        ),
                     },
                     hierarchy_tuples,
                 )
@@ -3245,14 +3624,18 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
                     all_correct = False
                 continue
 
-            role_correct = SeededRoleHierarchyCheckerInstance.check_seeded_role_hierarchy(
-                hierarchy_tuples, str(seeded_role.uuid)
+            role_correct = (
+                SeededRoleHierarchyCheckerInstance.check_seeded_role_hierarchy(
+                    hierarchy_tuples, str(seeded_role.uuid)
+                )
             )
             role_results.append(
                 {
                     "role_uuid": str(seeded_role.uuid),
                     "role_name": seeded_role.name,
-                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "v1_role_name": (
+                        seeded_role.v1_source.name if seeded_role.v1_source else None
+                    ),
                     "tuples_generated": len(hierarchy_tuples),
                     "correct": role_correct,
                 }
@@ -3260,7 +3643,9 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
             if not role_correct:
                 all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking seeded role hierarchy for role {seeded_role.uuid}")
+            logger.exception(
+                f"Error checking seeded role hierarchy for role {seeded_role.uuid}"
+            )
             role_results.append(
                 {
                     "role_uuid": str(seeded_role.uuid),
@@ -3301,13 +3686,19 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
     role_results = []
     all_correct = True
 
-    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related("v1_source__access")
-    implicit_resource_service = ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+    seeded_roles = SeededRoleV2.objects.select_related("v1_source").prefetch_related(
+        "v1_source__access"
+    )
+    implicit_resource_service = (
+        ImplicitResourceService.from_settings() if seeded_roles.exists() else None
+    )
 
     for seeded_role in seeded_roles:
         v1_role = seeded_role.v1_source
         if v1_role is None:
-            logger.warning(f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate permission tuples")
+            logger.warning(
+                f"SeededRole {seeded_role.uuid} has no v1_source, cannot generate permission tuples"
+            )
             continue
         try:
             handler = SeedingInventoryApiDualWriteHandler(role=v1_role)
@@ -3315,7 +3706,9 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
             assert implicit_resource_service is not None
             handler.implicit_resource_service = implicit_resource_service
             all_relations = handler._generate_relations_for_role(for_removal=False)
-            permission_tuples = [rel for rel in all_relations if rel.relation != "child"]
+            permission_tuples = [
+                rel for rel in all_relations if rel.relation != "child"
+            ]
             if not permission_tuples:
                 continue
 
@@ -3324,7 +3717,11 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
                     {
                         "role_uuid": str(seeded_role.uuid),
                         "role_name": seeded_role.name,
-                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                        "v1_role_name": (
+                            seeded_role.v1_source.name
+                            if seeded_role.v1_source
+                            else None
+                        ),
                     },
                     permission_tuples,
                 )
@@ -3333,14 +3730,18 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
                     all_correct = False
                 continue
 
-            role_correct = CustomRolePermissionCheckerInstance.check_custom_role_permissions(
-                permission_tuples, str(seeded_role.uuid)
+            role_correct = (
+                CustomRolePermissionCheckerInstance.check_custom_role_permissions(
+                    permission_tuples, str(seeded_role.uuid)
+                )
             )
             role_results.append(
                 {
                     "role_uuid": str(seeded_role.uuid),
                     "role_name": seeded_role.name,
-                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "v1_role_name": (
+                        seeded_role.v1_source.name if seeded_role.v1_source else None
+                    ),
                     "tuples_generated": len(permission_tuples),
                     "correct": role_correct,
                 }
@@ -3348,7 +3749,9 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
             if not role_correct:
                 all_correct = False
         except Exception as e:
-            logger.exception(f"Error checking seeded role permissions for role {seeded_role.uuid}")
+            logger.exception(
+                f"Error checking seeded role permissions for role {seeded_role.uuid}"
+            )
             role_results.append(
                 {
                     "role_uuid": str(seeded_role.uuid),
@@ -3428,12 +3831,22 @@ def verify_migration_global(request):
 
     org_ids_param = request.GET.get("org_ids")
     if org_ids_param:
-        org_ids = [org_id.strip() for org_id in org_ids_param.split(",") if org_id.strip()]
+        org_ids = [
+            org_id.strip() for org_id in org_ids_param.split(",") if org_id.strip()
+        ]
         tenants = list(Tenant.objects.filter(org_id__in=org_ids))
     elif org_limit_given:
-        tenants = list(Tenant.objects.filter(ready=True).exclude(tenant_name="public").order_by("-id")[:org_limit])
+        tenants = list(
+            Tenant.objects.filter(ready=True)
+            .exclude(tenant_name="public")
+            .order_by("-id")[:org_limit]
+        )
     elif smoke_test:
-        tenants = list(Tenant.objects.filter(ready=True).exclude(tenant_name="public").order_by("-id")[:1])
+        tenants = list(
+            Tenant.objects.filter(ready=True)
+            .exclude(tenant_name="public")
+            .order_by("-id")[:1]
+        )
     else:
         # No org scope requested -- don't touch any tenant data, just run the platform-global
         # seeded role checks below.
@@ -3441,7 +3854,9 @@ def verify_migration_global(request):
 
     seeded_role_hierarchy = _run_seeded_role_hierarchy_check(dry_run=dry_run)
     seeded_role_permissions = _run_seeded_role_permissions_check(dry_run=dry_run)
-    overall_failed = not seeded_role_hierarchy["correct"] or not seeded_role_permissions["correct"]
+    overall_failed = (
+        not seeded_role_hierarchy["correct"] or not seeded_role_permissions["correct"]
+    )
 
     tenant_reports = []
     tenants_skipped = []
@@ -3450,13 +3865,23 @@ def verify_migration_global(request):
 
     for tenant in tenants:
         if not hasattr(tenant, "tenant_mapping"):
-            tenants_skipped.append({"org_id": tenant.org_id, "reason": "No tenant mapping"})
+            tenants_skipped.append(
+                {"org_id": tenant.org_id, "reason": "No tenant mapping"}
+            )
             continue
 
         checks, failed_checks = _run_tenant_migration_checks(
-            tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+            tenant,
+            role_limit,
+            binding_limit,
+            group_limit,
+            car_limit,
+            workspace_limit,
+            dry_run=dry_run,
         )
-        tenant_report = _build_verify_migration_report(tenant.org_id, checks, failed_checks, dry_run=dry_run)
+        tenant_report = _build_verify_migration_report(
+            tenant.org_id, checks, failed_checks, dry_run=dry_run
+        )
         tenant_reports.append(tenant_report)
 
         if failed_checks:
@@ -3518,7 +3943,9 @@ def validate_generated_tuples(tuples) -> dict:
             RelationTuple.validate_message(rel.as_message())
             tuple_results.append({"tuple": rel.stringify(), "valid": True})
         except Exception as e:
-            tuple_results.append({"tuple": rel.stringify(), "valid": False, "error": str(e)})
+            tuple_results.append(
+                {"tuple": rel.stringify(), "valid": False, "error": str(e)}
+            )
             all_valid = False
     return {"valid": all_valid, "tuples": tuple_results}
 
@@ -3535,7 +3962,12 @@ def _dry_run_validation_result(extra_fields: dict, tuples) -> tuple[dict, bool]:
     its section's all_correct flag when valid is False.
     """
     validation = validate_generated_tuples(tuples)
-    result = {**extra_fields, "tuples_generated": len(tuples), "checked": False, "validation": validation}
+    result = {
+        **extra_fields,
+        "tuples_generated": len(tuples),
+        "checked": False,
+        "validation": validation,
+    }
     return result, validation["valid"]
 
 
@@ -3619,12 +4051,16 @@ def send_kafka_test_message(request):
         topic = settings.RBAC_KAFKA_CONSUMER_TOPIC
 
         if not topic:
-            return HttpResponse("RBAC_KAFKA_CONSUMER_TOPIC is not configured", status=400)
+            return HttpResponse(
+                "RBAC_KAFKA_CONSUMER_TOPIC is not configured", status=400
+            )
 
         if not producer.send_kafka_message(topic, debezium_message):
             return JsonResponse({"error": "Failed to send Kafka message"}, status=500)
 
-        logger.info(f"Test Kafka message sent to topic '{topic}' by user '{request.user.username}'")
+        logger.info(
+            f"Test Kafka message sent to topic '{topic}' by user '{request.user.username}'"
+        )
 
         response_data = {
             "message": "Test message sent successfully",
@@ -3644,7 +4080,9 @@ def send_kafka_test_message(request):
 
     except Exception as e:
         logger.error(f"Error sending test Kafka message: {e}")
-        return JsonResponse({"error": "Error sending test message", "detail": str(e)}, status=500)
+        return JsonResponse(
+            {"error": "Error sending test message", "detail": str(e)}, status=500
+        )
 
 
 def migrate_binding_scope(request):
@@ -3656,7 +4094,9 @@ def migrate_binding_scope(request):
     Iterates through roles (not binding mappings) and uses dual write handlers.
     """
     if request.method != "POST":
-        return JsonResponse({"error": "Invalid method, only 'POST' is allowed."}, status=405)
+        return JsonResponse(
+            {"error": "Invalid method, only 'POST' is allowed."}, status=405
+        )
 
     logger.info("Running binding scope migration.")
 
@@ -3779,7 +4219,9 @@ def cleanup_tenant_orphan_bindings(request, org_id):
         tenant.tenant_mapping
     except TenantMapping.DoesNotExist:
         return JsonResponse(
-            {"detail": f"No TenantMapping found for tenant {org_id}. Tenant may not be bootstrapped."},
+            {
+                "detail": f"No TenantMapping found for tenant {org_id}. Tenant may not be bootstrapped."
+            },
             status=404,
         )
 
@@ -3789,7 +4231,9 @@ def cleanup_tenant_orphan_bindings(request, org_id):
         Workspace.objects.default(tenant=tenant)
     except Workspace.DoesNotExist as e:
         return JsonResponse(
-            {"detail": f"Missing root or default workspace for tenant {org_id}: {str(e)}"},
+            {
+                "detail": f"Missing root or default workspace for tenant {org_id}: {str(e)}"
+            },
             status=404,
         )
 
@@ -3845,8 +4289,12 @@ def bulk_cleanup_orphan_bindings(request):
             status=202,
         )
     except Exception as e:
-        logger.exception(f"Error fixing orphan relations, {tenant_limit=}", exc_info=True)
-        return JsonResponse({"detail": f"Error fixing orphan relations: {str(e)}"}, status=500)
+        logger.exception(
+            f"Error fixing orphan relations, {tenant_limit=}", exc_info=True
+        )
+        return JsonResponse(
+            {"detail": f"Error fixing orphan relations: {str(e)}"}, status=500
+        )
 
 
 @require_http_methods(["POST"])
@@ -3877,7 +4325,9 @@ def rebuild_tenant_workspace_relations(request, org_id):
         Workspace.objects.default(tenant=tenant)
     except Workspace.DoesNotExist as e:
         return JsonResponse(
-            {"detail": f"Missing root or default workspace for tenant {org_id}: {str(e)}"},
+            {
+                "detail": f"Missing root or default workspace for tenant {org_id}: {str(e)}"
+            },
             status=404,
         )
 
@@ -3896,7 +4346,9 @@ def rebuild_tenant_workspace_relations(request, org_id):
     )
 
     # Create a read_tuples function that wraps the internal read_tuples_from_kessel
-    def read_tuples_fn(resource_type, resource_id, relation, subject_type="", subject_id=""):
+    def read_tuples_fn(
+        resource_type, resource_id, relation, subject_type="", subject_id=""
+    ):
         return read_tuples_from_kessel(
             resource_type=resource_type,
             resource_id=resource_id,
@@ -3947,9 +4399,13 @@ def remove_unassigned_system_binding_mappings(request):
     """
     try:
         remove_unassigned_system_binding_mappings_in_worker.delay()
-        return JsonResponse({"message": "Cleanup enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Cleanup enqueued in background worker."}, status=202
+        )
     except Exception as e:
-        logger.exception("Error removing unassigned system binding mappings", exc_info=True)
+        logger.exception(
+            "Error removing unassigned system binding mappings", exc_info=True
+        )
         return JsonResponse(
             {"detail": f"Error removing unassigned system binding mappings: {str(e)}"},
             status=500,
@@ -3968,10 +4424,14 @@ def expire_orphaned_cross_account_requests(request):
     """
     try:
         expire_orphaned_cross_account_requests_in_worker.delay()
-        return JsonResponse({"message": "Cleanup enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Cleanup enqueued in background worker."}, status=202
+        )
     except Exception as e:
         logger.exception("Error removing orphaned CARs", exc_info=True)
-        return JsonResponse({"detail": f"Error removing orphaned CARs: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error removing orphaned CARs: {str(e)}"}, status=500
+        )
 
 
 @require_http_methods(["POST"])
@@ -3986,9 +4446,13 @@ def remove_deleted_workspace_bindings(request):
     """
     try:
         remove_deleted_workspace_bindings_in_worker.delay()
-        return JsonResponse({"message": "Cleanup enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Cleanup enqueued in background worker."}, status=202
+        )
     except Exception as e:
-        logger.exception("Error removing bindings for deleted workspaces", exc_info=True)
+        logger.exception(
+            "Error removing bindings for deleted workspaces", exc_info=True
+        )
         return JsonResponse(
             {"detail": f"Error removing bindings for deleted workspaces: {str(e)}"},
             status=500,
@@ -4047,26 +4511,34 @@ def mcp_tool_descriptions(request, tool_name=None):
                     "tool_name": name,
                     "default_description": default_desc,
                     "override_description": override,
-                    "active_description": (override if override is not None else default_desc),
+                    "active_description": (
+                        override if override is not None else default_desc
+                    ),
                 }
             )
         return JsonResponse({"tools": tools}, status=200)
 
     if tool_name is None:
-        return JsonResponse({"detail": "tool_name is required for PUT/DELETE"}, status=400)
+        return JsonResponse(
+            {"detail": "tool_name is required for PUT/DELETE"}, status=400
+        )
 
     if tool_name not in _TOOL_CONFIG:
         return JsonResponse({"detail": f"Unknown tool: {tool_name}"}, status=404)
 
     if request.method == "GET":
         override = _get_description_override(tool_name)
-        default_desc = next((t.description or "" for t in _get_tools() if t.name == tool_name), "")
+        default_desc = next(
+            (t.description or "" for t in _get_tools() if t.name == tool_name), ""
+        )
         return JsonResponse(
             {
                 "tool_name": tool_name,
                 "default_description": default_desc,
                 "override_description": override,
-                "active_description": (override if override is not None else default_desc),
+                "active_description": (
+                    override if override is not None else default_desc
+                ),
             },
             status=200,
         )
@@ -4075,15 +4547,21 @@ def mcp_tool_descriptions(request, tool_name=None):
         body = load_request_body(request)
         description = body.get("description")
         if not description:
-            return JsonResponse({"detail": "Missing required field: description"}, status=400)
+            return JsonResponse(
+                {"detail": "Missing required field: description"}, status=400
+            )
         _set_description_override(tool_name, description)
         logger.info("mcp: description override set for tool=%s", tool_name)
-        return JsonResponse({"tool_name": tool_name, "override_description": description}, status=200)
+        return JsonResponse(
+            {"tool_name": tool_name, "override_description": description}, status=200
+        )
 
     if request.method == "DELETE":
         _delete_description_override(tool_name)
         logger.info("mcp: description override removed for tool=%s", tool_name)
-        default_desc = next((t.description or "" for t in _get_tools() if t.name == tool_name), "")
+        default_desc = next(
+            (t.description or "" for t in _get_tools() if t.name == tool_name), ""
+        )
         return JsonResponse(
             {
                 "tool_name": tool_name,
@@ -4113,10 +4591,14 @@ def replicate_default_workspaces(request):
 
     try:
         replicate_default_workspaces_in_worker.delay(limit=limit)
-        return JsonResponse({"message": "Replication enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Replication enqueued in background worker."}, status=202
+        )
     except Exception as e:
         logger.exception("Error replicating default workspaces", exc_info=True)
-        return JsonResponse({"detail": f"Error replicating default workspaces: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error replicating default workspaces: {str(e)}"}, status=500
+        )
 
 
 @require_http_methods(["POST"])
@@ -4135,7 +4617,9 @@ def replicate_updated_workspaces(request):
         JSON response indicating the task has been queued
     """
     if "since" not in request.GET:
-        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+        return JsonResponse(
+            {"field": "since", "detail": 'missing query parameter "since"'}, status=400
+        )
 
     if "stream" not in request.GET:
         return JsonResponse(
@@ -4146,19 +4630,27 @@ def replicate_updated_workspaces(request):
     since = request.GET["since"]
     stream = request.GET["stream"]
     exclude_unchanged_default_workspaces = (
-        request.GET.get("exclude_unchanged_default_workspaces", "false").lower() == "true"
+        request.GET.get("exclude_unchanged_default_workspaces", "false").lower()
+        == "true"
     )
 
     try:
         parsed_since = datetime.datetime.fromisoformat(since)
 
         if parsed_since.tzinfo is None:
-            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+            return JsonResponse(
+                {"field": "since", "detail": "since time must have timezone"},
+                status=400,
+            )
     except ValueError as e:
-        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
+        return JsonResponse(
+            {"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400
+        )
 
     if stream not in ("standard", "bulk"):
-        return JsonResponse({"field": "stream", "detail": f"invalid stream name: {stream}"}, status=400)
+        return JsonResponse(
+            {"field": "stream", "detail": f"invalid stream name: {stream}"}, status=400
+        )
 
     try:
         replicate_updated_workspaces_in_worker.delay(
@@ -4178,7 +4670,9 @@ def replicate_updated_workspaces(request):
         )
     except Exception as e:
         logger.exception("Error replicating updated workspaces", exc_info=True)
-        return JsonResponse({"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error replicating updated workspaces: {str(e)}"}, status=500
+        )
 
 
 @require_http_methods(["POST"])
@@ -4193,7 +4687,9 @@ def replicate_deleted_workspaces(request):
         JSON response indicating the task has been queued
     """
     if "since" not in request.GET:
-        return JsonResponse({"field": "since", "detail": 'missing query parameter "since"'}, status=400)
+        return JsonResponse(
+            {"field": "since", "detail": 'missing query parameter "since"'}, status=400
+        )
 
     since = request.GET["since"]
 
@@ -4201,9 +4697,14 @@ def replicate_deleted_workspaces(request):
         parsed_since = datetime.datetime.fromisoformat(since)
 
         if parsed_since.tzinfo is None:
-            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+            return JsonResponse(
+                {"field": "since", "detail": "since time must have timezone"},
+                status=400,
+            )
     except ValueError as e:
-        return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
+        return JsonResponse(
+            {"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400
+        )
 
     try:
         replicate_deleted_workspaces_in_worker.delay(since=since)
@@ -4217,7 +4718,9 @@ def replicate_deleted_workspaces(request):
         )
     except Exception as e:
         logger.exception("Error replicating deleted workspaces", exc_info=True)
-        return JsonResponse({"detail": f"Error replicating deleted workspaces: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"detail": f"Error replicating deleted workspaces: {str(e)}"}, status=500
+        )
 
 
 @require_http_methods(["POST"])
@@ -4237,7 +4740,9 @@ def recompute_tenant_role_bindings(request, org_id):
 
     try:
         recompute_tenant_role_bindings_in_worker.delay(org_id=tenant.org_id)
-        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Job enqueued in background worker."}, status=202
+        )
     except Exception as e:
         logger.exception(f"Error recomputing role bindings for tenant {org_id}")
         return JsonResponse(
@@ -4261,12 +4766,20 @@ def migrate_role_scope_if_changed(request, role_uuid):
     except ValueError:
         return JsonResponse({"message": f"invalid UUID: {role_uuid}"}, status=400)
 
-    if not Role.objects.public_tenant_only().filter(uuid=role_uuid, system=True).exists():
-        return JsonResponse({"message": f"role does not exist; UUID: {str(parsed_uuid)}"}, status=404)
+    if (
+        not Role.objects.public_tenant_only()
+        .filter(uuid=role_uuid, system=True)
+        .exists()
+    ):
+        return JsonResponse(
+            {"message": f"role does not exist; UUID: {str(parsed_uuid)}"}, status=404
+        )
 
     try:
         migrate_role_scope_if_changed_in_worker.delay(role_uuid=str(parsed_uuid))
-        return JsonResponse({"message": "Job enqueued in background worker."}, status=202)
+        return JsonResponse(
+            {"message": "Job enqueued in background worker."}, status=202
+        )
     except Exception as e:
         logger.exception(f"Error migrating scope for role {parsed_uuid}")
         return JsonResponse(
@@ -4291,7 +4804,9 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     """
     if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
         return JsonResponse(
-            {"detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"},
+            {
+                "detail": "DR recovery is disabled (DR_WORKSPACE_RECONCILE_ENABLED=False)"
+            },
             status=403,
         )
 
@@ -4317,11 +4832,19 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
 
     now = datetime.datetime.now(datetime.timezone.utc)
     if parsed_ts > now:
-        return JsonResponse({"detail": "restore_timestamp must be in the past"}, status=400)
+        return JsonResponse(
+            {"detail": "restore_timestamp must be in the past"}, status=400
+        )
 
     buffer_minutes = body.get("buffer_minutes", 5)
-    if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
-        return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
+    if (
+        isinstance(buffer_minutes, bool)
+        or not isinstance(buffer_minutes, int)
+        or buffer_minutes < 0
+    ):
+        return JsonResponse(
+            {"detail": "buffer_minutes must be a non-negative integer"}, status=400
+        )
 
     dry_run = body.get("dry_run", False)
     if not isinstance(dry_run, bool):
@@ -4363,7 +4886,9 @@ def disaster_recovery_reconcile(request):
     Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
     """
     if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
-        return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
+        return JsonResponse(
+            {"error": "Disaster recovery reconciliation is not enabled"}, status=403
+        )
 
     from datetime import datetime
 
@@ -4379,11 +4904,19 @@ def disaster_recovery_reconcile(request):
         dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
         restore_timestamp_ms = int(dt.timestamp() * 1000)
     except (ValueError, TypeError):
-        return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+        return JsonResponse(
+            {"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400
+        )
 
     buffer_seconds = body.get("buffer_seconds", 300)
-    if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
-        return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+    if (
+        isinstance(buffer_seconds, bool)
+        or not isinstance(buffer_seconds, int)
+        or buffer_seconds < 0
+    ):
+        return JsonResponse(
+            {"error": "buffer_seconds must be a non-negative integer"}, status=400
+        )
 
     dry_run = body.get("dry_run", False)
     if not isinstance(dry_run, bool):
@@ -4422,7 +4955,9 @@ def kessel_parity_check(request):
         return HttpResponse('Invalid method, only "POST" is allowed.', status=405)
 
     if not request.body:
-        return HttpResponse('Invalid request, must supply "org_ids" in body.', status=400)
+        return HttpResponse(
+            'Invalid request, must supply "org_ids" in body.', status=400
+        )
 
     try:
         body = json.loads(request.body.decode("utf-8"))
@@ -4501,7 +5036,9 @@ def bootstrap_users_from_user_ids(request):
 
     user_ids = body.get("user_ids", [])
     if not user_ids or not isinstance(user_ids, list):
-        return handle_error('Invalid request: "user_ids" must be a non-empty array.', 400)
+        return handle_error(
+            'Invalid request: "user_ids" must be a non-empty array.', 400
+        )
 
     dry_run = request.GET.get("dry_run", "false").lower() == "true"
     user_ids = [str(uid) for uid in user_ids]
@@ -4543,7 +5080,13 @@ def bootstrap_users_from_user_ids(request):
     for user_id in user_ids:
         bop_user = bop_user_by_id.get(user_id)
         if bop_user is None:
-            results.append({"user_id": user_id, "status": "skipped", "detail": "User not found in BOP"})
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "skipped",
+                    "detail": "User not found in BOP",
+                }
+            )
             continue
 
         user = external_principal_to_user(bop_user)
@@ -4573,7 +5116,9 @@ def bootstrap_users_from_user_ids(request):
         mismatched_principal = None
         obsolete_principal = None
         if tenant is not None:
-            same_username = Principal.objects.filter(tenant=tenant, username=user.username).first()
+            same_username = Principal.objects.filter(
+                tenant=tenant, username=user.username
+            ).first()
             if (
                 same_username is not None
                 and same_username.user_id not in (None, "")
@@ -4581,13 +5126,43 @@ def bootstrap_users_from_user_ids(request):
             ):
                 mismatched_principal = same_username
             obsolete_principal = (
-                Principal.objects.filter(tenant=tenant, user_id=user_id).exclude(username=user.username).first()
+                Principal.objects.filter(tenant=tenant, user_id=user_id)
+                .exclude(username=user.username)
+                .first()
             )
         needs_rewrite = mismatched_principal is not None
         needs_merging = obsolete_principal is not None
 
+        # Detect cross-tenant user_id conflicts that rewrite_principal_user_id would raise on.
+        cross_tenant_conflict = False
+        if needs_rewrite and tenant is not None:
+            cross_tenant_conflict = (
+                Principal.objects.filter(user_id=user_id)
+                .exclude(tenant=tenant)
+                .exists()
+            )
+
         if dry_run:
-            if needs_rewrite:
+            if needs_rewrite and cross_tenant_conflict:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "error",
+                        "detail": (
+                            f"Cross-tenant conflict: user_id '{user_id}' is owned "
+                            f"by a principal in another tenant"
+                        ),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                    }
+                )
+            elif needs_rewrite:
+                merge_detail = ""
+                if needs_merging:
+                    merge_detail = (
+                        f"; would merge obsolete principal "
+                        f"'{obsolete_principal.username}' into survivor"
+                    )
                 results.append(
                     {
                         "user_id": user_id,
@@ -4595,7 +5170,7 @@ def bootstrap_users_from_user_ids(request):
                         "detail": (
                             f"Would rewrite principal user_id "
                             f"'{mismatched_principal.user_id}' → '{user_id}' "
-                            f"for username '{user.username}'"
+                            f"for username '{user.username}'" + merge_detail
                         ),
                         "username": user.username,
                         "org_id": user.org_id,
@@ -4631,9 +5206,13 @@ def bootstrap_users_from_user_ids(request):
             def _bootstrap_one():
                 if needs_rewrite:
                     # One-off remediation before update_user, which still hard-fails on mismatch.
-                    principal = Principal.objects.get(tenant=tenant, username=user.username)
+                    principal = Principal.objects.get(
+                        tenant=tenant, username=user.username
+                    )
                     rewrite_principal_user_id(principal, user_id, replicator)
-                return bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
+                return bootstrap_service.update_user(
+                    user, upsert=True, ready_tenant=True
+                )
 
             bootstrapped = run_atomic_with_retry(5, _bootstrap_one)
 
@@ -4652,7 +5231,10 @@ def bootstrap_users_from_user_ids(request):
                     {
                         "user_id": user_id,
                         "status": "rewritten",
-                        "detail": (f"Rewrote principal user_id " f"'{mismatched_principal.user_id}' → '{user_id}'"),
+                        "detail": (
+                            f"Rewrote principal user_id "
+                            f"'{mismatched_principal.user_id}' → '{user_id}'"
+                        ),
                         "username": user.username,
                         "org_id": user.org_id,
                         "tenant_ready": bootstrapped.tenant.ready,
@@ -4723,7 +5305,9 @@ def update_tenant_v2_opt_in(request, org_id: str):
     tenant = Tenant.objects.filter(org_id=org_id).first()
 
     if tenant is None:
-        return JsonResponse({"error": f"Org ID {org_id!r} not found."}, status=status.HTTP_404_NOT_FOUND)
+        return JsonResponse(
+            {"error": f"Org ID {org_id!r} not found."}, status=status.HTTP_404_NOT_FOUND
+        )
 
     def _get_response():
         return JsonResponse({"v2_opted_in": is_v2_opted_in(tenant)})
@@ -4735,7 +5319,8 @@ def update_tenant_v2_opt_in(request, org_id: str):
             body = json.loads(request.body)
         except Exception as e:
             return JsonResponse(
-                {"error": "expected body to be a JSON object: " + str(e)}, status=status.HTTP_400_BAD_REQUEST
+                {"error": "expected body to be a JSON object: " + str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not isinstance(body, dict):
@@ -4746,7 +5331,9 @@ def update_tenant_v2_opt_in(request, org_id: str):
 
         if not {"v2_opted_in"}.issuperset(body.keys()):
             return JsonResponse(
-                {"error": f"expected body to contain only v2_opted_in, but found: {list(body.keys())}"},
+                {
+                    "error": f"expected body to contain only v2_opted_in, but found: {list(body.keys())}"
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -4756,12 +5343,17 @@ def update_tenant_v2_opt_in(request, org_id: str):
         requested_state = body["v2_opted_in"]
 
         if not isinstance(requested_state, bool):
-            return JsonResponse({"error": "expected v2_opted_in to be a bool"}, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse(
+                {"error": "expected v2_opted_in to be a bool"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             set_v2_opt_in_state(tenant, requested_state)
         except (TenantNotBootstrappedError, InvalidV2OptOutError) as e:
-            return JsonResponse({"error": str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            return JsonResponse(
+                {"error": str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY
+            )
 
         return JsonResponse({"v2_opted_in": requested_state})
     else:
@@ -4781,23 +5373,34 @@ def backfill_default_role_bindings_view(request):
     Returns:
         JSON response with the backfill result summary.
     """
-    from internal.migrations.backfill_role_bindings import DEFAULT_BATCH_SIZE, backfill_default_role_bindings
+    from internal.migrations.backfill_role_bindings import (
+        DEFAULT_BATCH_SIZE,
+        backfill_default_role_bindings,
+    )
 
     raw_org_ids = request.GET.get("org_ids")
     if raw_org_ids is None:
         org_ids = None
     else:
-        org_ids = [org_id.strip() for org_id in raw_org_ids.split(",") if org_id.strip()]
+        org_ids = [
+            org_id.strip() for org_id in raw_org_ids.split(",") if org_id.strip()
+        ]
         if not org_ids:
-            return JsonResponse({"detail": "org_ids must contain at least one org ID."}, status=400)
+            return JsonResponse(
+                {"detail": "org_ids must contain at least one org ID."}, status=400
+            )
 
     try:
         batch_size = int(request.GET.get("batch_size", DEFAULT_BATCH_SIZE))
     except (ValueError, TypeError):
-        return JsonResponse({"detail": "batch_size must be a positive integer."}, status=400)
+        return JsonResponse(
+            {"detail": "batch_size must be a positive integer."}, status=400
+        )
 
     if batch_size <= 0:
-        return JsonResponse({"detail": "batch_size must be a positive integer."}, status=400)
+        return JsonResponse(
+            {"detail": "batch_size must be a positive integer."}, status=400
+        )
 
     try:
         result = backfill_default_role_bindings(org_ids=org_ids, batch_size=batch_size)
