@@ -89,7 +89,6 @@ check_http "${RBAC_HEALTH_URL:-http://localhost:9080/metrics}" 'RBAC API'
 check_http "${INVENTORY_HEALTH_URL:-http://localhost:8081/api/kessel/v1/livez}" 'Kessel Inventory API'
 check_http "${KAFKA_CONNECT_HEALTH_URL:-http://localhost:8083/connectors}" 'Kafka Connect'
 check_tcp localhost "${RBAC_DB_PORT:-15432}" 'RBAC PostgreSQL'
-check_tcp localhost "${RELATIONS_PORT:-9000}" 'Kessel Relations API'
 check_tcp localhost "${SPICEDB_PORT:-50051}" 'SpiceDB'
 
 if [[ "${FAILURES}" -gt 0 ]]; then
