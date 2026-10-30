@@ -117,6 +117,22 @@ VALID_ROLE_ROLE_DISCRIMINATOR = ["all", "any"]
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
+def _conflict_retry_response():
+    """Build the 503 returned when a retryable write exhausts its serialization/deadlock retries."""
+    return Response(
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        data={
+            "errors": [
+                {
+                    "detail": "A conflicting update occurred, please retry the request.",
+                    "status": str(status.HTTP_503_SERVICE_UNAVAILABLE),
+                    "source": "groups",
+                }
+            ]
+        },
+    )
+
+
 class GroupFilter(CommonFilters):
     """Filter for group."""
 
@@ -823,6 +839,12 @@ class GroupViewSet(
         self.check_object_permissions(self.request, group)
         return group
 
+    def _protect_group_roles_change(self, request: Request, group: Group, action: str):
+        """Reject role add/remove attempts against protected groups or by callers without access."""
+        self.protect_default_admin_group_roles(group)
+        if not request.user.admin:
+            self.protect_group_with_user_access_admin_role(group.roles_with_access(), action)
+
     def _add_principal_into_group(self, request: Request, uuid: Optional[UUID] = None):
         """Add principals into a group."""
         """
@@ -946,18 +968,7 @@ class GroupViewSet(
             )
         except OperationalError as e:
             if _is_serialization_or_deadlock(e):
-                return Response(
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    data={
-                        "errors": [
-                            {
-                                "detail": "A conflicting update occurred, please retry the request.",
-                                "status": str(status.HTTP_503_SERVICE_UNAVAILABLE),
-                                "source": "groups",
-                            }
-                        ]
-                    },
-                )
+                return _conflict_retry_response()
             raise
 
     @backfill_atomic(retries=8)
@@ -1408,69 +1419,43 @@ class GroupViewSet(
         @apiSuccessExample {json} Success-Response:
             HTTP/1.1 204 NO CONTENT
         """
-        roles = []
         validate_uuid(uuid, "group uuid validation")
         group = self.get_object()
-        v2_write_msg = (
-            "V1 role-to-group assignment operations are not allowed "
-            "for orgs using workspaces. Use v2 role bindings instead."
-        )
-        if request.method in ("POST", "DELETE") and is_v2_edit_enabled_for_request(request):
-            return Response(
-                status=status.HTTP_403_FORBIDDEN,
-                data={"errors": [{"detail": v2_write_msg}]},
-            )
-        if request.method == "POST":
-            self.protect_default_admin_group_roles(group)
 
-            if not request.user.admin:
-                self.protect_group_with_user_access_admin_role(group.roles_with_access(), "add_role")
-
-            serializer = GroupRoleSerializerIn(data=request.data)
-            if serializer.is_valid(raise_exception=True):
-                roles = request.data.pop(ROLES_KEY, [])
-
-            try:
-                original_group_pk = group.pk
-                with transaction.atomic():
-                    assert_v1_write_allowed(request.tenant)
-                    group = set_system_flag_before_update(group, request.tenant, request.user)
-                    add_roles(group, roles, request.tenant, user=request.user)
-
-                    # Audit logs inside same transaction as outbox write
-                    response_data = GroupRoleSerializerIn(group)
-                    if group is not None and group.pk != original_group_pk:
-                        auditlog = AuditLog()
-                        auditlog.log_create_from_object(request, AuditLog.GROUP, group)
-
-                    for role in response_data.data["data"]:
-                        auditlog = AuditLog()
-                        auditlog.log_group_assignment(
-                            request,
-                            AuditLog.GROUP,
-                            group,
-                            role,
-                            AuditLog.ROLE,
-                        )
-            except V1WriteBlockedError:
-                return Response(
-                    status=status.HTTP_403_FORBIDDEN,
-                    data={"errors": [{"detail": v2_write_msg}]},
-                )
-
-            response = Response(status=status.HTTP_200_OK, data=response_data.data)
-
-        elif request.method == "GET":
+        if request.method == "GET":
             serialized_roles = self.obtain_roles(request, group)
             page = self.paginate_queryset(serialized_roles)
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
+
+        # DRF routes HEAD to the GET handler, so dispatch on the write methods explicitly instead of
+        # treating "not GET" as a write: otherwise HEAD (a safe method for GroupAccessPermission)
+        # reaches the role-removal path.
+        if request.method not in ("POST", "DELETE"):
+            return Response({"error": "Method not allowed"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+        v2_write_msg = (
+            "V1 role-to-group assignment operations are not allowed "
+            "for orgs using workspaces. Use v2 role bindings instead."
+        )
+        if is_v2_edit_enabled_for_request(request):
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": v2_write_msg}]},
+            )
+
+        # Validate the payload and check permissions before opening any DB transaction, so invalid requests
+        # and callers without access fail fast instead of entering the retry loop. This uses an unlocked read;
+        # the group is re-fetched and re-checked inside the retryable write below.
+        self._protect_group_roles_change(request, group, "add_role" if request.method == "POST" else "remove_role")
+
+        if request.method == "POST":
+            serializer = GroupRoleSerializerIn(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            roles = request.data.pop(ROLES_KEY, [])
+
+            write = partial(self._write_group_roles_add, request, roles)
         else:
-            self.protect_default_admin_group_roles(group)
-
-            if not request.user.admin:
-                self.protect_group_with_user_access_admin_role(group.roles_with_access(), "remove_role")
-
             if ROLES_KEY not in request.query_params:
                 key = "detail"
                 message = "Query parameter {} is required.".format(ROLES_KEY)
@@ -1478,39 +1463,86 @@ class GroupViewSet(
 
             role_ids = request.query_params.get(ROLES_KEY, "").split(",")
             serializer = GroupRoleSerializerIn(data={"roles": role_ids})
-            if serializer.is_valid(raise_exception=True):
-                original_group_pk = group.pk
-                try:
-                    with transaction.atomic():
-                        assert_v1_write_allowed(request.tenant)
-                        group = set_system_flag_before_update(group, request.tenant, request.user)
-                        remove_roles(group, role_ids, request.tenant, request.user)
+            serializer.is_valid(raise_exception=True)
 
-                        # Audit logs inside same transaction as outbox write
-                        if group is not None and group.pk != original_group_pk:
-                            auditlog = AuditLog()
-                            auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+            write = partial(self._write_group_roles_remove, request, role_ids)
 
-                        roles = _roles_by_query_or_ids(role_ids, request.tenant)
-                        for role_info in roles:
-                            auditlog = AuditLog()
-                            auditlog.log_group_remove(
-                                request,
-                                AuditLog.GROUP,
-                                group,
-                                role_info,
-                                AuditLog.ROLE,
-                            )
-                except V1WriteBlockedError:
-                    return Response(
-                        status=status.HTTP_403_FORBIDDEN,
-                        data={"errors": [{"detail": v2_write_msg}]},
-                    )
-            response = Response(status=status.HTTP_204_NO_CONTENT)
+        try:
+            return write()
+        except V1WriteBlockedError:
+            return Response(
+                status=status.HTTP_403_FORBIDDEN,
+                data={"errors": [{"detail": v2_write_msg}]},
+            )
+        except OperationalError as e:
+            if _is_serialization_or_deadlock(e):
+                return _conflict_retry_response()
+            raise
 
-            return response
+    @backfill_atomic(retries=8)
+    def _write_group_roles_add(self, request: Request, roles: List[str]):
+        """Persist previously-validated role additions onto the group.
+
+        DB-only (no external calls), so it is safe to retry on serialization failures. The group is
+        re-fetched on every attempt because a rolled-back attempt may have mutated it in place.
+        """
+        group = self.get_object()
+        self._protect_group_roles_change(request, group, "add_role")
+
+        assert_v1_write_allowed(request.tenant)
+        original_group_pk = group.pk
+        group = set_system_flag_before_update(group, request.tenant, request.user)
+        add_roles(group, roles, request.tenant, user=request.user)
+
+        # Audit logs inside same transaction as outbox write
+        response_data = GroupRoleSerializerIn(group)
+        if group is not None and group.pk != original_group_pk:
+            auditlog = AuditLog()
+            auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+
+        for role in response_data.data["data"]:
+            auditlog = AuditLog()
+            auditlog.log_group_assignment(
+                request,
+                AuditLog.GROUP,
+                group,
+                role,
+                AuditLog.ROLE,
+            )
 
         return Response(status=status.HTTP_200_OK, data=response_data.data)
+
+    @backfill_atomic(retries=8)
+    def _write_group_roles_remove(self, request: Request, role_ids: List[str]):
+        """Remove previously-validated roles from the group.
+
+        DB-only (no external calls), so it is safe to retry on serialization failures. The group is
+        re-fetched on every attempt because a rolled-back attempt may have mutated it in place.
+        """
+        group = self.get_object()
+        self._protect_group_roles_change(request, group, "remove_role")
+
+        assert_v1_write_allowed(request.tenant)
+        original_group_pk = group.pk
+        group = set_system_flag_before_update(group, request.tenant, request.user)
+        remove_roles(group, role_ids, request.tenant, request.user)
+
+        # Audit logs inside same transaction as outbox write
+        if group is not None and group.pk != original_group_pk:
+            auditlog = AuditLog()
+            auditlog.log_create_from_object(request, AuditLog.GROUP, group)
+
+        for role_info in _roles_by_query_or_ids(role_ids, request.tenant):
+            auditlog = AuditLog()
+            auditlog.log_group_remove(
+                request,
+                AuditLog.GROUP,
+                group,
+                role_info,
+                AuditLog.ROLE,
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def order_queryset(self, queryset, valid_fields, order_field):
         """Return queryset ordered according to order_by query param."""
