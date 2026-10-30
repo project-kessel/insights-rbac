@@ -26,6 +26,7 @@ from prometheus_client import Counter, Histogram
 from rest_framework import status
 
 from api.models import User
+from management.principal.keycloak_profile import get_keycloak_profiles
 from rbac.env import ENVIRONMENT
 
 LOGGER = logging.getLogger(__name__)
@@ -133,6 +134,48 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             processed_item["user_id"] = item.get("id")
         return processed_item
 
+    @staticmethod
+    def _bypass_principal_payload(principal=None, username=None, profile=None):
+        """Build a SaaS-shaped principal dict for BYPASS_BOP_VERIFICATION mode.
+
+        On-prem / local runs have no BOP/IT profile. Always include the SaaS contract
+        fields ``is_active`` and ``is_org_admin`` so the RBAC UI does not treat missing
+        flags as Inactive / Org Admin No. When Keycloak Admin env vars are configured,
+        ``profile`` may supply real email/name/org-admin; otherwise names stay empty,
+        email falls back to a synthetic value (never foo/bar/baz), and ``is_org_admin``
+        is False.
+        """
+        profile = profile or {}
+        if principal is not None:
+            username = principal.username
+            user_id = principal.user_id or principal.username
+            principal_type = principal.type
+        else:
+            user_id = username
+            principal_type = Principal.Types.USER
+
+        email = profile.get("email") or ""
+        if not email:
+            email = f"{username}@local" if username else BYPASS_BOP_EMAIL
+
+        # Synced principals are enabled Keycloak users; prefer Keycloak enabled flag
+        # when present, otherwise treat DB presence as active.
+        if "enabled" in profile:
+            is_active = bool(profile.get("enabled"))
+        else:
+            is_active = True
+
+        return {
+            "username": username,
+            "first_name": profile.get("first_name") or "",
+            "last_name": profile.get("last_name") or "",
+            "email": email,
+            "is_active": is_active,
+            "is_org_admin": bool(profile.get("is_org_admin", False)),
+            "user_id": user_id,
+            "type": principal_type,
+        }
+
     def _get_proxy_service(self):  # pylint: disable=no-self-use
         """Get proxy service host and port info from environment."""
         proxy_conn_info = {
@@ -175,69 +218,50 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
         if settings.BYPASS_BOP_VERIFICATION:
             to_return = []
             local_principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
+            kc_profiles = get_keycloak_profiles()
+
+            def payload_for(principal=None, username=None):
+                name = principal.username if principal is not None else username
+                profile = kc_profiles.get(str(name).casefold(), {}) if name else {}
+                return self._bypass_principal_payload(principal=principal, username=username, profile=profile)
+
             if data is None:
                 for principal in local_principals:
-                    to_return.append(
-                        dict(
-                            username=principal.username,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id="51736777",
-                            type=principal.type,
-                        )
-                    )
+                    to_return.append(payload_for(principal=principal))
             elif "users" in data:
-                for principal in data["users"]:
-                    to_return.append(
-                        dict(
-                            username=principal,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id=principal,
-                            type="user",
-                        )
-                    )
+                local_by_username = {principal.username.casefold(): principal for principal in local_principals}
+                for username in data["users"]:
+                    principal = local_by_username.get(str(username).casefold())
+                    if principal is not None:
+                        to_return.append(payload_for(principal=principal))
+                    else:
+                        to_return.append(payload_for(username=username))
             elif "principalStartsWith" in data:
                 principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
                 for principal in principals:
-                    to_return.append(
-                        dict(
-                            username=principal.username,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id=principal.user_id,
-                            type=principal.type,
-                        )
-                    )
+                    to_return.append(payload_for(principal=principal))
             elif "emailStartsWith" in data or "primaryEmail" in data:
-                if "emailStartsWith" in data:
-                    matches_email = BYPASS_BOP_EMAIL.startswith(data["emailStartsWith"])
-                else:
-                    matches_email = data["primaryEmail"] == BYPASS_BOP_EMAIL
-                if matches_email:
-                    for principal in local_principals:
-                        to_return.append(
-                            dict(
-                                username=principal.username,
-                                first_name="foo",
-                                last_name="bar",
-                                email=BYPASS_BOP_EMAIL,
-                                is_active=True,
-                                user_id=principal.user_id,
-                                type=principal.type,
-                            )
-                        )
+                # Prefer matching against Keycloak emails when available; otherwise the
+                # synthetic bypass email used when Keycloak is unset.
+                needle_startswith = data.get("emailStartsWith")
+                needle_exact = data.get("primaryEmail")
+                for principal in local_principals:
+                    item = payload_for(principal=principal)
+                    email = item.get("email") or ""
+                    if needle_startswith is not None and email.startswith(needle_startswith):
+                        to_return.append(item)
+                    elif needle_exact is not None and email == needle_exact:
+                        to_return.append(item)
             sort_order = (params or {}).get("sortOrder")
             if sort_order in {"asc", "des"}:
                 to_return.sort(key=lambda principal: principal["username"], reverse=sort_order == "des")
-            if (params or {}).get("status") == "disabled":
-                to_return = []
+            status_filter = (params or {}).get("status")
+            if status_filter == "disabled":
+                to_return = [principal for principal in to_return if not principal.get("is_active")]
+            elif status_filter == "enabled":
+                to_return = [principal for principal in to_return if principal.get("is_active")]
+            if (params or {}).get("admin_only") == "true":
+                to_return = [principal for principal in to_return if principal.get("is_org_admin")]
             user_count = len(to_return)
             limit = int((params or {}).get("limit", user_count))
             offset = int((params or {}).get("offset", 0))
