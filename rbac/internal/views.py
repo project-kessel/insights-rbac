@@ -65,7 +65,7 @@ from kessel.inventory.v1beta2 import (
     streamed_list_subjects_request_pb2,
     subject_reference_pb2,
 )
-from management.atomic_transactions import atomic_with_retry, run_atomic_with_retry
+from management.atomic_transactions import atomic_block, atomic_with_retry, run_atomic_with_retry
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
 from management.group.inventory_api_dual_write_group_handler import (
@@ -140,7 +140,12 @@ from management.tasks import (
 )
 from management.tenant_mapping.exceptions import TenantNotBootstrappedError
 from management.tenant_mapping.model import TenantMapping
-from management.tenant_mapping.v2_activation import InvalidV2OptOutError, is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import (
+    InvalidV2OptOutError,
+    is_v2_opted_in,
+    is_v2_write_activated,
+    set_v2_opt_in_state,
+)
 from management.tenant_service.v2 import V2TenantBootstrapService
 from management.utils import (
     create_client_channel_inventory,
@@ -2370,7 +2375,10 @@ def check_role(request, role_uuid):
         tuples = InMemoryTuples()
 
         if role.system:
-            with transaction.atomic():
+            # atomic_block (SERIALIZABLE, set before any query): the dual-write handlers
+            # internally use @atomic (pgtransaction SERIALIZABLE), which cannot nest inside a
+            # plain transaction that has already run queries.
+            with atomic_block():
                 relations_dual_write_handler = SeedingInventoryApiDualWriteHandler(
                     role=role,
                     replicator=InMemoryRelationReplicator(tuples),
@@ -2382,7 +2390,8 @@ def check_role(request, role_uuid):
                 transaction.set_rollback(True)
         else:
             # We have to lock the role before passing it to InventoryApiDualWriteHandler.
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the system branch.
+            with atomic_block():
                 role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
 
                 relations_dual_write_handler = InventoryApiDualWriteHandler(
@@ -2465,7 +2474,10 @@ def check_cross_account_request(request, request_id):
 
         tuples = InMemoryTuples()
 
-        with transaction.atomic():
+        # atomic_block (SERIALIZABLE, set before any query): the cross-access dual-write
+        # handler's internal methods use @atomic (pgtransaction SERIALIZABLE), which cannot
+        # nest inside a plain transaction that has already run queries.
+        with atomic_block():
             handler = InventoryApiDualWriteCrossAccessHandler(
                 cross_account_request=car,
                 event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
@@ -2575,7 +2587,10 @@ def _run_tenant_migration_checks(
     Covers every relation shape the relations-to-inventory migration dual-writes for a tenant:
       - bootstrap: tenant/workspace/platform/default-group tuples created when a tenant is bootstrapped
       - workspaces: workspace parent relations (the workspace hierarchy)
-      - roles: V2 role relations produced by the role dual-write handler (custom roles)
+      - roles: V2 role relations produced by the role dual-write handler (custom roles). On
+        tenants with V2 writes activated no V1 role can be replayed through that handler
+        (V1WriteBlockedError): migrated roles are covered by "role_permissions" below, and
+        unlinked V1 roles are reported as explicitly unverified
       - bindings: V2 role binding relations (resource#binding, binding#role, binding#subject) for
         bindings created through the V2 RoleBinding model (e.g. the role-bindings-by-subject API)
       - group_role_bindings: the same binding relation shape as "bindings", but for role
@@ -2588,7 +2603,8 @@ def _run_tenant_migration_checks(
         binding to one of this tenant's groups. BindingMapping doesn't carry a tenant FK (system
         roles belong to the public tenant), so mappings are found by searching for this tenant's
         group UUIDs inside each mapping's JSON "groups" list
-      - role_permissions: custom role permission tuples (role#<permission>@principal:*)
+      - role_permissions: custom role permission tuples (role#<permission>@principal:*) plus
+        each custom V2 role's owner tuple (role#owner@tenant:<id>)
       - group_principals: group membership relations
       - cross_account_requests: relations created for approved cross-account requests targeting
         this org
@@ -2749,10 +2765,49 @@ def _run_tenant_migration_checks(
 
     role_results = []
     roles_all_correct = True
-    for role in Role.objects.filter(tenant=tenant, system=False)[:role_limit]:
+    # On tenants with V2 writes activated, NO V1 custom role can be replayed through the V1
+    # dual-write handler -- it raises V1WriteBlockedError for any V1 write, not just migrated
+    # roles. V1 roles that have been migrated to a V2 CustomRoleV2 are validated by the
+    # "role_permissions" section below instead (permission AND owner tuples). Unlinked V1 roles
+    # have no V2 counterpart to check either way, so they are reported as explicitly unverified
+    # rather than run through a handler that can only fail. Only skip on such tenants: elsewhere
+    # v1_source roles are still actively V1-written (V1 dual-write) and must keep being verified
+    # through the V1 handler.
+    v2_write_activated = is_v2_write_activated(tenant)
+    if v2_write_activated:
+        migrated_v1_role_ids = set(
+            CustomRoleV2.objects.filter(v1_source__tenant=tenant).values_list("v1_source_id", flat=True)
+        )
+        roles_queryset = Role.objects.filter(tenant=tenant, system=False).exclude(pk__in=migrated_v1_role_ids)
+    else:
+        roles_queryset = Role.objects.filter(tenant=tenant, system=False)
+    for role in roles_queryset[:role_limit]:
+        if v2_write_activated:
+            # Unlinked V1 role on an activated tenant: the V1 handler is blocked and there is no
+            # V2 counterpart to check instead, so surface it rather than recording an error.
+            logger.warning(
+                f"Role {role.uuid} ('{role.name}') in tenant {org_id} has no V2 counterpart "
+                f"although V2 writes are activated; reporting as unverified."
+            )
+            role_results.append(
+                {
+                    "role_uuid": str(role.uuid),
+                    "role_name": role.name,
+                    "verified": False,
+                    "reason": (
+                        "V1 custom role with no V2 counterpart on a tenant with V2 writes activated; "
+                        "it cannot be replayed through the V1 dual-write handler"
+                    ),
+                }
+            )
+            continue
         try:
             tuples = InMemoryTuples()
-            with transaction.atomic():
+            # atomic_block (SERIALIZABLE, set before any query) rather than transaction.atomic:
+            # the dual-write handlers internally use @atomic (pgtransaction SERIALIZABLE), and
+            # nesting that inside a plain transaction that has already run queries makes
+            # PostgreSQL reject the inner "SET TRANSACTION ISOLATION LEVEL".
+            with atomic_block():
                 locked_role = get_object_or_404(Role.objects.select_for_update(), pk=role.pk)
                 relations_dual_write_handler = InventoryApiDualWriteHandler(
                     role=locked_role,
@@ -2892,14 +2947,18 @@ def _run_tenant_migration_checks(
     permissions_all_correct = True
     custom_roles = (
         CustomRoleV2.objects.filter(tenant=tenant)
-        .select_related("v1_source")
+        .select_related("v1_source", "tenant")
         .prefetch_related("permissions")[:role_limit]
     )
     for role in custom_roles:
         # role.uuid is the V2 RoleV2 uuid, distinct from the v1 Role.uuid checked in "roles" above.
         v1_role_uuid = str(role.v1_source.uuid) if role.v1_source_id else None
         try:
-            permission_tuples = [CustomRoleV2._permission_tuple(role, perm) for perm in role.permissions.all()]
+            # Include the owner tuple (rbac/role:<uuid>#owner@rbac/tenant:<id>) alongside the
+            # permission tuples: before migrated V1 roles were excluded from the "roles" section
+            # above, the V1 handler generated their owner tuples -- skipping that replay must
+            # not lose owner-tuple coverage.
+            permission_tuples = CustomRoleV2._permission_and_owner_tuples(role, role.permissions.all())
             if dry_run:
                 result, valid = _dry_run_validation_result(
                     {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid}, permission_tuples
@@ -2985,7 +3044,8 @@ def _run_tenant_migration_checks(
                 continue
 
             tuples = InMemoryTuples()
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the roles section above.
+            with atomic_block():
                 car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request=car,
                     event_type=ReplicationEventType.APPROVE_CROSS_ACCOUNT_REQUEST,
@@ -3054,7 +3114,8 @@ def _run_tenant_migration_checks(
                 )
                 continue
 
-            with transaction.atomic():
+            # atomic_block for the same isolation-level-nesting reason as the roles section above.
+            with atomic_block():
                 car_dual_write_handler = InventoryApiDualWriteCrossAccessHandler(
                     cross_account_request=car,
                     event_type=ReplicationEventType.EXPIRE_CROSS_ACCOUNT_REQUEST,

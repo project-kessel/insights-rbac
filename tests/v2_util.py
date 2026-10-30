@@ -1,26 +1,27 @@
 from typing import Callable, Optional
 
 from django.db import transaction
-
-from api.models import Tenant
 from management.group.platform import GlobalPolicyIdService
-from management.models import Permission, Role
-from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.inventory_replicator import (
     InventoryReplicator,
-    WorkspaceEventStream,
-    WorkspaceEvent,
     ReplicationEvent,
+    WorkspaceEvent,
+    WorkspaceEventStream,
 )
+from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.models import Permission, Role
+from management.problem_details import STATUS_PROBLEM_TYPES, ProblemType
 from management.role.v2_model import SeededRoleV2
 from management.tenant_service import V2TenantBootstrapService
 from management.tenant_service.tenant_service import BootstrappedTenant
 from migration_tool import in_memory_tuples
 from migration_tool.in_memory_tuples import (
-    all_of,
-    InMemoryTuples,
     InMemoryRelationReplicator,
+    InMemoryTuples,
+    all_of,
 )
+
+from api.models import Tenant
 
 
 def seed_v2_role_from_v1(role: Role) -> SeededRoleV2:
@@ -147,3 +148,19 @@ class WorkspaceCacheReplicator(InventoryReplicator):
 
     def clear_events(self):
         self._workspace_events = {}
+
+
+def is_problem_details_response(response) -> bool:
+    return response.headers["content-type"] == "application/problem+json"
+
+
+def assert_problem_details_response_with(test, response, status_code: int, problem_type: Optional[ProblemType] = None):
+    if problem_type is None:
+        problem_type = STATUS_PROBLEM_TYPES.get(status_code)
+
+    test.assertEqual(response.status_code, status_code)
+    test.assertTrue(is_problem_details_response(response))
+
+    body = response.json()
+    test.assertEqual(body["status"], status_code)
+    test.assertEqual(body.get("type"), problem_type)

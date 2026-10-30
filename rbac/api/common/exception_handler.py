@@ -77,7 +77,7 @@ def _generate_error_data_payload_response(detail: str, context, http_status_code
     return data
 
 
-def _v1_response_to_v2(response: Response, context: dict) -> Response:
+def _v1_response_to_v2(response: Response) -> Response:
     data = copy.deepcopy(response.data)
 
     if isinstance(data, dict) or isinstance(data, list):
@@ -86,7 +86,7 @@ def _v1_response_to_v2(response: Response, context: dict) -> Response:
         errors = []
 
     response.content_type = "application/problem+json"
-    response.data = v2_response_from_v1_errors(errors=errors, context=context)
+    response.data = v2_response_from_v1_errors(errors=errors)
 
     return response
 
@@ -97,13 +97,12 @@ def custom_exception_handler_v2(exc, context):
 
     # Now add the HTTP status code to the response.
     if v1_initial_response is not None:
-        return _v1_response_to_v2(v1_initial_response, context)
+        return _v1_response_to_v2(v1_initial_response)
     elif isinstance(exc, IntegrityError):
         return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
             context=context,
-            with_instance=True,
         )
     elif isinstance(exc, InvalidTokenError):
         return single_problem_response_with_errors_for_context(
@@ -132,19 +131,15 @@ def custom_exception_handler_v2(exc, context):
         response["Retry-After"] = "1"
         return response
     elif isinstance(exc, RolesNotFoundError):
-        # Convert RolesNotFoundError to Http404 and let standard handler process it
-        v1_response = exception_handler(Http404(str(exc)), context)
-        return _v1_response_to_v2(v1_response, context)
+        return _v1_response_to_v2(exception_handler(Http404(str(exc)), context))
     elif isinstance(exc, NotFoundError):
-        v1_response = exception_handler(Http404(str(exc)), context)
-        return _v1_response_to_v2(v1_response, context)
+        return _v1_response_to_v2(exception_handler(Http404(str(exc)), context))
     elif isinstance(exc, (InvalidFieldError, RequiredFieldError)):
         return single_problem_response_with_errors_for_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
             context=context,
             source=getattr(exc, "field", None) or getattr(exc, "field_name", None),
-            with_instance=True,
         )
 
     return None

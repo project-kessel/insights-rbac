@@ -213,7 +213,7 @@ def is_user_allowed_v1(request, required_operation, target_workspace):
         # on any workspace.
         target_workspace = root_workspace_id
     if required_operation == "read":
-        allowed_operations = ["read", "write", "*"]
+        allowed_operations = ["read", "*"]
     else:
         allowed_operations = ["write", "*"]
     valid_perm_tuples = set()

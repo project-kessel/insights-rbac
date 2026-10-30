@@ -19,6 +19,7 @@
 from abc import abstractmethod
 import logging
 
+from django.db import transaction
 from django.db.models import Count
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -40,7 +41,7 @@ from api.utils import reset_imported_tenants
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
 from management.group.inventory_api_dual_write_group_handler import InventoryApiDualWriteGroupHandler
-from management.models import BindingMapping, Group, Permission, Policy, Role, Workspace
+from management.models import BindingMapping, CustomRoleV2, Group, Permission, Policy, Role, Workspace
 from management.principal.model import Principal
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
@@ -75,7 +76,7 @@ from kessel.inventory.v1beta2 import (
     allowed_pb2,
 )
 from kessel.inventory.v1beta2.check_request_pb2 import CheckRequest
-from tests.identity_request import IdentityRequest
+from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
 from tests.management.role.test_dual_write import RbacFixture
 from tests.rbac.test_middleware import EnvironmentVarGuard
 from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
@@ -5728,6 +5729,124 @@ class VerifyMigrationEndpointTests(BaseInternalViewsetTests):
         for mock_obj in self.mocks.values():
             mock_obj.assert_not_called()
 
+    def test_verify_migration_skips_migrated_v1_roles_on_v2_tenants(self):
+        """Test that V1 roles migrated to V2 are skipped instead of failing with V1WriteBlockedError."""
+        v1_role = Role.objects.create(name="migrated-role", tenant=self.tenant, system=False)
+        CustomRoleV2.objects.create(name="migrated-role-v2", tenant=self.tenant, v1_source=v1_role)
+        with transaction.atomic():
+            ensure_v2_write_activated(self.tenant)
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true", **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["overall_status"], "pass")
+        self.assertNotIn("roles", body["failed_checks"])
+        self.assertTrue(body["checks"]["roles"]["correct"])
+        checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
+        self.assertNotIn(str(v1_role.uuid), checked_uuids)
+
+    def test_verify_migration_checks_v1_source_roles_on_non_activated_tenants(self):
+        """V1-linked roles must still be verified when V2 writes are not activated.
+
+        v1_source does not distinguish migrated roles from roles created by V1
+        dual-write, so the skip only applies on tenants where V2 writes are
+        activated (the only case where the V1 handler raises V1WriteBlockedError).
+        """
+        v1_role = Role.objects.create(name="dual-written-role", tenant=self.tenant, system=False)
+        CustomRoleV2.objects.create(name="dual-written-role-v2", tenant=self.tenant, v1_source=v1_role)
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true", **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn("roles", body["failed_checks"])
+        checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
+        self.assertIn(str(v1_role.uuid), checked_uuids)
+
+    def test_verify_migration_reports_unlinked_v1_roles_as_unverified_on_v2_tenants(self):
+        """Unlinked V1 roles on activated tenants are reported as unverified, not errored.
+
+        The V1 dual-write handler raises V1WriteBlockedError on activated tenants for ANY V1
+        role -- migrated or not -- so unlinked roles cannot be replayed at all. The endpoint
+        must surface them explicitly instead of recording a handler error for the section.
+        """
+        unlinked_role = Role.objects.create(name="unlinked-role", tenant=self.tenant, system=False)
+        with transaction.atomic():
+            ensure_v2_write_activated(self.tenant)
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true", **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn("roles", body["failed_checks"])
+        entry = next(
+            e for e in body["checks"]["roles"]["roles_checked"] if e.get("role_uuid") == str(unlinked_role.uuid)
+        )
+        self.assertFalse(entry["verified"])
+        self.assertIn("reason", entry)
+
+    def test_verify_migration_role_permissions_includes_owner_tuple(self):
+        """The role_permissions section must also validate the V2 owner tuple.
+
+        Regression test: excluding migrated V1 roles from the "roles" section removed the only
+        place their owner tuple (rbac/role:<uuid>#owner@rbac/tenant:<id>) was generated, so a
+        missing owner tuple could leave the migration report marked as passed.
+        """
+        perm = Permission.objects.create(permission="app:res:*", tenant=self.tenant)
+        v2_role = CustomRoleV2.objects.create(name="owner-checked-role", tenant=self.tenant)
+        v2_role.permissions.add(perm)
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true", **self.request.META
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn("role_permissions", body["failed_checks"])
+        entry = next(
+            e for e in body["checks"]["role_permissions"]["roles_checked"] if e["v2_role_uuid"] == str(v2_role.uuid)
+        )
+        tuple_strings = [t["tuple"] for t in entry["validation"]["tuples"]]
+        self.assertTrue(
+            any(f"rbac/role:{v2_role.uuid}#owner@" in tuple_str for tuple_str in tuple_strings),
+            tuple_strings,
+        )
+        # The permission tuple must still be validated alongside the owner tuple.
+        self.assertTrue(
+            any(
+                f"rbac/role:{v2_role.uuid}#" in tuple_str and "#owner@" not in tuple_str for tuple_str in tuple_strings
+            ),
+            tuple_strings,
+        )
+
+    def test_verify_migration_role_limit_applies_after_excluding_migrated_roles(self):
+        """Skipped roles must not consume the role_limit.
+
+        The exclusion happens in the queryset before slicing, so a tenant whose
+        first roles are all migrated still verifies later unlinked roles.
+        """
+        migrated_roles = [
+            Role.objects.create(name=f"migrated-role-{i}", tenant=self.tenant, system=False) for i in range(3)
+        ]
+        for role in migrated_roles:
+            CustomRoleV2.objects.create(name=f"{role.name}-v2", tenant=self.tenant, v1_source=role)
+        unlinked_role = Role.objects.create(name="unlinked-role", tenant=self.tenant, system=False)
+        with transaction.atomic():
+            ensure_v2_write_activated(self.tenant)
+
+        response = self.client.get(
+            f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/" f"?dry_run=true&role_limit=1",
+            **self.request.META,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn("roles", body["failed_checks"])
+        checked_uuids = [entry.get("role_uuid") for entry in body["checks"]["roles"]["roles_checked"]]
+        self.assertEqual(checked_uuids, [str(unlinked_role.uuid)])
+
     def test_verify_migration_checks_system_role_group_binding_mapping(self):
         """Test that a system role bound to a custom group via BindingMapping is verified.
 
@@ -6270,3 +6389,121 @@ class SendKafkaTestMessageTests(IdentityRequest):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         self.assertEqual(data["message"], "Test message sent successfully")
+
+
+class VerifyMigrationSerializableAtomicTests(TransactionalIdentityRequest):
+    """Regression tests that need TransactionTestCase to exercise pgtransaction SERIALIZABLE.
+
+    Django TestCase wraps each test in a transaction, preventing
+    pgtransaction.atomic from setting SERIALIZABLE isolation. These tests
+    override ATOMIC_RETRY_DISABLED=False (production behavior) and must run
+    outside that wrapper.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.internal_request_context = self._create_request_context(
+            self.customer_data, self.user_data, is_internal=True
+        )
+        self.request = self.internal_request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        self.request.user = user
+        self.public_tenant = Tenant.objects.get(tenant_name="public")
+
+        bootstrap_result = bootstrap_tenant_for_v2_test(tenant=self.tenant)
+        self.default_workspace = bootstrap_result.default_workspace
+        self.root_workspace = bootstrap_result.root_workspace
+
+        # Activate V2 writes so that dual-write handlers dispatch to the @atomic-decorated
+        # V2 methods (_add_car_roles_v2, _remove_car_roles_v2), exercising the nested
+        # @atomic-inside-atomic_block() code path this regression test targets.
+        with transaction.atomic():
+            ensure_v2_write_activated(self.tenant)
+
+    def test_verify_migration_dry_run_serializable_atomic_regression(self):
+        """Test that dry run works when @atomic uses its real (pgtransaction) implementation.
+
+        Regression test: the verify code wraps dual-write handlers in the outermost
+        transaction, and those handlers' internal methods are decorated with @atomic
+        (pgtransaction.atomic SERIALIZABLE). When the outer transaction was a plain
+        transaction.atomic() that had already run queries, PostgreSQL rejected the
+        nested "SET TRANSACTION ISOLATION LEVEL" and every checked item in the roles
+        and cross_account_requests[_removed] sections failed with
+        "SET TRANSACTION ISOLATION LEVEL must be called before any query".
+
+        The test environment normally hides this because tox sets
+        ATOMIC_RETRY_UNSAFELY_DISABLED=True, which degrades @atomic to a plain
+        transaction.atomic(). This test forces the production atomic behavior with
+        real (unmocked) dual-write handlers on a V2 tenant.
+        """
+        Principal.objects.create(tenant=self.tenant, username="car-user", user_id="9876543")
+        Principal.objects.create(tenant=self.tenant, username="denied-car-user", user_id="1111111")
+        custom_role = Role.objects.create(name="Custom Role", system=False, tenant=self.tenant)
+        # CARs reference system roles (cross-account access grants system-role permissions).
+        system_role = Role.objects.create(name="System Role for CAR", system=True, tenant=self.public_tenant)
+        denied_system_role = Role.objects.create(
+            name="System Role for Denied CAR", system=True, tenant=self.public_tenant
+        )
+        approved_car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="9876543",
+            status="approved",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        approved_car.roles.add(system_role)
+        # Use a distinct user_id and role so the removal section's active-role filter
+        # does not exclude this CAR's role, ensuring the removal atomic_block() path
+        # is actually exercised.
+        denied_car = CrossAccountRequest.objects.create(
+            target_org=self.tenant.org_id,
+            user_id="1111111",
+            status="denied",
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        denied_car.roles.add(denied_system_role)
+
+        role_count_before = Role.objects.filter(tenant=self.tenant).count()
+        car_count_before = CrossAccountRequest.objects.filter(target_org=self.tenant.org_id).count()
+
+        with override_settings(ATOMIC_RETRY_DISABLED=False, REPLICATION_TO_RELATION_ENABLED=True):
+            response = self.client.get(
+                f"/_private/api/inventory/verify_migration/{self.tenant.org_id}/?dry_run=true",
+                **self.request.META,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        section_items = {
+            "roles": body["checks"]["roles"]["roles_checked"],
+            "cross_account_requests": body["checks"]["cross_account_requests"]["requests_checked"],
+            "cross_account_requests_removed": body["checks"]["cross_account_requests_removed"]["requests_checked"],
+        }
+
+        # Sections that create test data must produce at least one checked item.
+        self.assertGreater(len(section_items["roles"]), 0, "roles section returned no items")
+        self.assertGreater(
+            len(section_items["cross_account_requests"]), 0, "cross_account_requests section returned no items"
+        )
+        self.assertGreater(
+            len(section_items["cross_account_requests_removed"]),
+            0,
+            "cross_account_requests_removed section returned no items",
+        )
+
+        # The regression check: no item must hit the isolation-level nesting bug.
+        # Items may fail for other reasons (e.g. missing SeededRoleV2) in the test env;
+        # this test only asserts that the specific PostgreSQL isolation-level error is absent.
+        for section, items in section_items.items():
+            for item in items:
+                self.assertNotIn(
+                    "SET TRANSACTION ISOLATION LEVEL",
+                    item.get("error", ""),
+                    f"section {section} hit the isolation-level nesting bug: {item}",
+                )
+
+        # Verify dry-run rollback left no side effects.
+        self.assertEqual(Role.objects.filter(tenant=self.tenant).count(), role_count_before)
+        self.assertEqual(CrossAccountRequest.objects.filter(target_org=self.tenant.org_id).count(), car_count_before)
