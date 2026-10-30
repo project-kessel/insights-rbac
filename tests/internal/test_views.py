@@ -6227,6 +6227,66 @@ class InternalBootstrapUsersFromUserIdsTests(BaseInternalViewsetTests):
         # dry_run must not mutate anything
         self.assertTrue(Principal.objects.filter(pk=obsolete.pk).exists())
 
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    def test_dry_run_would_rewrite_mismatched_user_id(self, request_filtered_principals):
+        """Same username with a stale user_id is reported as would_rewrite_user_id."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+        request_filtered_principals.return_value = {
+            "status_code": 200,
+            "data": [self._bop_user("51856862", "teppo.haapala@apotti.fi")],
+        }
+
+        response = self._post(["51856862"], dry_run=True)
+
+        self.assertEqual(response.status_code, 200)
+        result = self._result_for(response, "51856862")
+        self.assertEqual(result["status"], "would_rewrite_user_id")
+        self.assertEqual(result["old_user_id"], "16777216")
+        self.assertIn("16777216", result["detail"])
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "16777216")
+
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    def test_rewrites_mismatched_user_id(self, request_filtered_principals, replicate):
+        """One-off remediation: rewrite stale user_id then continue bootstrap."""
+        tuples = InMemoryTuples()
+        replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
+        )
+        group = Group.objects.create(name="admins", tenant=self.tenant)
+        group.principals.add(principal)
+
+        request_filtered_principals.return_value = {
+            "status_code": 200,
+            "data": [self._bop_user("51856862", "teppo.haapala@apotti.fi")],
+        }
+
+        response = self._post(["51856862"])
+
+        self.assertEqual(response.status_code, 200)
+        result = self._result_for(response, "51856862")
+        self.assertEqual(result["status"], "rewritten")
+        self.assertEqual(result["old_user_id"], "16777216")
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+        self.assertEqual(list(group.principals.all()), [principal])
+        self.assertEqual(
+            tuples.count_tuples(
+                all_of(
+                    resource("rbac", "group", str(group.uuid)),
+                    relation("member"),
+                    subject("rbac", "principal", "redhat/51856862"),
+                )
+            ),
+            1,
+        )
+
     @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
     def test_bootstraps_new_user(self, request_filtered_principals, replicate):

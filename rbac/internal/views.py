@@ -146,6 +146,7 @@ from management.tenant_mapping.v2_activation import (
     is_v2_write_activated,
     set_v2_opt_in_state,
 )
+from management.tenant_service.tenant_service import rewrite_principal_user_id
 from management.tenant_service.v2 import V2TenantBootstrapService
 from management.utils import (
     create_client_channel_inventory,
@@ -704,20 +705,26 @@ def get_user_from_bop(username, email):
     user = users[0]
 
     if ("username" not in user) or (not user["username"]) or (user["username"].isspace()):
-        logger.error(f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'username' field""")
+        logger.error(
+            f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'username' field"""
+        )
         raise Exception(
             f"invalid user data for user '{query_by}={principal}': user found in bop but no username exists"
         )
 
     if "is_org_admin" not in user:
         user["is_org_admin"] = False
-        logger.warning(f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'is_org_admin' field""")
+        logger.warning(
+            f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'is_org_admin' field"""
+        )
 
     if "org_id" not in user:
-        logger.error(f"""invalid data for user '{query_by}={principal}':
-            user found in bop but does not contain required 'org_id' field""")
+        logger.error(
+            f"""invalid data for user '{query_by}={principal}':
+            user found in bop but does not contain required 'org_id' field"""
+        )
         raise Exception(f"invalid user data for user '{query_by}={principal}': user found in bop but no org_id exists")
 
     logger.debug(f"successfully queried bop for user: '{user}' with queryBy: '{query_by}'")
@@ -4464,12 +4471,17 @@ def bootstrap_users_from_user_ids(request):
     For each user ID:
     1. Queries BOP to get user details (username, org_id, is_active, is_org_admin)
     2. Skips users not found in BOP or not active (status ``skipped``)
-    3. Detects stale principals: if a tenant already has a principal with the
+    3. Detects same-username / wrong-``user_id`` principals (unexpected corruption)
+       and rewrites ``user_id`` in place with SpiceDB tuple remove/add (status
+       ``rewritten`` / dry-run ``would_rewrite_user_id``). This is the one-off
+       remediation path; the Kafka cleaner still hard-fails on this case.
+    4. Detects stale principals: if a tenant already has a principal with the
        same ``user_id`` but a different username (i.e. the user's BOP username
        changed), the obsolete principal is merged into the survivor — group
        memberships are transferred and SpiceDB tuples replicated (status
        ``merged``).  Otherwise creates a fresh principal (status ``bootstrapped``).
-    4. Dry-run mode reports ``would_merge`` or ``would_bootstrap`` accordingly.
+    5. Dry-run mode reports ``would_rewrite_user_id``, ``would_merge``, or
+       ``would_bootstrap`` accordingly.
 
     .. note::
        The ``not_found`` and ``inactive`` statuses were replaced by ``skipped``
@@ -4525,7 +4537,8 @@ def bootstrap_users_from_user_ids(request):
             bop_user_by_id[str(uid)] = bop_user
 
     results = []
-    bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
+    replicator = OutboxReplicator()
+    bootstrap_service = V2TenantBootstrapService(replicator)
 
     for user_id in user_ids:
         bop_user = bop_user_by_id.get(user_id)
@@ -4557,15 +4570,40 @@ def bootstrap_users_from_user_ids(request):
             )
             continue
         tenant = Tenant.objects.filter(org_id=user.org_id).first()
+        mismatched_principal = None
         obsolete_principal = None
         if tenant is not None:
+            same_username = Principal.objects.filter(tenant=tenant, username=user.username).first()
+            if (
+                same_username is not None
+                and same_username.user_id not in (None, "")
+                and str(same_username.user_id) != user_id
+            ):
+                mismatched_principal = same_username
             obsolete_principal = (
                 Principal.objects.filter(tenant=tenant, user_id=user_id).exclude(username=user.username).first()
             )
+        needs_rewrite = mismatched_principal is not None
         needs_merging = obsolete_principal is not None
 
         if dry_run:
-            if needs_merging:
+            if needs_rewrite:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "would_rewrite_user_id",
+                        "detail": (
+                            f"Would rewrite principal user_id "
+                            f"'{mismatched_principal.user_id}' → '{user_id}' "
+                            f"for username '{user.username}'"
+                        ),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                        "is_org_admin": user.admin,
+                        "old_user_id": mismatched_principal.user_id,
+                    }
+                )
+            elif needs_merging:
                 results.append(
                     {
                         "user_id": user_id,
@@ -4589,9 +4627,15 @@ def bootstrap_users_from_user_ids(request):
             continue
 
         try:
-            bootstrapped = run_atomic_with_retry(
-                5, lambda: bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
-            )
+
+            def _bootstrap_one():
+                if needs_rewrite:
+                    # One-off remediation before update_user, which still hard-fails on mismatch.
+                    principal = Principal.objects.get(tenant=tenant, username=user.username)
+                    rewrite_principal_user_id(principal, user_id, replicator)
+                return bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
+
+            bootstrapped = run_atomic_with_retry(5, _bootstrap_one)
 
             if bootstrapped is None:
                 results.append(
@@ -4601,6 +4645,18 @@ def bootstrap_users_from_user_ids(request):
                         "detail": "User became inactive during bootstrap",
                         "username": user.username,
                         "org_id": user.org_id,
+                    }
+                )
+            elif needs_rewrite:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "rewritten",
+                        "detail": (f"Rewrote principal user_id " f"'{mismatched_principal.user_id}' → '{user_id}'"),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                        "tenant_ready": bootstrapped.tenant.ready,
+                        "old_user_id": mismatched_principal.user_id,
                     }
                 )
             else:
@@ -4631,13 +4687,16 @@ def bootstrap_users_from_user_ids(request):
             )
 
     bootstrapped_count = sum(1 for r in results if r["status"] == "bootstrapped")
+    rewritten_count = sum(1 for r in results if r["status"] == "rewritten")
     merged_count = sum(1 for r in results if r["status"] == "merged")
     skipped_count = sum(1 for r in results if r["status"] == "skipped")
     error_count = sum(1 for r in results if r["status"] == "error")
     logger.info(
-        "Bootstrap users from user_ids completed. total=%d bootstrapped=%d merged=%d skipped=%d error=%d dry_run=%s",
+        "Bootstrap users from user_ids completed. total=%d bootstrapped=%d rewritten=%d "
+        "merged=%d skipped=%d error=%d dry_run=%s",
         len(user_ids),
         bootstrapped_count,
+        rewritten_count,
         merged_count,
         skipped_count,
         error_count,

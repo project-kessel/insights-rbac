@@ -190,56 +190,22 @@ class MergePrincipalTests(IdentityRequest):
         self.assertEqual(survivor.user_id, "54181241")
         self.assertEqual(list(group.principals.all()), [survivor])
 
-    def test_ensure_principal_rewrites_mismatched_user_id_and_merges_owner(self):
-        """Mismatch with another owner of the BOP user_id rewrites and merges the owner."""
+    def test_ensure_principal_raises_on_user_id_mismatch(self):
+        """Same username with a conflicting user_id hard-fails; remediate via bootstrap API."""
         obsolete = Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
         principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
-        obsolete_group = Group.objects.create(name="legacy", tenant=self.tenant)
-        principal_group = Group.objects.create(name="engineering", tenant=self.tenant)
-        shared_group = Group.objects.create(name="shared", tenant=self.tenant)
-        obsolete_group.principals.add(obsolete)
-        principal_group.principals.add(principal)
-        shared_group.principals.add(obsolete, principal)
-
         user = User()
         user.username = "jdross@redhat.com"
         user.user_id = "54181241"
         user.org_id = self.tenant.org_id
 
         tracker = _ReplicationTracker()
-        result = _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
-        self.assertIsNone(result)
+        with self.assertRaises(RuntimeError):
+            _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
 
         principal.refresh_from_db()
-        self.assertEqual(principal.user_id, "54181241")
-        self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
-        self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy", "shared"])
-
-        # Tuples for shared/legacy groups with user_id 54181241 appear in both add and
-        # remove — they cancel out (tuple already exists in SpiceDB, should stay).
-        expected_removed = [
-            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "99999999"),
-            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "99999999"),
-        ]
-        expected_added = [
-            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "54181241"),
-        ]
-        # Default-group tuples (via TenantMapping, not M2M)
-        mapping = TenantMapping.objects.get(tenant=self.tenant)
-        # default_group_uuid: always transitioned (every user is a member)
-        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999"))
-        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241"))
-        # default_admin_group_uuid: old tuple removed, new NOT added (admin status gated)
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
-        )
-        self.assertCountEqual(tracker.tuples_removed, expected_removed)
-        self.assertCountEqual(tracker.tuples_added, expected_added)
-        # Add and remove lists must be disjoint after deduplication
-        self.assertFalse(
-            set(tracker.tuples_added) & set(tracker.tuples_removed),
-            "Tuples in both add and remove lists would cause inconsistent SpiceDB state",
-        )
+        self.assertEqual(principal.user_id, "99999999")
+        self.assertTrue(Principal.objects.filter(pk=obsolete.pk).exists())
 
     def test_ensure_principal_upsert_integrity_error_creates_survivor_when_missing(self):
         """upsert IntegrityError path creates survivor principal when insert fails on user_id uniqueness."""
@@ -481,36 +447,67 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "16777216")
 
-    def test_ensure_principal_rewrites_mismatched_user_id_in_place(self):
-        """Ensure path rewrites a stale user_id when the BOP id is free."""
+    def test_rewrite_merges_owner_of_new_user_id(self):
+        """Rewrite merges another principal that already owns the target user_id."""
+        obsolete = Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
+        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
+        obsolete_group = Group.objects.create(name="legacy", tenant=self.tenant)
+        principal_group = Group.objects.create(name="engineering", tenant=self.tenant)
+        shared_group = Group.objects.create(name="shared", tenant=self.tenant)
+        obsolete_group.principals.add(obsolete)
+        principal_group.principals.add(principal)
+        shared_group.principals.add(obsolete, principal)
+
+        tracker = _ReplicationTracker()
+        self.assertIsNone(rewrite_principal_user_id(principal, "54181241", tracker))
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "54181241")
+        self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
+        self.assertCountEqual(principal.group.values_list("name", flat=True), ["engineering", "legacy", "shared"])
+
+        # Tuples for shared/legacy groups with user_id 54181241 appear in both add and
+        # remove — they cancel out (tuple already exists in SpiceDB, should stay).
+        expected_removed = [
+            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "99999999"),
+            Group.relationship_to_user_id_for_group(str(shared_group.uuid), "99999999"),
+        ]
+        expected_added = [
+            Group.relationship_to_user_id_for_group(str(principal_group.uuid), "54181241"),
+        ]
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999"))
+        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241"))
+        expected_removed.append(
+            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
+        )
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
+        self.assertFalse(
+            set(tracker.tuples_added) & set(tracker.tuples_removed),
+            "Tuples in both add and remove lists would cause inconsistent SpiceDB state",
+        )
+
+    def test_rewrite_in_place_with_group_and_default_tuples(self):
+        """In-place rewrite updates user_id and replicates M2M + default-group tuples."""
         principal = Principal.objects.create(
             username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
         )
         group = Group.objects.create(name="admins", tenant=self.tenant)
         group.principals.add(principal)
 
-        user = User()
-        user.username = "teppo.haapala@apotti.fi"
-        user.user_id = 51856862
-        user.org_id = self.tenant.org_id
-
         tracker = _ReplicationTracker()
-        result = _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
-        self.assertIsNone(result)
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
 
-        # M2M group tuple
         expected_removed = [Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")]
         expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")]
 
-        # Default-group tuples (via TenantMapping, not M2M)
         mapping = TenantMapping.objects.get(tenant=self.tenant)
-        # default_group_uuid: always transitioned
         expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "16777216"))
         expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "51856862"))
-        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
         expected_removed.append(
             Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "16777216")
         )
