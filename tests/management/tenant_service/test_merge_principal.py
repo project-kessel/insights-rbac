@@ -10,6 +10,7 @@ from management.group.model import Group
 from management.principal.model import Principal
 from management.role_binding.model import RoleBinding, RoleBindingPrincipal
 from management.role.v2_model import CustomRoleV2
+from management.tenant_mapping.model import TenantMapping
 from management.tenant_service.tenant_service import (
     _ensure_principal_with_user_id_in_tenant,
     merge_obsolete_principal_into_survivor,
@@ -225,6 +226,11 @@ class MergePrincipalTests(IdentityRequest):
             Group.relationship_to_user_id_for_group(str(shared_group.uuid), "54181241"),
             Group.relationship_to_user_id_for_group(str(obsolete_group.uuid), "54181241"),
         ]
+        # Default-group tuples (via TenantMapping, not M2M)
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "99999999"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "54181241"))
         self.assertCountEqual(tracker.tuples_removed, expected_removed)
         self.assertCountEqual(tracker.tuples_added, expected_added)
 
@@ -274,14 +280,16 @@ class MergePrincipalTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "54181241")
         self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
-        self.assertCountEqual(
-            tracker.tuples_removed,
-            [Group.relationship_to_user_id_for_group(str(group.uuid), "99999999")],
-        )
-        self.assertCountEqual(
-            tracker.tuples_added,
-            [Group.relationship_to_user_id_for_group(str(group.uuid), "54181241")],
-        )
+
+        expected_removed = [Group.relationship_to_user_id_for_group(str(group.uuid), "99999999")]
+        expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "54181241")]
+        # Default-group tuples (via TenantMapping, not M2M)
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "99999999"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "54181241"))
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
 
     def test_ensure_principal_noop_when_principal_already_has_user_id(self):
         """No merge when the matched principal already has the expected user_id."""
@@ -354,10 +362,15 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         self.assertEqual(principal.user_id, "51856862")
         self.assertEqual(list(group.principals.all()), [principal])
 
-        expected_removed = Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")
-        expected_added = Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")
-        self.assertCountEqual(tracker.tuples_removed, [expected_removed])
-        self.assertCountEqual(tracker.tuples_added, [expected_added])
+        expected_removed = [Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")]
+        expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")]
+        # Default-group tuples (via TenantMapping, not M2M)
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
 
     def test_rewrite_replicates_direct_role_binding_subject_tuples(self):
         """Direct role-binding subject tuples are rewritten from old user_id to new."""
@@ -379,19 +392,24 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
 
-        expected_removed = binding._user_subject_tuple(
-            Principal(username="tmp", tenant=self.tenant, user_id="16777216")
-        )
+        expected_removed = [
+            binding._user_subject_tuple(Principal(username="tmp", tenant=self.tenant, user_id="16777216"))
+        ]
         # Rebuild expected with the same binding uuid after rewrite (principal now has new id).
-        expected_added = binding._user_subject_tuple(principal)
-        self.assertCountEqual(tracker.tuples_removed, [expected_removed])
-        self.assertCountEqual(tracker.tuples_added, [expected_added])
+        expected_added = [binding._user_subject_tuple(principal)]
+        # Default-group tuples (via TenantMapping, not M2M)
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
         self.assertTrue(
             RoleBindingPrincipal.objects.filter(binding=binding, principal=principal, source="direct").exists()
         )
 
     def test_rewrite_with_no_memberships_only_updates_user_id(self):
-        """Principal with no groups/bindings still gets user_id updated; no replication."""
+        """Principal with no M2M groups/bindings still replicates default-group tuples."""
         principal = Principal.objects.create(
             username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
         )
@@ -401,8 +419,15 @@ class RewritePrincipalUserIdTests(IdentityRequest):
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
-        self.assertEqual(tracker.tuples_added, [])
-        self.assertEqual(tracker.tuples_removed, [])
+        # Default-group tuples are still replicated even without M2M memberships
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        expected_removed = []
+        expected_added = []
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
 
     def test_rewrite_raises_when_principal_user_id_missing(self):
         """Rewrite requires an existing user_id; missing ids use the assign/merge path instead."""
@@ -445,15 +470,75 @@ class RewritePrincipalUserIdTests(IdentityRequest):
         user.org_id = self.tenant.org_id
 
         tracker = _ReplicationTracker()
-        _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
+        result = _ensure_principal_with_user_id_in_tenant(user, self.tenant, replicator=tracker)
+        self.assertIsNone(result)
 
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "51856862")
-        self.assertCountEqual(
-            tracker.tuples_removed,
-            [Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")],
+
+        # M2M group tuple
+        expected_removed = [Group.relationship_to_user_id_for_group(str(group.uuid), "16777216")]
+        expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")]
+
+        # Default-group tuples (via TenantMapping, not M2M)
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+        for default_uuid in (mapping.default_group_uuid, mapping.default_admin_group_uuid):
+            expected_removed.append(Group.relationship_to_user_id_for_group(str(default_uuid), "16777216"))
+            expected_added.append(Group.relationship_to_user_id_for_group(str(default_uuid), "51856862"))
+
+        self.assertCountEqual(tracker.tuples_removed, expected_removed)
+        self.assertCountEqual(tracker.tuples_added, expected_added)
+
+    def test_rewrite_removes_default_group_tuples_for_old_user_id(self):
+        """Default-group tuples (not in M2M) are removed for old user_id and added for new."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
         )
-        self.assertCountEqual(
-            tracker.tuples_added,
-            [Group.relationship_to_user_id_for_group(str(group.uuid), "51856862")],
+        mapping = TenantMapping.objects.get(tenant=self.tenant)
+
+        tracker = _ReplicationTracker()
+        self.assertIsNone(rewrite_principal_user_id(principal, "51856862", tracker))
+
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "51856862")
+
+        default_uuid = str(mapping.default_group_uuid)
+        admin_uuid = str(mapping.default_admin_group_uuid)
+        expected_removed = [
+            Group.relationship_to_user_id_for_group(default_uuid, "16777216"),
+            Group.relationship_to_user_id_for_group(admin_uuid, "16777216"),
+        ]
+        expected_added = [
+            Group.relationship_to_user_id_for_group(default_uuid, "51856862"),
+            Group.relationship_to_user_id_for_group(admin_uuid, "51856862"),
+        ]
+        for t in expected_removed:
+            self.assertIn(t, tracker.tuples_removed)
+        for t in expected_added:
+            self.assertIn(t, tracker.tuples_added)
+
+    def test_rewrite_catches_integrity_error_on_concurrent_claim(self):
+        """Concurrent claim of user_id between lookup and save is caught and resolved."""
+        principal = Principal.objects.create(
+            username="teppo.haapala@apotti.fi", tenant=self.tenant, user_id="16777216"
         )
+
+        original_save = Principal.save
+        call_count = {"n": 0}
+
+        def flaky_save(self_principal, *args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1 and self_principal.pk == principal.pk:
+                raise IntegrityError(
+                    'duplicate key value violates unique constraint "management_principal_user_id_key"'
+                )
+            return original_save(self_principal, *args, **kwargs)
+
+        tracker = _ReplicationTracker()
+        with (
+            patch("management.tenant_service.tenant_service._resolve_user_id_conflict") as mock_resolve,
+            patch.object(Principal, "save", flaky_save),
+        ):
+            rewrite_principal_user_id(principal, "51856862", tracker)
+
+        mock_resolve.assert_called_once_with(principal, "51856862", tracker)
