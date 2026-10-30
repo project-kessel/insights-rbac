@@ -56,6 +56,7 @@ from management.principal.view import PrincipalView
 from management.role.model import Role
 from management.role.v2_model import RoleV2
 from management.role.v2_role_scope import v2_role_excluded_applications
+from management.role.v2_service import is_v1_list_access_allowed_for_v2_tenant
 from management.role.v2_view import RoleV2ViewSet
 from management.role.view import RoleViewSet
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
@@ -6010,10 +6011,24 @@ def _generate_write_preview(tool_name: str, arguments: dict[str, Any]) -> str:
 _V2_EXCLUDED_APPS_V1_TOOL = "list_access"
 
 
+class V2ActivationCheckError(Exception):
+    """Raised when the V2 write-activation database lookup fails."""
+
+
 def _is_v2_write_activated_request(request: HttpRequest) -> bool:
-    """Return whether the request's tenant is V2 write-activated (False when there is no tenant)."""
+    """Return whether the request's tenant is V2 write-activated (False when there is no tenant).
+
+    Raises ``V2ActivationCheckError`` on database errors so callers can return
+    a JSON-RPC ``-32603`` error instead of an HTTP 500.
+    """
     tenant = getattr(request, "tenant", None)
-    return tenant is not None and is_v2_write_activated(tenant)
+    if tenant is None:
+        return False
+    try:
+        return is_v2_write_activated(tenant)
+    except Exception:
+        logger.exception("mcp: V2 write-activation check failed for tenant org_id=%s", getattr(tenant, "org_id", "?"))
+        raise V2ActivationCheckError("Database error checking V2 write-activation status")
 
 
 def _v1_tool_blocked_response(
@@ -6022,26 +6037,36 @@ def _v1_tool_blocked_response(
     """Reject a V1 tool call for a V2 write-activated tenant, pointing to the V2 alternative.
 
     ``list_access`` is allowed when every comma-separated ``application`` value
-    is excluded from the V2 migration (parsed like ``validate_v2_application_param``).
+    is excluded from the V2 migration (delegated to
+    :func:`~management.role.v2_service.is_v1_list_access_allowed_for_v2_tenant`).
     Returns None when the call may proceed.
     """
+    v2_alternative = config.v2_alternative if _is_v2_available() else None
+    if v2_alternative:
+        suffix = f" Use '{v2_alternative}' instead."
+    else:
+        suffix = " No V2 alternative is available in this deployment."
     error: dict[str, Any] = {
         "error": (
             f"Tool '{tool_name}' is a V1 tool and is not available for this organization because it "
-            f"uses RBAC V2. Use '{config.v2_alternative}' instead."
+            f"uses RBAC V2.{suffix}"
         ),
-        "v2_alternative": config.v2_alternative,
+        "v2_alternative": v2_alternative,
     }
+    if tool_name == "patch_role_v1" and v2_alternative:
+        error["error"] += (
+            f" Note: '{v2_alternative}' is a full replacement — the 'permissions' parameter is "
+            "required and replaces the entire permission list."
+        )
     if tool_name == _V2_EXCLUDED_APPS_V1_TOOL:
-        excluded_apps = v2_role_excluded_applications()
         applications = {app.strip() for app in str(arguments.get("application", "")).split(",") if app.strip()}
-        if applications and applications <= excluded_apps:
+        if is_v1_list_access_allowed_for_v2_tenant(applications):
             return None
         error["error"] += (
             f" '{tool_name}' is only available when every 'application' value is excluded from "
             "the V2 migration (see v2_excluded_applications)."
         )
-        error["v2_excluded_applications"] = sorted(excluded_apps)
+        error["v2_excluded_applications"] = sorted(v2_role_excluded_applications())
 
     logger.warning("mcp: tools/call tool='%s' rejected, V1 tool for V2 write-activated tenant", tool_name)
     _record_metric(tool_name, "v1_tool_blocked")
@@ -6057,7 +6082,10 @@ def _handle_tools_list(request: HttpRequest, request_id: Any, params: dict[str, 
     """
     v2_available = _is_v2_available()
     write_enabled = _is_write_enabled()
-    hide_v1_tools = _is_v2_write_activated_request(request)
+    try:
+        hide_v1_tools = _is_v2_write_activated_request(request)
+    except V2ActivationCheckError:
+        return _error_response(request_id, -32603, "Internal error: unable to determine V2 activation status")
     overrides = _get_all_description_overrides()
     tools_data = []
     for tool in _get_tools():
@@ -6263,10 +6291,15 @@ def _handle_tools_call(request: HttpRequest, request_id: Any, params: dict[str, 
             _record_metric(tool_name, "auth_error")
             return _error_response(request_id, -32000, "Authentication required")
 
-    if config.api_version == ApiVersion.V1 and _is_v2_write_activated_request(request):
-        blocked_response = _v1_tool_blocked_response(request_id, tool_name, config, arguments)
-        if blocked_response:
-            return blocked_response
+    if config.api_version == ApiVersion.V1:
+        try:
+            v2_write_activated = _is_v2_write_activated_request(request)
+        except V2ActivationCheckError:
+            return _error_response(request_id, -32603, "Internal error: unable to determine V2 activation status")
+        if v2_write_activated:
+            blocked_response = _v1_tool_blocked_response(request_id, tool_name, config, arguments)
+            if blocked_response:
+                return blocked_response
 
     if config.write:
         request.mcp_source = True

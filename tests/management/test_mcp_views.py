@@ -21,6 +21,7 @@ import inspect
 import json
 import threading
 import time
+import uuid
 from importlib import reload
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +33,7 @@ from management.mcp_views import (
     ApiVersion,
     ToolConfig,
     ToolTimeoutError,
+    V2ActivationCheckError,
     _MAX_PERMISSIONS_PER_ROLE,
     _TOOL_CONFIG,
     _check_kessel_access,
@@ -6106,12 +6108,14 @@ class MCPWriteToolsV1Tests(MCPToolTestMixin, IdentityRequest):
 _V1_TOOL_NAMES = {name for name, config in _TOOL_CONFIG.items() if config.api_version == ApiVersion.V1}
 
 
-@override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["cost-management", "approval"])
+@override_settings(V2_MIGRATION_APP_EXCLUDE_LIST=["cost-management", "approval"], V2_APIS_ENABLED=True)
 class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
     """Test that V1 tools are blocked and hidden for V2 write-activated tenants."""
 
     def setUp(self):
         """Set up V1 tool gating tests."""
+        reload(urls)
+        clear_url_caches()
         super().setUp()
         self.url = "/_private/_a2s/mcp/"
         self.client = APIClient()
@@ -6282,6 +6286,57 @@ class MCPV1ToolGatingTests(MCPToolTestMixin, IdentityRequest):
 
                 output = self._assert_blocked(response, "list_access")
                 self.assertEqual(output["v2_excluded_applications"], ["approval", "cost-management"])
+
+    @override_settings(MCP_WRITE_ENABLED=True)
+    def test_patch_role_v1_blocked_message_includes_permissions_note(self):
+        """The blocked message for patch_role_v1 warns that update_role requires the full permission list."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool("patch_role_v1", {"role_uuid": str(uuid.uuid4()), "name": "X"})
+
+        output = self._assert_blocked(response, "patch_role_v1")
+        self.assertIn("full replacement", output["error"])
+        self.assertIn("'permissions' parameter is required", output["error"])
+
+    @override_settings(V2_APIS_ENABLED=False)
+    def test_blocked_v1_tool_no_v2_alternative_when_v2_disabled(self):
+        """When V2 APIs are disabled, the blocked response names no V2 alternative."""
+        ensure_v2_write_activated(self.tenant)
+
+        response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        data = response.json()
+        self.assertTrue(data["result"]["isError"])
+        output = self._get_tool_output(response)
+        self.assertIsNone(output["v2_alternative"])
+        self.assertIn("No V2 alternative is available", output["error"])
+
+    def test_tools_list_db_error_returns_json_rpc_error(self):
+        """Database error during V2 activation check returns JSON-RPC -32603 in tools/list."""
+        with patch("management.mcp_views.is_v2_write_activated", side_effect=Exception("DB down")):
+            response = self.client.post(
+                self.url,
+                data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
+                content_type="application/json",
+                **self.headers,
+            )
+
+        data = response.json()
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32603)
+        self.assertIn("V2 activation status", data["error"]["message"])
+
+    def test_tools_call_db_error_returns_json_rpc_error(self):
+        """Database error during V2 activation check returns JSON-RPC -32603 in tools/call."""
+        ensure_v2_write_activated(self.tenant)
+
+        with patch("management.mcp_views.is_v2_write_activated", side_effect=Exception("DB down")):
+            response = self._call_tool("list_group_roles", {"group_uuid": str(self.group.uuid)})
+
+        data = response.json()
+        self.assertIn("error", data)
+        self.assertEqual(data["error"]["code"], -32603)
+        self.assertIn("V2 activation status", data["error"]["message"])
 
 
 @override_settings(MCP_WRITE_ENABLED=True, MCP_WRITE_CONFIRMATION=False)
