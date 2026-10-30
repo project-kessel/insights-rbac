@@ -17,7 +17,7 @@
 """Class to manage interactions with the IT service accounts service."""
 
 import logging
-import time
+import math
 import uuid
 from typing import Any, Iterable, Optional, Tuple
 
@@ -39,6 +39,21 @@ KEY_SERVICE_ACCOUNT = "service-account-"
 
 # IT path to fetch the service accounts.
 IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
+
+# Keys IT uses for the "service access token" attributes on a service account. IT only sets these for service
+# accounts created in service access token mode, so they are absent for every regular service account. IT calls
+# the first one "type", which is why we re-expose it as "service_account_type": our own "type" already means
+# "user or service account" and the console filters on it.
+IT_KEY_SERVICE_ACCOUNT_TYPE = "type"
+IT_KEY_SERVICE_ACCOUNT_EXPIRATION = "expiration"
+
+# Service account fields holding a Unix timestamp, mapped to the sort key used when the field is missing or is not
+# a number. A regular service account has no expiry, so it sorts after every expiring one when ascending. An
+# unknown creation time keeps sorting first, which is what the previous string-based sort did for it.
+TIMESTAMP_ORDER_BY_FIELDS: dict[str, float] = {
+    "time_created": 0.0,
+    "time_expires": float("inf"),
+}
 
 # Maximum number of service accounts to request at once. This is a limit set by the IT service.
 IT_SERVICE_ACCOUNT_BATCH_SIZE = 100
@@ -373,10 +388,15 @@ class ITService:
         else:
             service_account_principals = service_account_principals.order_by("-username")
 
+        # Always fetch full records for sorting and filtering; username_only projection is deferred until after
+        # pagination so that timestamp and tiebreaker fields are available for ordering.
+        username_only = options.get("username_only")
+        fetch_options = {k: v for k, v in options.items() if k != "username_only"} if username_only else options
+
         service_accounts = self._filtered_service_accounts(
             user=user,
             service_account_principals=service_account_principals,
-            options=options,
+            options=fetch_options,
         )
 
         # We always set a default offset and a limit if the user doesn't specify them, so it is safe to simply put the
@@ -410,15 +430,51 @@ class ITService:
 
         if order_by:
             # If any order_by parameter is passed then sort the service accounts by that field either asc or desc
-            if order_by in ["-time_created", "-name", "-description", "-clientId", "-owner"]:
-                service_accounts.sort(reverse=True, key=lambda sa: str(sa.get(order_by[1:], "")).casefold())
+            if order_by in ["-time_created", "-time_expires", "-name", "-description", "-clientId", "-owner"]:
+                descending_field = order_by[1:]
+                service_accounts.sort(
+                    reverse=True, key=lambda sa: self._service_account_sort_key(sa, descending_field)
+                )
             else:
-                service_accounts.sort(reverse=False, key=lambda sa: str(sa.get(order_by, "")).casefold())
+                service_accounts.sort(reverse=False, key=lambda sa: self._service_account_sort_key(sa, order_by))
 
         # flake8 ignore E203 = Whitespace before ':' -> false positive https://github.com/PyCQA/pycodestyle/issues/373
         service_accounts = service_accounts[offset : offset + limit]  # type: ignore # noqa: E203
 
+        # Project to username-only after sorting and pagination so that timestamp sort keys are available above.
+        if username_only and username_only == "true":
+            service_accounts = [{"username": sa["username"]} for sa in service_accounts]
+
         return service_accounts, count
+
+    @staticmethod
+    def _service_account_sort_key(service_account: dict, field: str) -> Any:
+        """Build the sort key for a service account for the given "order_by" field.
+
+        Timestamp fields need a numeric key. Coercing them to strings sorts "999" after "1000", which only looks
+        correct today because every timestamp we store happens to have the same number of digits.
+
+        When the primary key ties (e.g. every regular account has no expiry), the ``clientId`` is appended as a
+        stable tiebreaker so that offset pagination neither repeats nor omits accounts across workers.
+        """
+        # Stable tiebreaker shared by both branches below.
+        tiebreaker = str(service_account.get("clientId", ""))
+
+        if field not in TIMESTAMP_ORDER_BY_FIELDS:
+            return (str(service_account.get(field, "")).casefold(), tiebreaker)
+
+        try:
+            timestamp = float(service_account[field])
+        except (KeyError, TypeError, ValueError):
+            return (TIMESTAMP_ORDER_BY_FIELDS[field], tiebreaker)
+
+        # "NaN" parses as a float but is unorderable: every comparison against it is false, so a list containing
+        # one can come back out of order. Fall back to the field's default, which is a sentinel we choose and is
+        # therefore ordered consistently against every real timestamp.
+        if not math.isfinite(timestamp):
+            return (TIMESTAMP_ORDER_BY_FIELDS[field], tiebreaker)
+
+        return (timestamp, tiebreaker)
 
     def get_service_accounts_group(self, group: Group, user: User, options: dict[str, Any] = {}) -> list[dict]:
         """Get the service accounts for the given group."""
@@ -549,6 +605,8 @@ class ITService:
         created_by = service_account_from_it_service.get("createdBy")
         created_at = service_account_from_it_service.get("createdAt")
         user_id = service_account_from_it_service.get("userId")
+        service_account_type = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_TYPE)
+        expiration = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_EXPIRATION)
 
         if client_id:
             service_account["clientId"] = client_id
@@ -568,8 +626,18 @@ class ITService:
         if user_id:
             service_account["userId"] = user_id
 
-        # Hard code the type for every service account.
+        # Hard code the type for every service account. This stays "service-account" for service access tokens too:
+        # "type" distinguishes service accounts from users, and "service_account_type" distinguishes a service
+        # access token from a regular service account.
         service_account["type"] = "service-account"
+
+        # IT only returns these for service accounts created in "service access token" mode, so an absent value means
+        # a regular service account and we leave the keys out of the response entirely.
+        if service_account_type:
+            service_account["service_account_type"] = service_account_type
+
+        if expiration:
+            service_account["time_expires"] = expiration
 
         return service_account
 
@@ -625,25 +693,22 @@ class ITService:
         return service_accounts
 
     def _get_mock_service_accounts(self, service_account_principals: Iterable[Principal]) -> list[dict]:
-        """Mock an IT service call which returns service accounts. Useful for development or testing."""
-        mocked_service_accounts: list[dict] = []
-        for sap in service_account_principals:
-            # Transform the service account to the structure our logic works with and then append it to the list of
-            # mocked service accounts we will be returning.
-            mocked_service_accounts.append(
-                self._transform_incoming_payload(
-                    {
-                        "id": sap.service_account_id,
-                        "clientId": sap.service_account_id,
-                        "name": f"{sap.service_account_id}-name",
-                        "description": f"{sap.service_account_id}-description",
-                        "createdBy": sap.username,
-                        "createdAt": round(time.time()),
-                    }
-                )
-            )
+        """Mock an IT service call which returns service accounts. Useful for development or testing.
 
-        return mocked_service_accounts
+        The payloads are built in IT's shape and then run through the same transformation a real response goes
+        through, so the bypassed path still exercises the real mapping.
+
+        The mock generator yields one payload at a time so that the raw and transformed lists are not both held
+        in memory at once.
+        """
+        # Imported here rather than at module scope so that the mock module can import our IT key names without
+        # creating a circular import.
+        from management.principal.it_service_mocks import generate_it_service_accounts
+
+        return [
+            self._transform_incoming_payload(it_service_account)
+            for it_service_account in generate_it_service_accounts(service_account_principals)
+        ]
 
     def _filtered_service_accounts(
         self,
