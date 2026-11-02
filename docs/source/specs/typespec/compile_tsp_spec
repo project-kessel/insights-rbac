@@ -12,4 +12,36 @@ set -e
 tsp compile main.tsp
 tsp compile main.tsp --options @typespec/openapi3.output-file=openapi.json
 
+# Strip "@statusCode _" metadata that leaks into generated examples.
+# TypeSpec requires `_` in @example blocks (it is a required model property),
+# but it is HTTP status-code metadata, not a response-body field.
+python3 -c "
+import json, pathlib, re, sys
+
+def strip_underscore_from_examples(obj):
+    \"\"\"Recursively remove '_' keys whose values are HTTP status codes from example objects.\"\"\"
+    if isinstance(obj, dict):
+        # Remove '_' if its value is an integer status code (e.g. 200, 201)
+        if '_' in obj and isinstance(obj['_'], int):
+            del obj['_']
+        for v in obj.values():
+            strip_underscore_from_examples(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            strip_underscore_from_examples(item)
+
+# --- JSON ---
+json_path = pathlib.Path('tsp-output/@typespec/openapi3/openapi.json')
+data = json.loads(json_path.read_text())
+strip_underscore_from_examples(data)
+json_path.write_text(json.dumps(data, indent=2) + '\n')
+
+# --- YAML (treat as text to preserve formatting) ---
+yaml_path = pathlib.Path('tsp-output/@typespec/openapi3/openapi.yaml')
+yaml_text = yaml_path.read_text()
+# Remove standalone '\"_\": <integer>' or '_: <integer>' lines from YAML
+yaml_text = re.sub(r'^\s+\"?_\"?: \d+,?\n', '', yaml_text, flags=re.MULTILINE)
+yaml_path.write_text(yaml_text)
+"
+
 cp tsp-output/@typespec/openapi3/openapi.{yaml,json} ../v2
