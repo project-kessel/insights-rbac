@@ -1971,6 +1971,18 @@ class ITServiceTests(IdentityRequest):
         )
         self.assertNotIn("time_expires", falsy_values, "a zero expiration should be treated as an absent one")
 
+        invalid_expiration = self.it_service._transform_incoming_payload(
+            service_account_from_it_service={
+                **base_service_account,
+                IT_KEY_SERVICE_ACCOUNT_EXPIRATION: "not-an-integer",
+            }
+        )
+        self.assertNotIn(
+            "time_expires",
+            invalid_expiration,
+            "an expiration that cannot be represented as an integer should be omitted",
+        )
+
     def test_service_account_sort_key_timestamps_are_numeric(self) -> None:
         """Test that timestamp fields sort numerically rather than as strings."""
         # Timestamps with a differing number of digits are the case a string sort gets wrong: as strings "999"
@@ -2013,6 +2025,11 @@ class ITServiceTests(IdentityRequest):
             (float("inf"), ""),
             self.it_service._service_account_sort_key({"time_expires": "not-a-timestamp"}, "time_expires"),
             "an unparseable timestamp should fall back to the default instead of raising",
+        )
+        self.assertEqual(
+            (float("inf"), ""),
+            self.it_service._service_account_sort_key({"time_expires": 10**1000}, "time_expires"),
+            "a timestamp too large for float should fall back instead of raising",
         )
 
         # "NaN" and the infinities parse as floats but are not usable as sort keys, so they fall back too. NaN is

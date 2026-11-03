@@ -5158,6 +5158,8 @@ class GroupServiceAccessTokenReplicationTests(IdentityRequest):
                 subject("rbac", "principal", "redhat/sa-user-id"),
             )
         )
+        service_access_token_subject_tuples = tuples.count_tuples(subject("rbac", "principal", "redhat/sat-user-id"))
+        regular_subject_tuples = tuples.count_tuples(subject("rbac", "principal", "redhat/sa-user-id"))
 
         self.assertEqual(
             1,
@@ -5169,6 +5171,16 @@ class GroupServiceAccessTokenReplicationTests(IdentityRequest):
             service_access_token_tuples,
             "a service access token should replicate exactly like a regular service account; a difference here"
             " would contradict the premise that authorization needs no change for service access tokens",
+        )
+        self.assertEqual(
+            service_access_token_tuples,
+            service_access_token_subject_tuples,
+            "the service access token should produce no tuple beyond its group membership tuple",
+        )
+        self.assertEqual(
+            regular_tuples,
+            regular_subject_tuples,
+            "the regular service account should produce no tuple beyond its group membership tuple",
         )
 
 
