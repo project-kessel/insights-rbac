@@ -26,7 +26,7 @@ from prometheus_client import Counter, Histogram
 from rest_framework import status
 
 from api.models import User
-from management.principal.keycloak_profile import get_keycloak_profiles
+from management.principal.profile_service import get_profiles_from_service, profile_service_configured
 from rbac.env import ENVIRONMENT
 
 LOGGER = logging.getLogger(__name__)
@@ -140,10 +140,10 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
         On-prem / local runs have no BOP/IT profile. Always include the SaaS contract
         fields ``is_active`` and ``is_org_admin`` so the RBAC UI does not treat missing
-        flags as Inactive / Org Admin No. When Keycloak Admin env vars are configured,
-        ``profile`` may supply real email/name/org-admin; otherwise names stay empty,
-        email falls back to a synthetic value (never foo/bar/baz), and ``is_org_admin``
-        is False.
+        flags as Inactive / Org Admin No. When a Cost principal-profile service URL is
+        configured, ``profile`` may supply real email/name/org-admin; otherwise names
+        stay empty, email falls back to a synthetic value (never foo/bar/baz), and
+        ``is_org_admin`` is False.
         """
         profile = profile or {}
         if principal is not None:
@@ -158,8 +158,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
         if not email:
             email = f"{username}@local" if username else BYPASS_BOP_EMAIL
 
-        # Synced principals are enabled Keycloak users; prefer Keycloak enabled flag
-        # when present, otherwise treat DB presence as active.
+        # Prefer profile-service enabled flag when present; otherwise treat DB presence as active.
         if "enabled" in profile:
             is_active = bool(profile.get("enabled"))
         else:
@@ -218,14 +217,17 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
         if settings.BYPASS_BOP_VERIFICATION:
             to_return = []
             local_principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
-            kc_profiles = get_keycloak_profiles()
+            # Cost-owned profile service (A&M-aligned). Empty when unset → safe defaults.
+            enrichment_profiles = (
+                get_profiles_from_service(org_id) if profile_service_configured() else {}
+            )
 
-            def payload_for(principal=None, username=None, *, allow_keycloak_profile=True):
+            def payload_for(principal=None, username=None, *, allow_profile=True):
                 name = principal.username if principal is not None else username
-                if allow_keycloak_profile and name:
-                    profile = kc_profiles.get(str(name).casefold(), {})
+                if allow_profile and name:
+                    profile = enrichment_profiles.get(str(name).casefold(), {})
                 else:
-                    # Unknown-to-tenant usernames must not leak realm-wide Keycloak PII.
+                    # Unknown-to-tenant usernames must not leak org-wide profile PII.
                     profile = {}
                 return self._bypass_principal_payload(principal=principal, username=username, profile=profile)
 
@@ -239,14 +241,14 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                     if principal is not None:
                         to_return.append(payload_for(principal=principal))
                     else:
-                        to_return.append(payload_for(username=username, allow_keycloak_profile=False))
+                        to_return.append(payload_for(username=username, allow_profile=False))
             elif "principalStartsWith" in data:
                 principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
                 for principal in principals:
                     to_return.append(payload_for(principal=principal))
             elif "emailStartsWith" in data or "primaryEmail" in data:
-                # Prefer matching against Keycloak emails when available; otherwise the
-                # synthetic bypass email used when Keycloak is unset.
+                # Prefer matching against profile-service emails when available; otherwise
+                # the synthetic bypass email used when the service is unset.
                 needle_startswith = data.get("emailStartsWith")
                 needle_exact = data.get("primaryEmail")
                 for principal in local_principals:
@@ -264,6 +266,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 to_return = [principal for principal in to_return if not principal.get("is_active")]
             elif status_filter == "enabled":
                 to_return = [principal for principal in to_return if principal.get("is_active")]
+            # status=all (or anything else): no is_active filter — used by clean_tenant_principals
             if (params or {}).get("admin_only") == "true":
                 to_return = [principal for principal in to_return if principal.get("is_org_admin")]
             user_count = len(to_return)

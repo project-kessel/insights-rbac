@@ -199,8 +199,9 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertIs(by_username["unknown-user"]["is_org_admin"], False)
 
     @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=True)
     @patch(
-        "management.principal.proxy.get_keycloak_profiles",
+        "management.principal.proxy.get_profiles_from_service",
         return_value={
             "alice": {
                 "first_name": "Alice",
@@ -225,8 +226,8 @@ class PrincipalProxyTest(IdentityRequest):
             },
         },
     )
-    def test__request_principals_bypass_enriches_from_keycloak(self, _mock_profiles):
-        """When Keycloak profiles are available, return SaaS-parity org-admin and identity fields."""
+    def test__request_principals_bypass_enriches_from_profile_service(self, _mock_profiles, _mock_configured):
+        """When Cost profile service returns data, emit SaaS-parity org-admin and identity fields."""
         Principal.objects.create(tenant=self.tenant, username="alice", user_id="user-alice")
         Principal.objects.create(tenant=self.tenant, username="bob", user_id="user-bob")
 
@@ -253,7 +254,7 @@ class PrincipalProxyTest(IdentityRequest):
         )
         self.assertEqual([p["username"] for p in admin_only["data"]], ["alice"])
 
-        # Username not in this tenant must not receive Keycloak PII / org-admin.
+        # Username not in this tenant must not receive profile PII / org-admin.
         filtered = proxy._request_principals(
             url="http://localhost:8080/v1/users",
             org_id=self.tenant.org_id,
@@ -264,6 +265,28 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual(outsider["email"], "outsider@local")
         self.assertEqual(outsider["first_name"], "")
         self.assertIs(outsider["is_org_admin"], False)
+
+        # status=all keeps disabled users visible for clean_tenant_principals.
+        with patch(
+            "management.principal.proxy.get_profiles_from_service",
+            return_value={
+                "bob": {
+                    "first_name": "Bob",
+                    "last_name": "Disabled",
+                    "email": "bob@example.com",
+                    "is_org_admin": False,
+                    "enabled": False,
+                }
+            },
+        ):
+            all_status = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "all"},
+            )
+        by_username = {principal["username"]: principal for principal in all_status["data"]}
+        self.assertIn("bob", by_username)
+        self.assertIs(by_username["bob"]["is_active"], False)
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
