@@ -80,7 +80,18 @@ class ServiceAccountSerializer(serializers.Serializer):
     description = serializers.CharField(allow_null=True, required=False)
     owner = serializers.CharField()
     time_created = serializers.IntegerField()
+    # "type" tells a service account apart from a user, so it stays "service-account" for service access tokens as
+    # well. "service_account_type" is what distinguishes a service access token from a regular service account.
     type = serializers.CharField()
+    # IT only sends these for service accounts created in service access token mode. Declared as optional so that a
+    # regular service account is serialized exactly as it was before, with the keys left out entirely rather than
+    # rendered as null.
+    # CIAM-12576 confirms the current set as "service_access_token" or omitted, which is what the OpenAPI enum
+    # documents. Still a CharField rather than a ChoiceField: "current" implies the set can grow, and rejecting
+    # an unrecognised value would fail the whole response instead of degrading to "treat it as a regular
+    # service account", which is already the documented meaning of an absent value.
+    service_account_type = serializers.CharField(required=False)
+    time_expires = serializers.IntegerField(required=False)
     username = serializers.CharField()
 
     class Meta:
