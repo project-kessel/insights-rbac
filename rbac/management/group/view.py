@@ -60,7 +60,12 @@ from management.notifications.notification_handlers import (
 )
 from management.permissions import GroupAccessPermission
 from management.permissions.v2_edit_api_access import is_v2_edit_enabled_for_request
-from management.principal.backfill import backfill_atomic, backfill_remote_principals
+from management.principal.backfill import (
+    PrincipalUserIdMismatchError,
+    backfill_atomic,
+    backfill_remote_principals,
+    reject_mismatched_principal_user_ids,
+)
 from management.principal.it_service import ITService
 from management.principal.model import Principal, SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
@@ -944,6 +949,19 @@ class GroupViewSet(
                 principals=principals,
                 principals_from_response=principals_from_response,
             )
+        except PrincipalUserIdMismatchError as e:
+            return Response(
+                status=status.HTTP_409_CONFLICT,
+                data={
+                    "errors": [
+                        {
+                            "detail": str(e),
+                            "status": str(status.HTTP_409_CONFLICT),
+                            "source": "groups",
+                        }
+                    ]
+                },
+            )
         except OperationalError as e:
             if _is_serialization_or_deadlock(e):
                 return Response(
@@ -1003,6 +1021,8 @@ class GroupViewSet(
             if not all(u.is_active for u in users):
                 raise AssertionError(f"Received inactive users despite not requesting them: {users}")
 
+            # Fail closed before membership/dual-write when DB user_id disagrees with BOP.
+            reject_mismatched_principal_user_ids(users, tenant)
             backfill_remote_principals(bootstrap_service, users, tenant)
 
         new_users = []
