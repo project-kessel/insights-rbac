@@ -18,16 +18,23 @@
 """Sources for fetching JSON Web KeySets for validating JWT signatures."""
 
 import logging
+import time
 from json import JSONDecodeError
 from typing import Protocol
 
 import requests
+from django.conf import settings
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 from management.cache import JWKSCache
 from requests import Response
 from rest_framework import status
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+# Transient SSO/network blips (connection reset, timeout) should not fail JWT validation
+# on the first attempt — especially on cache miss when every authenticated request needs JWKS.
+JWKS_REQUEST_RETRIES = 2
+JWKS_REQUEST_BACKOFF_SECONDS = 0.25
 
 
 class JWKSSource(Protocol):
@@ -112,12 +119,29 @@ class JWKSCacheSource(JWKSSource):
 
 def _request_json(url: str) -> dict:
     """Perform an JWKS related GET request and return the JSON response."""
-    try:
-        response: Response = requests.get(url=url)
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ce:
-        logger.error("Unable to fetch %s to validate the token: %s", url, ce)
+    max_attempts = JWKS_REQUEST_RETRIES + 1
+    timeout = settings.IT_SERVICE_TIMEOUT_SECONDS
+    response: Response
 
-        raise UnableMeetPrerequisitesError(f"unable to fetch {url} to validate the token") from ce
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(url=url, timeout=timeout)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ce:
+            if attempt == max_attempts:
+                logger.error("Unable to fetch %s to validate the token: %s", url, ce)
+                raise UnableMeetPrerequisitesError(f"unable to fetch {url} to validate the token") from ce
+
+            logger.warning(
+                "Unable to fetch %s to validate the token (attempt %d/%d); retrying: %s",
+                url,
+                attempt,
+                max_attempts,
+                type(ce).__name__,
+            )
+            time.sleep(JWKS_REQUEST_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            continue
+
+        break
 
     if not status.is_success(response.status_code):
         logger.error(
