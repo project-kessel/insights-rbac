@@ -2243,7 +2243,7 @@
       "get": {
         "operationId": "RoleBindings_listBySubject",
         "summary": "List role bindings grouped by subject",
-        "description": "List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.",
+        "description": "List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path\u2014use GET /role-bindings/ for those filters.",
         "parameters": [
           {
             "name": "limit",
@@ -3774,7 +3774,6 @@
                   "$ref": "#/components/schemas/Workspaces.CreateWorkspaceResponse"
                 },
                 "example": {
-                  "_": 201,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -4063,7 +4062,6 @@
                 "examples": {
                   "example0": {
                     "value": {
-                      "_": 200,
                       "id": "e4277742-b91c-43f1-a185-b827e8574345",
                       "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                       "type": "standard",
@@ -4075,7 +4073,6 @@
                   },
                   "example1": {
                     "value": {
-                      "_": 200,
                       "id": "e4277742-b91c-43f1-a185-b827e8574345",
                       "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                       "type": "standard",
@@ -4168,7 +4165,6 @@
                   "$ref": "#/components/schemas/Workspaces.UpdateWorkspaceResponse"
                 },
                 "example": {
-                  "_": 200,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -4272,7 +4268,6 @@
                   "$ref": "#/components/schemas/Workspaces.PatchWorkspaceResponse"
                 },
                 "example": {
-                  "_": 200,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -4863,10 +4858,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -4885,10 +4890,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -4907,6 +4922,31 @@
         "type": "integer",
         "format": "int64",
         "description": "Offset for offset-based pagination.\nThe number of items to skip before starting to return results."
+      },
+      "OffsetPagination": {
+        "type": "object",
+        "required": [
+          "meta",
+          "links"
+        ],
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
+          },
+          "links": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
+          }
+        }
       },
       "OffsetPaginationLinks": {
         "type": "object",
@@ -5049,31 +5089,6 @@
           "application": "rbac",
           "resource_type": "workspace",
           "operation": "read"
-        }
-      },
-      "Permissions.Pagination": {
-        "type": "object",
-        "required": [
-          "meta",
-          "links"
-        ],
-        "properties": {
-          "meta": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationMeta"
-              }
-            ],
-            "description": "Pagination metadata"
-          },
-          "links": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationLinks"
-              }
-            ],
-            "description": "Pagination links"
-          }
         }
       },
       "Permissions.PermissionListResponse": {
@@ -5252,10 +5267,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -6492,7 +6517,6 @@
           }
         ],
         "example": {
-          "_": 201,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6546,34 +6570,8 @@
           }
         },
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "f0e1d2c3-b4a5-4678-9a1b-c2d3e4f5a6b7"
-        }
-      },
-      "Workspaces.Pagination": {
-        "type": "object",
-        "required": [
-          "meta",
-          "links"
-        ],
-        "properties": {
-          "meta": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationMeta"
-              }
-            ],
-            "description": "Pagination metadata"
-          },
-          "links": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationLinks"
-              }
-            ],
-            "description": "Pagination links"
-          }
         }
       },
       "Workspaces.PatchWorkspaceRequest": {
@@ -6603,7 +6601,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6621,7 +6618,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6657,7 +6653,6 @@
               "name": "Default Workspace"
             }
           ],
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6708,7 +6703,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
