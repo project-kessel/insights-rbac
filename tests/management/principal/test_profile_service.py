@@ -39,7 +39,7 @@ class ProfileServiceTests(SimpleTestCase):
             self.assertEqual(ps.get_profiles_from_service(None), {})
 
     @patch("management.principal.profile_service.requests.get")
-    def test_maps_profiles_casefold(self, mock_get):
+    def test_maps_profiles_lower(self, mock_get):
         response = MagicMock()
         response.raise_for_status.return_value = None
         response.json.return_value = {

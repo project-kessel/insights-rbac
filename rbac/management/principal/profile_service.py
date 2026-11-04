@@ -31,7 +31,8 @@ Contract (spike):
       {"profiles": {"username": {"email", "first_name", "last_name",
                                  "is_org_admin", "enabled"}}}
 
-Usernames in the response map are matched case-insensitively.
+Usernames in the response map are matched with ``str.lower()``, the same
+normalization ``Principal.save()`` uses when storing usernames.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ def profile_service_configured() -> bool:
 
 
 def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
-    """Fetch username(casefold) -> profile from the Cost profile service.
+    """Fetch username(lower) -> profile from the Cost profile service.
 
     Returns ``{}`` when unset, org_id missing, or the request fails so the
     principals API can fall back to safe bypass defaults.
@@ -85,7 +86,7 @@ def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
     for username, item in raw.items():
         if not isinstance(item, dict):
             continue
-        profiles[str(username).casefold()] = {
+        profiles[str(username).lower()] = {
             "first_name": item.get("first_name") or "",
             "last_name": item.get("last_name") or "",
             "email": item.get("email") or "",

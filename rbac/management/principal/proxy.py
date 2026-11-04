@@ -225,7 +225,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             def payload_for(principal=None, username=None, *, allow_profile=True):
                 name = principal.username if principal is not None else username
                 if allow_profile and name:
-                    profile = enrichment_profiles.get(str(name).casefold(), {})
+                    profile = enrichment_profiles.get(str(name).lower(), {})
                 else:
                     # Unknown-to-tenant usernames must not leak org-wide profile PII.
                     profile = {}
@@ -235,9 +235,9 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 for principal in local_principals:
                     to_return.append(payload_for(principal=principal))
             elif "users" in data:
-                local_by_username = {principal.username.casefold(): principal for principal in local_principals}
+                local_by_username = {principal.username.lower(): principal for principal in local_principals}
                 for username in data["users"]:
-                    principal = local_by_username.get(str(username).casefold())
+                    principal = local_by_username.get(str(username).lower())
                     if principal is not None:
                         to_return.append(payload_for(principal=principal))
                     else:
