@@ -42,10 +42,15 @@ import os
 from typing import Any
 
 import requests
+from django.core.cache import cache
 
 LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 5
+# Cache successes and failures so a downed sidecar does not re-block a worker
+# on every BYPASS principals request. Keep short; Cost owns the longer cache.
+CACHE_TTL_SECONDS = 30
+CACHE_KEY_PREFIX = "rbac:principal_profile_service"
 
 
 def profile_service_configured() -> bool:
@@ -53,15 +58,31 @@ def profile_service_configured() -> bool:
     return bool(os.environ.get("PRINCIPAL_PROFILE_SERVICE_URL", "").strip())
 
 
+def _cache_key(base_url: str, org_id: str) -> str:
+    """Return a cache key scoped to the profile service URL and org."""
+    return f"{CACHE_KEY_PREFIX}:{base_url}:{org_id}"
+
+
+def _normalize_email(value: Any) -> str:
+    """Keep only string emails; non-strings become '' for @local fallback."""
+    return value if isinstance(value, str) else ""
+
+
 def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
     """Fetch username(lower) -> profile from the Cost profile service.
 
     Returns ``{}`` when unset, org_id missing, or the request fails so the
-    principals API can fall back to safe bypass defaults.
+    principals API can fall back to safe bypass defaults. Successful and failed
+    fetches are cached briefly per org to avoid repeated timeouts.
     """
     base = os.environ.get("PRINCIPAL_PROFILE_SERVICE_URL", "").strip().rstrip("/")
     if not base or not org_id:
         return {}
+
+    key = _cache_key(base, str(org_id))
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
 
     url = f"{base}/v1/orgs/{org_id}/profiles"
     headers = {"Accept": "application/json"}
@@ -75,11 +96,13 @@ def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
         body = response.json()
     except Exception:  # noqa: BLE001 — enrichment must never break principals
         LOGGER.exception("Cost principal profile service request failed (%s)", url)
+        cache.set(key, {}, timeout=CACHE_TTL_SECONDS)
         return {}
 
     raw = body.get("profiles") if isinstance(body, dict) else None
     if not isinstance(raw, dict):
         LOGGER.warning("Cost principal profile service returned unexpected body type")
+        cache.set(key, {}, timeout=CACHE_TTL_SECONDS)
         return {}
 
     profiles: dict[str, dict[str, Any]] = {}
@@ -89,8 +112,9 @@ def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
         profiles[str(username).lower()] = {
             "first_name": item.get("first_name") or "",
             "last_name": item.get("last_name") or "",
-            "email": item.get("email") or "",
+            "email": _normalize_email(item.get("email")),
             "is_org_admin": bool(item.get("is_org_admin", False)),
             "enabled": bool(item.get("enabled", True)),
         }
+    cache.set(key, profiles, timeout=CACHE_TTL_SECONDS)
     return profiles
