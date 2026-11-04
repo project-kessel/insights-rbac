@@ -26,6 +26,7 @@ from django.db import transaction
 from django.test import override_settings
 from management.notifications.notification_handlers import (
     collect_rh_notifications,
+    enqueue_rh_notifications,
     handle_platform_group_role_change_notification,
     handle_system_role_change_notification,
     queue_rh_notification,
@@ -34,6 +35,7 @@ from management.notifications.notification_handlers import (
 )
 from management.tasks import (
     RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS,
+    RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
     _rh_notifications_quiet_window_wait_seconds,
     send_rh_notifications_in_worker,
 )
@@ -67,6 +69,15 @@ def make_role(name="role", platform_default=False):
 @override_settings(NOTIFICATIONS_ENABLED=True, NOTIFICATIONS_RH_ENABLED=True)
 class RhNotificationCollectionTests(IdentityRequest):
     """Test that the RH handlers register events on commit instead of sending."""
+
+    def setUp(self):
+        """Keep the global production lock isolated from parallel test workers."""
+        super().setUp()
+        cache_mock = MagicMock()
+        cache_mock.add.return_value = True
+        cache_patch = patch("management.notifications.notification_handlers.cache", cache_mock)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
 
     def test_event_is_collected_after_commit(self):
         """The event only reaches the collector once the transaction commits."""
@@ -156,6 +167,15 @@ class RhNotificationCollectionTests(IdentityRequest):
 
         self.assertEqual(events, [])
 
+    @patch(APPLY_ASYNC)
+    @patch("management.notifications.notification_handlers.cache.add", return_value=False)
+    def test_active_chain_prevents_overlapping_initial_enqueue(self, cache_add, apply_async):
+        """Only one seeding run acquires the shared active-chain marker."""
+        enqueue_rh_notifications([{"event_type": "a", "payload": {}}])
+
+        cache_add.assert_called_once()
+        apply_async.assert_not_called()
+
     @override_settings(NOTIFICATIONS_RH_ENABLED=False)
     def test_disabled_setting_collects_nothing(self):
         """NOTIFICATIONS_RH_ENABLED=False suppresses collection."""
@@ -188,11 +208,22 @@ class RhNotificationCollectionTests(IdentityRequest):
             handle_system_role_change_notification(make_role("lonely"), "created")
 
         apply_async.assert_called_once()
+        self.assertEqual(apply_async.call_args.kwargs["retry"], True)
+        self.assertEqual(apply_async.call_args.kwargs["retry_policy"]["max_retries"], 3)
         logger.exception.assert_called_once()
 
 
 class CollectRhNotificationsTests(IdentityRequest):
     """Test the per-run collector context manager."""
+
+    def setUp(self):
+        """Keep the global production lock isolated from parallel test workers."""
+        super().setUp()
+        cache_mock = MagicMock()
+        cache_mock.add.return_value = True
+        cache_patch = patch("management.notifications.notification_handlers.cache", cache_mock)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
 
     @patch(ENQUEUE)
     def test_enqueues_all_events_once(self, enqueue):
@@ -230,7 +261,10 @@ class CollectRhNotificationsTests(IdentityRequest):
         with collect_rh_notifications():
             rh_notification_collector.get().append({"event_type": "a", "payload": {}})
 
-        apply_async.assert_called_once_with(args=[[{"event_type": "a", "payload": {}}]])
+        apply_async.assert_called_once()
+        self.assertEqual(apply_async.call_args.kwargs["args"], [[{"event_type": "a", "payload": {}}]])
+        self.assertEqual(apply_async.call_args.kwargs["retry"], True)
+        self.assertEqual(apply_async.call_args.kwargs["retry_policy"]["max_retries"], 3)
         logger.exception.assert_called_once()
         logger.info.assert_not_called()
 
@@ -365,8 +399,39 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         )
         self.producer.get_producer.return_value.flush.assert_called_once()
         self.apply_async.assert_called_once_with(
-            args=[self.EVENTS], kwargs={"after_tenant_id": self.ready[2].id}, countdown=60
+            args=[self.EVENTS],
+            kwargs={"after_tenant_id": self.ready[2].id},
+            countdown=60,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
+
+    def test_duplicate_continuation_publish_does_not_repeat_batch(self):
+        """A replayed Celery publish token is ignored after its batch completed."""
+        state = {"rh-notifications:active-chain": "chain"}
+        cache_mock = MagicMock()
+        cache_mock.get.side_effect = state.get
+
+        def cache_add(key, value, timeout):
+            if key in state:
+                return False
+            state[key] = value
+            return True
+
+        cache_mock.add.side_effect = cache_add
+        cache_mock.set.side_effect = lambda key, value, timeout: state.__setitem__(key, value)
+        cache_mock.delete.side_effect = lambda key: state.pop(key, None) is not None
+
+        with patch("management.tasks.cache", cache_mock):
+            send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
+            send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
+
+        self.assertEqual(self.notify.call_count, 6)
+        self.apply_async.assert_called_once()
+        continuation = self.apply_async.call_args.kwargs
+        self.assertEqual(continuation["kwargs"]["chain_id"], "chain")
+        self.assertEqual(continuation["task_id"], continuation["kwargs"]["batch_id"])
+        self.assertEqual(continuation["retry_policy"]["max_retries"], 3)
 
     def test_last_batch_flushes_and_ends_chain(self):
         """A short batch is the last one: it flushes and does not re-enqueue."""
@@ -428,7 +493,11 @@ class SendRhNotificationsTaskTests(IdentityRequest):
 
         self.assertEqual({c.args[2] for c in self.notify.call_args_list}, {"org0"})
         self.apply_async.assert_called_once_with(
-            args=[self.EVENTS], kwargs={"after_tenant_id": self.ready[0].id}, countdown=60
+            args=[self.EVENTS],
+            kwargs={"after_tenant_id": self.ready[0].id},
+            countdown=60,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
 
     @override_settings(NOTIFICATIONS_RH_ENABLED=False)
@@ -461,7 +530,13 @@ class SendRhNotificationsTaskTests(IdentityRequest):
 
         self.notify.assert_not_called()
         self.producer.get_producer.return_value.flush.assert_not_called()
-        self.apply_async.assert_called_once_with(args=[self.EVENTS], kwargs={"after_tenant_id": 7}, countdown=300)
+        self.apply_async.assert_called_once_with(
+            args=[self.EVENTS],
+            kwargs={"after_tenant_id": 7},
+            countdown=300,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
+        )
 
     def test_quiet_window_starting_mid_batch_stops_after_the_last_completed_tenant(self):
         """A window that starts while the batch runs stops it and resumes from the last completed tenant."""
@@ -471,7 +546,11 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.assertEqual([c.args[2] for c in self.notify.call_args_list], ["org0", "org0"])
         self.producer.get_producer.return_value.flush.assert_called_once()
         self.apply_async.assert_called_once_with(
-            args=[self.EVENTS], kwargs={"after_tenant_id": self.ready[0].id}, countdown=120
+            args=[self.EVENTS],
+            kwargs={"after_tenant_id": self.ready[0].id},
+            countdown=120,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
 
     def test_failed_send_stops_the_batch_and_retries_from_the_last_completed_tenant(self):
@@ -488,6 +567,8 @@ class SendRhNotificationsTaskTests(IdentityRequest):
             args=[self.EVENTS],
             kwargs={"after_tenant_id": self.ready[0].id, "failed_attempts": 1},
             countdown=60,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
 
         # The retry starts after the last fully completed tenant, replaying org1's accepted first event.
@@ -500,7 +581,11 @@ class SendRhNotificationsTaskTests(IdentityRequest):
             ["org1", "org1", "org2", "org2", "org3", "org3"],
         )
         self.apply_async.assert_called_once_with(
-            args=[self.EVENTS], kwargs={"after_tenant_id": self.ready[3].id}, countdown=60
+            args=[self.EVENTS],
+            kwargs={"after_tenant_id": self.ready[3].id},
+            countdown=60,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
 
     def test_repeated_failed_sends_give_up(self):

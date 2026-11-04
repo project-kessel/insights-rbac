@@ -84,7 +84,7 @@ Sent when a tenant user modifies groups or their membership.
 
 #### Red Hat System Role & Group Events
 
-Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all ready tenants** by the `send_rh_notifications_in_worker` Celery task, which sends in batches of about `NOTIFICATIONS_RH_RATE_PER_MINUTE` messages per minute (whole tenants, at least one tenant per batch) and pauses during the UTC quiet window (`NOTIFICATIONS_RH_QUIET_START` to `NOTIFICATIONS_RH_QUIET_END`, default 23:30 to 00:30). Delivery is best-effort and at-least-once per tenant: a retry after a partial failure replays every event for that tenant, so an already-accepted event may be duplicated. Username is always `"Red Hat"`.
+Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all ready tenants** by the `send_rh_notifications_in_worker` Celery task, which sends in batches of about `NOTIFICATIONS_RH_RATE_PER_MINUTE` messages per minute (whole tenants, at least one tenant per batch) and pauses during the UTC quiet window (`NOTIFICATIONS_RH_QUIET_START` to `NOTIFICATIONS_RH_QUIET_END`, default 23:30 to 00:30). Delivery is best-effort: a retry after a partial failure replays every event for that tenant, so an already-accepted event may be duplicated. Username is always `"Red Hat"`.
 
 | Event Type | Occasion | Payload |
 |---|---|---|

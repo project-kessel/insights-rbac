@@ -22,9 +22,11 @@ import datetime
 import logging
 import time
 from typing import Optional
+from uuid import uuid4
 
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.core.management import call_command
 
 logger = logging.getLogger(__name__)
@@ -160,6 +162,14 @@ def run_seeds_in_worker(kwargs):
 RH_NOTIFICATIONS_BATCH_DELAY_SECONDS = 60
 RH_NOTIFICATIONS_MAX_COUNTDOWN_SECONDS = 300
 RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS = 5
+RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
+RH_NOTIFICATIONS_BATCH_LOCK_TIMEOUT_SECONDS = 10 * 60
+RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY = {
+    "max_retries": 3,
+    "interval_start": 0.2,
+    "interval_step": 0.5,
+    "interval_max": 2,
+}
 RH_NOTIFICATIONS_DEFAULT_QUIET_START = "23:30"
 RH_NOTIFICATIONS_DEFAULT_QUIET_END = "00:30"
 
@@ -195,8 +205,7 @@ def _rh_notifications_quiet_window_wait_seconds(now):
     return max(1, min(int((end_at - now).total_seconds()), RH_NOTIFICATIONS_MAX_COUNTDOWN_SECONDS))
 
 
-@shared_task
-def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0):
+def _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain_id, batch_id):
     """
     Celery task to send Red Hat system notifications to all ready tenants at a limited rate.
 
@@ -213,27 +222,47 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
     from api.models import Tenant
     from management.notifications.notification_handlers import noto_producer, notify
 
+    def mark_batch_done():
+        if chain_id and batch_id:
+            cache.set(
+                f"rh-notifications:batch-done:{chain_id}:{batch_id}",
+                True,
+                timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS,
+            )
+
     # Checked on every batch so that turning either flag off stops a running chain.
     if not (settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
         logger.info("RH notifications are disabled (NOTIFICATIONS_ENABLED or NOTIFICATIONS_RH_ENABLED), skipping.")
-        return
+        return False
     if not events:
-        return
+        return False
 
     def reenqueue(cursor, countdown, **extra_kwargs):
         kwargs = {"after_tenant_id": cursor, **extra_kwargs}
+        next_batch_id = str(uuid4())
+        if chain_id:
+            kwargs.update({"chain_id": chain_id, "batch_id": next_batch_id})
         try:
-            send_rh_notifications_in_worker.apply_async(args=[events], kwargs=kwargs, countdown=countdown)
+            options = {
+                "args": [events],
+                "kwargs": kwargs,
+                "countdown": countdown,
+                "retry": True,
+                "retry_policy": RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
+            }
+            if chain_id:
+                options["task_id"] = next_batch_id
+            send_rh_notifications_in_worker.apply_async(**options)
         except Exception:
-            # Not retried here (a retry would re-send this batch); the logged cursor identifies where to resume.
             logger.exception("Failed to enqueue the next RH notifications batch after tenant id %d.", cursor)
             raise
 
     wait_seconds = _rh_notifications_quiet_window_wait_seconds(datetime.datetime.now(datetime.timezone.utc))
     if wait_seconds:
         logger.info("RH notifications quiet window is active, retrying in %d seconds.", wait_seconds)
+        mark_batch_done()
         reenqueue(after_tenant_id, wait_seconds)
-        return
+        return True
 
     rate = max(1, settings.NOTIFICATIONS_RH_RATE_PER_MINUTE)
     batch_size = max(1, rate // len(events))
@@ -270,6 +299,10 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
         after_tenant_id,
     )
 
+    # Mark this batch before publishing its continuation. Broker acceptance followed by a lost
+    # publish acknowledgement can replay the same task; the next delivery then becomes a no-op.
+    mark_batch_done()
+
     if interrupted_wait:
         logger.info("RH notifications quiet window started mid-batch, resuming in %d seconds.", interrupted_wait)
         reenqueue(cursor, interrupted_wait)
@@ -281,13 +314,55 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
                 attempts,
                 cursor,
             )
-            return
+            return False
         logger.warning("Sending an RH notification failed, retrying after tenant id %d.", cursor)
         reenqueue(cursor, RH_NOTIFICATIONS_BATCH_DELAY_SECONDS, failed_attempts=attempts)
+        return True
     elif len(tenants) == batch_size:
         reenqueue(cursor, RH_NOTIFICATIONS_BATCH_DELAY_SECONDS)
+        return True
     else:
         logger.info("Finished sending RH notifications.")
+        return False
+
+
+@shared_task
+def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0, chain_id=None, batch_id=None):
+    """Send one idempotent batch in the active RH notification chain."""
+    if not chain_id:
+        return _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain_id, batch_id)
+
+    from management.notifications.notification_handlers import (
+        RH_NOTIFICATIONS_CHAIN_LOCK_KEY,
+        _release_rh_notifications_chain,
+    )
+
+    if cache.get(RH_NOTIFICATIONS_CHAIN_LOCK_KEY) != chain_id:
+        logger.info("Skipping stale RH notification chain %s.", chain_id)
+        return
+
+    batch_id = batch_id or str(uuid4())
+    done_key = f"rh-notifications:batch-done:{chain_id}:{batch_id}"
+    if cache.get(done_key):
+        logger.info("Skipping duplicate RH notification batch %s.", batch_id)
+        return
+
+    batch_lock_key = f"rh-notifications:batch-lock:{chain_id}:{batch_id}"
+    if not cache.add(batch_lock_key, batch_id, timeout=RH_NOTIFICATIONS_BATCH_LOCK_TIMEOUT_SECONDS):
+        logger.info("RH notification batch %s is already running.", batch_id)
+        return
+
+    try:
+        has_continuation = _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain_id, batch_id)
+    except Exception:
+        cache.delete(batch_lock_key)
+        _release_rh_notifications_chain(chain_id)
+        raise
+
+    cache.set(done_key, True, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS)
+    cache.delete(batch_lock_key)
+    if not has_continuation:
+        _release_rh_notifications_chain(chain_id)
 
 
 @shared_task

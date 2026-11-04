@@ -28,6 +28,7 @@ from uuid import uuid4
 
 from core.kafka import RBACProducer
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from management.role.v2_model import RoleV2
 
@@ -38,6 +39,8 @@ skip_rh_notifications: ContextVar[bool] = ContextVar("skip_rh_notifications", de
 
 # Collects the RH system notification events of one seeding run so they can be sent by a single rate-limited task.
 rh_notification_collector: ContextVar[Optional[list]] = ContextVar("rh_notification_collector", default=None)
+
+RH_NOTIFICATIONS_CHAIN_LOCK_KEY = "rh-notifications:active-chain"
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 noto_producer = RBACProducer()
@@ -65,15 +68,46 @@ def notify(event_type, payload, org_id=None):
 
 def enqueue_rh_notifications(events):
     """Hand RH system notification events (JSON-safe dicts of event_type and payload) to the sending task."""
-    from management.tasks import send_rh_notifications_in_worker
+    from management.tasks import (
+        RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS,
+        RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
+        send_rh_notifications_in_worker,
+    )
 
+    chain_id = str(uuid4())
+    try:
+        acquired = cache.add(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, chain_id, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception("Failed to acquire the RH notification chain lock; skipping enqueue.")
+        return
+    if not acquired:
+        logger.info("Skipping RH notification enqueue; another notification chain is active.")
+        return
+
+    batch_id = str(uuid4())
     # Notifications are best-effort: a broker failure must not fail the seeding run that produced them.
     try:
-        send_rh_notifications_in_worker.apply_async(args=[events])
+        send_rh_notifications_in_worker.apply_async(
+            args=[events],
+            kwargs={"chain_id": chain_id, "batch_id": batch_id},
+            task_id=batch_id,
+            retry=True,
+            retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
+        )
     except Exception:
+        _release_rh_notifications_chain(chain_id)
         logger.exception("Failed to enqueue %d RH system notification event(s).", len(events))
         return
     logger.info("Enqueued %d RH system notification event(s) for sending.", len(events))
+
+
+def _release_rh_notifications_chain(chain_id):
+    """Delete the active marker only when it still belongs to this chain."""
+    try:
+        if cache.get(RH_NOTIFICATIONS_CHAIN_LOCK_KEY) == chain_id:
+            cache.delete(RH_NOTIFICATIONS_CHAIN_LOCK_KEY)
+    except Exception:
+        logger.exception("Failed to release RH notification chain lock %s.", chain_id)
 
 
 def queue_rh_notification(event_type, payload):
