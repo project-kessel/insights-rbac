@@ -129,6 +129,16 @@ class TokenValidatorTests(IdentityRequest):
         elif url == self.oidc_configuration_jwks_url:
             raise requests.exceptions.Timeout
 
+    def _requests_get_sideffect_jwks_chunked_encoding_error(self, url: str, **_kwargs) -> mock.Mock:
+        """Side effect handler that raises a chunked encoding error when the JWKS response is fetched."""
+        if url == self.oidc_configuration_url:
+            return mock.Mock(
+                status_code=status.HTTP_200_OK,
+                json=lambda: {"jwks_uri": self.oidc_configuration_jwks_url},
+            )
+        elif url == self.oidc_configuration_jwks_url:
+            raise requests.exceptions.ChunkedEncodingError
+
     def test_token_validator_singleton(self):
         """Test that the token validator class only gets instantiated once."""
         class_instances = [
@@ -481,6 +491,7 @@ class TokenValidatorTests(IdentityRequest):
         test_cases = [
             self._requests_get_sideffect_jwks_connection_error,
             self._requests_get_sideffect_jwks_timeout_error,
+            self._requests_get_sideffect_jwks_chunked_encoding_error,
         ]
         for test_case in test_cases:
             get.side_effect = test_case

@@ -129,7 +129,11 @@ def _request_json(url: str) -> dict:
     for attempt in range(1, max_attempts + 1):
         try:
             response = requests.get(url=url, timeout=timeout)
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ce:
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as ce:
             if attempt == max_attempts:
                 logger.error("Unable to fetch %s to validate the token: %s", url, ce)
                 raise UnableMeetPrerequisitesError(f"unable to fetch {url} to validate the token") from ce
