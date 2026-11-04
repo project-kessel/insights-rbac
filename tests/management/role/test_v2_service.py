@@ -17,7 +17,7 @@
 """Test the RoleV2Service."""
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, wraps
 
 from django.test import override_settings
 from management.exceptions import RequiredFieldError, NotFoundError
@@ -47,6 +47,8 @@ from migration_tool.in_memory_tuples import (
 )
 from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
+
+from api.models import Tenant
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)

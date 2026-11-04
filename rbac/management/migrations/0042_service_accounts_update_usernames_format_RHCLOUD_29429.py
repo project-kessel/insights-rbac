@@ -1,4 +1,4 @@
-from django.db import migrations
+from django.db import migrations, models
 
 
 def remove_invalid_service_account_principals(apps, schema_editor):

@@ -51,7 +51,7 @@ class IsUserAllowedV1Tests(TestCase):
 
         # User has only write permission on the target workspace
         mock_tuple_set.return_value = {
-            ("inventory:groups:write", self.target_workspace_id),
+            (f"inventory:groups:write", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -66,7 +66,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:read", self.target_workspace_id),
+            (f"inventory:groups:read", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -81,7 +81,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:*", self.target_workspace_id),
+            (f"inventory:groups:*", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -96,7 +96,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:*:read", self.target_workspace_id),
+            (f"inventory:*:read", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -111,7 +111,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:write", self.target_workspace_id),
+            (f"inventory:groups:write", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -126,7 +126,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:read", self.target_workspace_id),
+            (f"inventory:groups:read", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -142,7 +142,7 @@ class IsUserAllowedV1Tests(TestCase):
 
         other_workspace_id = str(uuid4())
         mock_tuple_set.return_value = {
-            ("inventory:groups:write", other_workspace_id),
+            (f"inventory:groups:write", other_workspace_id),
         }
 
         request = self._make_request()
@@ -157,8 +157,8 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:read", self.target_workspace_id),
-            ("inventory:groups:write", self.target_workspace_id),
+            (f"inventory:groups:read", self.target_workspace_id),
+            (f"inventory:groups:write", self.target_workspace_id),
         }
 
         request = self._make_request()
@@ -173,7 +173,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         tuples = {
-            ("inventory:groups:read", self.target_workspace_id),
+            (f"inventory:groups:read", self.target_workspace_id),
         }
         mock_tuple_set.return_value = tuples
 
@@ -189,7 +189,7 @@ class IsUserAllowedV1Tests(TestCase):
         mock_workspace_model.objects.root.return_value = Mock(id=self.root_workspace_id)
 
         mock_tuple_set.return_value = {
-            ("inventory:groups:read", self.root_workspace_id),
+            (f"inventory:groups:read", self.root_workspace_id),
         }
 
         request = self._make_request()

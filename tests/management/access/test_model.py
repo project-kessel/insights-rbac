@@ -16,6 +16,8 @@
 #
 """Test the group model."""
 
+from django.test import TestCase
+
 # from unittest.mock import Mock
 
 from management.models import Access, Permission

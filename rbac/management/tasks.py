@@ -215,7 +215,9 @@ def _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain
     cursor. During the quiet window it only re-enqueues itself, and a batch that reaches the window stops after the
     last tenant it completed. The window is checked before each tenant, not each event, so a tenant whose events are
     already being sent when the window starts still receives all of them. A failed send stops the batch and is
-    retried from the last completed tenant, up to RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS times in a row. Delivery is
+    retried from the last completed tenant, up to RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS times in a row. Because the
+    cursor only moves past a tenant once all of its events were accepted, a failure part-way through a tenant's events
+    replays that tenant's full event list on retry, so an already-accepted event may be delivered twice. Delivery is
     best-effort: a send counts as done once the producer accepts it, and broker-side delivery failures after that
     are not retried.
     """
@@ -233,8 +235,10 @@ def _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain
     # Checked on every batch so that turning either flag off stops a running chain.
     if not (settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
         logger.info("RH notifications are disabled (NOTIFICATIONS_ENABLED or NOTIFICATIONS_RH_ENABLED), skipping.")
+        mark_batch_done()
         return False
     if not events:
+        mark_batch_done()
         return False
 
     def reenqueue(cursor, countdown, **extra_kwargs):
@@ -359,10 +363,13 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
         _release_rh_notifications_chain(chain_id)
         raise
 
-    cache.set(done_key, True, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS)
-    cache.delete(batch_lock_key)
-    if not has_continuation:
+    try:
+        cache.delete(batch_lock_key)
+        if not has_continuation:
+            _release_rh_notifications_chain(chain_id)
+    except Exception:
         _release_rh_notifications_chain(chain_id)
+        raise
 
 
 @shared_task

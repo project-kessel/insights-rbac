@@ -48,9 +48,12 @@ from migration_tool.in_memory_tuples import (
     resource,
     subject_type,
 )
+from rest_framework import serializers
 from tests.management.role.test_dual_write import RbacFixture
 from tests.util import assert_v2_tuples_consistent
 from tests.v2_util import WorkspaceCacheReplicator, bootstrap_tenant_for_v2_test, seed_v2_role_from_v1
+
+from api.models import Tenant
 
 
 @dataclass

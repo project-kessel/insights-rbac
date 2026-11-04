@@ -16,6 +16,7 @@
 #
 """Test Case extension to collect common test data."""
 
+import os
 import uuid
 from base64 import b64encode
 from json import dumps as json_dumps

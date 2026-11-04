@@ -2249,7 +2249,7 @@ class ITServiceTests(IdentityRequest):
             self.assertCountEqual(
                 ["username"],
                 account.keys(),
-                "Expected each account to have a single key when username_only is true.",
+                f"Expected each account to have a single key when username_only is true.",
             )
 
             self.assertIn(account["username"], expected_usernames)

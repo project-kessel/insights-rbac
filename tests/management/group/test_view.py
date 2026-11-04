@@ -2490,7 +2490,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         """Test that getting org admins only from a nonempty group returns successfully."""
 
         client = APIClient()
-        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid}) + "?admin_only=true"
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid}) + f"?admin_only=true"
 
         response = client.get(url, **self.headers)
 
@@ -2527,7 +2527,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         """Test that getting all principals from a nonempty group returns successfully with 'admin_only=false'."""
 
         client = APIClient()
-        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid}) + "?admin_only=false"
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid}) + f"?admin_only=false"
 
         response = client.get(url, **self.headers)
 
@@ -2573,8 +2573,8 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         return_value=[
             {
                 "clientId": "b7a82f30-bcef-013c-2452-6aa2427b506c",
-                "name": "service_account_name",
-                "description": "Service Account description",
+                "name": f"service_account_name",
+                "description": f"Service Account description",
                 "owner": "jsmith",
                 "username": "service_account-b7a82f30-bcef-013c-2452-6aa2427b506c",
                 "time_created": 1706784741,
@@ -3694,7 +3694,7 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
         client = APIClient()
         url_base = f"{reverse('v1_management:group-principals', kwargs={'uuid': self.group.uuid})}?principal_type=all"
 
-        url = url_base + "&username_only=true"
+        url = url_base + f"&username_only=true"
         response = client.get(url, **self.headers)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -6304,8 +6304,8 @@ class GroupViewNonAdminTests(IdentityRequest):
         mocked_values = [
             {
                 "clientId": sa_uuid,
-                "name": "Service Account name",
-                "description": "Service Account description",
+                "name": f"Service Account name",
+                "description": f"Service Account description",
                 "owner": "jsmith",
                 "username": "service_account-" + sa_uuid,
                 "time_created": 1706784741,
@@ -6389,8 +6389,8 @@ class GroupViewNonAdminTests(IdentityRequest):
             {
                 "clientId": sa_uuid,
                 "userId": "2345",
-                "name": "Service Account name",
-                "description": "Service Account description",
+                "name": f"Service Account name",
+                "description": f"Service Account description",
                 "owner": "jsmith",
                 "username": "service_account-" + sa_uuid,
                 "time_created": 1706784741,
@@ -6494,8 +6494,8 @@ class GroupViewNonAdminTests(IdentityRequest):
             {
                 "clientId": sa_uuid,
                 "userId": "1234",
-                "name": "Service Account name",
-                "description": "Service Account description",
+                "name": f"Service Account name",
+                "description": f"Service Account description",
                 "owner": "jsmith",
                 "username": "service_account-" + sa_uuid,
                 "time_created": 1706784741,
@@ -6632,8 +6632,8 @@ class GroupViewNonAdminTests(IdentityRequest):
         mocked_values = [
             {
                 "clientId": sa_uuid,
-                "name": "Service Account name",
-                "description": "Service Account description",
+                "name": f"Service Account name",
+                "description": f"Service Account description",
                 "owner": "jsmith",
                 "username": "service_account-" + sa_uuid,
                 "time_created": 1706784741,

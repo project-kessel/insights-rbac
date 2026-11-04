@@ -19,6 +19,7 @@
 from api.models import CrossAccountRequest, Tenant
 from django.urls import reverse
 from django.utils import timezone
+from management.models import Role
 from rest_framework import status
 from rest_framework.test import APIClient
 

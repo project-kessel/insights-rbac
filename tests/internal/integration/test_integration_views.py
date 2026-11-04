@@ -459,7 +459,7 @@ class IntegrationViewsTests(IdentityRequest):
     def test_tenants(self):
         """Test that we get tenants back on /tenant/"""
         response = self.client.get(
-            "/_private/api/v1/integrations/tenant/",
+            f"/_private/api/v1/integrations/tenant/",
             **self.request.META,
             follow=True,
         )

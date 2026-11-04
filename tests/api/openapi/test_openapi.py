@@ -16,6 +16,8 @@
 #
 """Test the openapi API."""
 
+import json
+import os
 from importlib import reload
 from unittest.mock import mock_open, patch
 
