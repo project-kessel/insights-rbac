@@ -266,27 +266,44 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual(outsider["first_name"], "")
         self.assertIs(outsider["is_org_admin"], False)
 
-        # status=all keeps disabled users visible for clean_tenant_principals.
+        # enabled=false is omitted for status=enabled (Users list) but kept for
+        # status=all so clean_tenant_principals does not delete disabled users.
+        disabled_profiles = {
+            "alice": {
+                "first_name": "Alice",
+                "last_name": "Admin",
+                "email": "alice@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+            "bob": {
+                "first_name": "Bob",
+                "last_name": "Disabled",
+                "email": "bob@example.com",
+                "is_org_admin": False,
+                "enabled": False,
+            },
+        }
         with patch(
             "management.principal.proxy.get_profiles_from_service",
-            return_value={
-                "bob": {
-                    "first_name": "Bob",
-                    "last_name": "Disabled",
-                    "email": "bob@example.com",
-                    "is_org_admin": False,
-                    "enabled": False,
-                }
-            },
+            return_value=disabled_profiles,
         ):
+            enabled_only = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "enabled"},
+            )
             all_status = proxy._request_principals(
                 url="http://localhost:8080/v1/users",
                 org_id=self.tenant.org_id,
                 params={"status": "all"},
             )
-        by_username = {principal["username"]: principal for principal in all_status["data"]}
-        self.assertIn("bob", by_username)
-        self.assertIs(by_username["bob"]["is_active"], False)
+        enabled_by_username = {principal["username"]: principal for principal in enabled_only["data"]}
+        self.assertIn("alice", enabled_by_username)
+        self.assertNotIn("bob", enabled_by_username)
+        all_by_username = {principal["username"]: principal for principal in all_status["data"]}
+        self.assertIn("bob", all_by_username)
+        self.assertIs(all_by_username["bob"]["is_active"], False)
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
