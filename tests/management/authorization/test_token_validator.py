@@ -23,7 +23,7 @@ from django.conf import settings
 from django.test import RequestFactory, override_settings
 from rest_framework import status
 
-from management.authorization.jwks_source import JWKS_REQUEST_RETRIES, _request_json
+from management.authorization.jwks_source import JWKS_REQUEST_BACKOFF_SECONDS, JWKS_REQUEST_RETRIES, _request_json
 from management.authorization.scope_claims import ScopeClaims
 from management.authorization.token_validator import ITSSOTokenValidator, InvalidTokenError, MissingAuthorizationError
 from management.authorization.token_validator import UnableMeetPrerequisitesError
@@ -68,14 +68,16 @@ class TokenValidatorTests(IdentityRequest):
         # tests.
         self.jwks_certificates_response_json = {"mocked": "content"}
 
-    @override_settings(IT_SERVICE_TIMEOUT_SECONDS=0)
     @mock.patch("management.authorization.jwks_source.requests.get")
     def test_request_json_rejects_non_positive_timeout(self, get: mock.Mock) -> None:
         """A non-positive timeout must retain mapped token-validation errors."""
-        with self.assertRaisesRegex(UnableMeetPrerequisitesError, "timeout must be a positive integer"):
-            _request_json("https://sso.example.test/jwks")
+        for timeout in (0, -1):
+            with self.subTest(timeout=timeout), override_settings(IT_SERVICE_TIMEOUT_SECONDS=timeout):
+                get.reset_mock()
+                with self.assertRaisesRegex(UnableMeetPrerequisitesError, "timeout must be a positive integer"):
+                    _request_json("https://sso.example.test/jwks")
 
-        get.assert_not_called()
+                get.assert_not_called()
 
     def _requests_get_sideffect(
         self,
@@ -300,6 +302,10 @@ class TokenValidatorTests(IdentityRequest):
 
             self.assertEqual(get.call_count, JWKS_REQUEST_RETRIES + 1)
             self.assertEqual(sleep.call_count, JWKS_REQUEST_RETRIES)
+            self.assertEqual(
+                sleep.call_args_list,
+                [mock.call(JWKS_REQUEST_BACKOFF_SECONDS * (2**attempt)) for attempt in range(JWKS_REQUEST_RETRIES)],
+            )
 
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")
@@ -503,6 +509,10 @@ class TokenValidatorTests(IdentityRequest):
             # OIDC discovery once, then JWKS URL retried to exhaustion (1 + JWKS_REQUEST_RETRIES).
             self.assertEqual(get.call_count, 1 + (JWKS_REQUEST_RETRIES + 1))
             self.assertEqual(sleep.call_count, JWKS_REQUEST_RETRIES)
+            self.assertEqual(
+                sleep.call_args_list,
+                [mock.call(JWKS_REQUEST_BACKOFF_SECONDS * (2**attempt)) for attempt in range(JWKS_REQUEST_RETRIES)],
+            )
 
     @mock.patch("management.authorization.jwks_source.time.sleep", return_value=None)
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
@@ -535,7 +545,7 @@ class TokenValidatorTests(IdentityRequest):
         set_jwks_response.assert_called_with(self.jwks_certificates_response_json)
         import_key_set.assert_called_with(self.jwks_certificates_response_json)
         self.assertEqual(get.call_count, 3)
-        sleep.assert_called_once()
+        sleep.assert_called_once_with(JWKS_REQUEST_BACKOFF_SECONDS)
         for call in get.call_args_list:
             self.assertEqual(call.kwargs.get("timeout"), settings.IT_SERVICE_TIMEOUT_SECONDS)
 
