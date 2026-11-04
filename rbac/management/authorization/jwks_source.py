@@ -121,6 +121,9 @@ def _request_json(url: str) -> dict:
     """Perform an JWKS related GET request and return the JSON response."""
     max_attempts = JWKS_REQUEST_RETRIES + 1
     timeout = settings.IT_SERVICE_TIMEOUT_SECONDS
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise UnableMeetPrerequisitesError("IT service timeout must be a positive integer")
+
     response: Response
 
     for attempt in range(1, max_attempts + 1):

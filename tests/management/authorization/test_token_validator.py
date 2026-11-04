@@ -16,19 +16,19 @@
 #
 """Test the token validator class."""
 
-import requests
+from unittest import mock
 
+import requests
 from django.conf import settings
 from django.test import RequestFactory, override_settings
 from rest_framework import status
 
-from api.models import User
+from management.authorization.jwks_source import JWKS_REQUEST_RETRIES, _request_json
 from management.authorization.scope_claims import ScopeClaims
-from management.authorization.jwks_source import JWKS_REQUEST_RETRIES
 from management.authorization.token_validator import ITSSOTokenValidator, InvalidTokenError, MissingAuthorizationError
 from management.authorization.token_validator import UnableMeetPrerequisitesError
 from tests.identity_request import IdentityRequest
-from unittest import mock
+from api.models import User
 
 from tests.management.authorization.token_fixtures import InMemoryIssuer
 
@@ -67,6 +67,15 @@ class TokenValidatorTests(IdentityRequest):
         # Set a mocked response content for the JWKS certificates payload, so that we can use it for assertions in
         # tests.
         self.jwks_certificates_response_json = {"mocked": "content"}
+
+    @override_settings(IT_SERVICE_TIMEOUT_SECONDS=0)
+    @mock.patch("management.authorization.jwks_source.requests.get")
+    def test_request_json_rejects_non_positive_timeout(self, get: mock.Mock) -> None:
+        """A non-positive timeout must retain mapped token-validation errors."""
+        with self.assertRaisesRegex(UnableMeetPrerequisitesError, "timeout must be a positive integer"):
+            _request_json("https://sso.example.test/jwks")
+
+        get.assert_not_called()
 
     def _requests_get_sideffect(
         self,
