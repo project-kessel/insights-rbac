@@ -551,7 +551,9 @@ class TokenValidatorTests(IdentityRequest):
             jwks_success,
         ]
 
-        self.token_validator._get_json_web_keyset()
+        with mock.patch("management.authorization.jwks_source.jwks_request_retries_total.inc") as retry_metric:
+            self.token_validator._get_json_web_keyset()
+            retry_metric.assert_called_once_with()
 
         set_jwks_response.assert_called_with(self.jwks_certificates_response_json)
         import_key_set.assert_called_with(self.jwks_certificates_response_json)

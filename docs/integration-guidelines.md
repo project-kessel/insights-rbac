@@ -233,3 +233,4 @@ All external service calls are instrumented. Follow these patterns:
 - Replication latency: `rbac_replication_event_latency_seconds` (histogram with event_type label)
 - V2 API usage: `rbac_v2_api_requests_total` (counter with endpoint, method, status labels), `rbac_v2_api_request_duration_seconds` (histogram with endpoint, method labels)
 - API migration tracking: `rbac_api_migration_requests_total` (counter with api_version, client_id, user_agent, method labels)
+- JWKS retrieval retries: `rbac_jwks_request_retries_total` (counter; incremented for each transient failure retried while fetching OIDC configuration or JWKS). The Operations Grafana dashboard shows its five-minute retry rate in the IT Service row.

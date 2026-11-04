@@ -26,6 +26,7 @@ import requests
 from django.conf import settings
 from management.authorization.unable_meet_prerequisites import UnableMeetPrerequisitesError
 from management.cache import JWKSCache
+from prometheus_client import Counter
 from requests import Response
 from rest_framework import status
 
@@ -33,8 +34,13 @@ logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 # Transient SSO/network blips (connection reset, timeout) should not fail JWT validation
 # on the first attempt — especially on cache miss when every authenticated request needs JWKS.
+# Two retries means at most three requests; each request is already bounded by its configured timeout.
 JWKS_REQUEST_RETRIES = 2
 JWKS_REQUEST_BACKOFF_SECONDS = 0.25
+jwks_request_retries_total = Counter(
+    "rbac_jwks_request_retries_total",
+    "Number of retries while fetching OIDC configuration and JWKS",
+)
 
 
 class JWKSSource(Protocol):
@@ -138,6 +144,7 @@ def _request_json(url: str) -> dict:
                 logger.error("Unable to fetch %s to validate the token: %s", url, ce)
                 raise UnableMeetPrerequisitesError(f"unable to fetch {url} to validate the token") from ce
 
+            jwks_request_retries_total.inc()
             logger.warning(
                 "Unable to fetch %s to validate the token (attempt %d/%d); retrying: %s",
                 url,
