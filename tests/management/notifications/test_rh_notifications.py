@@ -28,15 +28,15 @@ from management.notifications.notification_handlers import (
     collect_rh_notifications,
     handle_platform_group_role_change_notification,
     handle_system_role_change_notification,
+    queue_rh_notification,
     rh_notification_collector,
     skip_rh_notifications,
 )
 from management.tasks import (
-    _rh_notifications_quiet_window_wait_seconds,
     RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS,
+    _rh_notifications_quiet_window_wait_seconds,
     send_rh_notifications_in_worker,
 )
-
 from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
 
@@ -248,7 +248,8 @@ class CollectRhNotificationsTests(IdentityRequest):
         """The seeds command enqueues the events of already committed changes when a later step raises."""
 
         def seed_then_fail(**kwargs):
-            rh_notification_collector.get().append({"event_type": "a", "payload": {}})
+            with self.captureOnCommitCallbacks(execute=True):
+                queue_rh_notification("a", {})
             raise RuntimeError("seeding failed")
 
         role_seeding.side_effect = seed_then_fail
@@ -480,10 +481,26 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         send_rh_notifications_in_worker(self.EVENTS)
 
         self.assertEqual(self.notify.call_count, 4)
+        self.assertEqual(
+            [call_args.args[2] for call_args in self.notify.call_args_list], ["org0", "org0", "org1", "org1"]
+        )
         self.apply_async.assert_called_once_with(
             args=[self.EVENTS],
             kwargs={"after_tenant_id": self.ready[0].id, "failed_attempts": 1},
             countdown=60,
+        )
+
+        # The retry starts after the last fully completed tenant, replaying org1's accepted first event.
+        self.notify.reset_mock(side_effect=True)
+        self.apply_async.reset_mock()
+        send_rh_notifications_in_worker(self.EVENTS, after_tenant_id=self.ready[0].id, failed_attempts=1)
+
+        self.assertEqual(
+            [call_args.args[2] for call_args in self.notify.call_args_list],
+            ["org1", "org1", "org2", "org2", "org3", "org3"],
+        )
+        self.apply_async.assert_called_once_with(
+            args=[self.EVENTS], kwargs={"after_tenant_id": self.ready[3].id}, countdown=60
         )
 
     def test_repeated_failed_sends_give_up(self):

@@ -123,14 +123,14 @@ class RoleDefinerTests(IdentityRequest):
             self.assertTrue(len(roles))
             self.assertFalse(Role.objects.get(name="User Access administrator").platform_default)
 
-            role = roles.first()
-            self.assertIn(
-                {
-                    "event_type": "rh-new-role-available",
-                    "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
-                },
-                events,
-            )
+            for role in roles:
+                self.assertIn(
+                    {
+                        "event_type": "rh-new-role-available",
+                        "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
+                    },
+                    events,
+                )
             json.dumps(events)
 
     def test_role_update(self):
@@ -226,7 +226,8 @@ class RoleDefinerTests(IdentityRequest):
             )
             json.dumps(events)
 
-    def test_role_create_skip_notifications(self):
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_role_create_skip_notifications(self, send_kafka_message):
         """Test that skip_notifications suppresses RH notifications during role seeding."""
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             from management.seeds import role_seeding
@@ -235,6 +236,9 @@ class RoleDefinerTests(IdentityRequest):
                 role_seeding(skip_notifications=True)
 
         self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
+        self.assertFalse(
+            any(call_args.args[0] == settings.NOTIFICATIONS_TOPIC for call_args in send_kafka_message.call_args_list)
+        )
 
     def test_role_create_collects_notifications_when_not_skipped(self):
         """Test that the same seeding run collects events when skip_notifications is False."""
@@ -244,8 +248,16 @@ class RoleDefinerTests(IdentityRequest):
             with collected_rh_events(self) as events:
                 role_seeding(skip_notifications=False)
 
-        self.assertTrue(events)
-        self.assertEqual({e["event_type"] for e in events}, {"rh-new-role-available"})
+        roles = Role.objects.filter(platform_default=True)
+        self.assertTrue(roles)
+        for role in roles:
+            self.assertIn(
+                {
+                    "event_type": "rh-new-role-available",
+                    "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
+                },
+                events,
+            )
 
     def test_role_create_rh_notifications_disabled(self):
         """Test that nothing is collected when NOTIFICATIONS_RH_ENABLED is False."""
@@ -255,7 +267,8 @@ class RoleDefinerTests(IdentityRequest):
 
         self.assertEqual(events, [])
 
-    def test_role_update_skip_notifications(self):
+    @patch("core.kafka.RBACProducer.send_kafka_message")
+    def test_role_update_skip_notifications(self, send_kafka_message):
         """Test that skip_notifications suppresses RH notifications during role update seeding."""
         self.try_seed_roles()
 
@@ -269,6 +282,9 @@ class RoleDefinerTests(IdentityRequest):
                 role_seeding(skip_notifications=True)
 
         self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
+        self.assertFalse(
+            any(call_args.args[0] == settings.NOTIFICATIONS_TOPIC for call_args in send_kafka_message.call_args_list)
+        )
 
     def try_seed_roles(self):
         """Try to seed roles"""

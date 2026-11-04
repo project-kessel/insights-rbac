@@ -98,30 +98,26 @@ class GroupDefinerTests(IdentityRequest):
             for role in group.roles():
                 self.assertTrue(role.platform_default)
 
-            self.assertIn(
-                {
-                    "event_type": "rh-new-role-added-to-default-access",
-                    "payload": {
-                        "username": "Red Hat",
-                        "name": group.name,
-                        "uuid": str(group.uuid),
-                        "role": {"name": new_platform_role.name, "uuid": str(new_platform_role.uuid)},
-                    },
+            added_event = {
+                "event_type": "rh-new-role-added-to-default-access",
+                "payload": {
+                    "username": "Red Hat",
+                    "name": group.name,
+                    "uuid": str(group.uuid),
+                    "role": {"name": new_platform_role.name, "uuid": str(new_platform_role.uuid)},
                 },
-                events,
-            )
-            self.assertIn(
-                {
-                    "event_type": "rh-role-removed-from-default-access",
-                    "payload": {
-                        "username": "Red Hat",
-                        "name": group.name,
-                        "uuid": str(group.uuid),
-                        "role": {"name": role_to_remove.name, "uuid": str(role_to_remove.uuid)},
-                    },
+            }
+            self.assertEqual(events.count(added_event), 1)
+            removed_event = {
+                "event_type": "rh-role-removed-from-default-access",
+                "payload": {
+                    "username": "Red Hat",
+                    "name": group.name,
+                    "uuid": str(group.uuid),
+                    "role": {"name": role_to_remove.name, "uuid": str(role_to_remove.uuid)},
                 },
-                events,
-            )
+            }
+            self.assertEqual(events.count(removed_event), 1)
             json.dumps(events)
 
     def modify_default_group(self, system=True):
