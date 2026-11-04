@@ -13,7 +13,6 @@ from management.disaster_recovery.resource_checker import (
 from management.group.model import Group
 from management.principal.model import Principal
 from management.role.model import Role
-from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.management.disaster_recovery.helpers import _make_tuple
 from tests.v2_util import bootstrap_tenant_for_v2_test

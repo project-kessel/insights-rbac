@@ -32,7 +32,6 @@ from management.exceptions import (
 )
 from management.role.v2_exceptions import RolesNotFoundError
 from management.utils import (
-    ProblemType,
     STATUS_PROBLEM_TYPES,
     status_default_problem_title,
     v2_response_from_v1_errors,

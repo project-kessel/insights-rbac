@@ -157,6 +157,139 @@ def run_seeds_in_worker(kwargs):
         raise
 
 
+RH_NOTIFICATIONS_BATCH_DELAY_SECONDS = 60
+RH_NOTIFICATIONS_MAX_COUNTDOWN_SECONDS = 300
+RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS = 5
+RH_NOTIFICATIONS_DEFAULT_QUIET_START = "23:30"
+RH_NOTIFICATIONS_DEFAULT_QUIET_END = "00:30"
+
+
+def _parse_quiet_time(setting_name, default):
+    """Parse an HH:MM quiet window setting, falling back to the default when it is invalid."""
+    value = getattr(settings, setting_name, default)
+    try:
+        return datetime.datetime.strptime(value, "%H:%M").time()
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s value %r, using default %s.", setting_name, value, default)
+        return datetime.datetime.strptime(default, "%H:%M").time()
+
+
+def _rh_notifications_quiet_window_wait_seconds(now):
+    """Return the seconds to wait for the quiet window to end, or 0 when RH notifications may be sent at now (UTC)."""
+    start = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_START", RH_NOTIFICATIONS_DEFAULT_QUIET_START)
+    end = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_END", RH_NOTIFICATIONS_DEFAULT_QUIET_END)
+    if start == end:
+        return 0
+
+    current = now.time()
+    if start < end:
+        inside = start <= current < end
+    else:
+        inside = current >= start or current < end
+    if not inside:
+        return 0
+
+    end_at = datetime.datetime.combine(now.date(), end, tzinfo=now.tzinfo)
+    if end_at <= now:
+        end_at += datetime.timedelta(days=1)
+    return max(1, min(int((end_at - now).total_seconds()), RH_NOTIFICATIONS_MAX_COUNTDOWN_SECONDS))
+
+
+@shared_task
+def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0):
+    """
+    Celery task to send Red Hat system notifications to all ready tenants at a limited rate.
+
+    Each run sends one batch of tenants and flushes the producer. A batch holds NOTIFICATIONS_RH_RATE_PER_MINUTE
+    messages, rounded down to whole tenants but never fewer than one tenant, so a single tenant's events are never
+    split and may exceed a rate smaller than the number of events. The task re-enqueues itself with a tenant id
+    cursor. During the quiet window it only re-enqueues itself, and a batch that reaches the window stops after the
+    last tenant it completed. The window is checked before each tenant, not each event, so a tenant whose events are
+    already being sent when the window starts still receives all of them. A failed send stops the batch and is
+    retried from the last completed tenant, up to RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS times in a row. Delivery is
+    best-effort: a send counts as done once the producer accepts it, and broker-side delivery failures after that
+    are not retried.
+    """
+    from api.models import Tenant
+    from management.notifications.notification_handlers import noto_producer, notify
+
+    # Checked on every batch so that turning either flag off stops a running chain.
+    if not (settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
+        logger.info("RH notifications are disabled (NOTIFICATIONS_ENABLED or NOTIFICATIONS_RH_ENABLED), skipping.")
+        return
+    if not events:
+        return
+
+    def reenqueue(cursor, countdown, **extra_kwargs):
+        kwargs = {"after_tenant_id": cursor, **extra_kwargs}
+        try:
+            send_rh_notifications_in_worker.apply_async(args=[events], kwargs=kwargs, countdown=countdown)
+        except Exception:
+            # Not retried here (a retry would re-send this batch); the logged cursor identifies where to resume.
+            logger.exception("Failed to enqueue the next RH notifications batch after tenant id %d.", cursor)
+            raise
+
+    wait_seconds = _rh_notifications_quiet_window_wait_seconds(datetime.datetime.now(datetime.timezone.utc))
+    if wait_seconds:
+        logger.info("RH notifications quiet window is active, retrying in %d seconds.", wait_seconds)
+        reenqueue(after_tenant_id, wait_seconds)
+        return
+
+    rate = max(1, settings.NOTIFICATIONS_RH_RATE_PER_MINUTE)
+    batch_size = max(1, rate // len(events))
+    tenants = list(
+        Tenant.objects.exclude(tenant_name="public")
+        .filter(ready=True, id__gt=after_tenant_id)
+        .order_by("id")[:batch_size]
+    )
+
+    cursor = after_tenant_id
+    sent_tenants = 0
+    interrupted_wait = 0
+    send_failed = False
+    for tenant in tenants:
+        # The window is re-checked per tenant so that a slow batch does not run into it.
+        interrupted_wait = _rh_notifications_quiet_window_wait_seconds(datetime.datetime.now(datetime.timezone.utc))
+        if interrupted_wait:
+            break
+        if not all(notify(event["event_type"], event["payload"], tenant.org_id) for event in events):
+            send_failed = True
+            break
+        cursor = tenant.id
+        sent_tenants += 1
+
+    try:
+        noto_producer.get_producer().flush()
+    except Exception:
+        logger.exception("Failed to flush the notifications producer.")
+
+    logger.info(
+        "Sent RH notifications for %d tenant(s) (%d message(s)) after tenant id %d.",
+        sent_tenants,
+        sent_tenants * len(events),
+        after_tenant_id,
+    )
+
+    if interrupted_wait:
+        logger.info("RH notifications quiet window started mid-batch, resuming in %d seconds.", interrupted_wait)
+        reenqueue(cursor, interrupted_wait)
+    elif send_failed:
+        attempts = failed_attempts + 1
+        if attempts >= RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS:
+            logger.error(
+                "Giving up sending RH notifications after %d failed attempt(s); resume after tenant id %d.",
+                attempts,
+                cursor,
+            )
+            return
+        logger.warning("Sending an RH notification failed, retrying after tenant id %d.", cursor)
+        reenqueue(cursor, RH_NOTIFICATIONS_BATCH_DELAY_SECONDS, failed_attempts=attempts)
+    elif len(tenants) == batch_size:
+        reenqueue(cursor, RH_NOTIFICATIONS_BATCH_DELAY_SECONDS)
+    else:
+        logger.info("Finished sending RH notifications.")
+
+
 @shared_task
 def run_sync_schemas_in_worker(kwargs):
     """Celery task to sync schemas."""

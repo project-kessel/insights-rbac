@@ -20,6 +20,7 @@ import logging
 
 from django.core.management import CommandError
 from django.core.management.base import BaseCommand
+from management.notifications.notification_handlers import collect_rh_notifications
 from management.seeds import group_seeding, permission_seeding, role_seeding
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -50,29 +51,31 @@ class Command(BaseCommand):
         if force_create_relationships and force_update_relationships:
             raise CommandError("Relationships cannot be both forcibly created and forcibly updated!", returncode=1)
 
-        if options["permissions"] or seed_all:
-            logger.info("*** Seeding permissions... ***")
-            permission_seeding(skip_notifications=skip_notifications)
-            logger.info("*** Permission seeding completed. ***\n")
+        # Committed role/group changes enqueue their RH notifications even if a later seeding step raises.
+        with collect_rh_notifications():
+            if options["permissions"] or seed_all:
+                logger.info("*** Seeding permissions... ***")
+                permission_seeding(skip_notifications=skip_notifications)
+                logger.info("*** Permission seeding completed. ***\n")
 
-        if options["roles"] or seed_all:
-            logger.info("*** Seeding roles... ***")
-            logger.info(f"Running with force-create-relationships: {force_create_relationships}")
-            logger.info(f"Running with force-update-relationships: {force_update_relationships}")
-            logger.info(f"Running with skip-notifications: {skip_notifications}")
+            if options["roles"] or seed_all:
+                logger.info("*** Seeding roles... ***")
+                logger.info(f"Running with force-create-relationships: {force_create_relationships}")
+                logger.info(f"Running with force-update-relationships: {force_update_relationships}")
+                logger.info(f"Running with skip-notifications: {skip_notifications}")
 
-            role_seeding(
-                force_create_relationships=force_create_relationships,
-                force_update_relationships=force_update_relationships,
-                skip_notifications=skip_notifications,
-            )
+                role_seeding(
+                    force_create_relationships=force_create_relationships,
+                    force_update_relationships=force_update_relationships,
+                    skip_notifications=skip_notifications,
+                )
 
-            logger.info("*** Role seeding completed. ***\n")
+                logger.info("*** Role seeding completed. ***\n")
 
-        if options["groups"] or seed_all:
-            logger.info("*** Seeding groups... ***")
-            group_seeding(skip_notifications=skip_notifications)
-            logger.info("*** Group seeding completed. ***\n")
+            if options["groups"] or seed_all:
+                logger.info("*** Seeding groups... ***")
+                group_seeding(skip_notifications=skip_notifications)
+                logger.info("*** Group seeding completed. ***\n")
 
         # Since the cache will expire in 10 min. We can let it expire by itself. Not worth to explicitly expire it
         # currently becuthere might be some other unexpected issues. Can enable it in the future if it becomes an issue.

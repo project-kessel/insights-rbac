@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test.utils import override_settings
 from django.urls import clear_url_caches, reverse
-from management.cache import WORKSPACE_CACHE, WorkspaceCache, workspace_cache_total
+from management.cache import WorkspaceCache, workspace_cache_total
 from management.models import Workspace
 from management.workspace.service import WorkspaceService
 from redis import exceptions as redis_exceptions

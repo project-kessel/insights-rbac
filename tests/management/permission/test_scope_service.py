@@ -1082,7 +1082,6 @@ class SplitPermissionsTest(TestCase):
         """subscriptions:*:* alone is mixed because DEFAULT_SCOPE has subscriptions:reports:* etc."""
         from management.permission.scope_service import (
             binding_scopes_for_permissions,
-            split_permissions_by_binding_scope,
         )
 
         result = binding_scopes_for_permissions(["subscriptions:*:*"], self.service)

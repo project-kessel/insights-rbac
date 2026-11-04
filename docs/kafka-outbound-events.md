@@ -84,7 +84,7 @@ Sent when a tenant user modifies groups or their membership.
 
 #### Red Hat System Role & Group Events
 
-Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all tenants** via `notify_all()`. Username is always `"Red Hat"`.
+Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all ready tenants** by the `send_rh_notifications_in_worker` Celery task, which sends in batches of about `NOTIFICATIONS_RH_RATE_PER_MINUTE` messages per minute (whole tenants, at least one tenant per batch) and pauses during the UTC quiet window (`NOTIFICATIONS_RH_QUIET_START` to `NOTIFICATIONS_RH_QUIET_END`, default 23:30 to 00:30). Username is always `"Red Hat"`.
 
 | Event Type | Occasion | Payload |
 |---|---|---|
@@ -234,6 +234,8 @@ No additional headers.
 | `MOCK_KAFKA` | `False` | Use `FakeKafkaProducer` (no-op) for dev/test |
 | `NOTIFICATIONS_ENABLED` | `False` | Enable custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enable Red Hat system notifications |
+| `NOTIFICATIONS_RH_RATE_PER_MINUTE` | `3000` | Max Red Hat notification messages sent per minute |
+| `NOTIFICATIONS_RH_QUIET_START` / `NOTIFICATIONS_RH_QUIET_END` | `23:30` / `00:30` | UTC window (HH:MM, may cross midnight) in which Red Hat notifications are not sent |
 | `NOTIFICATIONS_TOPIC` | (env) | Kafka topic for user-facing notifications |
 | `EXTERNAL_SYNC_TOPIC` | (env) | Kafka topic for external service sync |
 | `EXTERNAL_CHROME_TOPIC` | (env) | Kafka topic for Chrome UI invalidation |

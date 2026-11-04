@@ -17,7 +17,6 @@
 import uuid
 
 from django.test import TestCase
-from unittest.mock import Mock
 from api.models import Tenant
 from management.models import Workspace
 from rest_framework import serializers

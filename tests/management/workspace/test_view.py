@@ -23,7 +23,6 @@ from importlib import reload
 from unittest.mock import patch
 from uuid import uuid4
 
-import management.workspace.view
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import OperationalError, transaction
@@ -52,7 +51,6 @@ from tests.identity_request import IdentityRequest, TransactionalIdentityRequest
 from tests.v2_util import (
     assert_problem_details_response_with,
     bootstrap_tenant_for_v2_test,
-    is_problem_details_response,
 )
 
 from api.models import Tenant

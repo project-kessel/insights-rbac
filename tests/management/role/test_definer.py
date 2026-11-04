@@ -16,13 +16,14 @@
 #
 """Test the role definer."""
 
-from unittest.mock import ANY, call, mock_open, patch
+import json
+from unittest.mock import mock_open, patch
 from uuid import UUID
 
 from django.conf import settings
 from django.test.utils import override_settings
 from management.group.definer import seed_group
-from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.group.platform import GlobalPolicyIdService
 from management.models import (
     Access,
     ExtRoleRelation,
@@ -55,8 +56,8 @@ from migration_tool.in_memory_tuples import (
     resource,
     subject,
 )
-from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
+from tests.management.notifications.utils import collected_rh_events
 from tests.management.role.test_dual_write import RbacFixture
 
 from api.models import Tenant
@@ -111,41 +112,26 @@ class RoleDefinerTests(IdentityRequest):
         super().setUp()
         self.public_tenant = Tenant.objects.get(tenant_name="public")
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_create(self, send_kafka_message):
-        kafka_mock = copy_call_args(send_kafka_message)
+    def test_role_create(self):
         """Test that we can run a role seeding update."""
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
-            self.try_seed_roles()
+            with collected_rh_events(self) as events:
+                self.try_seed_roles()
 
             roles = Role.objects.filter(platform_default=True)
-
-            org_id = self.customer_data["org_id"]
 
             self.assertTrue(len(roles))
             self.assertFalse(Role.objects.get(name="User Access administrator").platform_default)
 
-            kafka_mock.assert_any_call(
-                settings.NOTIFICATIONS_TOPIC,
+            role = roles.first()
+            self.assertIn(
                 {
-                    "bundle": "console",
-                    "application": "rbac",
                     "event_type": "rh-new-role-available",
-                    "timestamp": ANY,
-                    "events": [
-                        {
-                            "metadata": {},
-                            "payload": {
-                                "name": roles.first().name,
-                                "username": "Red Hat",
-                                "uuid": str(roles.first().uuid),
-                            },
-                        }
-                    ],
-                    "org_id": org_id,
+                    "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
                 },
-                ANY,
+                events,
             )
+            json.dumps(events)
 
     def test_role_update(self):
         """Test that role seeding update will re-create the roles."""
@@ -177,10 +163,8 @@ class RoleDefinerTests(IdentityRequest):
         roles = Role.objects.filter(platform_default=True)
         self.assertTrue(len(roles))
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_update_platform_default_role(self, send_kafka_message):
-        """Test that role seeding updates send out notification."""
-        kafka_mock = copy_call_args(send_kafka_message)
+    def test_role_update_platform_default_role(self):
+        """Test that role seeding updates collect the RH notification events."""
         self.try_seed_roles()
 
         # Update non platform default role
@@ -203,12 +187,9 @@ class RoleDefinerTests(IdentityRequest):
         platform_role_to_update.save()
         access.save()
 
-        org_id = self.customer_data["org_id"]
-        Tenant.objects.create(tenant_name="unready1", org_id="unready1", ready=False)
-        Tenant.objects.create(tenant_name="unready2", org_id="unready2", ready=False)
-
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
-            seed_roles()
+            with collected_rh_events(self) as events:
+                seed_roles()
 
             platform_role_to_update.refresh_from_db()
             non_platform_role_to_update.refresh_from_db()
@@ -221,79 +202,61 @@ class RoleDefinerTests(IdentityRequest):
                 "notifications:notifications:read",
             )
 
-            notification_messages = [
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-non-platform-default-role-updated",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "name": non_platform_role_to_update.name,
-                                    "username": "Red Hat",
-                                    "uuid": str(non_platform_role_to_update.uuid),
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
+            self.assertIn(
+                {
+                    "event_type": "rh-non-platform-default-role-updated",
+                    "payload": {
+                        "name": non_platform_role_to_update.name,
+                        "username": "Red Hat",
+                        "uuid": str(non_platform_role_to_update.uuid),
                     },
-                    ANY,
-                ),
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-platform-default-role-updated",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "name": platform_role_to_update.name,
-                                    "username": "Red Hat",
-                                    "uuid": str(platform_role_to_update.uuid),
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
+                },
+                events,
+            )
+            self.assertIn(
+                {
+                    "event_type": "rh-platform-default-role-updated",
+                    "payload": {
+                        "name": platform_role_to_update.name,
+                        "username": "Red Hat",
+                        "uuid": str(platform_role_to_update.uuid),
                     },
-                    ANY,
-                ),
-            ]
-            kafka_mock.assert_has_calls(notification_messages, any_order=True)
+                },
+                events,
+            )
+            json.dumps(events)
 
-            for call_args in kafka_mock.call_args_list:
-                topic = call_args.args[0]
-                if topic != settings.NOTIFICATIONS_TOPIC:
-                    continue
-                body = call_args.args[1]
-                self.assertNotIn(
-                    body.get("org_id"),
-                    ["unready1", "unready2"],
-                    "Unready tenant should not be notified",
-                )
-
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_create_skip_notifications(self, send_kafka_message):
+    def test_role_create_skip_notifications(self):
         """Test that skip_notifications suppresses RH notifications during role seeding."""
-        kafka_mock = copy_call_args(send_kafka_message)
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             from management.seeds import role_seeding
 
-            role_seeding(skip_notifications=True)
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=True)
 
-        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
-        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
+        self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_update_skip_notifications(self, send_kafka_message):
+    def test_role_create_collects_notifications_when_not_skipped(self):
+        """Test that the same seeding run collects events when skip_notifications is False."""
+        with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
+            from management.seeds import role_seeding
+
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=False)
+
+        self.assertTrue(events)
+        self.assertEqual({e["event_type"] for e in events}, {"rh-new-role-available"})
+
+    def test_role_create_rh_notifications_disabled(self):
+        """Test that nothing is collected when NOTIFICATIONS_RH_ENABLED is False."""
+        with self.settings(NOTIFICATIONS_RH_ENABLED=False, NOTIFICATIONS_ENABLED=True):
+            with collected_rh_events(self) as events:
+                self.try_seed_roles()
+
+        self.assertEqual(events, [])
+
+    def test_role_update_skip_notifications(self):
         """Test that skip_notifications suppresses RH notifications during role update seeding."""
-        kafka_mock = copy_call_args(send_kafka_message)
         self.try_seed_roles()
 
         # Force an update by zeroing the version
@@ -302,10 +265,10 @@ class RoleDefinerTests(IdentityRequest):
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             from management.seeds import role_seeding
 
-            role_seeding(skip_notifications=True)
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=True)
 
-        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
-        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
+        self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
 
     def try_seed_roles(self):
         """Try to seed roles"""

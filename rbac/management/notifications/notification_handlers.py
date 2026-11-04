@@ -20,20 +20,24 @@
 import json
 import logging
 import os
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from typing import Optional
 from uuid import uuid4
 
 from core.kafka import RBACProducer
 from django.conf import settings
+from django.db import transaction
 from management.role.v2_model import RoleV2
-
-from api.models import Tenant
 
 EVENT_TYPE_RH_TAM_REQUEST_CREATED = "rh-new-tam-request-created"
 
 # When set to True, suppresses RH system notifications (e.g. during seeding runs).
 skip_rh_notifications: ContextVar[bool] = ContextVar("skip_rh_notifications", default=False)
+
+# Collects the RH system notification events of one seeding run so they can be sent by a single rate-limited task.
+rh_notification_collector: ContextVar[Optional[list]] = ContextVar("rh_notification_collector", default=None)
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 noto_producer = RBACProducer()
@@ -53,19 +57,50 @@ def build_notifications_message(event_type, payload, org_id=None):
 
 
 def notify(event_type, payload, org_id=None):
-    """Actually send notifications message."""
+    """Actually send notifications message. Returns True if the message was handed to the producer."""
     noto_message = build_notifications_message(event_type, payload, org_id)
     noto_headers = [("rh-message-id", str(uuid4()).encode("utf-8"))]
-    noto_producer.send_kafka_message(noto_topic, noto_message, noto_headers)
+    return noto_producer.send_kafka_message(noto_topic, noto_message, noto_headers)
 
 
-def notify_all(event_type, payload):
-    """Notify all tenants."""
-    # To avoid memory overloaded, use iterator:
-    # https://docs.djangoproject.com/en/4.0/ref/models/querysets/#django.db.models.query.QuerySet.iterator
-    for tenant in Tenant.objects.exclude(tenant_name="public").filter(ready=True).iterator():
-        # Tenant name pattern is acct12345
-        notify(event_type, payload, tenant.org_id)
+def enqueue_rh_notifications(events):
+    """Hand RH system notification events (JSON-safe dicts of event_type and payload) to the sending task."""
+    from management.tasks import send_rh_notifications_in_worker
+
+    # Notifications are best-effort: a broker failure must not fail the seeding run that produced them.
+    try:
+        send_rh_notifications_in_worker.apply_async(args=[events])
+    except Exception:
+        logger.exception("Failed to enqueue %d RH system notification event(s).", len(events))
+        return
+    logger.info("Enqueued %d RH system notification event(s) for sending.", len(events))
+
+
+def queue_rh_notification(event_type, payload):
+    """Queue an RH system notification for every tenant once the current transaction commits."""
+    collector = rh_notification_collector.get()
+
+    def register():
+        event = {"event_type": event_type, "payload": payload}
+        if collector is None:
+            enqueue_rh_notifications([event])
+        else:
+            collector.append(event)
+
+    transaction.on_commit(register)
+
+
+@contextmanager
+def collect_rh_notifications():
+    """Collect RH system notifications of a seeding run and enqueue them in one task when the run ends."""
+    events = []
+    token = rh_notification_collector.set(events)
+    try:
+        yield
+    finally:
+        rh_notification_collector.reset(token)
+        if events:
+            enqueue_rh_notifications(events)
 
 
 def _rh_notifications_suppressed() -> bool:
@@ -91,7 +126,7 @@ def handle_system_role_change_notification(role_obj, operation):
     else:
         raise Exception("Not recognized operation for updating Red Hat managed group.")
 
-    notify_all(event_type, payload)
+    queue_rh_notification(event_type, payload)
 
 
 def role_obj_change_notification_handler(role_obj, operation, user=None):
@@ -174,7 +209,7 @@ def handle_platform_group_role_change_notification(group_obj, role_obj, operatio
     else:
         raise Exception("Not recognized operation for updating Red Hat managed platform default access group.")
 
-    notify_all(event_type, payload)
+    queue_rh_notification(event_type, payload)
 
 
 def group_role_change_notification_handler(user, group_obj, role_obj, operation):

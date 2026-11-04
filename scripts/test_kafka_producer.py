@@ -54,7 +54,7 @@ def send_test_message(bootstrap_servers="localhost:9092", topic="VirtualTopic.ca
     # Wait for the message to be sent
     try:
         record_metadata = future.get(timeout=10)
-        print(f"  Message sent successfully!")
+        print("  Message sent successfully!")
         print(f"  Topic: {record_metadata.topic}")
         print(f"  Partition: {record_metadata.partition}")
         print(f"  Offset: {record_metadata.offset}")

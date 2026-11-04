@@ -43,7 +43,7 @@ from management.principal.unexpected_status_code_from_it import UnexpectedStatus
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup
-from management.tenant_mapping.v2_activation import assert_v1_write_allowed, is_v2_opted_in, set_v2_opt_in_state
+from management.tenant_mapping.v2_activation import set_v2_opt_in_state
 from management.utils import ProblemType
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -52,7 +52,6 @@ from tests.logging_util import enable_logging
 from tests.v2_util import (
     assert_problem_details_response_with,
     bootstrap_tenant_for_v2_test,
-    is_problem_details_response,
 )
 
 from api.common import RH_IDENTITY_HEADER

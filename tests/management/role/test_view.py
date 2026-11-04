@@ -17,16 +17,14 @@
 """Test the role viewset."""
 
 import json
-from typing import Optional
-from unittest.mock import ANY, Mock, call, patch
+from unittest.mock import ANY, Mock, patch
 from uuid import uuid4
 
 from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from django.test.utils import override_settings
-from django.urls import resolve, reverse
+from django.urls import reverse
 from management.cache import TenantCache
-from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.models import (
     Access,
     BindingMapping,
@@ -40,24 +38,20 @@ from management.models import (
     Role,
     Workspace,
 )
-from management.role.v2_model import CustomRoleV2
-from management.role_binding.model import RoleBinding
 from management.tenant_mapping.v2_activation import set_v2_opt_in_state
-from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
     InMemoryRelationReplicator,
     InMemoryTuples,
     all_of,
     relation,
     resource,
-    resource_type,
     subject,
 )
 from rest_framework import status
 from rest_framework.test import APIClient
 from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
-from tests.util import assert_v1_v2_locally_consistent, assert_v1_v2_tuples_fully_consistent
+from tests.util import assert_v1_v2_locally_consistent
 from tests.v2_util import bootstrap_tenant_for_v2_test
 
 from api.models import Tenant

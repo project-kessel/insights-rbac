@@ -24,7 +24,6 @@ from management.group.model import Group
 from management.models import CustomRoleV2, Permission
 from management.principal.model import Principal
 from management.tasks import run_kessel_parity_checks_in_worker
-from management.tenant_mapping.model import TenantMapping
 from management.workspace.model import Workspace
 from tests.identity_request import IdentityRequest
 from tests.v2_util import bootstrap_tenant_for_v2_test
