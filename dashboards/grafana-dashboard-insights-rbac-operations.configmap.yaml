@@ -8000,6 +8000,48 @@ data:
               ],
               "title": "IT Request Errors",
               "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 9
+              },
+              "id": 141,
+              "options": {
+                "legend": {
+                  "calcs": [],
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "pluginVersion": "11.6.3",
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "editorMode": "code",
+                  "expr": "sum(rate(rbac_jwks_request_retries_total[5m]))",
+                  "legendFormat": "JWKS retries/s",
+                  "range": true,
+                  "refId": "A"
+                }
+              ],
+              "title": "JWKS Request Retry Rate",
+              "type": "timeseries"
             }
           ],
           "title": "IT Service",
