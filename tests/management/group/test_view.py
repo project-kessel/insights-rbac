@@ -4134,6 +4134,28 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
                 ANY,
             )
 
+    @patch("management.principal.backfill.capture_exception")
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator._save_replication_event")
+    @patch(
+        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
+        return_value={
+            "status_code": 200,
+            "data": [{"username": "stale_user", "user_id": "51856862"}],
+        },
+    )
+    def test_add_group_principals_rejects_user_id_mismatch(self, mock_request, mock_repl, mock_capture):
+        """Reject add when local Principal.user_id disagrees with BOP; do not dual-write."""
+        Principal.objects.create(username="stale_user", tenant=self.tenant, user_id="16777216")
+        test_group = Group.objects.create(name="mismatch_group", tenant=self.tenant)
+        url = reverse("v1_management:group-principals", kwargs={"uuid": test_group.uuid})
+        response = APIClient().post(url, {"principals": [{"username": "stale_user"}]}, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("user_id mismatch", response.data["errors"][0]["detail"])
+        self.assertFalse(test_group.principals.filter(username="stale_user").exists())
+        mock_repl.assert_not_called()
+        mock_capture.assert_called_once()
+
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")
     def test_add_group_principals_service_account(self, sa_mock):
