@@ -21,17 +21,21 @@ import dataclasses
 import json
 import logging
 import os
+from typing import Iterator
 
 from core.utils import destructive_ok
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, QuerySet
+from django.db.models import CharField, F, QuerySet
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.utils import timezone
 from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from management.atomic_transactions import atomic, atomic_with_retry
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.types import RelationTuple
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permission.model import Permission
 from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService
@@ -39,12 +43,21 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
-from management.role.model import Access, ExtRoleRelation, ExtTenant, ResourceDefinition, Role, RoleScopeState
+from management.role.model import (
+    Access,
+    BindingMapping,
+    ExtRoleRelation,
+    ExtTenant,
+    ResourceDefinition,
+    Role,
+    RoleScopeState,
+)
 from management.role.platform import (
     admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
 )
 from management.role.v2_model import PlatformRoleV2, SeededRoleV2
+from management.role_binding.model import RoleBinding
 from management.tenant_mapping.model import DefaultAccessType
 
 from api.models import Tenant
@@ -194,6 +207,45 @@ def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None
     return current_roles
 
 
+def _role_binding_relations_to_remove(role: Role) -> Iterator[RelationTuple]:
+    """Yield the relations of every role binding that cascades away with this system role.
+
+    Deleting a V1 role cascades through ``RoleV2.v1_source`` to its V2 roles and their role
+    bindings, and through ``BindingMapping.role`` to its binding mappings, so the relations of
+    both must be removed along with the role's own.
+
+    Streamed rather than collected so that a role bound in every tenant does not have all of its
+    relations in memory at once.
+    """
+    for binding in (
+        RoleBinding.objects.filter(role__v1_source=role)
+        .select_related("role")
+        .prefetch_related("group_entries__group", "principal_entries__principal")
+        .iterator(chunk_size=1000)
+    ):
+        yield from binding.all_tuples()
+
+    # A V1 group assignment of a system role is tracked by a BindingMapping, which is only migrated
+    # to a RoleBinding lazily. Mappings not migrated yet still own live relations, which the loop
+    # above cannot see. A migrated mapping shares its RoleBinding's UUID, hence its tuples, so it is
+    # skipped to keep the same relation out of two events.
+    #
+    # Deduplication is pushed to the database so the Python process does not need to retain every
+    # migrated binding UUID in memory.
+    migrated_uuids = (
+        RoleBinding.objects.filter(role__v1_source=role)
+        .annotate(uuid_str=Cast("uuid", output_field=CharField()))
+        .values("uuid_str")
+    )
+    for mapping in (
+        BindingMapping.objects.filter(role=role)
+        .annotate(binding_id=KeyTextTransform("id", "mappings"))
+        .exclude(binding_id__in=migrated_uuids)
+        .iterator(chunk_size=1000)
+    ):
+        yield from mapping.get_role_binding().as_tuples()
+
+
 # SERIALIZABLE for the same reason as _make_role above.
 @atomic
 def _do_delete_system_roles(roles: QuerySet):
@@ -201,7 +253,9 @@ def _do_delete_system_roles(roles: QuerySet):
 
     for role in roles:
         dual_write_handler = SeedingInventoryApiDualWriteHandler(role)
-        dual_write_handler.replicate_deleted_system_role()
+        extra_remove = _role_binding_relations_to_remove(role) if dual_write_handler.replication_enabled() else ()
+
+        dual_write_handler.replicate_deleted_system_role(extra_remove=extra_remove)
 
     roles.delete()
 
