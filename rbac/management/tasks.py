@@ -162,7 +162,8 @@ def run_seeds_in_worker(kwargs):
 RH_NOTIFICATIONS_BATCH_DELAY_SECONDS = 60
 RH_NOTIFICATIONS_MAX_COUNTDOWN_SECONDS = 300
 RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS = 5
-RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
+# Exceeds Celery Redis's 1-hour default visibility timeout plus the 5-minute max countdown.
+RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS = 2 * 60 * 60
 RH_NOTIFICATIONS_BATCH_LOCK_TIMEOUT_SECONDS = 10 * 60
 RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY = {
     "max_retries": 3,
@@ -172,6 +173,17 @@ RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY = {
 }
 RH_NOTIFICATIONS_DEFAULT_QUIET_START = "23:30"
 RH_NOTIFICATIONS_DEFAULT_QUIET_END = "00:30"
+
+
+class RhNotificationsContinuationError(Exception):
+    """The continuation of an RH notification chain could not be published; resume holds its recoverable state."""
+
+    def __init__(self, resume):
+        """Keep the events and tenant cursor needed to resume the chain."""
+        super().__init__(
+            f"Could not publish the RH notifications continuation after tenant id {resume['after_tenant_id']}"
+        )
+        self.resume = resume
 
 
 def _parse_quiet_time(setting_name, default):
@@ -257,9 +269,14 @@ def _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain
             if chain_id:
                 options["task_id"] = next_batch_id
             send_rh_notifications_in_worker.apply_async(**options)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to enqueue the next RH notifications batch after tenant id %d.", cursor)
-            raise
+            resume = {
+                "events": events,
+                "after_tenant_id": cursor,
+                "failed_attempts": extra_kwargs.get("failed_attempts", 0),
+            }
+            raise RhNotificationsContinuationError(resume) from exc
 
     wait_seconds = _rh_notifications_quiet_window_wait_seconds(datetime.datetime.now(datetime.timezone.utc))
     if wait_seconds:
@@ -310,6 +327,7 @@ def _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain
     if interrupted_wait:
         logger.info("RH notifications quiet window started mid-batch, resuming in %d seconds.", interrupted_wait)
         reenqueue(cursor, interrupted_wait)
+        return True
     elif send_failed:
         attempts = failed_attempts + 1
         if attempts >= RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS:
@@ -338,11 +356,15 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
 
     from management.notifications.notification_handlers import (
         RH_NOTIFICATIONS_CHAIN_LOCK_KEY,
-        _release_rh_notifications_chain,
+        finish_rh_notifications_chain,
+        save_rh_notifications_resume,
     )
 
     if cache.get(RH_NOTIFICATIONS_CHAIN_LOCK_KEY) != chain_id:
         logger.info("Skipping stale RH notification chain %s.", chain_id)
+        return
+    if not cache.touch(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS):
+        logger.info("Skipping expired RH notification chain %s.", chain_id)
         return
 
     batch_id = batch_id or str(uuid4())
@@ -358,17 +380,24 @@ def send_rh_notifications_in_worker(events, after_tenant_id=0, failed_attempts=0
 
     try:
         has_continuation = _send_rh_notifications_batch(events, after_tenant_id, failed_attempts, chain_id, batch_id)
+    except RhNotificationsContinuationError as exc:
+        # The events left the pending queue when the chain started, so keep the cursor recoverable
+        # before releasing the chain; finishing it republishes the continuation or leaves it for the next enqueue.
+        cache.delete(batch_lock_key)
+        save_rh_notifications_resume(exc.resume)
+        finish_rh_notifications_chain(chain_id)
+        raise
     except Exception:
         cache.delete(batch_lock_key)
-        _release_rh_notifications_chain(chain_id)
+        finish_rh_notifications_chain(chain_id)
         raise
 
     try:
         cache.delete(batch_lock_key)
         if not has_continuation:
-            _release_rh_notifications_chain(chain_id)
+            finish_rh_notifications_chain(chain_id)
     except Exception:
-        _release_rh_notifications_chain(chain_id)
+        finish_rh_notifications_chain(chain_id)
         raise
 
 

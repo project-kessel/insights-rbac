@@ -25,6 +25,8 @@ from django.core.management import call_command
 from django.db import transaction
 from django.test import override_settings
 from management.notifications.notification_handlers import (
+    RH_NOTIFICATIONS_CHAIN_LOCK_KEY,
+    RH_NOTIFICATIONS_PENDING_EVENTS_KEY,
     collect_rh_notifications,
     enqueue_rh_notifications,
     handle_platform_group_role_change_notification,
@@ -34,8 +36,10 @@ from management.notifications.notification_handlers import (
     skip_rh_notifications,
 )
 from management.tasks import (
+    RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS,
     RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS,
     RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
+    RhNotificationsContinuationError,
     _rh_notifications_quiet_window_wait_seconds,
     send_rh_notifications_in_worker,
 )
@@ -56,6 +60,25 @@ def utc(hour, minute=0, second=0):
     return datetime.datetime(2026, 11, 4, hour, minute, second, tzinfo=datetime.timezone.utc)
 
 
+def make_cache_mock(state=None):
+    """Create a small shared-cache fake for lock and pending-event tests."""
+    state = state if state is not None else {}
+    cache_mock = MagicMock()
+    cache_mock.get.side_effect = state.get
+
+    def add(key, value, timeout):
+        if key in state:
+            return False
+        state[key] = value
+        return True
+
+    cache_mock.add.side_effect = add
+    cache_mock.set.side_effect = lambda key, value, timeout=None: state.__setitem__(key, value)
+    cache_mock.delete.side_effect = lambda key: state.pop(key, None) is not None
+    cache_mock.touch.side_effect = lambda key, timeout=None: key in state
+    return cache_mock, state
+
+
 def make_role(name="role", platform_default=False):
     """Return a stand-in system role object."""
     role = MagicMock()
@@ -73,8 +96,7 @@ class RhNotificationCollectionTests(IdentityRequest):
     def setUp(self):
         """Keep the global production lock isolated from parallel test workers."""
         super().setUp()
-        cache_mock = MagicMock()
-        cache_mock.add.return_value = True
+        cache_mock, self.cache_state = make_cache_mock()
         cache_patch = patch("management.notifications.notification_handlers.cache", cache_mock)
         cache_patch.start()
         self.addCleanup(cache_patch.stop)
@@ -168,13 +190,32 @@ class RhNotificationCollectionTests(IdentityRequest):
         self.assertEqual(events, [])
 
     @patch(APPLY_ASYNC)
-    @patch("management.notifications.notification_handlers.cache.add", return_value=False)
-    def test_active_chain_prevents_overlapping_initial_enqueue(self, cache_add, apply_async):
-        """Only one seeding run acquires the shared active-chain marker."""
+    def test_active_chain_queues_events_for_following_chain(self, apply_async):
+        """Events arriving during a chain are retained for a subsequent chain."""
+        self.cache_state[RH_NOTIFICATIONS_CHAIN_LOCK_KEY] = "active-chain"
         enqueue_rh_notifications([{"event_type": "a", "payload": {}}])
 
-        cache_add.assert_called_once()
+        self.assertEqual(
+            self.cache_state[RH_NOTIFICATIONS_PENDING_EVENTS_KEY],
+            [{"event_type": "a", "payload": {}}],
+        )
         apply_async.assert_not_called()
+
+    @patch("management.notifications.notification_handlers.logger")
+    @patch(APPLY_ASYNC)
+    def test_inactive_chain_starts_with_queued_and_new_events(self, apply_async, logger):
+        """A new chain drains saved events together with the new enqueue and warns about the stranded ones."""
+        queued = [{"event_type": "queued", "payload": {}}]
+        self.cache_state[RH_NOTIFICATIONS_PENDING_EVENTS_KEY] = queued
+        new_event = {"event_type": "new", "payload": {}}
+
+        enqueue_rh_notifications([new_event])
+
+        logger.warning.assert_called_once()
+        self.assertEqual(logger.warning.call_args.args[1], 1)
+        self.assertEqual(apply_async.call_args.kwargs["args"], [queued + [new_event]])
+        self.assertIn(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, self.cache_state)
+        self.assertNotIn(RH_NOTIFICATIONS_PENDING_EVENTS_KEY, self.cache_state)
 
     @override_settings(NOTIFICATIONS_RH_ENABLED=False)
     def test_disabled_setting_collects_nothing(self):
@@ -211,6 +252,19 @@ class RhNotificationCollectionTests(IdentityRequest):
         self.assertEqual(apply_async.call_args.kwargs["retry"], True)
         self.assertEqual(apply_async.call_args.kwargs["retry_policy"]["max_retries"], 3)
         logger.exception.assert_called_once()
+        self.assertEqual(
+            self.cache_state[RH_NOTIFICATIONS_PENDING_EVENTS_KEY],
+            [
+                {
+                    "event_type": "rh-new-role-available",
+                    "payload": {
+                        "username": "Red Hat",
+                        "name": "lonely",
+                        "uuid": "00000000-0000-0000-0000-000000000001",
+                    },
+                }
+            ],
+        )
 
 
 class CollectRhNotificationsTests(IdentityRequest):
@@ -219,8 +273,7 @@ class CollectRhNotificationsTests(IdentityRequest):
     def setUp(self):
         """Keep the global production lock isolated from parallel test workers."""
         super().setUp()
-        cache_mock = MagicMock()
-        cache_mock.add.return_value = True
+        cache_mock, self.cache_state = make_cache_mock()
         cache_patch = patch("management.notifications.notification_handlers.cache", cache_mock)
         cache_patch.start()
         self.addCleanup(cache_patch.stop)
@@ -409,18 +462,7 @@ class SendRhNotificationsTaskTests(IdentityRequest):
     def test_duplicate_continuation_publish_does_not_repeat_batch(self):
         """A replayed Celery publish token is ignored after its batch completed."""
         state = {"rh-notifications:active-chain": "chain"}
-        cache_mock = MagicMock()
-        cache_mock.get.side_effect = state.get
-
-        def cache_add(key, value, timeout):
-            if key in state:
-                return False
-            state[key] = value
-            return True
-
-        cache_mock.add.side_effect = cache_add
-        cache_mock.set.side_effect = lambda key, value, timeout: state.__setitem__(key, value)
-        cache_mock.delete.side_effect = lambda key: state.pop(key, None) is not None
+        cache_mock, _ = make_cache_mock(state)
 
         with patch("management.tasks.cache", cache_mock):
             send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
@@ -432,6 +474,98 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.assertEqual(continuation["kwargs"]["chain_id"], "chain")
         self.assertEqual(continuation["task_id"], continuation["kwargs"]["batch_id"])
         self.assertEqual(continuation["retry_policy"]["max_retries"], 3)
+        self.assertEqual(cache_mock.touch.call_count, 2)
+        self.assertEqual(
+            cache_mock.touch.call_args_list,
+            [
+                call(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS),
+                call(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, timeout=RH_NOTIFICATIONS_CHAIN_TIMEOUT_SECONDS),
+            ],
+        )
+
+    def test_chain_handoff_drains_pending_events_before_releasing_marker(self):
+        """A completed chain starts a successor for queued events without an unlocked gap."""
+        from management.notifications.notification_handlers import RH_NOTIFICATIONS_PENDING_EVENTS_KEY
+
+        queued = [{"event_type": "queued", "payload": {"name": "later"}}]
+        state = {
+            RH_NOTIFICATIONS_CHAIN_LOCK_KEY: "chain",
+            RH_NOTIFICATIONS_PENDING_EVENTS_KEY: queued,
+        }
+        cache_mock, _ = make_cache_mock(state)
+
+        with (
+            patch("management.tasks.cache", cache_mock),
+            patch("management.notifications.notification_handlers.cache", cache_mock),
+        ):
+            send_rh_notifications_in_worker(
+                self.EVENTS,
+                after_tenant_id=self.ready[-1].id,
+                chain_id="chain",
+                batch_id="batch",
+            )
+
+        self.apply_async.assert_called_once()
+        next_chain = self.apply_async.call_args.kwargs["kwargs"]["chain_id"]
+        self.assertNotEqual(next_chain, "chain")
+        self.assertEqual(self.apply_async.call_args.kwargs["args"], [queued])
+        self.assertEqual(state[RH_NOTIFICATIONS_CHAIN_LOCK_KEY], next_chain)
+        self.assertNotIn(RH_NOTIFICATIONS_PENDING_EVENTS_KEY, state)
+
+    def test_failed_continuation_publish_keeps_the_cursor_recoverable(self):
+        """A continuation that cannot be published is republished from its cursor instead of dropping the tenants."""
+        from management.notifications.notification_handlers import RH_NOTIFICATIONS_RESUME_KEY
+
+        state = {RH_NOTIFICATIONS_CHAIN_LOCK_KEY: "chain"}
+        cache_mock, _ = make_cache_mock(state)
+        self.apply_async.side_effect = [ConnectionError("broker down"), None]
+
+        with (
+            patch("management.tasks.cache", cache_mock),
+            patch("management.notifications.notification_handlers.cache", cache_mock),
+        ):
+            with self.assertRaises(RhNotificationsContinuationError):
+                send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
+
+        self.assertEqual(self.apply_async.call_count, 2)
+        resumed = self.apply_async.call_args.kwargs
+        self.assertEqual(resumed["args"], [self.EVENTS])
+        self.assertEqual(resumed["kwargs"]["after_tenant_id"], self.ready[2].id)
+        self.assertNotEqual(resumed["kwargs"]["chain_id"], "chain")
+        self.assertEqual(state[RH_NOTIFICATIONS_CHAIN_LOCK_KEY], resumed["kwargs"]["chain_id"])
+        self.assertNotIn(RH_NOTIFICATIONS_RESUME_KEY, state)
+
+    def test_unpublishable_continuation_resumes_on_the_next_enqueue(self):
+        """When the broker stays down the cursor is kept and the next enqueue resumes it before new events."""
+        from management.notifications.notification_handlers import (
+            RH_NOTIFICATIONS_PENDING_EVENTS_KEY,
+            RH_NOTIFICATIONS_RESUME_KEY,
+            enqueue_rh_notifications,
+        )
+
+        state = {RH_NOTIFICATIONS_CHAIN_LOCK_KEY: "chain"}
+        cache_mock, _ = make_cache_mock(state)
+        self.apply_async.side_effect = ConnectionError("broker down")
+
+        with (
+            patch("management.tasks.cache", cache_mock),
+            patch("management.notifications.notification_handlers.cache", cache_mock),
+        ):
+            with self.assertRaises(RhNotificationsContinuationError):
+                send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
+
+            self.assertEqual(state[RH_NOTIFICATIONS_RESUME_KEY]["after_tenant_id"], self.ready[2].id)
+            self.assertNotIn(RH_NOTIFICATIONS_CHAIN_LOCK_KEY, state)
+
+            self.apply_async.reset_mock(side_effect=True)
+            new_events = [{"event_type": "later", "payload": {"name": "c"}}]
+            enqueue_rh_notifications(new_events)
+
+        resumed = self.apply_async.call_args.kwargs
+        self.assertEqual(resumed["args"], [self.EVENTS])
+        self.assertEqual(resumed["kwargs"]["after_tenant_id"], self.ready[2].id)
+        self.assertEqual(state[RH_NOTIFICATIONS_PENDING_EVENTS_KEY], new_events)
+        self.assertNotIn(RH_NOTIFICATIONS_RESUME_KEY, state)
 
     def test_last_batch_flushes_and_ends_chain(self):
         """A short batch is the last one: it flushes and does not re-enqueue."""
@@ -553,6 +687,46 @@ class SendRhNotificationsTaskTests(IdentityRequest):
             retry_policy=RH_NOTIFICATIONS_PUBLISH_RETRY_POLICY,
         )
 
+    def test_chain_quiet_window_at_start_keeps_the_chain_marker(self):
+        """A quiet-window continuation keeps the chain active instead of handing it off."""
+        state = {RH_NOTIFICATIONS_CHAIN_LOCK_KEY: "chain"}
+        cache_mock, _ = make_cache_mock(state)
+
+        with (
+            patch("management.tasks.cache", cache_mock),
+            patch("management.notifications.notification_handlers.cache", cache_mock),
+            patch("management.tasks._rh_notifications_quiet_window_wait_seconds", return_value=300),
+        ):
+            send_rh_notifications_in_worker(self.EVENTS, after_tenant_id=7, chain_id="chain", batch_id="batch")
+
+        self.notify.assert_not_called()
+        self.assertEqual(state[RH_NOTIFICATIONS_CHAIN_LOCK_KEY], "chain")
+        self.apply_async.assert_called_once()
+        continuation = self.apply_async.call_args.kwargs
+        self.assertEqual(continuation["countdown"], 300)
+        self.assertEqual(continuation["kwargs"]["after_tenant_id"], 7)
+        self.assertEqual(continuation["kwargs"]["chain_id"], "chain")
+
+    def test_chain_quiet_window_mid_batch_keeps_the_chain_marker(self):
+        """A quiet window that starts mid-batch leaves the marker set so the continuation is not stale."""
+        state = {RH_NOTIFICATIONS_CHAIN_LOCK_KEY: "chain"}
+        cache_mock, _ = make_cache_mock(state)
+
+        with (
+            patch("management.tasks.cache", cache_mock),
+            patch("management.notifications.notification_handlers.cache", cache_mock),
+            patch("management.tasks._rh_notifications_quiet_window_wait_seconds", side_effect=[0, 0, 120]),
+        ):
+            send_rh_notifications_in_worker(self.EVENTS, chain_id="chain", batch_id="batch")
+
+        self.assertEqual([c.args[2] for c in self.notify.call_args_list], ["org0", "org0"])
+        self.assertEqual(state[RH_NOTIFICATIONS_CHAIN_LOCK_KEY], "chain")
+        self.apply_async.assert_called_once()
+        continuation = self.apply_async.call_args.kwargs
+        self.assertEqual(continuation["countdown"], 120)
+        self.assertEqual(continuation["kwargs"]["after_tenant_id"], self.ready[0].id)
+        self.assertEqual(continuation["kwargs"]["chain_id"], "chain")
+
     def test_failed_send_stops_the_batch_and_retries_from_the_last_completed_tenant(self):
         """A failed send does not advance the cursor past the tenant it failed for."""
         self.notify.side_effect = [True, True, True, False]
@@ -603,9 +777,11 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.apply_async.side_effect = RuntimeError("broker down")
 
         with patch("management.tasks.logger") as logger:
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(RhNotificationsContinuationError) as raised:
                 send_rh_notifications_in_worker(self.EVENTS)
 
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+        self.assertEqual(raised.exception.resume["after_tenant_id"], self.ready[2].id)
         logger.exception.assert_called_once()
         self.assertEqual(logger.exception.call_args.args[1], self.ready[2].id)
 
