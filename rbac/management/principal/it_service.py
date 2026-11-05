@@ -465,7 +465,7 @@ class ITService:
 
         try:
             timestamp = float(service_account[field])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             return (TIMESTAMP_ORDER_BY_FIELDS[field], tiebreaker)
 
         # "NaN" parses as a float but is unorderable: every comparison against it is false, so a list containing
@@ -637,7 +637,11 @@ class ITService:
             service_account["service_account_type"] = service_account_type
 
         if expiration:
-            service_account["time_expires"] = expiration
+            try:
+                service_account["time_expires"] = int(expiration)
+            except (TypeError, ValueError, OverflowError):
+                # Omit values that cannot be represented by the integer response field.
+                pass
 
         return service_account
 
