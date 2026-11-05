@@ -21,7 +21,7 @@ Never register v2 routes unconditionally. The feature flag check in `urls.py` is
 - `V2Router` extends `DefaultRouter` with two custom `Route` entries for batch operations:
   - `{prefix}:batchCreate/` maps POST to `batch_create` action.
   - `{prefix}:batchDelete/` maps POST to `bulk_destroy` action.
-- Registered viewsets: `WorkspaceViewSet`, `RoleBindingViewSet`, `RoleV2ViewSet`, `PrincipalV2ViewSet`, `GroupV2ViewSet`.
+- Registered viewsets: `WorkspaceViewSet`, `RoleBindingViewSet`, `RoleV2ViewSet`, `PrincipalV2ViewSet`, `GroupV2ViewSet`, `PermissionV2ViewSet`.
 - `AuditLogV2ViewSet` is registered outside the router as a plain path (`auditlogs/`) because audit log entries have no UUID identity — only a list route is exposed (no detail route).
 
 When adding a v2 endpoint, register on `V2Router` in `v2_urls.py`. For batch operations, use the existing `:batchCreate` / `:batchDelete` route pattern (colon prefix, camelCase action name). For read-only list endpoints without UUID-addressable resources, register as a plain `path()` in `urlpatterns` instead of on the router.
@@ -56,7 +56,7 @@ v2 viewsets that perform writes should also inherit `AtomicOperationsMixin`:
 
 ## Pagination
 
-V2 uses two pagination strategies intentionally. See [performance-guidelines.md](performance-guidelines.md) for performance rationale.
+V2 uses two pagination strategies. **Offset is the default for new list endpoints**; cursor is reserved for the cases named in the authoring rule below. See [performance-guidelines.md](performance-guidelines.md) for performance rationale.
 
 ### v1: `StandardResultsSetPagination` (limit/offset)
 Response envelope:
@@ -68,12 +68,12 @@ Default limit: 10. Max limit: 1000.
 ### v2 offset: `V2ResultsSetPagination`
 Same envelope as v1. Adds `limit=-1` to disable pagination (returns all results).
 
-### v2 cursor: `V2CursorPagination` / `RoleV2CursorPagination`
+### v2 cursor: `V2CursorPagination` / `RoleV2CursorPagination` / `AuditLogV2CursorPagination`
 Response envelope (no `count`, no `first`/`last`):
 ```json
 {"meta": {"limit": L}, "links": {"next": "...", "previous": "..."}, "data": [...]}
 ```
-Each cursor paginator has its own `FIELD_MAPPING` dict. Role bindings use dot-notation field mapping for cross-relation ordering — the list endpoint maps `role.*` and `resource.*` fields, while the by-subject endpoint maps `group.*` or `user.*` fields depending on `subject_type`. Roles use plain field names (`name`, `last_modified`). Invalid `order_by` values raise `ValidationError` with the list of valid fields.
+Each cursor paginator has its own `FIELD_MAPPING` dict. Role bindings use dot-notation field mapping for cross-relation ordering — the list endpoint maps `role.*` and `resource.*` fields, while the by-subject endpoint maps `group.*` or `user.*` fields depending on `subject_type`. Roles use plain field names (`name`, `last_modified`), and audit logs map `created` only. Invalid `order_by` values raise `ValidationError` with the list of valid fields.
 
 ### v2 endpoint matrix
 
@@ -82,22 +82,33 @@ Each cursor paginator has its own `FIELD_MAPPING` dict. Role bindings use dot-no
 | `GET /workspaces/` | offset | `WorkspacePagination` | 10 | 3000 |
 | `POST /workspaces/query/` | offset | `WorkspacePagination` | 10 | 3000 |
 | `GET /principals/` | offset | `V2ResultsSetPagination` | 10 | 1000 |
+| `GET /groups/` | offset | `V2ResultsSetPagination` | 10 | 1000 |
+| `GET /groups/{uuid}/principals/` | offset | `V2ResultsSetPagination` | 10 | 1000 |
+| `GET /permissions/` | offset | `V2ResultsSetPagination` | 10 | 1000 |
+| `GET /permissions/options/` | offset | `V2ResultsSetPagination` | 10 | 1000 |
 | `GET /role-bindings/` | cursor | `V2CursorPagination` | 10 | 1000 |
 | `GET /role-bindings/by-subject/` | cursor | `V2CursorPagination` | 10 | 1000 |
 | `GET /roles/` | cursor | `RoleV2CursorPagination` | 10 | 1000 |
 | `GET /auditlogs/` | cursor | `AuditLogV2CursorPagination` | 10 | 1000 |
 
-### Rationale for dual strategy
+Endpoints listed with `V2ResultsSetPagination` do not declare a `pagination_class` of their own -- they inherit the default from `BaseV2ViewSet`.
 
-**Offset** (`V2ResultsSetPagination` / `WorkspacePagination`) is used for bounded, tenant-scoped lists where clients benefit from `count`, `first`, and `last` links:
+### Authoring rule: offset by default
 
-- **Workspaces** -- Console UI loads the full workspace list on the main page. Dataset is bounded (~3000/org). `WorkspacePagination` raises `max_limit` to 3000 (see `management/workspace/view.py`).
-- **Principals** -- Smaller tenant-scoped list with simple `order_by` on `username`. Inherits the default `V2ResultsSetPagination` from `BaseV2ViewSet`.
+Agreed standard for V2 list pagination (RHCLOUD-51554):
 
-**Cursor** (`V2CursorPagination` / `RoleV2CursorPagination`) is used for large, growing datasets:
+1. **New V2 list endpoints use offset** (`V2ResultsSetPagination`). Most V2 lists are bounded -- either small per tenant or a seeded global catalog -- and offset gives clients a total `count` plus `first`/`last` links and jump-to-page.
+2. **Use cursor only** when a list grows without bound (audit logs) or when `COUNT(*)` is expensive because of joins or annotated ordering (role bindings).
+3. **Nothing already shipped changes.** No retrofit is approved; response shapes stay as the matrix above records them.
+4. **Roles is a documented exception.** By this rule `GET /roles/` would be offset, but the Console already pages through it with cursors and switching would break that page for little gain. It stays on `RoleV2CursorPagination`.
+5. **Clients should follow `links.next`** rather than building offsets by hand -- that works with either style. Tooling that hand-builds `offset` against a cursor endpoint silently re-reads page 1 (see RHCLOUD-52312).
+6. **A new list endpoint adds its own row** to the matrix above, and its TypeSpec operation in `docs/source/specs/typespec/main.tsp` states the pagination style in its `@doc` and returns the matching envelope (`OffsetPaginationMeta` / `CursorPaginationMeta`), in the same change. Existing endpoints are not re-documented retroactively.
 
-- **Role bindings** -- Avoids expensive `COUNT(*)` queries. Provides stable iteration under concurrent writes. Supports cross-relation `order_by` via dot notation (e.g., `role.name` on the list endpoint, `group.modified` on the by-subject endpoint).
-- **Roles** -- Same cursor benefits (`RoleV2CursorPagination`). Uses plain field names (`name`, `last_modified`) since roles are queried directly, not across relations.
+### Per-endpoint notes
+
+- **Workspaces** -- Console UI loads the full workspace list on the main page. Dataset is bounded (~3000/org), so `WorkspacePagination` raises `max_limit` to 3000 (see `management/workspace/view.py`).
+- **Permissions** -- Globally seeded, not tenant-scoped (see `PermissionService.get_visible_permissions()`). `GET /permissions/options/` returns distinct option values rather than full resource objects, in the standard offset envelope.
+- **Role bindings** -- Avoids expensive `COUNT(*)` queries and gives stable iteration under concurrent writes.
 - **Audit logs** -- Append-only, growing dataset. `AuditLogV2CursorPagination` defaults to `-created` ordering (newest first). Only `created` / `-created` ordering is supported.
 
 **Workspace cursor unification is not recommended.** Cursor pagination would remove `count`/`last` links and complicate the Console "fetch all workspaces" flow. The bounded workspace dataset does not justify the client-experience cost.
@@ -109,7 +120,7 @@ All v2 list endpoints support `limit=-1` to return all results in a single respo
 - **Offset** -- runs `queryset.count()` to set the page size, then returns the full offset envelope.
 - **Cursor** -- loads the full queryset into memory and returns a cursor envelope with `next`/`previous` set to `null`.
 
-Avoid `limit=-1` on large datasets (roles, role-bindings, audit logs). Acceptable for bounded lists (workspaces, principals).
+Avoid `limit=-1` on large datasets (roles, role-bindings, audit logs). Acceptable for the bounded lists that use offset (workspaces, principals, groups, permissions).
 
 ### `order_by` conventions
 
