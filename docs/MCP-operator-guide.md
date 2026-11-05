@@ -435,6 +435,7 @@ Total number of MCP tool calls, labeled by `tool` and `status`.
 | `success` | Tool executed successfully |
 | `auth_error` | Tool rejected due to missing authentication |
 | `permission_denied` | Tool rejected due to insufficient permissions |
+| `v1_tool_blocked` | V1 tool rejected for a V2 write-activated organization |
 | `timeout` | Tool execution exceeded `MCP_TOOL_TIMEOUT_SECONDS` |
 | `error` | Unhandled exception during tool execution |
 | `invalid_params` | Invalid parameters passed to the tool |
