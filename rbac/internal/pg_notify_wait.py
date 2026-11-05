@@ -136,24 +136,11 @@ def wait_for_pg_notify(
         deadline = started + float(timeout_seconds)
         expected_payload_str = str(expected_payload).strip()
 
-        try:
-            conn.poll()
-            if getattr(conn, "notifies", None):
-                conn.notifies.clear()
-        except Exception:
-            logger.debug("%s: failed to clear stale notifications before LISTEN, continuing anyway", log_label)
-
         fd = conn.fileno() if hasattr(conn, "fileno") else conn
 
+        # Do not discard notifications queued since LISTEN: the consumer may already have sent the matching NOTIFY
+        # before this loop starts. Payloads are unique per wait, so stale notifications simply never match.
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-
-            readable, _, _ = select.select([fd], [], [], min(1.0, remaining))
-            if not readable:
-                continue
-
             conn.poll()
             notifies = getattr(conn, "notifies", None)
             if notifies:
@@ -174,6 +161,12 @@ def wait_for_pg_notify(
                         if on_success is not None:
                             on_success(duration)
                         return
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            select.select([fd], [], [], min(1.0, remaining))
 
         duration = time.monotonic() - started
         logger.error(
