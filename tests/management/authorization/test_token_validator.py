@@ -16,18 +16,19 @@
 #
 """Test the token validator class."""
 
-import requests
+from unittest import mock
 
+import requests
 from django.conf import settings
 from django.test import RequestFactory, override_settings
 from rest_framework import status
 
-from api.models import User
+from management.authorization.jwks_source import JWKS_REQUEST_BACKOFF_SECONDS, JWKS_REQUEST_RETRIES, _request_json
 from management.authorization.scope_claims import ScopeClaims
 from management.authorization.token_validator import ITSSOTokenValidator, InvalidTokenError, MissingAuthorizationError
 from management.authorization.token_validator import UnableMeetPrerequisitesError
 from tests.identity_request import IdentityRequest
-from unittest import mock
+from api.models import User
 
 from tests.management.authorization.token_fixtures import InMemoryIssuer
 
@@ -67,11 +68,23 @@ class TokenValidatorTests(IdentityRequest):
         # tests.
         self.jwks_certificates_response_json = {"mocked": "content"}
 
+    @mock.patch("management.authorization.jwks_source.requests.get")
+    def test_request_json_rejects_non_positive_timeout(self, get: mock.Mock) -> None:
+        """A non-positive timeout must retain mapped token-validation errors."""
+        for timeout in (0, -1):
+            with self.subTest(timeout=timeout), override_settings(IT_SERVICE_TIMEOUT_SECONDS=timeout):
+                get.reset_mock()
+                with self.assertRaisesRegex(UnableMeetPrerequisitesError, "timeout must be a positive integer"):
+                    _request_json("https://sso.example.test/jwks")
+
+                get.assert_not_called()
+
     def _requests_get_sideffect(
         self,
         url: str,
         oidc_configuration_url_status_code: status = status.HTTP_200_OK,
         jwks_url_response_status_code: status = status.HTTP_200_OK,
+        **_kwargs,
     ) -> mock.Mock:
         """Side effect handler for when we need the "requests.get" method to return different responses."""
         if url == self.oidc_configuration_url:
@@ -84,7 +97,7 @@ class TokenValidatorTests(IdentityRequest):
                 status_code=jwks_url_response_status_code, json=lambda: self.jwks_certificates_response_json
             )
 
-    def _requests_get_sideffect_jwks_bad_response(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_bad_response(self, url: str, **_kwargs) -> mock.Mock:
         """Side effect handler that returns bad request response for when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -96,7 +109,7 @@ class TokenValidatorTests(IdentityRequest):
                 status_code=status.HTTP_400_BAD_REQUEST, json=lambda: self.jwks_certificates_response_json
             )
 
-    def _requests_get_sideffect_jwks_connection_error(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_connection_error(self, url: str, **_kwargs) -> mock.Mock:
         """Side effect handler that raises a connection error when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -106,7 +119,7 @@ class TokenValidatorTests(IdentityRequest):
         elif url == self.oidc_configuration_jwks_url:
             raise requests.exceptions.ConnectionError
 
-    def _requests_get_sideffect_jwks_timeout_error(self, url: str) -> mock.Mock:
+    def _requests_get_sideffect_jwks_timeout_error(self, url: str, **_kwargs) -> mock.Mock:
         """Side effect handler that raises a timeout error when the JWKS certificates are fetched."""
         if url == self.oidc_configuration_url:
             return mock.Mock(
@@ -115,6 +128,16 @@ class TokenValidatorTests(IdentityRequest):
             )
         elif url == self.oidc_configuration_jwks_url:
             raise requests.exceptions.Timeout
+
+    def _requests_get_sideffect_jwks_chunked_encoding_error(self, url: str, **_kwargs) -> mock.Mock:
+        """Side effect handler that raises a chunked encoding error when the JWKS response is fetched."""
+        if url == self.oidc_configuration_url:
+            return mock.Mock(
+                status_code=status.HTTP_200_OK,
+                json=lambda: {"jwks_uri": self.oidc_configuration_jwks_url},
+            )
+        elif url == self.oidc_configuration_jwks_url:
+            raise requests.exceptions.ChunkedEncodingError
 
     def test_token_validator_singleton(self):
         """Test that the token validator class only gets instantiated once."""
@@ -230,12 +253,18 @@ class TokenValidatorTests(IdentityRequest):
         # And the "import key set" method should also have been called with the same contents.
         import_key_set.assert_called_with(self.jwks_certificates_response_json)
 
+    @mock.patch("management.authorization.jwks_source.time.sleep", return_value=None)
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")
     @mock.patch("management.authorization.jwks_source.JWKSCache.set_jwks_response")
     @mock.patch("management.authorization.token_validator.KeySet.import_key_set")
     def test_get_json_web_keyset_oidc_network_errors(
-        self, import_key_set: mock.Mock, set_jwks_response: mock.Mock, get: mock.Mock, get_jwks_response: mock.Mock
+        self,
+        import_key_set: mock.Mock,
+        set_jwks_response: mock.Mock,
+        get: mock.Mock,
+        get_jwks_response: mock.Mock,
+        sleep: mock.Mock,
     ) -> None:
         """Tests that when we suffer from a network error when contacting IT an exception is raised"""
         # Make the cache raise an exception to simulate that something went wrong with it. It should trigger having to
@@ -259,6 +288,8 @@ class TokenValidatorTests(IdentityRequest):
         test_cases = [requests.exceptions.ConnectionError, requests.exceptions.Timeout]
         for test_case in test_cases:
             get.side_effect = test_case
+            get.reset_mock()
+            sleep.reset_mock()
 
             # Call the function under test again.
             try:
@@ -276,6 +307,15 @@ class TokenValidatorTests(IdentityRequest):
                     str(e),
                     "unexpected error message for the exception",
                 )
+            else:
+                self.fail("expected UnableMeetPrerequisitesError was not raised")
+
+            self.assertEqual(get.call_count, JWKS_REQUEST_RETRIES + 1)
+            self.assertEqual(sleep.call_count, JWKS_REQUEST_RETRIES)
+            self.assertEqual(
+                sleep.call_args_list,
+                [mock.call(JWKS_REQUEST_BACKOFF_SECONDS * (2**attempt)) for attempt in range(JWKS_REQUEST_RETRIES)],
+            )
 
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")
@@ -413,12 +453,18 @@ class TokenValidatorTests(IdentityRequest):
                 "unexpected error message for the exception",
             )
 
+    @mock.patch("management.authorization.jwks_source.time.sleep", return_value=None)
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")
     @mock.patch("management.authorization.jwks_source.JWKSCache.set_jwks_response")
     @mock.patch("management.authorization.token_validator.KeySet.import_key_set")
     def test_get_json_web_keyset_jwks_network_error(
-        self, import_key_set: mock.Mock, set_jwks_response: mock.Mock, get: mock.Mock, get_jwks_response: mock.Mock
+        self,
+        import_key_set: mock.Mock,
+        set_jwks_response: mock.Mock,
+        get: mock.Mock,
+        get_jwks_response: mock.Mock,
+        sleep: mock.Mock,
     ) -> None:
         """Tests that when we suffer from a network error when fetching the JWKS certificates an exception is raised"""
         # Make the cache raise an exception to simulate that something went wrong with it. It should trigger having to
@@ -445,9 +491,12 @@ class TokenValidatorTests(IdentityRequest):
         test_cases = [
             self._requests_get_sideffect_jwks_connection_error,
             self._requests_get_sideffect_jwks_timeout_error,
+            self._requests_get_sideffect_jwks_chunked_encoding_error,
         ]
         for test_case in test_cases:
             get.side_effect = test_case
+            get.reset_mock()
+            sleep.reset_mock()
 
             # Call the function under test again.
             try:
@@ -465,6 +514,53 @@ class TokenValidatorTests(IdentityRequest):
                     str(e),
                     "unexpected error message for the exception",
                 )
+            else:
+                self.fail("expected UnableMeetPrerequisitesError was not raised")
+
+            # OIDC discovery once, then JWKS URL retried to exhaustion (1 + JWKS_REQUEST_RETRIES).
+            self.assertEqual(get.call_count, 1 + (JWKS_REQUEST_RETRIES + 1))
+            self.assertEqual(sleep.call_count, JWKS_REQUEST_RETRIES)
+            self.assertEqual(
+                sleep.call_args_list,
+                [mock.call(JWKS_REQUEST_BACKOFF_SECONDS * (2**attempt)) for attempt in range(JWKS_REQUEST_RETRIES)],
+            )
+
+    @mock.patch("management.authorization.jwks_source.time.sleep", return_value=None)
+    @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
+    @mock.patch("management.authorization.jwks_source.requests.get")
+    @mock.patch("management.authorization.jwks_source.JWKSCache.set_jwks_response")
+    @mock.patch("management.authorization.token_validator.KeySet.import_key_set")
+    def test_get_json_web_keyset_jwks_network_error_recovers_on_retry(
+        self,
+        import_key_set: mock.Mock,
+        set_jwks_response: mock.Mock,
+        get: mock.Mock,
+        get_jwks_response: mock.Mock,
+        sleep: mock.Mock,
+    ) -> None:
+        """Transient ConnectionError fetching JWKS should succeed after retry."""
+        get_jwks_response.return_value = None
+        jwks_success = mock.Mock(status_code=status.HTTP_200_OK, json=lambda: self.jwks_certificates_response_json)
+        oidc_success = mock.Mock(
+            status_code=status.HTTP_200_OK,
+            json=lambda: {"jwks_uri": self.oidc_configuration_jwks_url},
+        )
+        get.side_effect = [
+            oidc_success,
+            requests.exceptions.ConnectionError("Connection reset by peer"),
+            jwks_success,
+        ]
+
+        with mock.patch("management.authorization.jwks_source.jwks_request_retries_total.inc") as retry_metric:
+            self.token_validator._get_json_web_keyset()
+            retry_metric.assert_called_once_with()
+
+        set_jwks_response.assert_called_with(self.jwks_certificates_response_json)
+        import_key_set.assert_called_with(self.jwks_certificates_response_json)
+        self.assertEqual(get.call_count, 3)
+        sleep.assert_called_once_with(JWKS_REQUEST_BACKOFF_SECONDS)
+        for call in get.call_args_list:
+            self.assertEqual(call.kwargs.get("timeout"), settings.IT_SERVICE_TIMEOUT_SECONDS)
 
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")
