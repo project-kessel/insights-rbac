@@ -749,6 +749,10 @@ objects:
             value: ${GROUP_SEEDING_ENABLED}
           - name: BYPASS_BOP_VERIFICATION
             value: ${BYPASS_BOP_VERIFICATION}
+          - name: PRINCIPAL_PROFILE_SERVICE_URL
+            value: ${PRINCIPAL_PROFILE_SERVICE_URL}
+          - name: PRINCIPAL_PROFILE_TOKEN
+            value: ${PRINCIPAL_PROFILE_TOKEN}
           - name: ROLE_CREATE_ALLOW_LIST
             value: ${ROLE_CREATE_ALLOW_LIST}
           - name: RBAC_DESTRUCTIVE_API_ENABLED_UNTIL
@@ -1775,6 +1779,12 @@ parameters:
 - description: Bypass interaction with the BOP service
   name: BYPASS_BOP_VERIFICATION
   value: 'False'
+- description: Optional Cost principal-profile service base URL (on-prem BYPASS enrichment)
+  name: PRINCIPAL_PROFILE_SERVICE_URL
+  value: ''
+- description: Optional bearer token for the Cost principal-profile service
+  name: PRINCIPAL_PROFILE_TOKEN
+  value: ''
 - description: Application allow list for role creation in RBAC
   name: ROLE_CREATE_ALLOW_LIST
   value: cost-management,remediations,inventory,policies,advisor,vulnerability,compliance,automation-analytics,notifications,patch,integrations,ros,staleness,config-manager,idmsvc,subscriptions

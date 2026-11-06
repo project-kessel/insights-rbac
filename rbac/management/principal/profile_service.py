@@ -15,14 +15,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-"""Cost-owned principal profile HTTP client (COST-8167 spike).
+"""Cost-owned principal profile HTTP client (COST-8167).
 
 When ``PRINCIPAL_PROFILE_SERVICE_URL`` is set, BYPASS principals enrichment
 fetches profiles from that Cost service instead of calling Keycloak from
 inside insights-rbac. This matches Access & Management's preference that
 Keycloak interpretation stay Cost-owned behind an agreed interface.
 
-Contract (spike):
+Contract:
 
     GET {PRINCIPAL_PROFILE_SERVICE_URL}/v1/orgs/{org_id}/profiles
     Optional Authorization: Bearer {PRINCIPAL_PROFILE_TOKEN}
@@ -38,24 +38,20 @@ normalization ``Principal.save()`` uses when storing usernames.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import requests
+from django.conf import settings
 from django.core.cache import cache
 
 LOGGER = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 5
-# Cache successes and failures so a downed sidecar does not re-block a worker
-# on every BYPASS principals request. Keep short; Cost owns the longer cache.
-CACHE_TTL_SECONDS = 30
 CACHE_KEY_PREFIX = "rbac:principal_profile_service"
 
 
 def profile_service_configured() -> bool:
     """Return True when a Cost profile service base URL is configured."""
-    return bool(os.environ.get("PRINCIPAL_PROFILE_SERVICE_URL", "").strip())
+    return bool((getattr(settings, "PRINCIPAL_PROFILE_SERVICE_URL", "") or "").strip())
 
 
 def _cache_key(base_url: str, org_id: str) -> str:
@@ -63,9 +59,26 @@ def _cache_key(base_url: str, org_id: str) -> str:
     return f"{CACHE_KEY_PREFIX}:{base_url}:{org_id}"
 
 
-def _normalize_email(value: Any) -> str:
-    """Keep only string emails; non-strings become '' for @local fallback."""
+def _normalize_str(value: Any) -> str:
+    """Keep only string profile fields; non-strings become ''."""
     return value if isinstance(value, str) else ""
+
+
+def _cache_get(key: str):
+    """Read from Django cache; treat backend failures as a miss."""
+    try:
+        return cache.get(key)
+    except Exception:  # noqa: BLE001 — cache outage must not break principals
+        LOGGER.exception("Cost principal profile cache read failed")
+        return None
+
+
+def _cache_set(key: str, value: dict[str, dict[str, Any]], timeout: int) -> None:
+    """Write to Django cache; ignore backend failures."""
+    try:
+        cache.set(key, value, timeout=timeout)
+    except Exception:  # noqa: BLE001 — cache outage must not break principals
+        LOGGER.exception("Cost principal profile cache write failed")
 
 
 def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
@@ -75,34 +88,37 @@ def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
     principals API can fall back to safe bypass defaults. Successful and failed
     fetches are cached briefly per org to avoid repeated timeouts.
     """
-    base = os.environ.get("PRINCIPAL_PROFILE_SERVICE_URL", "").strip().rstrip("/")
+    base = (getattr(settings, "PRINCIPAL_PROFILE_SERVICE_URL", "") or "").strip().rstrip("/")
     if not base or not org_id:
         return {}
 
+    timeout = int(getattr(settings, "PRINCIPAL_PROFILE_REQUEST_TIMEOUT", 5) or 5)
+    cache_ttl = int(getattr(settings, "PRINCIPAL_PROFILE_CACHE_TTL", 30) or 30)
+
     key = _cache_key(base, str(org_id))
-    cached = cache.get(key)
+    cached = _cache_get(key)
     if cached is not None:
         return cached
 
     url = f"{base}/v1/orgs/{org_id}/profiles"
     headers = {"Accept": "application/json"}
-    token = os.environ.get("PRINCIPAL_PROFILE_TOKEN", "").strip()
+    token = (getattr(settings, "PRINCIPAL_PROFILE_TOKEN", "") or "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        response = requests.get(url, headers=headers, timeout=timeout)
         response.raise_for_status()
         body = response.json()
     except Exception:  # noqa: BLE001 — enrichment must never break principals
         LOGGER.exception("Cost principal profile service request failed (%s)", url)
-        cache.set(key, {}, timeout=CACHE_TTL_SECONDS)
+        _cache_set(key, {}, cache_ttl)
         return {}
 
     raw = body.get("profiles") if isinstance(body, dict) else None
     if not isinstance(raw, dict):
         LOGGER.warning("Cost principal profile service returned unexpected body type")
-        cache.set(key, {}, timeout=CACHE_TTL_SECONDS)
+        _cache_set(key, {}, cache_ttl)
         return {}
 
     profiles: dict[str, dict[str, Any]] = {}
@@ -110,11 +126,11 @@ def get_profiles_from_service(org_id: str | None) -> dict[str, dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         profiles[str(username).lower()] = {
-            "first_name": item.get("first_name") or "",
-            "last_name": item.get("last_name") or "",
-            "email": _normalize_email(item.get("email")),
+            "first_name": _normalize_str(item.get("first_name")),
+            "last_name": _normalize_str(item.get("last_name")),
+            "email": _normalize_str(item.get("email")),
             "is_org_admin": bool(item.get("is_org_admin", False)),
             "enabled": bool(item.get("enabled", True)),
         }
-    cache.set(key, profiles, timeout=CACHE_TTL_SECONDS)
+    _cache_set(key, profiles, cache_ttl)
     return profiles

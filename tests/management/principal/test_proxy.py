@@ -147,7 +147,8 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual(result["userCount"], 3)
 
     @override_settings(BYPASS_BOP_VERIFICATION=True)
-    def test__request_principals_bypass_includes_saas_contract_flags(self):
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_includes_saas_contract_flags(self, _mock_configured):
         """Bypass mode must emit is_active/is_org_admin and avoid foo/bar/baz stubs."""
         local = Principal.objects.create(
             tenant=self.tenant,
@@ -174,7 +175,8 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual(principal["type"], "user")
 
     @override_settings(BYPASS_BOP_VERIFICATION=True)
-    def test__request_principals_bypass_filtered_users_enrich_from_local(self):
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_filtered_users_enrich_from_local(self, _mock_configured):
         """Username filter path should reuse local user_id and include SaaS flags."""
         Principal.objects.create(
             tenant=self.tenant,
@@ -298,12 +300,29 @@ class PrincipalProxyTest(IdentityRequest):
                 org_id=self.tenant.org_id,
                 params={"status": "all"},
             )
+            username_only_enabled = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "status": "enabled"},
+            )
+            username_only_admin = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "admin_only": "true"},
+            )
         enabled_by_username = {principal["username"]: principal for principal in enabled_only["data"]}
         self.assertIn("alice", enabled_by_username)
         self.assertNotIn("bob", enabled_by_username)
         all_by_username = {principal["username"]: principal for principal in all_status["data"]}
         self.assertIn("bob", all_by_username)
         self.assertIs(all_by_username["bob"]["is_active"], False)
+        self.assertEqual(
+            sorted(p["username"] for p in username_only_enabled["data"]),
+            ["alice"],
+        )
+        self.assertEqual([p["username"] for p in username_only_admin["data"]], ["alice"])
+        for row in username_only_enabled["data"] + username_only_admin["data"]:
+            self.assertEqual(set(row.keys()), {"username"})
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",

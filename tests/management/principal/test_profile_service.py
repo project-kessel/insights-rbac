@@ -26,7 +26,11 @@ from management.principal import profile_service as ps
 
 
 @override_settings(
-    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "profile-service-tests"}}
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "profile-service-tests"}},
+    PRINCIPAL_PROFILE_SERVICE_URL="",
+    PRINCIPAL_PROFILE_TOKEN="",
+    PRINCIPAL_PROFILE_REQUEST_TIMEOUT=5,
+    PRINCIPAL_PROFILE_CACHE_TTL=30,
 )
 class ProfileServiceTests(SimpleTestCase):
     """Tests for profile_service helpers."""
@@ -38,16 +42,19 @@ class ProfileServiceTests(SimpleTestCase):
         cache.clear()
 
     def test_not_configured_without_url(self):
-        with patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(ps.profile_service_configured())
-            self.assertEqual(ps.get_profiles_from_service("12345"), {})
+        self.assertFalse(ps.profile_service_configured())
+        self.assertEqual(ps.get_profiles_from_service("12345"), {})
 
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
     def test_missing_org_id_returns_empty(self):
-        with patch.dict("os.environ", {"PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099"}):
-            self.assertTrue(ps.profile_service_configured())
-            self.assertEqual(ps.get_profiles_from_service(""), {})
-            self.assertEqual(ps.get_profiles_from_service(None), {})
+        self.assertTrue(ps.profile_service_configured())
+        self.assertEqual(ps.get_profiles_from_service(""), {})
+        self.assertEqual(ps.get_profiles_from_service(None), {})
 
+    @override_settings(
+        PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099/",
+        PRINCIPAL_PROFILE_TOKEN="secret",
+    )
     @patch("management.principal.profile_service.requests.get")
     def test_maps_profiles_lower(self, mock_get):
         response = MagicMock()
@@ -65,14 +72,7 @@ class ProfileServiceTests(SimpleTestCase):
         }
         mock_get.return_value = response
 
-        with patch.dict(
-            "os.environ",
-            {
-                "PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099/",
-                "PRINCIPAL_PROFILE_TOKEN": "secret",
-            },
-        ):
-            profiles = ps.get_profiles_from_service("12345")
+        profiles = ps.get_profiles_from_service("12345")
 
         self.assertIn("admin", profiles)
         self.assertTrue(profiles["admin"]["is_org_admin"])
@@ -81,16 +81,17 @@ class ProfileServiceTests(SimpleTestCase):
         self.assertEqual(args[0], "http://profile:8099/v1/orgs/12345/profiles")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
 
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
     @patch("management.principal.profile_service.requests.get")
-    def test_non_string_email_becomes_empty(self, mock_get):
+    def test_non_string_fields_become_empty(self, mock_get):
         response = MagicMock()
         response.raise_for_status.return_value = None
         response.json.return_value = {
             "profiles": {
                 "alice": {
                     "email": 12345,
-                    "first_name": "Alice",
-                    "last_name": "User",
+                    "first_name": {"bad": True},
+                    "last_name": ["x"],
                     "is_org_admin": False,
                     "enabled": True,
                 }
@@ -98,23 +99,25 @@ class ProfileServiceTests(SimpleTestCase):
         }
         mock_get.return_value = response
 
-        with patch.dict("os.environ", {"PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099"}):
-            profiles = ps.get_profiles_from_service("12345")
+        profiles = ps.get_profiles_from_service("12345")
 
         self.assertEqual(profiles["alice"]["email"], "")
+        self.assertEqual(profiles["alice"]["first_name"], "")
+        self.assertEqual(profiles["alice"]["last_name"], "")
 
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
     @patch("management.principal.profile_service.requests.get", side_effect=RuntimeError("boom"))
     def test_swallows_errors(self, _mock_get):
-        with patch.dict("os.environ", {"PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099"}):
-            self.assertEqual(ps.get_profiles_from_service("12345"), {})
+        self.assertEqual(ps.get_profiles_from_service("12345"), {})
 
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
     @patch("management.principal.profile_service.requests.get", side_effect=RuntimeError("boom"))
     def test_failed_fetch_is_cached(self, mock_get):
-        with patch.dict("os.environ", {"PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099"}):
-            self.assertEqual(ps.get_profiles_from_service("12345"), {})
-            self.assertEqual(ps.get_profiles_from_service("12345"), {})
+        self.assertEqual(ps.get_profiles_from_service("12345"), {})
+        self.assertEqual(ps.get_profiles_from_service("12345"), {})
         self.assertEqual(mock_get.call_count, 1)
 
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
     @patch("management.principal.profile_service.requests.get")
     def test_successful_fetch_is_cached(self, mock_get):
         response = MagicMock()
@@ -132,9 +135,15 @@ class ProfileServiceTests(SimpleTestCase):
         }
         mock_get.return_value = response
 
-        with patch.dict("os.environ", {"PRINCIPAL_PROFILE_SERVICE_URL": "http://profile:8099"}):
-            first = ps.get_profiles_from_service("12345")
-            second = ps.get_profiles_from_service("12345")
+        first = ps.get_profiles_from_service("12345")
+        second = ps.get_profiles_from_service("12345")
 
         self.assertEqual(first, second)
         self.assertEqual(mock_get.call_count, 1)
+
+    @override_settings(PRINCIPAL_PROFILE_SERVICE_URL="http://profile:8099")
+    @patch("management.principal.profile_service.cache.get", side_effect=RuntimeError("redis down"))
+    @patch("management.principal.profile_service.requests.get", side_effect=RuntimeError("boom"))
+    def test_cache_read_failure_falls_back(self, mock_get, _mock_cache_get):
+        self.assertEqual(ps.get_profiles_from_service("12345"), {})
+        mock_get.assert_called_once()

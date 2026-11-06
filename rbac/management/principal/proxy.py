@@ -204,7 +204,9 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
     ):
         """Send request to proxy service."""
         metrics_method = method.__name__.upper()
-        if params and params.get("username_only") == "true":
+        # SaaS / non-BYPASS username_only stays on the cheap DB-only path.
+        # BYPASS must apply status/admin_only using profile enrichment first.
+        if params and params.get("username_only") == "true" and not settings.BYPASS_BOP_VERIFICATION:
             principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
             if data and "users" in data:
                 principals = principals.filter(username__in=data["users"])
@@ -242,22 +244,21 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                         to_return.append(payload_for(principal=principal))
                     else:
                         to_return.append(payload_for(username=username, allow_profile=False))
-            elif "principalStartsWith" in data:
-                principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
-                for principal in principals:
-                    to_return.append(payload_for(principal=principal))
-            elif "emailStartsWith" in data or "primaryEmail" in data:
-                # Prefer matching against profile-service emails when available; otherwise
-                # the synthetic bypass email used when the service is unset.
-                needle_startswith = data.get("emailStartsWith")
-                needle_exact = data.get("primaryEmail")
-                for principal in local_principals:
+            elif "principalStartsWith" in data or "emailStartsWith" in data or "primaryEmail" in data:
+                # Username and email criteria can both be present; apply both.
+                candidates = local_principals
+                if "principalStartsWith" in data:
+                    candidates = candidates.filter(username__istartswith=data["principalStartsWith"])
+                needle_startswith = data.get("emailStartsWith") if "emailStartsWith" in data else None
+                needle_exact = data.get("primaryEmail") if "primaryEmail" in data else None
+                for principal in candidates:
                     item = payload_for(principal=principal)
                     email = item.get("email") or ""
-                    if needle_startswith is not None and email.startswith(needle_startswith):
-                        to_return.append(item)
-                    elif needle_exact is not None and email == needle_exact:
-                        to_return.append(item)
+                    if needle_startswith is not None and not email.startswith(needle_startswith):
+                        continue
+                    if needle_exact is not None and email != needle_exact:
+                        continue
+                    to_return.append(item)
             sort_order = (params or {}).get("sortOrder")
             if sort_order in {"asc", "des"}:
                 to_return.sort(key=lambda principal: principal["username"], reverse=sort_order == "des")
@@ -269,6 +270,8 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             # status=all (or anything else): no is_active filter — used by clean_tenant_principals
             if (params or {}).get("admin_only") == "true":
                 to_return = [principal for principal in to_return if principal.get("is_org_admin")]
+            if (params or {}).get("username_only") == "true":
+                to_return = [dict(username=principal["username"]) for principal in to_return]
             user_count = len(to_return)
             limit = int((params or {}).get("limit", user_count))
             offset = int((params or {}).get("offset", 0))

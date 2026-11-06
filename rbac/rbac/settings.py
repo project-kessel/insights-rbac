@@ -159,6 +159,11 @@ if DEVELOPMENT:
     MIDDLEWARE.insert(5, "rbac.dev_middleware.DevelopmentIdentityHeaderMiddleware")
 # Don't try to go verify Principals against the BOP user service
 BYPASS_BOP_VERIFICATION = ENVIRONMENT.bool("BYPASS_BOP_VERIFICATION", default=False)
+# Cost on-prem principal-profile sidecar (COST-8167). Empty in SaaS.
+PRINCIPAL_PROFILE_SERVICE_URL = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_SERVICE_URL", default="").strip().rstrip("/")
+PRINCIPAL_PROFILE_TOKEN = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_TOKEN", default="").strip()
+PRINCIPAL_PROFILE_REQUEST_TIMEOUT = ENVIRONMENT.int("PRINCIPAL_PROFILE_REQUEST_TIMEOUT", default=5)
+PRINCIPAL_PROFILE_CACHE_TTL = ENVIRONMENT.int("PRINCIPAL_PROFILE_CACHE_TTL", default=30)
 
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.AllowAllUsersModelBackend"]
 
