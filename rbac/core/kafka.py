@@ -70,6 +70,10 @@ class FakeKafkaProducer:
         """No operation method."""
         pass
 
+    def flush(self, timeout=None):
+        """No operation method."""
+        pass
+
 
 class RBACProducer:
     """Kafka message producer to emit events to notification service."""

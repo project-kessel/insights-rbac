@@ -543,6 +543,11 @@ MOCK_REDIS = ENVIRONMENT.get_value("MOCK_REDIS", default=False)
 NOTIFICATIONS_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_ENABLED", default=False)
 NOTIFICATIONS_RH_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_RH_ENABLED", default=False)
 NOTIFICATIONS_TOPIC = ENVIRONMENT.get_value("NOTIFICATIONS_TOPIC", default=None)
+# Red Hat role notifications are sent by a rate-limited Celery task: at most this many messages per minute,
+# and none during the quiet window (UTC, HH:MM, may cross midnight).
+NOTIFICATIONS_RH_RATE_PER_MINUTE = ENVIRONMENT.int("NOTIFICATIONS_RH_RATE_PER_MINUTE", default=3000)
+NOTIFICATIONS_RH_QUIET_START = ENVIRONMENT.get_value("NOTIFICATIONS_RH_QUIET_START", default="23:30")
+NOTIFICATIONS_RH_QUIET_END = ENVIRONMENT.get_value("NOTIFICATIONS_RH_QUIET_END", default="00:30")
 
 EXTERNAL_SYNC_TOPIC = ENVIRONMENT.get_value("EXTERNAL_SYNC_TOPIC", default=None)
 EXTERNAL_CHROME_TOPIC = ENVIRONMENT.get_value("EXTERNAL_CHROME_TOPIC", default=None)

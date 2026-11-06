@@ -158,6 +158,8 @@ Guards:
 - `skip_rh_notifications` context var suppresses during seeding
 - `KAFKA_ENABLED=False` disables all notifications
 
+Red Hat system notifications are not sent by the seeding run. The handlers register each event with `transaction.on_commit`, the `seeds` command collects them (`collect_rh_notifications()`), and one `send_rh_notifications_in_worker` Celery task per run fans them out to all ready tenants in batches of `NOTIFICATIONS_RH_RATE_PER_MINUTE` messages (rounded down to whole tenants, at least one tenant per batch), one batch per minute, outside the UTC quiet window. The quiet window is re-checked before each tenant (not each event), so the tenant being sent when the window starts still receives all of its events. Delivery is best-effort: a send counts once the producer accepts it, and broker-side delivery failures are not retried. A failed send stops the batch and is retried from the last completed tenant (at most 5 consecutive failed attempts); if an event fails after earlier events for that tenant were accepted, retry replays that tenant's full event batch and may produce duplicates. Events arriving during an active chain are queued and drained into a following chain before the active marker is released. The marker has a 2-hour TTL, refreshed at each batch; this exceeds the Redis broker's 1-hour default visibility timeout plus the maximum 5-minute continuation countdown, while allowing abandoned chains to recover after worker loss. Continuation publishing uses bounded retries; if they are exhausted, the chain saves its events and tenant cursor, republishes from that cursor when it is released, and otherwise resumes on the next enqueue. The task requires workers to be deployed with the task registered before seeding enqueues it.
+
 ## 9. Celery Tasks and Beat Schedule
 
 Broker: Redis (`CELERY_BROKER_URL`). Config namespace: `CELERY_`.
@@ -185,6 +187,8 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_ENABLED` | `False` | Enables Kafka producer/consumer |
 | `NOTIFICATIONS_ENABLED` | `False` | Enables custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enables RH system notifications |
+| `NOTIFICATIONS_RH_RATE_PER_MINUTE` | `3000` | Max RH notification messages sent per minute by the worker task |
+| `NOTIFICATIONS_RH_QUIET_START` / `NOTIFICATIONS_RH_QUIET_END` | `23:30` / `00:30` | UTC quiet window (HH:MM) with no RH notification sending |
 | `BYPASS_BOP_VERIFICATION` | `False` | Skips BOP calls, uses local DB |
 | `IT_BYPASS_IT_CALLS` | `False` | Mocks IT service responses |
 | `MOCK_KAFKA` | `False` | Uses FakeKafkaProducer |
