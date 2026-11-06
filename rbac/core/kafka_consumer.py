@@ -655,12 +655,6 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
         rather than waiting for the next heartbeat / select timeout.
         """
         future = KafkaFuture()
-        # Capture the selector for cross-thread wakeup.  The selector's
-        # ``_poll_once`` registers ``call_soon(task)`` as the future callback,
-        # which only queues the task without waking the selector.  We call
-        # ``wakeup()`` explicitly so ``select()`` returns and processes the
-        # newly-ready task right away.
-        net = getattr(getattr(self.consumer_instance, "consumer", None), "_net", None)
 
         def _target():
             try:
@@ -668,12 +662,6 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
                 future.success(result)
             except Exception as exc:
                 future.failure(exc)
-            finally:
-                if net is not None:
-                    try:
-                        net.wakeup()
-                    except Exception:
-                        pass
 
         thread = threading.Thread(target=_target, daemon=True)
         thread.start()
