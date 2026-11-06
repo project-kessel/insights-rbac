@@ -1068,8 +1068,7 @@ class RBACKafkaConsumer:
             logger.debug("Health status updated: healthy")
         else:
             # Remove readiness file but keep liveness file
-            if self.readiness_file.exists():
-                self.readiness_file.unlink()
+            self.readiness_file.unlink(missing_ok=True)
             logger.warning("Health status updated: unhealthy")
 
     def _start_health_check_thread(self):
@@ -1123,8 +1122,7 @@ class RBACKafkaConsumer:
                     # Don't immediately mark as unhealthy, give it a few tries
                     # Only update liveness (consumer process is alive) but not readiness
                     self.liveness_file.touch()
-                    if self.readiness_file.exists():
-                        self.readiness_file.unlink()
+                    self.readiness_file.unlink(missing_ok=True)
 
             elif self.is_consuming:
                 # Consumer should be running but isn't - this is a problem
@@ -1138,8 +1136,7 @@ class RBACKafkaConsumer:
             logger.error(f"Health check thread error: {e}")
             # Keep liveness but remove readiness on thread errors
             self.liveness_file.touch()
-            if self.readiness_file.exists():
-                self.readiness_file.unlink()
+            self.readiness_file.unlink(missing_ok=True)
 
     def _process_single(self, message_value: Dict[str, Any], message_partition: int, message_offset: int) -> bool:
         """Process a single message (parse and handle).

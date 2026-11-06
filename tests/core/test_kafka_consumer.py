@@ -2338,7 +2338,6 @@ class HeartbeatMetricTests(TestCase):
         self.consumer.consumer.partitions_for_topic.side_effect = Exception("Kafka unreachable")
         self.consumer.liveness_file = Mock()
         self.consumer.readiness_file = Mock()
-        self.consumer.readiness_file.exists.return_value = True
 
         self.consumer._health_check_loop_iteration()
 
@@ -2346,7 +2345,6 @@ class HeartbeatMetricTests(TestCase):
 
         # Assert liveness kept but readiness removed on failure
         self.consumer.liveness_file.touch.assert_called_once()
-        self.consumer.readiness_file.exists.assert_called_once()
         self.consumer.readiness_file.unlink.assert_called_once()
 
     @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
