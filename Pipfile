@@ -48,7 +48,7 @@ kessel-sdk = {extras = ["auth"], version = "*"}
 mcp = "==2.3.0"
 
 [dev-packages]
-coverage = "==7.17.0"
+coverage = "==7.17.1"
 faker = "==40.44.0"
 black = "==26.10.1"
 flake8-docstrings = "==1.7.0"
