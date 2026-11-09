@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+import itertools
 from django.conf import settings
 from kafka import AsyncConsumerRebalanceListener, KafkaConsumer, OffsetAndMetadata, TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
@@ -939,8 +940,14 @@ class BaseRBACKafkaConsumer(abc.ABC):
             )
             return False  # Break loop
 
+    def _batch_size(self) -> int:
+        return 1
+
+    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]):
+        pass
+
     @abc.abstractmethod
-    def _prepare_for_message(self, message, first_message: bool):
+    def _prepare_for_message(self, message: ConsumerRecord, first_message: bool):
         """Perform any setup required before handling a message."""
         ...
 
@@ -948,42 +955,51 @@ class BaseRBACKafkaConsumer(abc.ABC):
         """Run the main message consumption loop."""
         last_committed_offsets = {}
 
-        for message in self.consumer:
-            # Record poll activity — each iteration processes one message from a poll batch.
-            # During idle periods (no messages), the health check thread keeps this metric fresh.
-            self._metrics.last_poll_time.set(time.time())
+        for batch in itertools.batched(self.consumer, self._batch_size()):
+            self._prepare_for_batch(batch)
 
-            self._prepare_for_message(message=message, first_message=(len(last_committed_offsets) == 0))
+            for message in batch:
+                # Record poll activity — each iteration processes one message from a poll batch.
+                # During idle periods (no messages), the health check thread keeps this metric fresh.
+                self._metrics.last_poll_time.set(time.time())
 
-            try:
-                topic_partition = TopicPartition(message.topic, message.partition)
+                self._prepare_for_message(message=message, first_message=(len(last_committed_offsets) == 0))
 
-                # Initialize offset tracking for new partitions
-                if topic_partition not in last_committed_offsets:
-                    self._initialize_partition_offset_tracking(topic_partition, last_committed_offsets)
+                try:
+                    topic_partition = TopicPartition(message.topic, message.partition)
 
-                # Handle tombstone messages
-                if message.value is None:
-                    self._handle_tombstone_message(message, topic_partition)
-                    continue
+                    # Initialize offset tracking for new partitions
+                    if topic_partition not in last_committed_offsets:
+                        self._initialize_partition_offset_tracking(topic_partition, last_committed_offsets)
 
-                # Process and commit
-                should_continue = self._process_and_commit_message(message, topic_partition, last_committed_offsets)
+                    # Handle tombstone messages
+                    if message.value is None:
+                        self._handle_tombstone_message(message, topic_partition)
+                        continue
 
-                if not should_continue:
-                    break  # Shutdown requested
+                    # Process and commit
+                    should_continue = self._process_and_commit_message(
+                        message, topic_partition, last_committed_offsets
+                    )
 
-            except Exception as e:
-                # Fail fast on unexpected exceptions
-                logger.error(
-                    f"Unexpected error in message loop "
-                    f"(partition: {getattr(message, 'partition', 'unknown')}, "
-                    f"offset: {getattr(message, 'offset', 'unknown')}): {e}. "
-                    f"Consumer will stop to prevent data loss. "
-                    f"Message will be retried on restart."
-                )
-                self._metrics.messages_processed_total.labels(message_type="unknown", status="unexpected_error").inc()
-                raise
+                    if not should_continue:
+                        return  # Shutdown requested
+
+                except Exception as e:
+                    # Fail fast on unexpected exceptions
+                    logger.error(
+                        f"Unexpected error in message loop "
+                        f"(partition: {getattr(message, 'partition', 'unknown')}, "
+                        f"offset: {getattr(message, 'offset', 'unknown')}): {e}. "
+                        f"Consumer will stop to prevent data loss. "
+                        f"Message will be retried on restart."
+                    )
+
+                    self._metrics.messages_processed_total.labels(
+                        message_type="unknown", status="unexpected_error"
+                    ).inc()
+
+                    raise
 
     def start_consuming(self):
         """Start consuming messages from Kafka.
