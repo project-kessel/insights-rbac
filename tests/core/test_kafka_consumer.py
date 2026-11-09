@@ -63,6 +63,16 @@ from internal.migration_coordination import MigrationNotifyCoordination
 from kafka.errors import KafkaError
 
 
+def _mock_message(value):
+    mock = Mock()
+
+    mock.value = json.dumps(value).encode("utf-8")
+    mock.offset = 1
+    mock.partition = 42
+
+    return mock
+
+
 class MessageValidatorTests(TestCase):
     """Tests for MessageValidator class."""
 
@@ -1298,7 +1308,7 @@ class RetryAllErrorsTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(message_value, 1234, 0, self.topic_partition)
+                self.consumer._process_message_with_retry(_mock_message(message_value), self.topic_partition)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1322,7 +1332,7 @@ class RetryAllErrorsTests(TestCase):
         with patch.object(self.consumer, "_process_debezium_message", return_value=False):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(message_value, 1234, 0, self.topic_partition)
+                self.consumer._process_message_with_retry(_mock_message(message_value), self.topic_partition)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1422,7 +1432,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         consumer._process_debezium_message = Mock(side_effect=mock_process_side_effect)
 
         try:
-            result = consumer._process_message_with_retry(test_message, 123, 0, topic_partition)
+            result = consumer._process_message_with_retry(_mock_message(test_message), topic_partition)
         finally:
             # Restore original method
             consumer._process_debezium_message = original_method
@@ -1464,7 +1474,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                consumer._process_message_with_retry(message_value, 123, 0, topic_partition)
+                consumer._process_message_with_retry(_mock_message(message_value), topic_partition)
 
             # Verify the error message indicates max retries exceeded
             self.assertIn("Max operation retries", str(ctx.exception))
