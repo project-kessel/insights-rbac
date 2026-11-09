@@ -33,6 +33,7 @@ from django.db import OperationalError, connection, transaction
 from google.protobuf import json_format
 from internal.migration_coordination import notify_migration_batch_completion
 from kafka import TopicPartition
+from kafka.consumer.fetcher import ConsumerRecord
 from kessel.inventory.v1beta2 import relationship_pb2
 from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
 from prometheus_client import Counter, Gauge, Histogram
@@ -587,15 +588,13 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer):
                 # because offset was not committed. Message will be retried on restart.
                 raise RuntimeError(error_msg)
 
-    def _process_single(self, message_value: Dict[str, Any], message_partition: int, message_offset: int) -> bool:
+    def _process_single(self, message: ConsumerRecord) -> bool:
         """Process a single message (parse and handle).
 
         This is the core message processing logic without retry concerns.
 
         Args:
-            message_value: The Kafka message value to process
-            message_partition: The partition number (for logging)
-            message_offset: The message offset (for logging)
+            message: The Kafka message to process
 
         Returns:
             bool: True if message processed successfully
@@ -604,11 +603,16 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer):
             ValidationError: If message validation fails
             Other exceptions: If processing fails
         """
+        message_value = self._parse_message_value(message)
+        logger.debug(
+            f"Parsed message content (partition: {message.partition}, offset: {message.offset}): {message_value}"
+        )
+
         # Parse Debezium message (may raise ValidationError or JSONDecodeError)
         parsed_message = self._parse_debezium_message(message_value)
 
         # Process the message (may raise ValidationError or other exceptions)
-        return self._process_debezium_message(parsed_message, message_partition, message_offset)
+        return self._process_debezium_message(parsed_message, message.partition, message.offset)
 
     def _parse_debezium_message(self, message_value: Dict[str, Any]) -> Dict[str, Any]:
         """Parse standard Debezium message format with schema/payload wrapper.

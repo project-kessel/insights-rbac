@@ -25,10 +25,11 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Dict, Optional
 
 from django.conf import settings
 from kafka import AsyncConsumerRebalanceListener, KafkaConsumer, OffsetAndMetadata, TopicPartition
+from kafka.consumer.fetcher import ConsumerRecord
 from kafka.errors import KafkaError
 from kafka.future import Future as KafkaFuture
 from prometheus_client import Counter, Gauge, Histogram
@@ -630,15 +631,13 @@ class BaseRBACKafkaConsumer(abc.ABC):
             self.readiness_file.unlink(missing_ok=True)
 
     @abc.abstractmethod
-    def _process_single(self, message_value: Dict[str, Any], message_partition: int, message_offset: int) -> bool:
+    def _process_single(self, message: ConsumerRecord) -> bool:
         """Process a single message (parse and handle).
 
         This is the core message processing logic without retry concerns.
 
         Args:
-            message_value: The Kafka message value to process
-            message_partition: The partition number (for logging)
-            message_offset: The message offset (for logging)
+            message: The Kafka message to process
 
         Returns:
             bool: True if message processed successfully
@@ -651,9 +650,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
 
     def _process_message_with_retry(
         self,
-        message_value: Dict[str, Any],
-        message_offset: int,
-        message_partition: int,
+        message: ConsumerRecord,
         topic_partition: TopicPartition,
         leader_epoch: Optional[int] = None,
         error_handler=None,
@@ -664,9 +661,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         ValidationError indicates permanently malformed messages that won't become valid.
 
         Args:
-            message_value: The Kafka message value to process
-            message_offset: The message offset
-            message_partition: The partition number
+            message: The Kafka message
             topic_partition: TopicPartition object for offset tracking
             leader_epoch: The leader epoch for the partition (optional)
             error_handler: Optional callable(Exception) -> bool to short-circuit retries
@@ -687,8 +682,8 @@ class BaseRBACKafkaConsumer(abc.ABC):
             # ValidationError and ParseError mean bad message format - retrying won't help
             if isinstance(exception, (ValidationError, ParseError)):
                 logger.error(
-                    f"{type(exception).__name__} is non-retryable for message at partition {message_partition}, "
-                    f"offset {message_offset}. Consumer will stop."
+                    f"{type(exception).__name__} is non-retryable for message at partition {message.partition}, "
+                    f"offset {message.offset}. Consumer will stop."
                 )
                 return True
             # Use custom error handler if provided
@@ -708,7 +703,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         def process_wrapper():
             """Wrap message processing for retry logic."""
             # Process the message
-            success = self._process_single(message_value, message_partition, message_offset)
+            success = self._process_single(message)
 
             # If processing returned False, treat as an error and retry
             if not success:
@@ -732,11 +727,11 @@ class BaseRBACKafkaConsumer(abc.ABC):
             # Max retries exceeded - stop consumer to allow Kubernetes restart
             error_msg = (
                 f"Max operation retries exceeded for message "
-                f"(partition: {message_partition}, offset: {message_offset}): {e}. "
+                f"(partition: {message.partition}, offset: {message.offset}): {e}. "
                 f"Consumer will STOP to allow Kubernetes restart.\n"
                 f"Offset NOT committed - message will be retried on restart.\n"
                 f"To resolve: Fix the issue. Kubernetes will restart the pod automatically.\n"
-                f"Message content: {message_value}"
+                f"Message content: {message.value}"
             )
             logger.error(error_msg)
             self._metrics.messages_processed_total.labels(message_type="unknown", status="max_retries_exceeded").inc()
@@ -758,7 +753,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
             # This should NOT be silently ignored - raise to stop the consumer
             error_msg = (
                 f"Error handler short-circuited retry for message "
-                f"(partition: {message_partition}, offset: {message_offset}): {e}. "
+                f"(partition: {message.partition}, offset: {message.offset}): {e}. "
                 f"Consumer will stop to prevent silent message loss."
             )
             logger.error(error_msg)
@@ -889,62 +884,28 @@ class BaseRBACKafkaConsumer(abc.ABC):
         self._metrics.last_message_processed_time.set(self.last_activity)
         return True
 
-    def _parse_message_value(self, message):
-        """Parse JSON from raw Kafka message bytes.
-
-        Args:
-            message: Kafka message
-
-        Returns:
-            dict: Parsed JSON message
-
-        Raises:
-            json.JSONDecodeError, UnicodeDecodeError: If parsing fails
-        """
-        try:
-            return json.loads(message.value.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            # Fail fast on JSON parse errors
-            raw_content = message.value[:100] if len(message.value) > 100 else message.value
-            error_msg = (
-                f"Failed to parse JSON from message at partition {message.partition}, "
-                f"offset {message.offset}: {e}. "
-                f"Sample content: {raw_content}. "
-                f"This indicates a malformed message in the Kafka topic. "
-                f"Fix the producer or manually skip the offset, then restart the consumer."
-            )
-            logger.error(error_msg)
-            self._metrics.messages_processed_total.labels(message_type="unknown", status="json_error").inc()
-            raise
-
     def _process_and_commit_message(self, message, topic_partition, last_committed_offsets):
         """Process a message and handle offset commits.
 
         Args:
             message: Kafka message
-            message_value: Parsed message value (dict)
             topic_partition: TopicPartition object
             last_committed_offsets: Dict tracking last committed offsets
 
         Returns:
             bool: True if should continue processing, False if should break loop
         """
-        # Parse JSON message
-        message_value = self._parse_message_value(message)
-
         # Log processing
         last_committed = last_committed_offsets.get(topic_partition, -1)
         logger.info(
             f"Processing message (partition: {message.partition}, offset: {message.offset}, "
             f"last_committed: {last_committed})"
         )
-        logger.debug(f"Message content (partition: {message.partition}, offset: {message.offset}): {message_value}")
+        logger.debug(f"Message content (partition: {message.partition}, offset: {message.offset}): {message.value}")
 
-        # Process with retry logic
+        # Process with retry logicar
         success = self._process_message_with_retry(
-            message_value,
-            message.offset,
-            message.partition,
+            message,
             topic_partition,
             message.leader_epoch,
         )
