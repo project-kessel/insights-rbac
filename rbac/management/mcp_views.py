@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 import jsonschema
 from django.conf import settings
@@ -1386,7 +1387,10 @@ def list_role_access(
         "search_roles(permission='<app>:<resource>:<verb>'). Accepts comma-separated permissions. "
         "To see all roles for an application, call search_roles(application='<app>'). "
         "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
-        "V2 orgs support name with '*' wildcards (e.g., name='Cost*') and resource_type filter. "
+        "V2 orgs support name with '*' wildcards (e.g., name='Cost*'), resource_type filter, and "
+        "cursor-based pagination. For V2 pagination, pass the full previous links.next URL as cursor "
+        "to preserve filters and ordering, or pass its bare cursor token and repeat those arguments; "
+        "'offset' is not supported in V2 (use cursor instead). "
         "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
@@ -1395,7 +1399,8 @@ def list_role_access(
         "- Role names are not unique across V1 and V2. The org_version field indicates which API "
         "version the result came from.\n"
         "- The username filter is V1-only. For V2 orgs, it is ignored and returned in ignored_filters "
-        "with guidance to use list_role_bindings instead."
+        "with guidance to use list_role_bindings instead.\n"
+        "- The offset parameter is V1-only. For V2 orgs, use the cursor parameter from links.next instead."
     ),
     requires_auth=True,
     api_version=ApiVersion.UNIFIED,
@@ -1405,7 +1410,7 @@ def list_role_access(
 def search_roles(
     request: HttpRequest,
     *,
-    limit: int = 10,
+    limit: int | None = None,
     offset: int = 0,
     name: str = "",
     display_name: str = "",
@@ -1415,6 +1420,7 @@ def search_roles(
     resource_type: str = "",
     order_by: str = "",
     username: str = "",
+    cursor: str = "",
 ) -> str:
     """Search roles, auto-detecting V1/V2 and delegating to the appropriate view."""
     tenant = getattr(request, "tenant", None)
@@ -1431,9 +1437,19 @@ def search_roles(
             display_name,
             application,
             system,
+            cursor,
         )
     return _search_roles_v1(
-        request, limit, offset, name, display_name, permission, application, system, order_by, username
+        request,
+        10 if limit is None else limit,
+        offset,
+        name,
+        display_name,
+        permission,
+        application,
+        system,
+        order_by,
+        username,
     )
 
 
@@ -1478,7 +1494,7 @@ def _search_roles_v1(
 
 def _search_roles_v2(
     request: HttpRequest,
-    limit: int,
+    limit: int | None,
     offset: int,
     name: str,
     resource_type: str,
@@ -1488,12 +1504,11 @@ def _search_roles_v2(
     display_name: str,
     application: str,
     system: str,
+    cursor: str,
 ) -> str:
     """Search roles using V2 API."""
-    query_params: dict[str, str] = {
-        "limit": str(limit),
-        "offset": str(offset),
-    }
+    # offset is not forwarded: V2 /roles/ is cursor-paginated and reports it via ignored_filters below.
+    query_params: dict[str, str] = {"limit": str(10 if limit is None else limit)}
     if name:
         query_params["name"] = name
     if resource_type:
@@ -1502,6 +1517,47 @@ def _search_roles_v2(
         query_params["permission"] = permission
     if order_by:
         query_params["order_by"] = order_by
+    if cursor:
+        parsed = urlparse(cursor)
+        if parsed.query:
+            # Caller passed a URL or partial URL from links.next — extract the
+            # bare cursor token *and* preserve search/pagination parameters so
+            # omitted tool arguments don't replace the original filters with
+            # their defaults.
+            url_params = parse_qs(parsed.query)
+            _known_v2_params = {"cursor", "name", "permission", "resource_type", "order_by", "limit"}
+            if url_params.keys() & _known_v2_params:
+                # Real URL with recognised V2 query parameters.
+                cursor_values = url_params.get("cursor")
+                if cursor_values:
+                    cursor = cursor_values[0]
+                else:
+                    # URL had a query string but no cursor parameter — do not
+                    # forward the raw URL as a cursor token.
+                    cursor = ""
+
+                # Supported V2 query parameters that may be embedded in links.next.
+                _url_fallbacks: dict[str, str] = {}
+                for key in ("name", "permission", "resource_type", "order_by", "limit"):
+                    values = url_params.get(key)
+                    if values:
+                        _url_fallbacks[key] = values[0]
+
+                # Nonempty filters override the URL; limit uses None to distinguish omission from 10.
+                if not name and "name" in _url_fallbacks:
+                    query_params["name"] = _url_fallbacks["name"]
+                if not resource_type and "resource_type" in _url_fallbacks:
+                    query_params["resource_type"] = _url_fallbacks["resource_type"]
+                if not permission and "permission" in _url_fallbacks:
+                    query_params["permission"] = _url_fallbacks["permission"]
+                if not order_by and "order_by" in _url_fallbacks:
+                    query_params["order_by"] = _url_fallbacks["order_by"]
+                if limit is None and "limit" in _url_fallbacks:
+                    query_params["limit"] = _url_fallbacks["limit"]
+            # else: bare token that happens to contain '?' — keep cursor as-is.
+
+        if cursor:
+            query_params["cursor"] = cursor
 
     path = reverse("v2_management:roles-list")
     raw = _call_view(request, _role_v2_list_view, path, query_params)
@@ -1542,6 +1598,13 @@ def _search_roles_v2(
             "value": system,
             "reason": "V2 roles use 'type' (custom/system/seeded) instead of a boolean 'system' flag.",
             "alternative": "V2 role results include a 'type' field you can filter client-side.",
+        }
+
+    if offset:
+        ignored_filters["offset"] = {
+            "value": str(offset),
+            "reason": "V2 roles use cursor-based pagination instead of offset.",
+            "alternative": "Use the 'cursor' parameter from the previous response's links.next to paginate.",
         }
 
     if ignored_filters:

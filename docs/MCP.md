@@ -450,8 +450,9 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | integer | `10` | Max results |
-| `offset` | integer | `0` | Pagination offset |
+| `limit` | integer | `10` | Max results; when omitted with a `links.next` URL, uses the limit in that URL |
+| `offset` | integer | `0` | Pagination offset (V1 only; ignored in V2) |
+| `cursor` | string | `""` | V2 pagination: pass the full `links.next` URL to preserve filters and ordering, or pass its bare token and repeat the original filters and `order_by` |
 | `name` | string | `""` | Filter by role name (V2 supports `*` wildcards) |
 | `display_name` | string | `""` | Filter by display name (V1 only) |
 | `permission` | string | `""` | Filter by permission (comma-separated) |
@@ -471,11 +472,21 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 {"method": "tools/call", "params": {"name": "search_roles", "arguments": {"permission": "cost-management:cost_model:read"}}}
 ```
 
-**Returns:** `{meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+**Example V2 cursor-based pagination:** Use the full `links.next` URL returned by a filtered search:
+```json
+{"method": "tools/call", "params": {"name": "search_roles", "arguments": {"cursor": "/api/rbac/v2/roles/?name=Cost%2A&order_by=name&limit=10&cursor=cD0xMjM0NTY3OA%3D%3D"}}}
+```
+
+If passing only the bare cursor token, repeat the original `name`, `permission`, `resource_type`, and `order_by` values, as applicable. Nonempty filter and ordering arguments and any explicit `limit` take precedence over values in a cursor URL, including an explicit `limit` of 10.
+
+**Returns:** `{meta: {count}, links: {next: "..."}, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+- V1 orgs: `links` contains `next` with offset-based pagination
+- V2 orgs: `links` contains `next` with cursor-based pagination; if `offset > 0` is passed, it is listed in `ignored_filters` with guidance to use `cursor` instead.
 
 **Caveats:**
 - The permission filter does not account for ResourceDefinition filters that may narrow effective scope.
 - The `username` filter is V1-only. For V2, it is ignored and returned in `ignored_filters`.
+- The `offset` parameter is V1-only pagination. For V2 orgs, use `cursor` from the previous response's `links.next` instead.
 
 ---
 
