@@ -67,6 +67,19 @@ from api.models import Tenant
 logger = logging.getLogger(__name__)
 
 
+def is_v1_list_access_allowed_for_v2_tenant(requested_applications: set[str]) -> bool:
+    """Return True if all requested applications are excluded from V2 migration.
+
+    When True, the V1 ``list_access`` tool is allowed for V2 write-activated
+    tenants because those applications have not migrated to V2 yet.  An empty
+    or blank-only set is not allowed — callers must specify at least one
+    concrete application.
+    """
+    if not requested_applications:
+        return False
+    return requested_applications <= v2_role_excluded_applications()
+
+
 class RoleV2Service:
     """
     Domain service for RoleV2 operations.
