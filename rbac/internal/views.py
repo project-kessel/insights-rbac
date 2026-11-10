@@ -65,7 +65,11 @@ from kessel.inventory.v1beta2 import (
     streamed_list_subjects_request_pb2,
     subject_reference_pb2,
 )
-from management.atomic_transactions import atomic_block, atomic_with_retry, run_atomic_with_retry
+from management.atomic_transactions import (
+    atomic_block,
+    atomic_with_retry,
+    run_atomic_with_retry,
+)
 from management.audit_log.model import AuditLog
 from management.cache import TenantCache
 from management.group.inventory_api_dual_write_group_handler import (
@@ -81,7 +85,9 @@ from management.inventory_checker.inventory_api_check import (
     SeededRoleHierarchyChecker,
     WorkspaceRelationInventoryChecker,
 )
-from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
+from management.inventory_replicator.inventory_api_replicator import (
+    InventoryApiReplicator,
+)
 from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
     ReplicationEvent,
@@ -146,6 +152,7 @@ from management.tenant_mapping.v2_activation import (
     is_v2_write_activated,
     set_v2_opt_in_state,
 )
+from management.tenant_service.tenant_service import rewrite_principal_user_id
 from management.tenant_service.v2 import V2TenantBootstrapService
 from management.utils import (
     create_client_channel_inventory,
@@ -153,7 +160,9 @@ from management.utils import (
     get_principal,
     groups_for_principal,
 )
-from management.workspace.inventory_api_dual_write_workspace_handler import InventoryApiDualWriteWorkspaceHandler
+from management.workspace.inventory_api_dual_write_workspace_handler import (
+    InventoryApiDualWriteWorkspaceHandler,
+)
 from management.workspace.model import Workspace
 from management.workspace.serializer import WorkspaceSerializer
 from migration_tool.in_memory_tuples import InMemoryRelationReplicator, InMemoryTuples
@@ -1518,7 +1527,8 @@ def reset_imported_tenants(request: HttpRequest) -> HttpResponse:
         query += "AND NOT ready"
     else:
         query += (
-            "AND NOT EXISTS (SELECT 1 FROM management_principal WHERE management_principal.tenant_id = api_tenant.id) "
+            "AND NOT EXISTS (SELECT 1 FROM management_principal"
+            " WHERE management_principal.tenant_id = api_tenant.id) "
         )
         query += """AND NOT (
                   EXISTS    (SELECT 1
@@ -2563,10 +2573,19 @@ def verify_migration(request, org_id):
         return JsonResponse({"detail": f"No tenant mapping for org_id: {org_id}"}, status=404)
 
     checks, failed_checks = _run_tenant_migration_checks(
-        tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+        tenant,
+        role_limit,
+        binding_limit,
+        group_limit,
+        car_limit,
+        workspace_limit,
+        dry_run=dry_run,
     )
 
-    return JsonResponse(_build_verify_migration_report(org_id, checks, failed_checks, dry_run=dry_run), status=200)
+    return JsonResponse(
+        _build_verify_migration_report(org_id, checks, failed_checks, dry_run=dry_run),
+        status=200,
+    )
 
 
 def _run_tenant_migration_checks(
@@ -2674,7 +2693,10 @@ def _run_tenant_migration_checks(
                 default_workspace_id=str(default_workspace.id),
                 ungrouped_workspace_id=str(ungrouped.id) if ungrouped else None,
             )
-            checks["bootstrap"] = {"correct": bootstrap_correct, "relations_checked": bootstrap_checks}
+            checks["bootstrap"] = {
+                "correct": bootstrap_correct,
+                "relations_checked": bootstrap_checks,
+            }
             if not bootstrap_correct:
                 failed_checks.append("bootstrap")
     except Exception as e:
@@ -2693,18 +2715,21 @@ def _run_tenant_migration_checks(
             workspaces_all_correct = True
             for workspace in workspaces:
                 add_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.CREATE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.CREATE_WORKSPACE,
                 )
                 add_handler.generate_relations_to_add_workspace()
 
                 remove_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.DELETE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.DELETE_WORKSPACE,
                 )
                 remove_handler.generate_relations_to_remove_workspace()
 
                 # Moving a workspace to its current parent must be a no-op.
                 noop_handler = InventoryApiDualWriteWorkspaceHandler(
-                    workspace=workspace, event_type=ReplicationEventType.UPDATE_WORKSPACE
+                    workspace=workspace,
+                    event_type=ReplicationEventType.UPDATE_WORKSPACE,
                 )
                 noop_handler.generate_relations_to_update_workspace(previous_parent=workspace.parent)
 
@@ -2755,7 +2780,10 @@ def _run_tenant_migration_checks(
                 )
             else:
                 workspaces_correct, workspace_checks = True, []
-            checks["workspaces"] = {"correct": workspaces_correct, "relations_checked": workspace_checks}
+            checks["workspaces"] = {
+                "correct": workspaces_correct,
+                "relations_checked": workspace_checks,
+            }
             if not workspaces_correct:
                 failed_checks.append("workspaces")
     except Exception as e:
@@ -2837,7 +2865,12 @@ def _run_tenant_migration_checks(
                 # No tuples generated -- check_role([]) would trivially return True (all() on an
                 # empty list), so report this as unverified rather than falsely claiming "correct".
                 role_results.append(
-                    {"role_uuid": str(role.uuid), "role_name": role.name, "tuples_generated": 0, "verified": False}
+                    {
+                        "role_uuid": str(role.uuid),
+                        "role_name": role.name,
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
@@ -2891,7 +2924,10 @@ def _run_tenant_migration_checks(
             logger.exception(f"Error checking role binding {binding.uuid} for tenant {org_id}")
             binding_results.append({"binding_uuid": str(binding.uuid), "error": str(e)})
             bindings_all_correct = False
-    checks["bindings"] = {"correct": bindings_all_correct, "bindings_checked": binding_results}
+    checks["bindings"] = {
+        "correct": bindings_all_correct,
+        "bindings_checked": binding_results,
+    }
     if dry_run:
         checks["bindings"]["dry_run"] = True
     if not bindings_all_correct:
@@ -2916,7 +2952,11 @@ def _run_tenant_migration_checks(
             mapping_tuples = mapping.as_tuples()
             if dry_run:
                 result, valid = _dry_run_validation_result(
-                    {"binding_mapping_id": mapping.id, "role_uuid": str(mapping.role.uuid)}, mapping_tuples
+                    {
+                        "binding_mapping_id": mapping.id,
+                        "role_uuid": str(mapping.role.uuid),
+                    },
+                    mapping_tuples,
                 )
                 group_binding_results.append(result)
                 if not valid:
@@ -2937,7 +2977,10 @@ def _run_tenant_migration_checks(
             logger.exception(f"Error checking BindingMapping {mapping.id} for tenant {org_id}")
             group_binding_results.append({"binding_mapping_id": mapping.id, "error": str(e)})
             group_bindings_all_correct = False
-    checks["group_role_bindings"] = {"correct": group_bindings_all_correct, "bindings_checked": group_binding_results}
+    checks["group_role_bindings"] = {
+        "correct": group_bindings_all_correct,
+        "bindings_checked": group_binding_results,
+    }
     if dry_run:
         checks["group_role_bindings"]["dry_run"] = True
     if not group_bindings_all_correct:
@@ -2961,7 +3004,8 @@ def _run_tenant_migration_checks(
             permission_tuples = CustomRoleV2._permission_and_owner_tuples(role, role.permissions.all())
             if dry_run:
                 result, valid = _dry_run_validation_result(
-                    {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid}, permission_tuples
+                    {"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid},
+                    permission_tuples,
                 )
                 permission_results.append(result)
                 if not valid:
@@ -2982,9 +3026,18 @@ def _run_tenant_migration_checks(
                 permissions_all_correct = False
         except Exception as e:
             logger.exception(f"Error checking role permissions for V2 role {role.uuid} in tenant {org_id}")
-            permission_results.append({"v2_role_uuid": str(role.uuid), "v1_role_uuid": v1_role_uuid, "error": str(e)})
+            permission_results.append(
+                {
+                    "v2_role_uuid": str(role.uuid),
+                    "v1_role_uuid": v1_role_uuid,
+                    "error": str(e),
+                }
+            )
             permissions_all_correct = False
-    checks["role_permissions"] = {"correct": permissions_all_correct, "roles_checked": permission_results}
+    checks["role_permissions"] = {
+        "correct": permissions_all_correct,
+        "roles_checked": permission_results,
+    }
     if dry_run:
         checks["role_permissions"]["dry_run"] = True
     if not permissions_all_correct:
@@ -3006,7 +3059,13 @@ def _run_tenant_migration_checks(
                     # Principals exist but no relation tuples could be built for them -- report as
                     # unverified rather than silently skipping (check_relationships([]) on an empty
                     # list would otherwise look identical to "nothing to check").
-                    group_results.append({"group_uuid": str(group.uuid), "tuples_generated": 0, "verified": False})
+                    group_results.append(
+                        {
+                            "group_uuid": str(group.uuid),
+                            "tuples_generated": 0,
+                            "verified": False,
+                        }
+                    )
                 continue
             if dry_run:
                 result, valid = _dry_run_validation_result({"group_uuid": str(group.uuid)}, relationships)
@@ -3017,7 +3076,11 @@ def _run_tenant_migration_checks(
             result = GroupPrincipalChecker.check_relationships(relationships)
             group_correct = all(pr["relation_exists"] for pr in result["principal_relations"])
             group_results.append(
-                {"group_uuid": str(group.uuid), "tuples_generated": len(relationships), "correct": group_correct}
+                {
+                    "group_uuid": str(group.uuid),
+                    "tuples_generated": len(relationships),
+                    "correct": group_correct,
+                }
             )
             if not group_correct:
                 groups_all_correct = False
@@ -3025,7 +3088,10 @@ def _run_tenant_migration_checks(
             logger.exception(f"Error checking group {group.uuid} for tenant {org_id}")
             group_results.append({"group_uuid": str(group.uuid), "error": str(e)})
             groups_all_correct = False
-    checks["group_principals"] = {"correct": groups_all_correct, "groups_checked": group_results}
+    checks["group_principals"] = {
+        "correct": groups_all_correct,
+        "groups_checked": group_results,
+    }
     if dry_run:
         checks["group_principals"]["dry_run"] = True
     if not groups_all_correct:
@@ -3040,7 +3106,13 @@ def _run_tenant_migration_checks(
         try:
             cross_account_roles = list(car.roles.all())
             if not cross_account_roles:
-                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "correct": True,
+                    }
+                )
                 continue
 
             tuples = InMemoryTuples()
@@ -3064,12 +3136,22 @@ def _run_tenant_migration_checks(
                 continue
 
             if len(tuples) == 0:
-                car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "verified": False})
+                car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
+                )
                 continue
 
             car_correct = CrossAccountRequestChecker.check_cross_account_request(list(tuples), str(car.request_id))
             car_results.append(
-                {"request_id": str(car.request_id), "tuples_generated": len(tuples), "correct": car_correct}
+                {
+                    "request_id": str(car.request_id),
+                    "tuples_generated": len(tuples),
+                    "correct": car_correct,
+                }
             )
             if not car_correct:
                 cars_all_correct = False
@@ -3077,7 +3159,10 @@ def _run_tenant_migration_checks(
             logger.exception(f"Error checking cross account request {car.request_id} for tenant {org_id}")
             car_results.append({"request_id": str(car.request_id), "error": str(e)})
             cars_all_correct = False
-    checks["cross_account_requests"] = {"correct": cars_all_correct, "requests_checked": car_results}
+    checks["cross_account_requests"] = {
+        "correct": cars_all_correct,
+        "requests_checked": car_results,
+    }
     if dry_run:
         checks["cross_account_requests"]["dry_run"] = True
     if not cars_all_correct:
@@ -3104,13 +3189,23 @@ def _run_tenant_migration_checks(
             still_active_role_pks = active_roles_by_user.get(car.user_id, set())
             all_car_roles = list(car.roles.all())
             if not all_car_roles:
-                removed_car_results.append({"request_id": str(car.request_id), "tuples_generated": 0, "correct": True})
+                removed_car_results.append(
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "correct": True,
+                    }
+                )
                 continue
 
             cross_account_roles = [role for role in all_car_roles if role.pk not in still_active_role_pks]
             if not cross_account_roles:
                 removed_car_results.append(
-                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
@@ -3135,7 +3230,11 @@ def _run_tenant_migration_checks(
 
             if len(remove_tuples) == 0:
                 removed_car_results.append(
-                    {"request_id": str(car.request_id), "tuples_generated": 0, "verified": False}
+                    {
+                        "request_id": str(car.request_id),
+                        "tuples_generated": 0,
+                        "verified": False,
+                    }
                 )
                 continue
 
@@ -3229,7 +3328,7 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
                     {
                         "role_uuid": str(seeded_role.uuid),
                         "role_name": seeded_role.name,
-                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                        "v1_role_name": (seeded_role.v1_source.name if seeded_role.v1_source else None),
                     },
                     hierarchy_tuples,
                 )
@@ -3245,7 +3344,7 @@ def _run_seeded_role_hierarchy_check(dry_run: bool = False) -> dict:
                 {
                     "role_uuid": str(seeded_role.uuid),
                     "role_name": seeded_role.name,
-                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "v1_role_name": (seeded_role.v1_source.name if seeded_role.v1_source else None),
                     "tuples_generated": len(hierarchy_tuples),
                     "correct": role_correct,
                 }
@@ -3317,7 +3416,7 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
                     {
                         "role_uuid": str(seeded_role.uuid),
                         "role_name": seeded_role.name,
-                        "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                        "v1_role_name": (seeded_role.v1_source.name if seeded_role.v1_source else None),
                     },
                     permission_tuples,
                 )
@@ -3333,7 +3432,7 @@ def _run_seeded_role_permissions_check(dry_run: bool = False) -> dict:
                 {
                     "role_uuid": str(seeded_role.uuid),
                     "role_name": seeded_role.name,
-                    "v1_role_name": seeded_role.v1_source.name if seeded_role.v1_source else None,
+                    "v1_role_name": (seeded_role.v1_source.name if seeded_role.v1_source else None),
                     "tuples_generated": len(permission_tuples),
                     "correct": role_correct,
                 }
@@ -3447,7 +3546,13 @@ def verify_migration_global(request):
             continue
 
         checks, failed_checks = _run_tenant_migration_checks(
-            tenant, role_limit, binding_limit, group_limit, car_limit, workspace_limit, dry_run=dry_run
+            tenant,
+            role_limit,
+            binding_limit,
+            group_limit,
+            car_limit,
+            workspace_limit,
+            dry_run=dry_run,
         )
         tenant_report = _build_verify_migration_report(tenant.org_id, checks, failed_checks, dry_run=dry_run)
         tenant_reports.append(tenant_report)
@@ -3528,7 +3633,12 @@ def _dry_run_validation_result(extra_fields: dict, tuples) -> tuple[dict, bool]:
     its section's all_correct flag when valid is False.
     """
     validation = validate_generated_tuples(tuples)
-    result = {**extra_fields, "tuples_generated": len(tuples), "checked": False, "validation": validation}
+    result = {
+        **extra_fields,
+        "tuples_generated": len(tuples),
+        "checked": False,
+        "validation": validation,
+    }
     return result, validation["valid"]
 
 
@@ -4146,7 +4256,10 @@ def replicate_updated_workspaces(request):
         parsed_since = datetime.datetime.fromisoformat(since)
 
         if parsed_since.tzinfo is None:
-            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+            return JsonResponse(
+                {"field": "since", "detail": "since time must have timezone"},
+                status=400,
+            )
     except ValueError as e:
         return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
@@ -4194,7 +4307,10 @@ def replicate_deleted_workspaces(request):
         parsed_since = datetime.datetime.fromisoformat(since)
 
         if parsed_since.tzinfo is None:
-            return JsonResponse({"field": "since", "detail": "since time must have timezone"}, status=400)
+            return JsonResponse(
+                {"field": "since", "detail": "since time must have timezone"},
+                status=400,
+            )
     except ValueError as e:
         return JsonResponse({"field": "since", "detail": f"invalid datetime: {str(e)}"}, status=400)
 
@@ -4464,12 +4580,17 @@ def bootstrap_users_from_user_ids(request):
     For each user ID:
     1. Queries BOP to get user details (username, org_id, is_active, is_org_admin)
     2. Skips users not found in BOP or not active (status ``skipped``)
-    3. Detects stale principals: if a tenant already has a principal with the
+    3. Detects same-username / wrong-``user_id`` principals (unexpected corruption)
+       and rewrites ``user_id`` in place with SpiceDB tuple remove/add (status
+       ``rewritten`` / dry-run ``would_rewrite_user_id``). This is the one-off
+       remediation path; the Kafka cleaner still hard-fails on this case.
+    4. Detects stale principals: if a tenant already has a principal with the
        same ``user_id`` but a different username (i.e. the user's BOP username
        changed), the obsolete principal is merged into the survivor — group
        memberships are transferred and SpiceDB tuples replicated (status
        ``merged``).  Otherwise creates a fresh principal (status ``bootstrapped``).
-    4. Dry-run mode reports ``would_merge`` or ``would_bootstrap`` accordingly.
+    5. Dry-run mode reports ``would_rewrite_user_id``, ``would_merge``, or
+       ``would_bootstrap`` accordingly.
 
     .. note::
        The ``not_found`` and ``inactive`` statuses were replaced by ``skipped``
@@ -4525,12 +4646,19 @@ def bootstrap_users_from_user_ids(request):
             bop_user_by_id[str(uid)] = bop_user
 
     results = []
-    bootstrap_service = V2TenantBootstrapService(OutboxReplicator())
+    replicator = OutboxReplicator()
+    bootstrap_service = V2TenantBootstrapService(replicator)
 
     for user_id in user_ids:
         bop_user = bop_user_by_id.get(user_id)
         if bop_user is None:
-            results.append({"user_id": user_id, "status": "skipped", "detail": "User not found in BOP"})
+            results.append(
+                {
+                    "user_id": user_id,
+                    "status": "skipped",
+                    "detail": "User not found in BOP",
+                }
+            )
             continue
 
         user = external_principal_to_user(bop_user)
@@ -4557,15 +4685,62 @@ def bootstrap_users_from_user_ids(request):
             )
             continue
         tenant = Tenant.objects.filter(org_id=user.org_id).first()
+        mismatched_principal = None
         obsolete_principal = None
         if tenant is not None:
+            same_username = Principal.objects.filter(tenant=tenant, username=user.username).first()
+            if (
+                same_username is not None
+                and same_username.user_id not in (None, "")
+                and str(same_username.user_id) != user_id
+            ):
+                mismatched_principal = same_username
             obsolete_principal = (
                 Principal.objects.filter(tenant=tenant, user_id=user_id).exclude(username=user.username).first()
             )
+        needs_rewrite = mismatched_principal is not None
         needs_merging = obsolete_principal is not None
 
+        # Detect cross-tenant user_id conflicts that rewrite_principal_user_id would raise on.
+        cross_tenant_conflict = False
+        if needs_rewrite and tenant is not None:
+            cross_tenant_conflict = Principal.objects.filter(user_id=user_id).exclude(tenant=tenant).exists()
+
         if dry_run:
-            if needs_merging:
+            if needs_rewrite and cross_tenant_conflict:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "error",
+                        "detail": (
+                            f"Cross-tenant conflict: user_id '{user_id}' is owned " f"by a principal in another tenant"
+                        ),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                    }
+                )
+            elif needs_rewrite:
+                merge_detail = ""
+                if needs_merging:
+                    merge_detail = (
+                        f"; would merge obsolete principal " f"'{obsolete_principal.username}' into survivor"
+                    )
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "would_rewrite_user_id",
+                        "detail": (
+                            f"Would rewrite principal user_id "
+                            f"'{mismatched_principal.user_id}' → '{user_id}' "
+                            f"for username '{user.username}'" + merge_detail
+                        ),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                        "is_org_admin": user.admin,
+                        "old_user_id": mismatched_principal.user_id,
+                    }
+                )
+            elif needs_merging:
                 results.append(
                     {
                         "user_id": user_id,
@@ -4589,9 +4764,15 @@ def bootstrap_users_from_user_ids(request):
             continue
 
         try:
-            bootstrapped = run_atomic_with_retry(
-                5, lambda: bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
-            )
+
+            def _bootstrap_one():
+                if needs_rewrite:
+                    # One-off remediation before update_user, which still hard-fails on mismatch.
+                    principal = Principal.objects.get(tenant=tenant, username=user.username)
+                    rewrite_principal_user_id(principal, user_id, replicator)
+                return bootstrap_service.update_user(user, upsert=True, ready_tenant=True)
+
+            bootstrapped = run_atomic_with_retry(5, _bootstrap_one)
 
             if bootstrapped is None:
                 results.append(
@@ -4601,6 +4782,18 @@ def bootstrap_users_from_user_ids(request):
                         "detail": "User became inactive during bootstrap",
                         "username": user.username,
                         "org_id": user.org_id,
+                    }
+                )
+            elif needs_rewrite:
+                results.append(
+                    {
+                        "user_id": user_id,
+                        "status": "rewritten",
+                        "detail": (f"Rewrote principal user_id " f"'{mismatched_principal.user_id}' → '{user_id}'"),
+                        "username": user.username,
+                        "org_id": user.org_id,
+                        "tenant_ready": bootstrapped.tenant.ready,
+                        "old_user_id": mismatched_principal.user_id,
                     }
                 )
             else:
@@ -4631,13 +4824,16 @@ def bootstrap_users_from_user_ids(request):
             )
 
     bootstrapped_count = sum(1 for r in results if r["status"] == "bootstrapped")
+    rewritten_count = sum(1 for r in results if r["status"] == "rewritten")
     merged_count = sum(1 for r in results if r["status"] == "merged")
     skipped_count = sum(1 for r in results if r["status"] == "skipped")
     error_count = sum(1 for r in results if r["status"] == "error")
     logger.info(
-        "Bootstrap users from user_ids completed. total=%d bootstrapped=%d merged=%d skipped=%d error=%d dry_run=%s",
+        "Bootstrap users from user_ids completed. total=%d bootstrapped=%d rewritten=%d "
+        "merged=%d skipped=%d error=%d dry_run=%s",
         len(user_ids),
         bootstrapped_count,
+        rewritten_count,
         merged_count,
         skipped_count,
         error_count,
@@ -4676,7 +4872,8 @@ def update_tenant_v2_opt_in(request, org_id: str):
             body = json.loads(request.body)
         except Exception as e:
             return JsonResponse(
-                {"error": "expected body to be a JSON object: " + str(e)}, status=status.HTTP_400_BAD_REQUEST
+                {"error": "expected body to be a JSON object: " + str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not isinstance(body, dict):
@@ -4697,7 +4894,10 @@ def update_tenant_v2_opt_in(request, org_id: str):
         requested_state = body["v2_opted_in"]
 
         if not isinstance(requested_state, bool):
-            return JsonResponse({"error": "expected v2_opted_in to be a bool"}, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse(
+                {"error": "expected v2_opted_in to be a bool"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             set_v2_opt_in_state(tenant, requested_state)
@@ -4722,7 +4922,10 @@ def backfill_default_role_bindings_view(request):
     Returns:
         JSON response with the backfill result summary.
     """
-    from internal.migrations.backfill_role_bindings import DEFAULT_BATCH_SIZE, backfill_default_role_bindings
+    from internal.migrations.backfill_role_bindings import (
+        DEFAULT_BATCH_SIZE,
+        backfill_default_role_bindings,
+    )
 
     raw_org_ids = request.GET.get("org_ids")
     if raw_org_ids is None:
