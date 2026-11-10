@@ -22,9 +22,10 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from django.test.utils import override_settings
-from django.urls import clear_url_caches
+from django.urls import clear_url_caches, reverse
 from management.group.model import Group
 from management.models import Principal
+from management.principal.it_service_mocks import MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
 from management.principal.v2_serializer import PrincipalV2OutputSerializer
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -302,6 +303,96 @@ class PrincipalV2ViewTests(IdentityRequest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertIsNone(response.data["data"][0]["user_id"])
+
+
+@override_settings(V2_APIS_ENABLED=True, IT_BYPASS_TOKEN_VALIDATION=True)
+class PrincipalV2ServiceAccessTokenTests(IdentityRequest):
+    """Test how the V2 principals API represents a service account created as a service access token.
+
+    The V2 principals endpoint reads RBAC's database and never calls IT, so the only way a service access token
+    reaches it is through the V1 group membership path, which is where the principal is created. These tests
+    therefore drive that real creation path and then assert what V2 makes of the result.
+    """
+
+    def setUp(self):
+        """Set up a group to create service account principals through."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.tenant.save()
+
+        bootstrap_tenant_for_v2_test(self.tenant)
+
+        self.group = Group.objects.create(name="service_access_token_group", tenant=self.tenant)
+
+    def _create_service_account_principal(self, service_access_token: bool = False) -> str:
+        """Create a service account principal through the V1 group add path and return its client ID."""
+        client_id = str(uuid4())
+        it_payload = {
+            "clientId": client_id,
+            "name": f"service_account_name_{client_id.split('-')[0]}",
+            "description": f"Service Account description {client_id.split('-')[0]}",
+            "owner": "jsmith",
+            "username": f"service_account-{client_id}",
+            "time_created": 1706784741,
+            "type": "service-account",
+            "userId": f"sa_sub_{client_id}",
+        }
+
+        if service_access_token:
+            it_payload["service_account_type"] = MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
+            it_payload["time_expires"] = 1713876532
+
+        with patch(
+            "management.principal.it_service.ITService.request_service_accounts",
+            return_value=[it_payload],
+        ):
+            response = APIClient().post(
+                reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid}),
+                {"principals": [{"clientId": client_id, "type": "service-account"}]},
+                format="json",
+                **self.headers,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        return client_id
+
+    def _get_principal(self, client_id: str) -> dict:
+        """Return the V2 list entry for the given service account client ID."""
+        response = APIClient().get(f"{V2_URL}?username=service-account-{client_id}", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+
+        return response.data["data"][0]
+
+    def test_service_access_token_and_service_account_are_indistinguishable_in_v2(self):
+        """V2 renders a service access token identically to a regular service account.
+
+        The mode IT reports is not persisted on Principal, so V2 has nothing to tell the two apart with. That
+        is deliberate: service access tokens are assigned to groups and bound at the group level exactly like
+        regular service accounts, so no V2 surface needs to distinguish them.
+
+        This is the documented v1/v2 asymmetry, and it cannot fail while nothing in rbac/ branches on the mode.
+        It is kept as the tripwire for that changing: persisting the mode on Principal has to come with a
+        deliberate decision about what V2 exposes, and this is what forces that decision to be made rather
+        than drifted into.
+        """
+        service_account_client_id = self._create_service_account_principal()
+        token_client_id = self._create_service_account_principal(service_access_token=True)
+
+        service_account = self._get_principal(service_account_client_id)
+        token = self._get_principal(token_client_id)
+
+        self.assertEqual(
+            "service-account",
+            token["type"],
+            '"type" must stay "service-account" for a service access token on every surface',
+        )
+        self.assertEqual(sorted(service_account.keys()), sorted(token.keys()))
+        self.assertNotIn("service_account_type", token)
+        self.assertNotIn("time_expires", token)
 
 
 @override_settings(V2_APIS_ENABLED=True)

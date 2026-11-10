@@ -465,7 +465,9 @@ class ITService:
 
         try:
             timestamp = float(service_account[field])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+            # OverflowError covers an integer too large to be represented as a float, which is the one bad
+            # value that gets past int-like type checks.
             return (TIMESTAMP_ORDER_BY_FIELDS[field], tiebreaker)
 
         # "NaN" parses as a float but is unorderable: every comparison against it is false, so a list containing
@@ -637,7 +639,12 @@ class ITService:
             service_account["service_account_type"] = service_account_type
 
         if expiration:
-            service_account["time_expires"] = expiration
+            try:
+                service_account["time_expires"] = int(expiration)
+            except (TypeError, ValueError, OverflowError):
+                # The response field is an integer, so a value which cannot be represented as one is omitted
+                # rather than failing serialization of the whole service account.
+                pass
 
         return service_account
 
