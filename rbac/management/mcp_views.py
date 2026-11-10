@@ -1365,8 +1365,9 @@ def list_role_access(
         "To see all roles for an application, call search_roles(application='<app>'). "
         "To find roles held by a specific user (V1 orgs only), call search_roles(username='<user>'). "
         "V2 orgs support name with '*' wildcards (e.g., name='Cost*'), resource_type filter, and "
-        "cursor-based pagination. For V2 pagination, pass the 'cursor' from the previous response's "
-        "links.next; 'offset' is not supported in V2 (use cursor instead). "
+        "cursor-based pagination. For V2 pagination, pass the full previous links.next URL as cursor "
+        "to preserve filters and ordering, or pass its bare cursor token and repeat those arguments; "
+        "'offset' is not supported in V2 (use cursor instead). "
         "V1 orgs additionally support display_name, system flag, and username filters. "
         "Returns: {meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}.\n"
         "Caveats:\n"
@@ -1386,7 +1387,7 @@ def list_role_access(
 def search_roles(
     request: HttpRequest,
     *,
-    limit: int = 10,
+    limit: int | None = None,
     offset: int = 0,
     name: str = "",
     display_name: str = "",
@@ -1416,7 +1417,16 @@ def search_roles(
             cursor,
         )
     return _search_roles_v1(
-        request, limit, offset, name, display_name, permission, application, system, order_by, username
+        request,
+        10 if limit is None else limit,
+        offset,
+        name,
+        display_name,
+        permission,
+        application,
+        system,
+        order_by,
+        username,
     )
 
 
@@ -1461,7 +1471,7 @@ def _search_roles_v1(
 
 def _search_roles_v2(
     request: HttpRequest,
-    limit: int,
+    limit: int | None,
     offset: int,
     name: str,
     resource_type: str,
@@ -1475,7 +1485,7 @@ def _search_roles_v2(
 ) -> str:
     """Search roles using V2 API."""
     # offset is not forwarded: V2 /roles/ is cursor-paginated and reports it via ignored_filters below.
-    query_params: dict[str, str] = {"limit": str(limit)}
+    query_params: dict[str, str] = {"limit": str(10 if limit is None else limit)}
     if name:
         query_params["name"] = name
     if resource_type:
@@ -1510,8 +1520,7 @@ def _search_roles_v2(
                     if values:
                         _url_fallbacks[key] = values[0]
 
-                # Apply URL values only when the caller did not supply them
-                # explicitly (i.e. the argument still has its default value).
+                # Nonempty filters override the URL; limit uses None to distinguish omission from 10.
                 if not name and "name" in _url_fallbacks:
                     query_params["name"] = _url_fallbacks["name"]
                 if not resource_type and "resource_type" in _url_fallbacks:
@@ -1520,7 +1529,7 @@ def _search_roles_v2(
                     query_params["permission"] = _url_fallbacks["permission"]
                 if not order_by and "order_by" in _url_fallbacks:
                     query_params["order_by"] = _url_fallbacks["order_by"]
-                if limit == 10 and "limit" in _url_fallbacks:
+                if limit is None and "limit" in _url_fallbacks:
                     query_params["limit"] = _url_fallbacks["limit"]
             # else: bare token that happens to contain '?' — keep cursor as-is.
 

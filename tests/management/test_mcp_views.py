@@ -23,6 +23,7 @@ import threading
 import time
 from importlib import reload
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
@@ -2756,6 +2757,34 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
         # Explicit limit=50 must NOT be overwritten by the URL's limit=10.
         self.assertEqual(forwarded_params["limit"], "50")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_explicit_default_limit_overrides_cursor_url_limit(self, mock_call_view):
+        """An explicitly supplied default limit takes precedence over the cursor URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=20"
+        response = self._call_tool("search_roles", {"cursor": next_url, "limit": 10})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_call_view.call_args[0][3]["limit"], "10")
+
+    def test_search_roles_v2_filtered_pagination_preserves_results(self):
+        """Full next URLs retain filters and ordering when retrieving the next page."""
+        for name in ("Cost Alpha", "Cost Beta", "Other Role"):
+            RoleV2.objects.create(name=name, tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+
+        first = self._get_tool_output(
+            self._call_tool("search_roles", {"name": "Cost*", "order_by": "name", "limit": 1})
+        )
+        self.assertEqual([role["name"] for role in first["data"]], ["Cost Alpha"])
+        self.assertTrue(first["links"]["next"])
+        second = self._get_tool_output(self._call_tool("search_roles", {"cursor": first["links"]["next"]}))
+        self.assertEqual([role["name"] for role in second["data"]], ["Cost Beta"])
+        token = parse_qs(urlparse(first["links"]["next"]).query)["cursor"][0]
+        bare = self._get_tool_output(
+            self._call_tool("search_roles", {"cursor": token, "name": "Cost*", "order_by": "name", "limit": 1})
+        )
+        self.assertEqual([role["name"] for role in bare["data"]], ["Cost Beta"])
 
     @patch("management.mcp_views._call_view")
     def test_search_roles_v2_cursor_url_without_cursor_param_omits_cursor(self, mock_call_view):
