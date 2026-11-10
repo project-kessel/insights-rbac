@@ -241,15 +241,15 @@ class MergePrincipalTests(IdentityRequest):
         self.assertEqual(survivor.user_id, "54181241")
 
     def test_resolve_user_id_conflict_refreshes_stale_in_memory_user_id(self):
-        """After a failed save, in-memory user_id may already be the target; refresh before rewrite."""
+        """After a failed save, in-memory user_id may already be the target; refresh before merge."""
         from management.tenant_service.tenant_service import _resolve_user_id_conflict
 
         obsolete = Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
-        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
+        # Assign path: survivor has no user_id yet; caller may have set it in memory before save failed.
+        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id=None)
         group = Group.objects.create(name="engineering", tenant=self.tenant)
         group.principals.add(principal)
 
-        # Simulate assign path: caller set principal.user_id to the target before save() failed.
         principal.user_id = "54181241"
         tracker = _ReplicationTracker()
         _resolve_user_id_conflict(principal, "54181241", tracker)
@@ -257,20 +257,26 @@ class MergePrincipalTests(IdentityRequest):
         principal.refresh_from_db()
         self.assertEqual(principal.user_id, "54181241")
         self.assertFalse(Principal.objects.filter(pk=obsolete.pk).exists())
+        self.assertTrue(group.principals.filter(pk=principal.pk).exists())
 
-        expected_removed = [Group.relationship_to_user_id_for_group(str(group.uuid), "99999999")]
-        expected_added = [Group.relationship_to_user_id_for_group(str(group.uuid), "54181241")]
-        # Default-group tuples (via TenantMapping, not M2M)
-        mapping = TenantMapping.objects.get(tenant=self.tenant)
-        # default_group_uuid: always transitioned
-        expected_removed.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "99999999"))
-        expected_added.append(Group.relationship_to_user_id_for_group(str(mapping.default_group_uuid), "54181241"))
-        # default_admin_group_uuid: old removed, new NOT added (admin status gated)
-        expected_removed.append(
-            Group.relationship_to_user_id_for_group(str(mapping.default_admin_group_uuid), "99999999")
-        )
-        self.assertCountEqual(tracker.tuples_removed, expected_removed)
-        self.assertCountEqual(tracker.tuples_added, expected_added)
+    def test_resolve_user_id_conflict_raises_when_survivor_has_different_user_id(self):
+        """Do not auto-rewrite a survivor that already has a different non-null user_id."""
+        from management.tenant_service.tenant_service import _resolve_user_id_conflict
+
+        Principal.objects.create(username="jaross@redhat.com", tenant=self.tenant, user_id="54181241")
+        principal = Principal.objects.create(username="jdross@redhat.com", tenant=self.tenant, user_id="99999999")
+        # Simulate assign path: caller set principal.user_id to the target before save() failed.
+        principal.user_id = "54181241"
+        tracker = _ReplicationTracker()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _resolve_user_id_conflict(principal, "54181241", tracker)
+
+        self.assertIn("Refusing to auto-rewrite", str(ctx.exception))
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "99999999")
+        self.assertEqual(tracker.tuples_added, [])
+        self.assertEqual(tracker.tuples_removed, [])
 
     def test_ensure_principal_noop_when_principal_already_has_user_id(self):
         """No merge when the matched principal already has the expected user_id."""
@@ -548,8 +554,8 @@ class RewritePrincipalUserIdTests(IdentityRequest):
             "Admin-group tuple must not be added during rewrite — admin status is unknown",
         )
 
-    def test_rewrite_catches_integrity_error_on_concurrent_claim(self):
-        """Concurrent claim of user_id between lookup and save is caught and resolved."""
+    def test_rewrite_raises_integrity_error_on_concurrent_claim(self):
+        """Concurrent claim of user_id between lookup and save fails loudly (no chained repair)."""
         principal = Principal.objects.create(username="testuser@example.com", tenant=self.tenant, user_id="16777216")
 
         original_save = Principal.save
@@ -568,6 +574,11 @@ class RewritePrincipalUserIdTests(IdentityRequest):
             patch("management.tenant_service.tenant_service._resolve_user_id_conflict") as mock_resolve,
             patch.object(Principal, "save", flaky_save),
         ):
-            rewrite_principal_user_id(principal, "51856862", tracker)
+            with self.assertRaises(IntegrityError):
+                rewrite_principal_user_id(principal, "51856862", tracker)
 
-        mock_resolve.assert_called_once_with(principal, "51856862", tracker)
+        mock_resolve.assert_not_called()
+        principal.refresh_from_db()
+        self.assertEqual(principal.user_id, "16777216")
+        self.assertEqual(tracker.tuples_added, [])
+        self.assertEqual(tracker.tuples_removed, [])

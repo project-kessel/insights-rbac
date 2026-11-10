@@ -260,15 +260,11 @@ def rewrite_principal_user_id(
         )
         obsolete.delete()
 
-    try:
-        with transaction.atomic():
-            principal.user_id = normalized_new
-            principal.save()
-    except IntegrityError:
-        # Concurrent transaction may have inserted the same user_id between our
-        # check above and the save; delegate to conflict resolver.
-        _resolve_user_id_conflict(principal, normalized_new, replicator)
-        return
+    # Fail loudly on concurrent unique conflicts rather than chaining into another
+    # repair routine while state is already inconsistent (review: fail closed).
+    with transaction.atomic():
+        principal.user_id = normalized_new
+        principal.save()
 
     tuples_to_add = _relation_tuples_for_principal_user_id(principal, normalized_new)
 
@@ -336,13 +332,14 @@ def _resolve_user_id_conflict(
     """Resolve a user_id uniqueness conflict after a failed principal save.
 
     Refreshes the survivor from the database (callers may have mutated user_id in memory
-    before the IntegrityError), then either rewrites the survivor's stale user_id or merges
-    the obsolete owner of user_id into the survivor.
+    before the IntegrityError), then merges the obsolete owner of user_id into the survivor
+    when the survivor has no user_id yet. Does not auto-rewrite a survivor that already has
+    a different non-null user_id.
 
     Raises:
         ValueError: if user_id is missing.
         RuntimeError: if the conflict owner cannot be found and the survivor does not hold
-            the target user_id.
+            the target user_id, or if the survivor already has a different non-null user_id.
     """
     normalized_user_id = _normalize_user_id(user_id)
     if normalized_user_id is None:
@@ -363,16 +360,14 @@ def _resolve_user_id_conflict(
 
     survivor_user_id = _normalize_user_id(survivor.user_id)
     if survivor_user_id is not None and survivor_user_id != normalized_user_id:
-        # Survivor already has a different user_id; rewrite so old SpiceDB tuples are removed.
-        rewrite_principal_user_id(survivor, normalized_user_id, replicator)
-        survivor.refresh_from_db()
-        if _normalize_user_id(survivor.user_id) != normalized_user_id:
-            raise RuntimeError(
-                f"Rewrite did not set expected user_id. "
-                f"survivor_id={survivor.pk} expected={normalized_user_id} "
-                f"actual={survivor.user_id}"
-            )
-        return
+        # Survivor already has a different non-null user_id. Do not auto-rewrite here;
+        # remediate explicitly via bootstrap rewrite.
+        raise RuntimeError(
+            f"Refusing to auto-rewrite survivor user_id during conflict resolution. "
+            f"survivor_id={survivor.pk} survivor_username={survivor.username} "
+            f"survivor_user_id={survivor_user_id} conflict_user_id={normalized_user_id} "
+            f"org_id={survivor.tenant.org_id}"
+        )
     merge_obsolete_principal_into_survivor(survivor, obsolete, user_id=normalized_user_id, replicator=replicator)
 
 
