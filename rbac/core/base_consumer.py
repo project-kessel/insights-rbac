@@ -645,13 +645,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         """
         ...
 
-    def _process_message_with_retry(
-        self,
-        message: ConsumerRecord,
-        topic_partition: TopicPartition,
-        leader_epoch: Optional[int] = None,
-        error_handler=None,
-    ) -> bool:
+    def _process_message_with_retry(self, message: ConsumerRecord) -> bool:
         """Process a message with comprehensive retry logic.
 
         Retries transient errors (network, DB, etc.) but NOT ValidationError.
@@ -659,8 +653,6 @@ class BaseRBACKafkaConsumer(abc.ABC):
 
         Args:
             message: The Kafka message
-            topic_partition: TopicPartition object for offset tracking
-            leader_epoch: The leader epoch for the partition (optional)
             error_handler: Optional callable(Exception) -> bool to short-circuit retries
 
         Returns:
@@ -683,9 +675,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
                     f"offset {message.offset}. Consumer will stop."
                 )
                 return True
-            # Use custom error handler if provided
-            if error_handler and callable(error_handler):
-                return error_handler(exception)
+
             return False
 
         # Create a retry helper with custom error handling
@@ -903,11 +893,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         logger.debug(f"Message content (partition: {message.partition}, offset: {message.offset}): {message.value}")
 
         # Process with retry logicar
-        success = self._process_message_with_retry(
-            message,
-            topic_partition,
-            message.leader_epoch,
-        )
+        success = self._process_message_with_retry(message)
 
         if success:
             # Store offset after successful processing
