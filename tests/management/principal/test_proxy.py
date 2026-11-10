@@ -18,6 +18,7 @@
 
 from unittest.mock import patch
 
+from django.test import override_settings
 from rest_framework import status
 import requests
 
@@ -111,6 +112,217 @@ def mocked_requests_get_200_except(url, *args, **kwargs):  # pylint: disable=unu
 
 class PrincipalProxyTest(IdentityRequest):
     """Test PrincipalProxy object."""
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    def test__request_principals_bypass_respects_descending_sort_order(self):
+        """The local BOP bypass should preserve BOP's requested username ordering."""
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"sortOrder": "des"},
+            data={"users": ["alice", "carol", "bob"]},
+        )
+
+        self.assertEqual([principal["username"] for principal in result["data"]], ["carol", "bob", "alice"])
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    def test__request_principals_bypass_respects_pagination(self):
+        """The local BOP bypass should return one page while preserving the total count."""
+        for index in range(3):
+            Principal.objects.create(
+                tenant=self.tenant,
+                username=f"local-user-{index}",
+                user_id=f"local-pagination-{index}",
+            )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"limit": 2, "offset": 1},
+        )
+
+        self.assertEqual([principal["username"] for principal in result["data"]], ["local-user-1", "local-user-2"])
+        self.assertEqual(result["userCount"], 3)
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_includes_saas_contract_flags(self, _mock_configured):
+        """Bypass mode must emit is_active/is_org_admin and avoid foo/bar/baz stubs."""
+        local = Principal.objects.create(
+            tenant=self.tenant,
+            username="onprem-admin",
+            user_id="user-onprem-admin",
+        )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+        )
+
+        matching = [principal for principal in result["data"] if principal["username"] == local.username]
+        self.assertEqual(len(matching), 1)
+        principal = matching[0]
+        self.assertIs(principal["is_active"], True)
+        self.assertIs(principal["is_org_admin"], False)
+        self.assertEqual(principal["first_name"], "")
+        self.assertEqual(principal["last_name"], "")
+        self.assertEqual(principal["email"], "onprem-admin@local")
+        self.assertNotIn(principal["email"], {"baz", "foo", "bar"})
+        self.assertEqual(principal["user_id"], "user-onprem-admin")
+        self.assertEqual(principal["type"], "user")
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_filtered_users_enrich_from_local(self, _mock_configured):
+        """Username filter path should reuse local user_id and include SaaS flags."""
+        Principal.objects.create(
+            tenant=self.tenant,
+            username="alice",
+            user_id="user-alice",
+        )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            data={"users": ["Alice", "unknown-user"]},
+        )
+
+        by_username = {principal["username"]: principal for principal in result["data"]}
+        self.assertEqual(by_username["alice"]["user_id"], "user-alice")
+        self.assertIs(by_username["alice"]["is_active"], True)
+        self.assertIs(by_username["alice"]["is_org_admin"], False)
+        self.assertEqual(by_username["alice"]["email"], "alice@local")
+        self.assertEqual(by_username["unknown-user"]["user_id"], "unknown-user")
+        self.assertIs(by_username["unknown-user"]["is_active"], True)
+        self.assertIs(by_username["unknown-user"]["is_org_admin"], False)
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=True)
+    @patch(
+        "management.principal.proxy.get_profiles_from_service",
+        return_value={
+            "alice": {
+                "first_name": "Alice",
+                "last_name": "Admin",
+                "email": "alice@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+            "bob": {
+                "first_name": "Bob",
+                "last_name": "User",
+                "email": "bob@example.com",
+                "is_org_admin": False,
+                "enabled": True,
+            },
+            "outsider": {
+                "first_name": "Out",
+                "last_name": "SIDER",
+                "email": "outsider@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+        },
+    )
+    def test__request_principals_bypass_enriches_from_profile_service(self, _mock_profiles, _mock_configured):
+        """When Cost profile service returns data, emit SaaS-parity org-admin and identity fields."""
+        Principal.objects.create(tenant=self.tenant, username="alice", user_id="user-alice")
+        Principal.objects.create(tenant=self.tenant, username="bob", user_id="user-bob")
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"status": "enabled"},
+        )
+
+        by_username = {principal["username"]: principal for principal in result["data"]}
+        self.assertIs(by_username["alice"]["is_org_admin"], True)
+        self.assertEqual(by_username["alice"]["first_name"], "Alice")
+        self.assertEqual(by_username["alice"]["last_name"], "Admin")
+        self.assertEqual(by_username["alice"]["email"], "alice@example.com")
+        self.assertIs(by_username["alice"]["is_active"], True)
+        self.assertIs(by_username["bob"]["is_org_admin"], False)
+        self.assertEqual(by_username["bob"]["email"], "bob@example.com")
+
+        admin_only = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"admin_only": "true"},
+        )
+        self.assertEqual([p["username"] for p in admin_only["data"]], ["alice"])
+
+        # Username not in this tenant must not receive profile PII / org-admin.
+        filtered = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            data={"users": ["outsider"]},
+        )
+        outsider = filtered["data"][0]
+        self.assertEqual(outsider["username"], "outsider")
+        self.assertEqual(outsider["email"], "outsider@local")
+        self.assertEqual(outsider["first_name"], "")
+        self.assertIs(outsider["is_org_admin"], False)
+
+        # enabled=false is omitted for status=enabled (Users list) but kept for
+        # status=all so clean_tenant_principals does not delete disabled users.
+        disabled_profiles = {
+            "alice": {
+                "first_name": "Alice",
+                "last_name": "Admin",
+                "email": "alice@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+            "bob": {
+                "first_name": "Bob",
+                "last_name": "Disabled",
+                "email": "bob@example.com",
+                "is_org_admin": False,
+                "enabled": False,
+            },
+        }
+        with patch(
+            "management.principal.proxy.get_profiles_from_service",
+            return_value=disabled_profiles,
+        ):
+            enabled_only = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "enabled"},
+            )
+            all_status = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "all"},
+            )
+            username_only_enabled = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "status": "enabled"},
+            )
+            username_only_admin = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "admin_only": "true"},
+            )
+        enabled_by_username = {principal["username"]: principal for principal in enabled_only["data"]}
+        self.assertIn("alice", enabled_by_username)
+        self.assertNotIn("bob", enabled_by_username)
+        all_by_username = {principal["username"]: principal for principal in all_status["data"]}
+        self.assertIn("bob", all_by_username)
+        self.assertIs(all_by_username["bob"]["is_active"], False)
+        self.assertEqual(
+            sorted(p["username"] for p in username_only_enabled["data"]),
+            ["alice"],
+        )
+        self.assertEqual([p["username"] for p in username_only_admin["data"]], ["alice"])
+        for row in username_only_enabled["data"] + username_only_admin["data"]:
+            self.assertEqual(set(row.keys()), {"username"})
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",

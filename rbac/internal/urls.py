@@ -108,6 +108,8 @@ urlpatterns = [
     path("api/inventory/check_role/<role_uuid>/", views.check_role),
     path("api/inventory/check_cross_account_request/<request_id>/", views.check_cross_account_request),
     path("api/inventory/check/", views.check_inventory),
+    path("api/inventory/verify_migration/", views.verify_migration_global),
+    path("api/inventory/verify_migration/<str:org_id>/", views.verify_migration),
     path("api/utils/kafka_test_message/", views.send_kafka_test_message),
     path("api/utils/migrate_binding_scope/", views.migrate_binding_scope),
     path("api/utils/fix_missing_binding_base_tuples/", views.fix_missing_binding_base_tuples),
@@ -140,6 +142,7 @@ urlpatterns = [
     path("api/utils/kessel_parity_check/", views.kessel_parity_check),
     path("api/utils/bootstrap_users_from_user_ids/", views.bootstrap_users_from_user_ids),
     path("api/utils/tenant_v2_opt_in/<str:org_id>/", views.update_tenant_v2_opt_in),
+    path("api/utils/backfill_default_role_bindings/", views.backfill_default_role_bindings_view),
 ]
 
 urlpatterns.extend(integration_urlpatterns)

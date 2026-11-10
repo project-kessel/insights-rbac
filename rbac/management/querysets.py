@@ -186,10 +186,7 @@ def get_role_queryset(request) -> QuerySet:
         if username != request.user.username and not role_permission.has_permission(request=request, view=None):
             return Role.objects.none()
         else:
-            if settings.BYPASS_BOP_VERIFICATION:
-                is_org_admin = request.user.admin
-            else:
-                is_org_admin = _check_user_username_is_org_admin(request=request, username=username)
+            is_org_admin = _is_username_org_admin_for_request(request, username)
 
             request.user_from_query = User()
             request.user_from_query.username = username
@@ -252,10 +249,7 @@ def get_access_queryset(request: Request) -> QuerySet:
     # If we are querying on a username we need to check if the username is an org_admin
     # not the user making the request
     username = request.query_params.get("username")
-    if not username or settings.BYPASS_BOP_VERIFICATION:
-        is_org_admin = request.user.admin
-    else:
-        is_org_admin = _check_user_username_is_org_admin(request=request, username=username)
+    is_org_admin = _is_username_org_admin_for_request(request, username)
 
     return get_object_principal_queryset(
         request,
@@ -291,10 +285,7 @@ def get_object_principal_queryset(request, scope, clazz, **kwargs):
 def _filter_admin_default(request: Request, queryset: QuerySet):
     """Filter out admin default groups unless the principal is an org admin."""
     username = request.query_params.get("username")
-    if not username or settings.BYPASS_BOP_VERIFICATION:
-        is_org_admin = request.user.admin
-    else:
-        is_org_admin = _check_user_username_is_org_admin(request=request, username=username)
+    is_org_admin = _is_username_org_admin_for_request(request, username)
 
     # If the principal is an org admin, make sure they get any and all admin_default groups
     if is_org_admin:
@@ -328,3 +319,16 @@ def _check_user_username_is_org_admin(request: Request, username: str) -> bool:
         return False
     else:
         return get_admin_from_proxy(request=request, username=username)
+
+
+def _is_username_org_admin_for_request(request: Request, username: Optional[str]) -> bool:
+    """Resolve admin status for username filters, keeping smoke bypass scoped to the caller."""
+    if settings.BYPASS_BOP_VERIFICATION:
+        caller_username = request.user.username
+        if username and (not caller_username or username.casefold() != caller_username.casefold()):
+            return False
+        return bool(request.user.admin)
+
+    if username:
+        return _check_user_username_is_org_admin(request=request, username=username)
+    return bool(request.user.admin)

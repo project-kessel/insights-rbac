@@ -17,8 +17,9 @@
 """Backfill remote principals in SpiceDB via TenantMapping update_user."""
 
 import copy
+import logging
 from functools import wraps
-from typing import Optional
+from typing import Iterable, Optional
 
 from django.conf import settings
 from django.db import transaction as django_transaction
@@ -29,6 +30,53 @@ from management.atomic_transactions import (
 )
 from management.models import Principal
 from pgtransaction import transaction
+from sentry_sdk import capture_exception
+
+from api.models import Tenant, User
+
+logger = logging.getLogger(__name__)
+
+
+class PrincipalUserIdMismatchError(Exception):
+    """Local Principal.user_id disagrees with the authoritative BOP/IT user_id."""
+
+
+def _normalize_user_id(user_id) -> Optional[str]:
+    """Normalize BOP/identity user_id values to the string form stored on Principal."""
+    if user_id is None or user_id == "":
+        return None
+    return str(user_id)
+
+
+def reject_mismatched_principal_user_ids(users: Iterable[User], tenant: Tenant) -> None:
+    """Reject group-add when a local principal already has a different non-null user_id.
+
+    When local ``Principal.user_id`` is set and does not match BOP, dual-write would
+    emit membership under the stale id. Fail closed, log + report to GlitchTip, and
+    leave remediation to the bootstrap rewrite internal API.
+    """
+    for user in users:
+        if not user.username or not user.user_id:
+            continue
+        try:
+            principal = Principal.objects.get(username__iexact=user.username, tenant=tenant)
+        except Principal.DoesNotExist:
+            continue
+
+        local_user_id = _normalize_user_id(principal.user_id)
+        bop_user_id = _normalize_user_id(user.user_id)
+        if local_user_id is None or local_user_id == bop_user_id:
+            continue
+
+        error = PrincipalUserIdMismatchError(
+            "Principal user_id mismatch with BOP; refusing group membership change. "
+            f"username={principal.username} org_id={tenant.org_id} "
+            f"local_user_id={local_user_id} bop_user_id={bop_user_id}. "
+            "Remediate via bootstrap_users_from_user_ids rewrite, then retry."
+        )
+        logger.error("%s", error)
+        capture_exception(error)
+        raise error
 
 
 def backfill_atomic(retries: Optional[int] = None):

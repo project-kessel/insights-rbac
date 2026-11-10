@@ -666,7 +666,17 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -749,7 +759,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -1019,7 +1036,7 @@
       "post": {
         "operationId": "Groups_addPrincipals",
         "summary": "Add principals to a group",
-        "description": "Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members.",
+        "description": "Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members. Returns 409 Conflict when a local principal's user_id disagrees with BOP.",
         "parameters": [
           {
             "name": "uuid",
@@ -1046,7 +1063,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -1081,12 +1105,40 @@
               }
             }
           },
+          "409": {
+            "description": "The request conflicts with the current state of the server.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem409"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Server error",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problems.Problem500"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable.",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problems.Problem503"
                 }
               }
             }
@@ -1149,7 +1201,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -1232,7 +1291,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -2187,7 +2253,7 @@
       "get": {
         "operationId": "RoleBindings_listBySubject",
         "summary": "List role bindings grouped by subject",
-        "description": "List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path—use GET /role-bindings/ for those filters.",
+        "description": "List role bindings grouped by subject. Uses cursor pagination (`limit`, `cursor`). Max limit 1000. subject_type (optional) is user or group only, with subject_id as UUID. granted_subject_type, granted_subject_id, and granted_subject.principal.user_id are not query parameters on this path\u2014use GET /role-bindings/ for those filters.",
         "parameters": [
           {
             "name": "limit",
@@ -3327,7 +3393,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -3423,7 +3496,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -3704,7 +3784,6 @@
                   "$ref": "#/components/schemas/Workspaces.CreateWorkspaceResponse"
                 },
                 "example": {
-                  "_": 201,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -3727,6 +3806,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
                     }
                   ]
                 }
@@ -3990,7 +4072,6 @@
                 "examples": {
                   "example0": {
                     "value": {
-                      "_": 200,
                       "id": "e4277742-b91c-43f1-a185-b827e8574345",
                       "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                       "type": "standard",
@@ -4002,7 +4083,6 @@
                   },
                   "example1": {
                     "value": {
-                      "_": 200,
                       "id": "e4277742-b91c-43f1-a185-b827e8574345",
                       "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                       "type": "standard",
@@ -4095,7 +4175,6 @@
                   "$ref": "#/components/schemas/Workspaces.UpdateWorkspaceResponse"
                 },
                 "example": {
-                  "_": 200,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -4118,6 +4197,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
                     }
                   ]
                 }
@@ -4196,7 +4278,6 @@
                   "$ref": "#/components/schemas/Workspaces.PatchWorkspaceResponse"
                 },
                 "example": {
-                  "_": 200,
                   "id": "e4277742-b91c-43f1-a185-b827e8574345",
                   "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
                   "type": "standard",
@@ -4219,6 +4300,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Problems.Problem400AlreadyExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
                     }
                   ]
                 }
@@ -4304,6 +4388,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
                     }
                   ]
                 }
@@ -4382,7 +4469,14 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problems.Problem400"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Problems.Problem400ProtectedObject"
+                    }
+                  ]
                 }
               }
             }
@@ -4774,10 +4868,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -4796,10 +4900,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -4818,6 +4932,31 @@
         "type": "integer",
         "format": "int64",
         "description": "Offset for offset-based pagination.\nThe number of items to skip before starting to return results."
+      },
+      "OffsetPagination": {
+        "type": "object",
+        "required": [
+          "meta",
+          "links"
+        ],
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
+          },
+          "links": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
+          }
+        }
       },
       "OffsetPaginationLinks": {
         "type": "object",
@@ -4960,31 +5099,6 @@
           "application": "rbac",
           "resource_type": "workspace",
           "operation": "read"
-        }
-      },
-      "Permissions.Pagination": {
-        "type": "object",
-        "required": [
-          "meta",
-          "links"
-        ],
-        "properties": {
-          "meta": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationMeta"
-              }
-            ],
-            "description": "Pagination metadata"
-          },
-          "links": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationLinks"
-              }
-            ],
-            "description": "Pagination links"
-          }
         }
       },
       "Permissions.PermissionListResponse": {
@@ -5163,10 +5277,20 @@
         ],
         "properties": {
           "meta": {
-            "$ref": "#/components/schemas/OffsetPaginationMeta"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationMeta"
+              }
+            ],
+            "description": "Pagination metadata"
           },
           "links": {
-            "$ref": "#/components/schemas/OffsetPaginationLinks"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OffsetPaginationLinks"
+              }
+            ],
+            "description": "Pagination links"
           },
           "data": {
             "type": "array",
@@ -5262,6 +5386,53 @@
             "type": "string",
             "enum": [
               "The resource already exists."
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/Problems.ProblemType"
+              },
+              "status": {
+                "type": "number",
+                "enum": [
+                  400
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "instance": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        ]
+      },
+      "Problems.Problem400ProtectedObject": {
+        "type": "object",
+        "required": [
+          "type",
+          "title"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http://project-kessel.org/problems/protected-internal-object"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "enum": [
+              "An internal object cannot be modified."
             ]
           }
         },
@@ -5600,7 +5771,8 @@
           "http://project-kessel.org/problems/already-exists",
           "http://project-kessel.org/problems/workspace-not-empty",
           "http://project-kessel.org/problems/service-unavailable",
-          "http://project-kessel.org/problems/conflict"
+          "http://project-kessel.org/problems/conflict",
+          "http://project-kessel.org/problems/protected-internal-object"
         ]
       },
       "Problems.Workspace.Problem400WorkspaceNotEmpty": {
@@ -6355,7 +6527,6 @@
           }
         ],
         "example": {
-          "_": 201,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6409,34 +6580,8 @@
           }
         },
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "f0e1d2c3-b4a5-4678-9a1b-c2d3e4f5a6b7"
-        }
-      },
-      "Workspaces.Pagination": {
-        "type": "object",
-        "required": [
-          "meta",
-          "links"
-        ],
-        "properties": {
-          "meta": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationMeta"
-              }
-            ],
-            "description": "Pagination metadata"
-          },
-          "links": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OffsetPaginationLinks"
-              }
-            ],
-            "description": "Pagination links"
-          }
         }
       },
       "Workspaces.PatchWorkspaceRequest": {
@@ -6466,7 +6611,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6484,7 +6628,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6520,7 +6663,6 @@
               "name": "Default Workspace"
             }
           ],
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",
@@ -6571,7 +6713,6 @@
           }
         ],
         "example": {
-          "_": 200,
           "id": "e4277742-b91c-43f1-a185-b827e8574345",
           "parent_id": "c1f729e2-3e2b-4f9e-b247-a4b568393e11",
           "type": "standard",

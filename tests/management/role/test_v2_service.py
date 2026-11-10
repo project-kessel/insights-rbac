@@ -20,7 +20,7 @@ import uuid
 from unittest.mock import MagicMock, patch, wraps
 
 from django.test import override_settings
-from management.exceptions import RequiredFieldError
+from management.exceptions import RequiredFieldError, NotFoundError
 from management.models import Group, Workspace, Permission
 from management.permission.scope_service import ImplicitResourceService, PermissionScopeCache
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
@@ -577,6 +577,37 @@ class RoleV2ServiceTests(IdentityRequest):
             )
         )
         self.assertEqual(len(cost_tuples), 1, "Expected 1 cost:reports:read permission tuple")
+
+    def test_update_nonexistent_fails(self):
+        fake_uuid = str(uuid.uuid4())
+
+        with self.assertRaises(NotFoundError) as context:
+            self.service.update(
+                role_uuid=fake_uuid,
+                name="a role",
+                description="A description",
+                permission_data=[self.permission1_data],
+                tenant=self.tenant,
+            )
+
+        self.assertEqual(context.exception.resource_type, "role")
+        self.assertEqual(context.exception.resource_id, str(fake_uuid))
+        self.assertIn(str(fake_uuid), str(context.exception))
+
+    def test_update_seeded_fails(self):
+        seed_roles()
+
+        seeded_role = SeededRoleV2.objects.first()
+        self.assertIsNotNone(seeded_role)
+
+        with self.assertRaises(CustomRoleRequiredError):
+            self.service.update(
+                role_uuid=str(seeded_role.uuid),
+                name="a role",
+                description="A description",
+                permission_data=[self.permission1_data],
+                tenant=self.tenant,
+            )
 
     # ==========================================================================
     # Tests for bulk_delete()

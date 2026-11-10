@@ -18,6 +18,8 @@
 
 import functools
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import pgtransaction
 from django.conf import settings
@@ -27,6 +29,9 @@ from django.db.utils import OperationalError
 # Shared isolation level configuration
 ISOLATION_LEVEL = pgtransaction.SERIALIZABLE
 
+# True only while the current context runs inside an atomic_block() SERIALIZABLE transaction.
+_in_serializable_block: ContextVar[bool] = ContextVar("in_serializable_block", default=False)
+
 
 def is_atomic_disabled():
     """Check if atomic transactions should be disabled (for tests)."""
@@ -34,11 +39,17 @@ def is_atomic_disabled():
 
 
 def atomic(func):
-    """Wrap service methods in a SERIALIZABLE transaction."""
+    """Wrap service methods in a SERIALIZABLE transaction.
+
+    When already inside an ``atomic_block()`` SERIALIZABLE transaction, uses a
+    plain savepoint (``transaction.atomic()``) instead of issuing another
+    ``SET TRANSACTION ISOLATION LEVEL`` which PostgreSQL rejects after the first
+    query.  The outer block already guarantees SERIALIZABLE isolation.
+    """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if is_atomic_disabled():
+        if is_atomic_disabled() or _in_serializable_block.get():
             with transaction.atomic():
                 return func(*args, **kwargs)
         else:
@@ -123,9 +134,23 @@ def run_nested_transaction_retries[T](retries: int, callable: Callable[[], T]): 
     raise last_exception
 
 
+@contextmanager
 def atomic_block():
-    """Return a context manager that can be used to turn a block into a SERIALIZABLE transaction."""
-    if is_atomic_disabled():
-        return transaction.atomic()
+    """Context manager for a SERIALIZABLE transaction block.
 
-    return pgtransaction.atomic(isolation_level=ISOLATION_LEVEL)
+    Sets ``_in_serializable_block`` so that nested ``@atomic``-decorated methods
+    use a plain savepoint instead of issuing a second
+    ``SET TRANSACTION ISOLATION LEVEL`` (which PostgreSQL rejects after the first
+    query in the transaction).
+    """
+    if is_atomic_disabled():
+        with transaction.atomic():
+            yield
+        return
+
+    token = _in_serializable_block.set(True)
+    try:
+        with pgtransaction.atomic(isolation_level=ISOLATION_LEVEL):
+            yield
+    finally:
+        _in_serializable_block.reset(token)

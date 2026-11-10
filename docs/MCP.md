@@ -186,7 +186,7 @@ curl -X POST http://localhost:8000/_private/_a2s/mcp/ \
   -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}}'
 ```
 
-**Response:** Returns an array of tool objects, each with `name`, `description`, and `inputSchema` (JSON Schema for the tool's parameters). Write tools that are disabled (when `MCP_WRITE_ENABLED=False`) are annotated with `[DISABLED]` in their description.
+**Response:** Returns an array of tool objects, each with `name`, `description`, and `inputSchema` (JSON Schema for the tool's parameters). Write tools that are disabled (when `MCP_WRITE_ENABLED=False`) are annotated with `[DISABLED]` in their description. For V2 write-activated organizations, V1 tools are omitted (except `list_access`); see [API Version Gating](#api-version-gating).
 
 ### Call Tool
 
@@ -437,8 +437,8 @@ List access permissions for a principal (V1 API only). By default shows access f
 **Returns:** `{meta: {count}, links, data: [{permission, resourceDefinitions: [...]}]}`.
 
 **Caveats:**
-- V1-only endpoint. For V2 organizations, use `check_user_permission` or `list_role_bindings` instead.
-- Shows flattened effective permissions but not which role or group granted each one. Use `list_group_roles` + `list_role_access` to trace the full chain.
+- V1-only endpoint. For V2 organizations, use `check_user_permission` or `list_role_bindings` instead. V2 write-activated organizations can only call it for applications in `V2_MIGRATION_APP_EXCLUDE_LIST`.
+- Shows flattened effective permissions but not which role or group granted each one. For V2 orgs, use `get_role` and `list_role_bindings` to trace the full chain.
 
 ---
 
@@ -450,8 +450,9 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | integer | `10` | Max results |
-| `offset` | integer | `0` | Pagination offset |
+| `limit` | integer | `10` | Max results; when omitted with a `links.next` URL, uses the limit in that URL |
+| `offset` | integer | `0` | Pagination offset (V1 only; ignored in V2) |
+| `cursor` | string | `""` | V2 pagination: pass the full `links.next` URL to preserve filters and ordering, or pass its bare token and repeat the original filters and `order_by` |
 | `name` | string | `""` | Filter by role name (V2 supports `*` wildcards) |
 | `display_name` | string | `""` | Filter by display name (V1 only) |
 | `permission` | string | `""` | Filter by permission (comma-separated) |
@@ -471,11 +472,21 @@ Search and filter roles by name, permission, application, or other criteria. Aut
 {"method": "tools/call", "params": {"name": "search_roles", "arguments": {"permission": "cost-management:cost_model:read"}}}
 ```
 
-**Returns:** `{meta: {count}, links, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+**Example V2 cursor-based pagination:** Use the full `links.next` URL returned by a filtered search:
+```json
+{"method": "tools/call", "params": {"name": "search_roles", "arguments": {"cursor": "/api/rbac/v2/roles/?name=Cost%2A&order_by=name&limit=10&cursor=cD0xMjM0NTY3OA%3D%3D"}}}
+```
+
+If passing only the bare cursor token, repeat the original `name`, `permission`, `resource_type`, and `order_by` values, as applicable. Nonempty filter and ordering arguments and any explicit `limit` take precedence over values in a cursor URL, including an explicit `limit` of 10.
+
+**Returns:** `{meta: {count}, links: {next: "..."}, data: [{uuid, name, description, ...}], org_version: 'v1'|'v2'}`.
+- V1 orgs: `links` contains `next` with offset-based pagination
+- V2 orgs: `links` contains `next` with cursor-based pagination; if `offset > 0` is passed, it is listed in `ignored_filters` with guidance to use `cursor` instead.
 
 **Caveats:**
 - The permission filter does not account for ResourceDefinition filters that may narrow effective scope.
 - The `username` filter is V1-only. For V2, it is ignored and returned in `ignored_filters`.
+- The `offset` parameter is V1-only pagination. For V2 orgs, use `cursor` from the previous response's `links.next` instead.
 
 ---
 
@@ -1483,8 +1494,38 @@ Tools declare their API version compatibility via the `api_version` parameter on
 | `UNVERSIONED` | No auth required, always visible |
 | `COMMON` | Works for both V1 and V2 organizations |
 | `UNIFIED` | Auto-detects V1/V2 via `is_v2_write_activated()` and routes accordingly |
-| `V1` | V1-only; blocked for V2 organizations with guidance to use V2 equivalent |
+| `V1` | V1-only; blocked for V2 write-activated organizations with guidance to use the V2 equivalent (see below) |
 | `V2` | V2-only; hidden when `V2_APIS_ENABLED=False` |
+
+### V1 tools for V2 write-activated organizations
+
+Every `ApiVersion.V1` tool must set `v2_alternative` on `@register_tool`, naming the tool to use instead (enforced by a test). When the tenant is V2 write-activated (`is_v2_write_activated()`; V2 opt-in alone does not trigger this):
+
+- `tools/list` omits all V1 tools except `list_access`. Requests without a tenant get the list unchanged.
+- `tools/call` on a V1 tool is rejected right after the auth check, before the permission check and the write confirmation flow (no `confirmation_token` is issued). The rejection is a tool result, not a JSON-RPC error, so the guidance reaches the LLM:
+
+```json
+{
+  "content": [{"type": "text", "text": "{\"error\": \"tool_not_available_for_v2_org\", \"tool\": \"create_role_v1\", \"message\": \"create_role_v1 uses the V1 API, which this organization no longer uses because it has migrated to RBAC V2. Use 'create_role' instead.\", \"use_instead\": \"create_role\"}"}],
+  "isError": true
+}
+```
+
+`use_instead` is `null` (and `message` says no V2 alternative is available) when V2 APIs are not enabled in the deployment.
+
+- Exception: `list_access` stays callable when every comma-separated `application` value is in `V2_MIGRATION_APP_EXCLUDE_LIST` (read via `v2_role_excluded_applications()`). Values are parsed like the `/access/` endpoint (empty segments are ignored). An `application` with no values, or any value outside that list, is rejected; the error also includes the sorted `allowed_applications`.
+
+| V1 tool | `v2_alternative` |
+|---------|------------------|
+| `list_access` | `check_user_permission` |
+| `list_group_roles` | `list_role_bindings` |
+| `list_role_access` | `get_role` |
+| `add_roles_to_group` | `create_role_bindings` |
+| `create_role_v1` | `create_role` |
+| `update_role_v1` | `update_role` |
+| `patch_role_v1` | `update_role` |
+| `remove_roles_from_group` | `update_role_binding` |
+| `delete_role_v1` | `bulk_delete_roles` |
 
 Tools with `api_version=ApiVersion.UNIFIED` (e.g., `search_roles`, `get_role`, `check_user_permission`) provide the best experience by automatically detecting the organization's version and using the appropriate API path.
 
@@ -1524,6 +1565,7 @@ def my_auth_tool(request: HttpRequest, *, limit: int = 10) -> str:
     requires_auth=True,
     write=True,
     api_version=ApiVersion.V1,
+    v2_alternative="create_something_v2",
 )
 def create_something(request: HttpRequest, *, name: str) -> str:
     """Write tool with automatic confirmation gating."""
@@ -1544,6 +1586,7 @@ def create_something(request: HttpRequest, *, name: str) -> str:
 | `required_resource_type` | str | `""` | Kessel resource type for V2 orgs |
 | `v1_permission` | tuple | `()` | V1 permission fallback (e.g., `("role", "read")`) |
 | `caveats` | str | `""` | Appended as separate content block in tool results |
+| `v2_alternative` | str | `""` | Tool to use instead for V2 write-activated orgs; required for `ApiVersion.V1` tools |
 
 ### How it works
 

@@ -234,6 +234,14 @@ model OffsetPaginationLinks {
     last: string | null;
 }
 
+model OffsetPagination {
+    @doc("Pagination metadata")
+    meta: OffsetPaginationMeta;
+
+    @doc("Pagination links")
+    links: OffsetPaginationLinks;
+}
+
 namespace Problems {
     enum ProblemType {
         InsufficientPermission:"http://project-kessel.org/problems/insufficient-permission",
@@ -245,6 +253,7 @@ namespace Problems {
         WorkspaceNotEmpty:"http://project-kessel.org/problems/workspace-not-empty",
         ServiceUnavailable:"http://project-kessel.org/problems/service-unavailable",
         Conflict:"http://project-kessel.org/problems/conflict",
+        ProtectedObject:"http://project-kessel.org/problems/protected-internal-object",
     }
 
     @error
@@ -311,6 +320,12 @@ namespace Problems {
     model Problem400AlreadyExists extends ProblemDetails<Status = 400>{
         type: ProblemType.AlreadyExists,
         title: "The resource already exists.";
+    }
+
+    @error
+    model Problem400ProtectedObject extends ProblemDetails<Status = 400>{
+        type: ProblemType.ProtectedObject,
+        title: "An internal object cannot be modified.";
     }
 
     @error
@@ -509,16 +524,8 @@ namespace Workspaces {
         parent_id: UUID;
     }
 
-    model Pagination {
-        @doc("Pagination metadata")
-        meta: OffsetPaginationMeta;
-
-        @doc("Pagination links")
-        links: OffsetPaginationLinks;
-    }
-
-
     @example(#{
+        _: 200,
         meta: #{
             count: 100,
             limit: 10,
@@ -543,7 +550,8 @@ namespace Workspaces {
         ]
     })
     model WorkspaceListResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of workspaces")
         data: Workspace[];
@@ -559,6 +567,7 @@ namespace Workspaces {
           offset: 0
         },
         returnType: #{
+          _: 200,
           meta: #{
             count: 100,
             limit: 10,
@@ -629,7 +638,7 @@ namespace Workspaces {
             }
       }
     )
-    @post op create(@body body: CreateWorkspaceRequest): CreateWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists;
+    @post op create(@body body: CreateWorkspaceRequest): CreateWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists | Problems.Problem400ProtectedObject;
 
     @doc("Get a workspace in tenant")
     @summary("Get a workspace in tenant")
@@ -712,7 +721,7 @@ namespace Workspaces {
         @doc("Unique identification")
         @path id: UUID;
         @body body: UpdateWorkspaceRequest
-    ): UpdateWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists;
+    ): UpdateWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists | Problems.Problem400ProtectedObject;
 
     @opExample(#{
         parameters: #{
@@ -740,7 +749,7 @@ namespace Workspaces {
         @doc("Unique identification")
         @path id: UUID;
         @body body: PatchWorkspaceRequest
-    ): PatchWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists;
+    ): PatchWorkspaceResponse | Problems.CommonProblems | Problems.Problem400AlreadyExists | Problems.Problem400ProtectedObject;
 
     @doc("Delete a workspace")
     @summary("Delete the workspace")
@@ -757,7 +766,7 @@ namespace Workspaces {
     @delete op delete(
         @doc("Unique identification")
         @path id: UUID;
-    ): DeleteWorkspaceResponse | Problems.CommonProblems | Problems.Workspace.Problem400WorkspaceNotEmpty;
+    ): DeleteWorkspaceResponse | Problems.CommonProblems | Problems.Workspace.Problem400WorkspaceNotEmpty | Problems.Problem400ProtectedObject;
 
     @doc("Move a workspace to a new parent.")
     @summary("Move a workspace to a new parent.")
@@ -782,7 +791,8 @@ namespace Workspaces {
         @body body: MoveWorkspaceRequest
     ): MoveWorkspaceResponse
       | Problems.CommonProblems
-      | Problems.Problem404;
+      | Problems.Problem404
+      | Problems.Problem400ProtectedObject;
 
     @example(#{
         ids: #[
@@ -826,6 +836,7 @@ namespace Workspaces {
             }
         },
         returnType: #{
+            _: 200,
             meta: #{
                 count: 2,
                 limit: 10,
@@ -1678,7 +1689,7 @@ namespace Roles {
 
         @doc("Control which fields are included in the response to optimize payload size.")
         @query fields?: FieldMask = DefaultRoleFieldMask;
-    ): ItemResponse<Role, 200> | Problems.CommonProblems | Problems.Problem404;
+    ): ItemResponse<Role, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
 
     @doc("Data for request to delete multiple roles by ID.")
     model BatchDeleteRolesRequest {
@@ -1709,7 +1720,7 @@ namespace Roles {
     })
     @post op batchDelete(
         @body body: BatchDeleteRolesRequest
-    ): BatchDeleteRolesResponse | Problems.CommonProblems | Problems.Problem404;
+    ): BatchDeleteRolesResponse | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
 }
 
 @doc("Principal type")
@@ -1789,8 +1800,7 @@ model Principal {
 
 model PrincipalListResponse {
     @statusCode _: 200;
-    meta: OffsetPaginationMeta;
-    links: OffsetPaginationLinks;
+    ...OffsetPagination;
     data: Principal[];
 }
 
@@ -2007,15 +2017,8 @@ namespace Principals {
 @doc("Operations about permissions")
 namespace Permissions {
 
-    model Pagination {
-        @doc("Pagination metadata")
-        meta: OffsetPaginationMeta;
-
-        @doc("Pagination links")
-        links: OffsetPaginationLinks;
-    }
-
     @example(#{
+        _: 200,
         meta: #{
             count: 100,
             limit: 10,
@@ -2039,7 +2042,8 @@ namespace Permissions {
         ]
     })
     model PermissionListResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of permissions")
         data: Permission[];
@@ -2053,6 +2057,7 @@ namespace Permissions {
             offset: 0
         },
         returnType: #{
+            _: 200,
             meta: #{
                 count: 100,
                 limit: 10,
@@ -2111,7 +2116,8 @@ namespace Permissions {
     ): PermissionListResponse | Problems.CommonProblems;
 
     model PermissionOptionsResponse {
-        ...Pagination;
+        @statusCode _: 200;
+        ...OffsetPagination;
 
         @doc("List of distinct values for the requested field")
         data: string[];
@@ -2192,8 +2198,7 @@ namespace Groups {
 
     model GroupListResponse {
         @statusCode _: 200;
-        meta: OffsetPaginationMeta;
-        links: OffsetPaginationLinks;
+        ...OffsetPagination;
         data: Group[];
     }
 
@@ -2251,19 +2256,18 @@ namespace Groups {
     @put op update(
         @path uuid: UUID;
         @body body: GroupInput;
-    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem404;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400AlreadyExists | Problems.Problem400ProtectedObject | Problems.Problem404;
 
     @route("{uuid}/")
     @doc("Delete a group. Protected-group behavior: system groups (system=true) return 400; platform_default groups return 400; admin_default groups return 400. Groups with active role bindings return 409 Conflict. Only custom (non-protected) groups with no active role bindings can be deleted.")
     @summary("Delete a group")
     @delete op destroy(
         @path uuid: UUID;
-    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404 | Problems.Problem409;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404 | Problems.Problem409;
 
     model PrincipalListResponse {
         @statusCode _: 200;
-        meta: OffsetPaginationMeta;
-        links: OffsetPaginationLinks;
+        ...OffsetPagination;
         data: Principal[];
     }
 
@@ -2322,12 +2326,12 @@ namespace Groups {
     }
 
     @route("{uuid}/principals/")
-    @doc("Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members.")
+    @doc("Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members. Returns 409 Conflict when a local principal's user_id disagrees with BOP.")
     @summary("Add principals to a group")
     @post op addPrincipals(
         @path uuid: UUID;
         @body body: AddPrincipalsInput;
-    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem404;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404 | Problems.Problem409 | Problems.Problem503;
 
     @route("{uuid}/principals/{principal_uuid}/")
     @doc("Remove a single principal from a group by principal UUID. Protected-group behavior: system groups return 400. For bulk removal, use DELETE /groups/{uuid}/principals/ with query parameters.")
@@ -2335,7 +2339,7 @@ namespace Groups {
     @delete op removePrincipal(
         @path uuid: UUID;
         @path principal_uuid: UUID;
-    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
 
     @route("{uuid}/principals/")
     @doc("Remove principals from a group in bulk. At least one of usernames or service_accounts must be provided. Note: V1 spelled this query parameter 'service-accounts'; V2 uses snake_case 'service_accounts' for consistency with the rest of the V2 contract. All specified principals must be members of the group; if any are not found, the request returns 404 and no removals are performed. Protected-group behavior: system groups return 400.")
@@ -2346,5 +2350,5 @@ namespace Groups {
         @query usernames?: string;
         @doc("Comma-separated service account client IDs to remove from the group. At most 100 unique identifiers after deduplication.")
         @query service_accounts?: string;
-    ): NoContentResponse | Problems.CommonProblems | Problems.Problem404;
+    ): NoContentResponse | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404;
 }

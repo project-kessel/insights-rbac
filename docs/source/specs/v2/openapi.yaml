@@ -422,7 +422,10 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -473,7 +476,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -642,7 +647,7 @@ paths:
     post:
       operationId: Groups_addPrincipals
       summary: Add principals to a group
-      description: 'Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members.'
+      description: "Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members. Returns 409 Conflict when a local principal's user_id disagrees with BOP."
       parameters:
         - name: uuid
           in: path
@@ -661,7 +666,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -680,12 +687,29 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problems.Problem404'
+        '409':
+          description: The request conflicts with the current state of the server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem409'
         '500':
           description: Server error
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problems.Problem500'
+        '503':
+          description: Service unavailable.
+          headers:
+            Retry-After:
+              required: true
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem503'
       tags:
         - Groups
       requestBody:
@@ -726,7 +750,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -777,7 +803,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2114,7 +2142,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2173,7 +2203,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2355,7 +2387,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Workspaces.CreateWorkspaceResponse'
               example:
-                _: 201
                 id: e4277742-b91c-43f1-a185-b827e8574345
                 parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
                 type: standard
@@ -2371,6 +2402,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2535,7 +2567,6 @@ paths:
               examples:
                 example0:
                   value:
-                    _: 200
                     id: e4277742-b91c-43f1-a185-b827e8574345
                     parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
                     type: standard
@@ -2545,7 +2576,6 @@ paths:
                     modified: '2024-08-04T12:00:00Z'
                 example1:
                   value:
-                    _: 200
                     id: e4277742-b91c-43f1-a185-b827e8574345
                     parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
                     type: standard
@@ -2604,7 +2634,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Workspaces.UpdateWorkspaceResponse'
               example:
-                _: 200
                 id: e4277742-b91c-43f1-a185-b827e8574345
                 parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
                 type: standard
@@ -2620,6 +2649,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2667,7 +2697,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Workspaces.PatchWorkspaceResponse'
               example:
-                _: 200
                 id: e4277742-b91c-43f1-a185-b827e8574345
                 parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
                 type: standard
@@ -2683,6 +2712,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Problem400AlreadyExists'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2734,6 +2764,7 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/Problems.Problem400'
                   - $ref: '#/components/schemas/Problems.Workspace.Problem400WorkspaceNotEmpty'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -2781,7 +2812,9 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: '#/components/schemas/Problems.Problem400'
+                anyOf:
+                  - $ref: '#/components/schemas/Problems.Problem400'
+                  - $ref: '#/components/schemas/Problems.Problem400ProtectedObject'
         '401':
           description: Access is unauthorized.
           content:
@@ -3065,9 +3098,13 @@ components:
         - data
       properties:
         meta:
-          $ref: '#/components/schemas/OffsetPaginationMeta'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
         links:
-          $ref: '#/components/schemas/OffsetPaginationLinks'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
         data:
           type: array
           items:
@@ -3080,9 +3117,13 @@ components:
         - data
       properties:
         meta:
-          $ref: '#/components/schemas/OffsetPaginationMeta'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
         links:
-          $ref: '#/components/schemas/OffsetPaginationLinks'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
         data:
           type: array
           items:
@@ -3103,6 +3144,20 @@ components:
       description: |-
         Offset for offset-based pagination.
         The number of items to skip before starting to return results.
+    OffsetPagination:
+      type: object
+      required:
+        - meta
+        - links
+      properties:
+        meta:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
+        links:
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
     OffsetPaginationLinks:
       type: object
       required:
@@ -3216,20 +3271,6 @@ components:
         application: rbac
         resource_type: workspace
         operation: read
-    Permissions.Pagination:
-      type: object
-      required:
-        - meta
-        - links
-      properties:
-        meta:
-          allOf:
-            - $ref: '#/components/schemas/OffsetPaginationMeta'
-          description: Pagination metadata
-        links:
-          allOf:
-            - $ref: '#/components/schemas/OffsetPaginationLinks'
-          description: Pagination links
     Permissions.PermissionListResponse:
       type: object
       required:
@@ -3353,9 +3394,13 @@ components:
         - data
       properties:
         meta:
-          $ref: '#/components/schemas/OffsetPaginationMeta'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationMeta'
+          description: Pagination metadata
         links:
-          $ref: '#/components/schemas/OffsetPaginationLinks'
+          allOf:
+            - $ref: '#/components/schemas/OffsetPaginationLinks'
+          description: Pagination links
         data:
           type: array
           items:
@@ -3421,6 +3466,36 @@ components:
           type: string
           enum:
             - The resource already exists.
+      allOf:
+        - type: object
+          properties:
+            type:
+              $ref: '#/components/schemas/Problems.ProblemType'
+            status:
+              type: number
+              enum:
+                - 400
+            title:
+              type: string
+            detail:
+              type: string
+            instance:
+              type: string
+              format: uri
+    Problems.Problem400ProtectedObject:
+      type: object
+      required:
+        - type
+        - title
+      properties:
+        type:
+          type: string
+          enum:
+            - http://project-kessel.org/problems/protected-internal-object
+        title:
+          type: string
+          enum:
+            - An internal object cannot be modified.
       allOf:
         - type: object
           properties:
@@ -3641,6 +3716,7 @@ components:
         - http://project-kessel.org/problems/workspace-not-empty
         - http://project-kessel.org/problems/service-unavailable
         - http://project-kessel.org/problems/conflict
+        - http://project-kessel.org/problems/protected-internal-object
     Problems.Workspace.Problem400WorkspaceNotEmpty:
       type: object
       required:
@@ -4131,7 +4207,6 @@ components:
       allOf:
         - $ref: '#/components/schemas/Workspaces.Workspace'
       example:
-        _: 201
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         type: standard
@@ -4165,23 +4240,8 @@ components:
             - $ref: '#/components/schemas/UUID'
           description: New parent ID of moved workspace
       example:
-        _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: f0e1d2c3-b4a5-4678-9a1b-c2d3e4f5a6b7
-    Workspaces.Pagination:
-      type: object
-      required:
-        - meta
-        - links
-      properties:
-        meta:
-          allOf:
-            - $ref: '#/components/schemas/OffsetPaginationMeta'
-          description: Pagination metadata
-        links:
-          allOf:
-            - $ref: '#/components/schemas/OffsetPaginationLinks'
-          description: Pagination links
     Workspaces.PatchWorkspaceRequest:
       type: object
       properties:
@@ -4201,7 +4261,6 @@ components:
       allOf:
         - $ref: '#/components/schemas/Workspaces.Workspace'
       example:
-        _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         type: standard
@@ -4214,7 +4273,6 @@ components:
       allOf:
         - $ref: '#/components/schemas/Workspaces.Workspace'
       example:
-        _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         type: standard
@@ -4238,7 +4296,6 @@ components:
           - id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
             parent_id: a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6
             name: Default Workspace
-        _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         type: standard
@@ -4274,7 +4331,6 @@ components:
       allOf:
         - $ref: '#/components/schemas/Workspaces.Workspace'
       example:
-        _: 200
         id: e4277742-b91c-43f1-a185-b827e8574345
         parent_id: c1f729e2-3e2b-4f9e-b247-a4b568393e11
         type: standard

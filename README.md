@@ -254,6 +254,16 @@ pipenv run tox -e py312-fast -- tests.management.role.test_view
 
 See [docs/testing-guidelines.md](docs/testing-guidelines.md) for base classes, v2 test setup, and mocking patterns.
 
+### IQE API tests against the local stack
+
+See [Run IQE RBAC tests locally](docs/local-iqe-tests.md) for setup and full-suite
+or filtered runs. From this repository root, after setup and starting the stack:
+
+```bash
+scripts/setup_iqe_plugin.sh test
+scripts/setup_iqe_plugin.sh filter 'groups'
+```
+
 ## Linting and Formatting
 
 ```bash

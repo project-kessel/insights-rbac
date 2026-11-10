@@ -317,14 +317,13 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_includes_status_title_detail_type(self):
         """Test that v2 response includes all ProblemDetails fields including type."""
         errors = [{"detail": "Test error message", "status": "400"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertIn("status", result)
         self.assertIn("title", result)
         self.assertIn("detail", result)
         self.assertIn("type", result)
+        self.assertNotIn("instance", result)
         self.assertEqual(result["status"], 400)
         self.assertEqual(result["detail"], "Test error message")
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[400])
@@ -332,9 +331,7 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_400_has_correct_title_and_type(self):
         """Test that 400 errors have the correct title and type."""
         errors = [{"detail": "Invalid input", "status": "400"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(400))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[400])
@@ -342,9 +339,7 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_401_has_correct_title_and_type(self):
         """Test that 401 errors have the correct title and type."""
         errors = [{"detail": "Not authenticated", "status": "401"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(401))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[401])
@@ -352,9 +347,7 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_403_has_correct_title_and_type(self):
         """Test that 403 errors have the correct title and type."""
         errors = [{"detail": "Permission denied", "status": "403"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(403))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[403])
@@ -362,9 +355,7 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_404_has_correct_title_and_type(self):
         """Test that 404 errors have the correct title and type."""
         errors = [{"detail": "Resource not found", "status": "404"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(404))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[404])
@@ -373,8 +364,7 @@ class V2ProblemDetailsTest(TestCase):
         """Test that 409 errors have correct title but no type (no URI defined for 409)."""
         errors = [{"detail": "Concurrent update conflict", "status": "409"}]
         context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(409))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[409])
@@ -382,9 +372,7 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_500_has_correct_title_and_type(self):
         """Test that 500 errors have the correct title and type."""
         errors = [{"detail": "Internal error", "status": "500"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], status_default_problem_title(500))
         self.assertEqual(result["type"], STATUS_PROBLEM_TYPES[500])
@@ -392,58 +380,10 @@ class V2ProblemDetailsTest(TestCase):
     def test_v2response_unknown_status_has_fallback_title_and_no_type(self):
         """Test that unknown status codes get a fallback title and no type."""
         errors = [{"detail": "Some error", "status": "418"}]
-        context = self._mock_context()
-
-        result = v2_response_from_v1_errors(errors, context=context)
+        result = v2_response_from_v1_errors(errors)
 
         self.assertEqual(result["title"], "I'm a Teapot")
         self.assertNotIn("type", result)
-
-    def test_v2response_includes_instance_for_put(self):
-        """Test that PUT requests include instance field."""
-        errors = [{"detail": "Update failed", "status": "400"}]
-        context = self._mock_context(method="PUT")
-
-        result = v2_response_from_v1_errors(errors, context=context)
-
-        self.assertIn("instance", result)
-        self.assertEqual(result["instance"], "/api/v2/roles/")
-
-    def test_v2response_includes_instance_for_patch(self):
-        """Test that PATCH requests include instance field."""
-        errors = [{"detail": "Patch failed", "status": "400"}]
-        context = self._mock_context(method="PATCH")
-
-        result = v2_response_from_v1_errors(errors, context=context)
-
-        self.assertIn("instance", result)
-
-    def test_v2response_includes_instance_for_delete(self):
-        """Test that DELETE requests include instance field."""
-        errors = [{"detail": "Delete failed", "status": "400"}]
-        context = self._mock_context(method="DELETE")
-
-        result = v2_response_from_v1_errors(errors, context=context)
-
-        self.assertIn("instance", result)
-
-    def test_v2response_excludes_instance_for_post(self):
-        """Test that POST requests do not include instance field."""
-        errors = [{"detail": "Create failed", "status": "400"}]
-        context = self._mock_context(method="POST")
-
-        result = v2_response_from_v1_errors(errors, context=context)
-
-        self.assertNotIn("instance", result)
-
-    def test_v2response_excludes_instance_for_get(self):
-        """Test that GET requests do not include instance field."""
-        errors = [{"detail": "Get failed", "status": "400"}]
-        context = self._mock_context(method="GET")
-
-        result = v2_response_from_v1_errors(errors, context=context)
-
-        self.assertNotIn("instance", result)
 
 
 class V2ExceptionHandlerTests(TestCase):
@@ -481,7 +421,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "This field is required.",
                 "errors": [{"message": "This field is required.", "field": "name"}],
-                "instance": self.PATH,
             },
         )
 
@@ -504,7 +443,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "Error one.",
                 "errors": [{"message": "Error one."}, {"message": "Error two."}],
-                "instance": self.PATH,
             },
         )
 
@@ -531,7 +469,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[400],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "role-bindings"}],
-                "instance": self.PATH,
             },
         )
 
@@ -633,7 +570,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[404],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "detail"}],
-                "instance": self.PATH,
             },
         )
 
@@ -657,7 +593,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[404],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "detail"}],
-                "instance": self.PATH,
             },
         )
 
@@ -681,7 +616,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[400],
                 "detail": detail,
                 "errors": [{"message": detail, "field": "roles"}],
-                "instance": self.PATH,
             },
         )
 
@@ -704,7 +638,6 @@ class V2ExceptionHandlerTests(TestCase):
                 "type": STATUS_PROBLEM_TYPES[400],
                 "detail": "resource_type is required",
                 "errors": [{"message": "resource_type is required", "field": "resource_type"}],
-                "instance": self.PATH,
             },
         )
 

@@ -4146,7 +4146,6 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                     "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": missing_field}],
-                    "instance": "/api/rbac/v2/role-bindings/by-subject/",
                 }
                 self.assertEqual(response.data, expected)
 
@@ -4200,7 +4199,6 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                     "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_message,
                     "errors": [{"message": expected_message, "field": expected_field}],
-                    "instance": "/api/rbac/v2/role-bindings/by-subject/",
                 }
                 self.assertEqual(response.data, expected)
 
@@ -4262,7 +4260,6 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                     "type": STATUS_PROBLEM_TYPES[404],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": "detail"}],
-                    "instance": "/api/rbac/v2/role-bindings/by-subject/",
                 }
                 self.assertEqual(response.data, expected)
 
@@ -4330,7 +4327,6 @@ class UpdateRoleBindingsBySubjectAPITests(IdentityRequest):
                     "type": STATUS_PROBLEM_TYPES[400],
                     "detail": expected_detail,
                     "errors": [{"message": expected_detail, "field": expected_field}],
-                    "instance": "/api/rbac/v2/role-bindings/by-subject/",
                 }
                 self.assertEqual(response.data, expected)
 

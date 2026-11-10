@@ -505,13 +505,15 @@ class CustomRolePermissionChecker(InventoryApiBaseChecker):
         """Core logic to check custom role permission relations via the Relations API.
 
         Each permission tuple represents: rbac/role:<uuid>#<permission>@rbac/principal:*
+        The caller may also include the role's owner tuple (rbac/role:<uuid>#owner@rbac/tenant:<id>),
+        which is verified the same way.
 
         Uses ReadTuples instead of the Inventory Check API because all custom role
         permission subjects are wildcards (principal:*) by SpiceDB schema design,
         and the Check API does not support wildcard subjects.
 
         Args:
-            permission_tuples: List of RelationTuple objects from CustomRoleV2._permission_tuple()
+            permission_tuples: List of RelationTuple objects from CustomRoleV2._permission_and_owner_tuples()
             role_uuid: UUID of the custom role being checked
 
         Returns:

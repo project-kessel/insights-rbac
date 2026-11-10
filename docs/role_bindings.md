@@ -724,7 +724,23 @@ seeded before the service starts, so a missing group is treated as an error and 
 The lazy path is temporary: it is removed in RHCLOUD-50990, once the RHCLOUD-50168 backfill has run for
 existing opt-in tenants.
 
-**Source:** `rbac/management/role_binding/service.py` (`_ensure_default_bindings_exist`, `create_default_bindings`)
+The backfill is available through two interfaces:
+
+1. **Management command** — `backfill_default_role_bindings` (`--all`, or `--org-ids` for a staged
+   rollout), deployed as the `backfill-default-role-bindings` ClowdJobInvocation
+   (`deploy/backfill_default_role_bindings.yml`).
+
+2. **Internal API** — `POST /_private/api/utils/backfill_default_role_bindings/` with optional query
+   parameters `org_ids` (comma-separated) and `batch_size` (default 500). Returns a JSON summary of the
+   run. This endpoint is easier to re-trigger without setting up a new CJI job.
+
+Both walk every opted-in tenant, skip those whose default bindings all exist, and report any tenants
+that remain failed or incomplete. The signal to remove the lazy path is a **complete, unfiltered run**
+(no `--org-ids` / `org_ids`) that finishes with zero failures and zero incomplete tenants. Runs that
+filter by `--org-ids` or `org_ids` only cover the selected tenants and cannot serve as this signal.
+
+**Source:** `rbac/management/role_binding/service.py` (`_ensure_default_bindings_exist`, `create_default_bindings`),
+`rbac/internal/migrations/backfill_role_bindings.py`
 
 ### Default Binding Types
 
