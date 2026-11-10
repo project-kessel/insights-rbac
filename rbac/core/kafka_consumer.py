@@ -498,7 +498,6 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
         # Acquire lock token for assigned partitions
         if len(assigned_partitions) > 0:
             # Typically only one partition per consumer
-            # Note: assigned is a set, so we need to convert to list to access by index
             partition = assigned_partitions[0]
 
             # Generate lock ID: {consumer_group_id}/{partition_number}
@@ -510,8 +509,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
             start_time = time.time()
 
             try:
-                # Acquire lock token from Relations API in a worker thread
-                # to avoid blocking the consumer IO / heartbeat loop
+                # This runs in a worker thread, so it won't block the consumer IO / heartbeat loop.
                 lock_token = self._acquire_lock_with_retry(lock_id)
 
                 # Record successful acquisition
