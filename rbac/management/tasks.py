@@ -1084,6 +1084,7 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
 def recover_workspace_events_in_worker(
     restore_timestamp_iso: str,
     buffer_minutes: int = 5,
+    end_timestamp_iso: str | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Celery task to generate corrective workspace events after a DB restore.
@@ -1094,6 +1095,10 @@ def recover_workspace_events_in_worker(
     Args:
         restore_timestamp_iso: ISO 8601 timestamp of the DB restore point (T-30).
         buffer_minutes: Minutes to extend the window before restore_timestamp.
+        end_timestamp_iso: ISO 8601 timestamp to end the window at. Defaults to
+            now (evaluated when this task runs) so the window also covers events
+            produced between the restore point and when reconciliation runs,
+            rather than stopping at restore_timestamp.
 
     Returns:
         dict: Summary statistics of corrective events generated.
@@ -1114,9 +1119,15 @@ def recover_workspace_events_in_worker(
         if restore_dt.tzinfo is None:
             restore_dt = restore_dt.replace(tzinfo=datetime.timezone.utc)
 
+        if end_timestamp_iso:
+            end_dt = datetime.datetime.fromisoformat(end_timestamp_iso)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            end_dt = datetime.datetime.now(datetime.timezone.utc)
+
         buffer_delta = datetime.timedelta(minutes=buffer_minutes)
         start_dt = restore_dt - buffer_delta
-        end_dt = restore_dt
 
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
@@ -1149,6 +1160,7 @@ def recover_workspace_events_in_worker(
         result["duration_seconds"] = round(elapsed, 3)
         result["restore_timestamp"] = restore_timestamp_iso
         result["buffer_minutes"] = buffer_minutes
+        result["end_timestamp"] = end_dt.isoformat()
         result["kafka_events_read"] = len(kafka_events)
 
         logger.info("Workspace DR recovery task completed in %.3fs: %s", elapsed, result)
@@ -1160,7 +1172,10 @@ def recover_workspace_events_in_worker(
 
 @shared_task
 def run_disaster_recovery_reconcile(
-    restore_timestamp_ms: int, buffer_seconds: int = 300, dry_run: bool = False
+    restore_timestamp_ms: int,
+    buffer_seconds: int = 300,
+    end_timestamp_ms: int | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Celery task for disaster recovery reconciliation of Kessel Relations.
 
@@ -1170,6 +1185,10 @@ def run_disaster_recovery_reconcile(
     Args:
         restore_timestamp_ms: Unix timestamp in milliseconds of the DB restore point.
         buffer_seconds: Extra time before restore_timestamp to include (default 300).
+        end_timestamp_ms: Unix timestamp in milliseconds to end the window at.
+            Defaults to now (evaluated when this task runs) so the window also
+            covers events produced between the restore point and when
+            reconciliation runs, rather than stopping at restore_timestamp_ms.
         dry_run: If True, analyze but don't write corrective events.
 
     Returns:
@@ -1190,6 +1209,7 @@ def run_disaster_recovery_reconcile(
         return reconcile(
             restore_timestamp_ms=restore_timestamp_ms,
             buffer_seconds=buffer_seconds,
+            end_timestamp_ms=end_timestamp_ms,
             dry_run=dry_run,
         )
     except Exception as e:

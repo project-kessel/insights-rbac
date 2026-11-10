@@ -1,5 +1,6 @@
 """Tests for disaster recovery service orchestrator."""
 
+import time
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -183,6 +184,7 @@ class ReconcileServiceTest(TestCase):
         result = reconcile(
             restore_timestamp_ms=2000000,
             buffer_seconds=60,
+            end_timestamp_ms=2500000,
             replicator=replicator,
         )
 
@@ -191,12 +193,39 @@ class ReconcileServiceTest(TestCase):
         self.assertIn("start_ms", result["time_window"])
         self.assertIn("end_ms", result["time_window"])
         self.assertEqual(result["time_window"]["start_ms"], 2000000 - 60000)
-        self.assertEqual(result["time_window"]["end_ms"], 2000000)
+        self.assertEqual(result["time_window"]["end_ms"], 2500000)
         self.assertIn("events_read", result)
         self.assertIn("events_skipped_by_type", result)
         self.assertIn("affected_user_ids", result)
         self.assertIn("tuples_processed", result)
         self.assertIn("duration_seconds", result)
+
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_end_timestamp_defaults_to_now(self, mock_read):
+        """When end_timestamp_ms is omitted, the window extends to (roughly) now."""
+        mock_read.return_value = []
+        log = InMemoryLog()
+        replicator = OutboxReplicator(log=log)
+
+        restore_timestamp_ms = int(time.time() * 1000) - 3600 * 1000
+        before_call_ms = int(time.time() * 1000)
+
+        result = reconcile(
+            restore_timestamp_ms=restore_timestamp_ms,
+            buffer_seconds=60,
+            replicator=replicator,
+        )
+
+        after_call_ms = int(time.time() * 1000)
+
+        self.assertGreaterEqual(result["time_window"]["end_ms"], before_call_ms)
+        self.assertLessEqual(result["time_window"]["end_ms"], after_call_ms)
+        self.assertGreater(result["time_window"]["end_ms"], restore_timestamp_ms)
+
+    def test_end_timestamp_before_restore_timestamp_raises(self):
+        """end_timestamp_ms earlier than restore_timestamp_ms is rejected."""
+        with self.assertRaises(ValueError):
+            reconcile(restore_timestamp_ms=2000000, end_timestamp_ms=1000000)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     def test_both_correct_states_skipped(self, mock_read):
