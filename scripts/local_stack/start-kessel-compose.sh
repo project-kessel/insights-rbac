@@ -59,7 +59,7 @@ if [[ "${RBAC_FORCE_RECREATE:-false}" == "true" ]]; then
 fi
 
 "${COMPOSE_CMD[@]}" --env-file "${ENV_FILE}" \
-  --profile relations --profile consumer --profile rbac \
+  --profile consumer --profile rbac \
   -f "${COMPOSE_DIR}/docker-compose.yaml" \
   -f "${RBAC_OVERRIDE_FILE}" \
   "${compose_up_args[@]}"
