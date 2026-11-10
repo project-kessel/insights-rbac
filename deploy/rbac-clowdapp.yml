@@ -34,7 +34,6 @@ objects:
       replicas: 3
     optionalDependencies:
       - kessel-inventory
-      - kessel-relations
       - kessel-kafkaconnect
     deployments:
     - name: worker-service
