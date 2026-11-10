@@ -157,8 +157,16 @@ MIDDLEWARE = [
 DEVELOPMENT = ENVIRONMENT.bool("DEVELOPMENT", default=False)
 if DEVELOPMENT:
     MIDDLEWARE.insert(5, "rbac.dev_middleware.DevelopmentIdentityHeaderMiddleware")
-# Don't try to go verify Principals against the BOP user service
+# Don't try to go verify Principals against the BOP user service.
+# Also used by ephemeral/performance environments; default False in SaaS.
 BYPASS_BOP_VERIFICATION = ENVIRONMENT.bool("BYPASS_BOP_VERIFICATION", default=False)
+# On-prem only (COST-8167): Cost principal-profile sidecar HTTP client.
+# Wired via PRINCIPAL_PROFILE_* Template params in deploy/rbac-clowdapp.yml
+# (service + worker-service). Leave URL/token empty in SaaS.
+PRINCIPAL_PROFILE_SERVICE_URL = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_SERVICE_URL", default="").strip().rstrip("/")
+PRINCIPAL_PROFILE_TOKEN = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_TOKEN", default="").strip()
+PRINCIPAL_PROFILE_REQUEST_TIMEOUT = ENVIRONMENT.int("PRINCIPAL_PROFILE_REQUEST_TIMEOUT", default=5)
+PRINCIPAL_PROFILE_CACHE_TTL = ENVIRONMENT.int("PRINCIPAL_PROFILE_CACHE_TTL", default=30)
 
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.AllowAllUsersModelBackend"]
 
