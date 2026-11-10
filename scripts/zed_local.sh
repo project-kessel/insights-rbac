@@ -3,7 +3,7 @@
 # zed_local.sh — Zed CLI for local Docker + stage Kessel SpiceDB
 #
 # Pairs with scripts/validations/api/create-workspace.sh. Zed talks to SpiceDB (gRPC on
-# localhost:50051), not the Relations API (localhost:9000). Both port-forwards
+# localhost:50051), not the Inventory API (localhost:9000). Both port-forwards
 # target the same stage cluster.
 #
 # Usage:
@@ -32,7 +32,7 @@ KESSEL_HOST="${KESSEL_HOST:-localhost}"
 KESSEL_PORT="${KESSEL_PORT:-9000}"
 OC_PROJECT="${OC_PROJECT:-kessel-stage}"
 SPICEDB_SERVICE="${SPICEDB_SERVICE:-kessel-relations-spicedb}"
-RELATIONS_SERVICE="${RELATIONS_SERVICE:-kessel-relations-api}"
+INVENTORY_SERVICE="${INVENTORY_SERVICE:-kessel-inventory-api}"
 
 # shellcheck source=common/logging.sh
 source "$SCRIPT_DIR/common/logging.sh"
@@ -170,16 +170,16 @@ ensure_spicedb_forward() {
     wait_for_port "$SPICEDB_HOST" "$SPICEDB_PORT" "SpiceDB (zed)" 45
 }
 
-ensure_relations_forward() {
+ensure_inventory_forward() {
     if port_open "$KESSEL_HOST" "$KESSEL_PORT"; then
         return 0
     fi
-    start_port_forward relations "$RELATIONS_SERVICE" "$KESSEL_PORT" "9000"
-    wait_for_port "$KESSEL_HOST" "$KESSEL_PORT" "Kessel Relations API" 45
+    start_port_forward inventory "$INVENTORY_SERVICE" "$KESSEL_PORT" "9000"
+    wait_for_port "$KESSEL_HOST" "$KESSEL_PORT" "Kessel Inventory API" 45
 }
 
 cmd_ensure_forwards() {
-    ensure_relations_forward
+    ensure_inventory_forward
     ensure_spicedb_forward
 }
 
@@ -193,7 +193,7 @@ cmd_setup() {
         exit 1
     fi
 
-    cmd_ensure_forwards
+    ensure_spicedb_forward
 
     # Use environment variables instead of CLI arguments to avoid
     # exposing the PSK in process listings (/proc/*/cmdline)
@@ -208,9 +208,9 @@ cmd_status() {
 
     echo "Ports:"
     if port_open "$KESSEL_HOST" "$KESSEL_PORT"; then
-        echo "  Relations API (${KESSEL_HOST}:${KESSEL_PORT}): open"
+        echo "  Inventory API (${KESSEL_HOST}:${KESSEL_PORT}): open"
     else
-        echo "  Relations API (${KESSEL_HOST}:${KESSEL_PORT}): closed"
+        echo "  Inventory API (${KESSEL_HOST}:${KESSEL_PORT}): closed"
     fi
     if port_open "$SPICEDB_HOST" "$SPICEDB_PORT"; then
         echo "  SpiceDB (${SPICEDB_HOST}:${SPICEDB_PORT}): open"
@@ -319,7 +319,7 @@ Usage: $0 <command> [args...]
 
 Commands:
   setup              Configure zed context '$ZED_CONTEXT_NAME' (SpiceDB on ${SPICEDB_HOST}:${SPICEDB_PORT})
-  ensure-forwards    oc port-forward Relations API + SpiceDB if ports are closed
+  ensure-forwards    oc port-forward Inventory API + SpiceDB if ports are closed
   status             Show port, credential, and port-forward status
   schema             Print the schema loaded by SpiceDB
   read-workspace ID  zed relationship read rbac/workspace:ID
@@ -334,7 +334,7 @@ Environment:
   LOCAL_KESSEL_ENV_FILE Local full-Kessel .env file containing the PSK
   ZED_CONTEXT_NAME    Zed context name (default: kessel-local)
   SPICEDB_HOST/PORT     SpiceDB port-forward target (default: localhost:50051)
-  KESSEL_HOST/PORT      Relations API port-forward (default: localhost:9000)
+  KESSEL_HOST/PORT      Inventory API port-forward (default: localhost:9000)
   OC_PROJECT            OpenShift project (default: kessel-stage)
 
 Used with:

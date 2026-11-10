@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the full local integration stack:
-#   Kessel (Inventory API + Relations + SpiceDB) + Debezium + RBAC + Host Inventory
+#   Kessel (Inventory API + SpiceDB) + Debezium + RBAC + Host Inventory
 #
 # Uses project-kessel/inventory-api development/full-kessel (make kessel-up) for
 # Kessel/Debezium/RBAC, then attaches insights-host-inventory on the `kessel`
@@ -873,7 +873,6 @@ print_endpoints() {
 Stack endpoints:
   RBAC API:          http://localhost:9080
   RBAC Postgres:     localhost:15432
-  Relations API:     localhost:9000
   SpiceDB (zed):     localhost:50051
   Inventory API:     localhost:9081
   Kafka Connect:     http://localhost:8083
