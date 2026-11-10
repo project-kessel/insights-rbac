@@ -381,7 +381,7 @@ def _consumer_config(topic: str):
         return {**common_config, "bootstrap_servers": kafka_servers}
 
 
-class RBACKafkaConsumer(BaseRBACKafkaConsumer):
+class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
     """RBAC Kafka consumer for processing Debezium and replication messages."""
 
     def __init__(
@@ -588,7 +588,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer):
                 # because offset was not committed. Message will be retried on restart.
                 raise RuntimeError(error_msg)
 
-    def _process_single(self, message: ConsumerRecord) -> bool:
+    def _process_single(self, message: ConsumerRecord, batch_data: None) -> bool:
         """Process a single message (parse and handle).
 
         This is the core message processing logic without retry concerns.

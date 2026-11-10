@@ -18,6 +18,7 @@
 """Common base for RBAC Kafka consumers."""
 
 import abc
+import itertools
 import json
 import logging
 import random
@@ -27,7 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-import itertools
 from django.conf import settings
 from kafka import AsyncConsumerRebalanceListener, KafkaConsumer, OffsetAndMetadata, TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
@@ -484,7 +484,7 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
         await self._run_in_thread(self._on_assigned, list(assigned))
 
 
-class BaseRBACKafkaConsumer(abc.ABC):
+class BaseRBACKafkaConsumer[BatchData](abc.ABC):
     """Common base class for standalone Kafka consumers."""
 
     def __init__(
@@ -632,13 +632,14 @@ class BaseRBACKafkaConsumer(abc.ABC):
             self.readiness_file.unlink(missing_ok=True)
 
     @abc.abstractmethod
-    def _process_single(self, message: ConsumerRecord) -> bool:
+    def _process_single(self, message: ConsumerRecord, batch_data: BatchData) -> bool:
         """Process a single message (parse and handle).
 
         This is the core message processing logic without retry concerns.
 
         Args:
             message: The Kafka message to process
+            batch_data: Data for the batch containing this message
 
         Returns:
             bool: True if message processed successfully
@@ -649,7 +650,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         """
         ...
 
-    def _process_message_with_retry(self, message: ConsumerRecord) -> bool:
+    def _process_message_with_retry(self, message: ConsumerRecord, batch_data: BatchData) -> bool:
         """Process a message with comprehensive retry logic.
 
         Retries transient errors (network, DB, etc.) but NOT ValidationError.
@@ -694,7 +695,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         def process_wrapper():
             """Wrap message processing for retry logic."""
             # Process the message
-            success = self._process_single(message)
+            success = self._process_single(message, batch_data=batch_data)
 
             # If processing returned False, treat as an error and retry
             if not success:
@@ -875,7 +876,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         self._metrics.last_message_processed_time.set(self.last_activity)
         return True
 
-    def _process_and_commit_message(self, message, topic_partition, last_committed_offsets):
+    def _process_and_commit_message(self, message, topic_partition, last_committed_offsets, batch_data: BatchData):
         """Process a message and handle offset commits.
 
         Args:
@@ -895,7 +896,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         logger.debug(f"Message content (partition: {message.partition}, offset: {message.offset}): {message.value}")
 
         # Process with retry logicar
-        success = self._process_message_with_retry(message)
+        success = self._process_message_with_retry(message, batch_data=batch_data)
 
         if success:
             # Store offset after successful processing
@@ -929,7 +930,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
     def _batch_size(self) -> int:
         return 1
 
-    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]):
+    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]) -> BatchData:
         pass
 
     @abc.abstractmethod
@@ -942,7 +943,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         last_committed_offsets = {}
 
         for batch in itertools.batched(self.consumer, self._batch_size()):
-            self._prepare_for_batch(batch)
+            batch_data = self._prepare_for_batch(batch)
 
             for message in batch:
                 # Record poll activity — each iteration processes one message from a poll batch.
@@ -965,7 +966,10 @@ class BaseRBACKafkaConsumer(abc.ABC):
 
                     # Process and commit
                     should_continue = self._process_and_commit_message(
-                        message, topic_partition, last_committed_offsets
+                        message=message,
+                        topic_partition=topic_partition,
+                        last_committed_offsets=last_committed_offsets,
+                        batch_data=batch_data,
                     )
 
                     if not should_continue:

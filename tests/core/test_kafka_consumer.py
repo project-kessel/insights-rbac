@@ -1308,7 +1308,7 @@ class RetryAllErrorsTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(_mock_message(message_value))
+                self.consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1332,7 +1332,7 @@ class RetryAllErrorsTests(TestCase):
         with patch.object(self.consumer, "_process_debezium_message", return_value=False):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(_mock_message(message_value))
+                self.consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1432,7 +1432,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         consumer._process_debezium_message = Mock(side_effect=mock_process_side_effect)
 
         try:
-            result = consumer._process_message_with_retry(_mock_message(test_message))
+            result = consumer._process_message_with_retry(_mock_message(test_message), batch_data=None)
         finally:
             # Restore original method
             consumer._process_debezium_message = original_method
@@ -1474,7 +1474,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                consumer._process_message_with_retry(_mock_message(message_value))
+                consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message indicates max retries exceeded
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -2290,7 +2290,7 @@ class HeartbeatMetricTests(TestCase):
 
         before = time.time()
         message_value = json.loads(message.value.decode("utf-8"))
-        result = self.consumer._process_and_commit_message(message, tp, {})
+        result = self.consumer._process_and_commit_message(message, tp, {}, batch_data=None)
         after = time.time()
 
         # Assert processing succeeded
