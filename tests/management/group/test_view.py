@@ -34,6 +34,7 @@ from management.group.definer import add_roles
 from management.group.serializer import GroupInputSerializer
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.inventory_replicator.noop_replicator import NoopReplicator
+from management.principal.it_service_mocks import MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
 from management.models import (
     Access,
     BindingMapping,
@@ -4161,6 +4162,213 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
             type=Principal.Types.SERVICE_ACCOUNT, service_account_id=sa_uuid
         )
         self.assertEqual(sa.count(), 1)
+
+    @staticmethod
+    def _it_service_account_payload(client_id: str, service_access_token: bool = False) -> dict:
+        """Build the payload ITService.request_service_accounts returns for a single client ID.
+
+        The payload is in RBAC's transformed shape, because that is what the mocked method returns. A service
+        access token is the same payload plus the two fields IT only sets in service access token mode, so the
+        flag is the only difference between the two kinds.
+        """
+        payload = {
+            "clientId": client_id,
+            "name": f"service_account_name_{client_id.split('-')[0]}",
+            "description": f"Service Account description {client_id.split('-')[0]}",
+            "owner": "jsmith",
+            "username": f"service_account-{client_id}",
+            "time_created": 1706784741,
+            "type": "service-account",
+            "userId": f"sa_sub_{client_id}",
+        }
+
+        if service_access_token:
+            payload["service_account_type"] = MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
+            payload["time_expires"] = 1713876532
+
+        return payload
+
+    def _add_service_account_to_group(self, client_id: str) -> Response:
+        """Post the given client ID to the group's principals endpoint as a service account."""
+        client = APIClient()
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        request_body = {"principals": [{"clientId": client_id, "type": "service-account"}]}
+
+        return client.post(url, request_body, format="json", **self.headers)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_service_access_token_creates_principal(self, sa_mock):
+        """Test that adding a service access token creates a service account principal.
+
+        Per CIAM-ADR-00090 a service access token is an organizational service account in SSO, served by the
+        same IT endpoint with the same clientId, so the creation path needs no change for it.
+
+        Nothing in rbac/ branches on "service_account_type", so this cannot currently fail: a service access
+        token is a regular service account to every line of the creation path. It is kept as the tripwire for
+        that stopping being true — if the mode is ever persisted on Principal and code starts reading it, this
+        is what catches the creation path diverging. Treat a failure here as a design question, not a bug.
+        """
+        # Deliberately a client ID which is not already a group member, so that the add exercises the principal
+        # creation branch of add_service_accounts rather than re-adding an existing principal.
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid, service_access_token=True)]
+
+        response = self._add_service_account_to_group(sa_uuid)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principal = Group.objects.get(uuid=self.group.uuid).principals.get(service_account_id=sa_uuid)
+        self.assertEqual(Principal.Types.SERVICE_ACCOUNT, principal.type)
+        self.assertEqual(
+            f"service-account-{sa_uuid}",
+            principal.username,
+            "the principal must carry the plain service account username, not the CRA credential format",
+        )
+        self.assertEqual(
+            f"sa_sub_{sa_uuid}",
+            principal.user_id,
+            "the user ID IT returned for the service access token must be persisted on creation",
+        )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_service_access_token_populates_null_user_id(self, sa_mock):
+        """Test that adding a service access token backfills the user ID of a lazily created principal.
+
+        A service account principal can already exist with no user ID, because get_principal creates one from
+        a username alone. The group add is the only path which can fill that in, so it has to run for a
+        service access token too. Unlike most of the parity tests here, this one has a real failure mode: the
+        update-if-null branch of add_service_accounts is ordinary logic that can break on its own.
+        """
+        sa_uuid = str(uuid4())
+        Principal.objects.create(
+            username=f"service-account-{sa_uuid}",
+            tenant=self.tenant,
+            type=Principal.Types.SERVICE_ACCOUNT,
+            service_account_id=sa_uuid,
+            user_id=None,
+        )
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid, service_access_token=True)]
+
+        response = self._add_service_account_to_group(sa_uuid)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principal = Group.objects.get(uuid=self.group.uuid).principals.get(service_account_id=sa_uuid)
+        self.assertEqual(f"sa_sub_{sa_uuid}", principal.user_id)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_service_access_token_listed_with_mode(self, sa_mock):
+        """Test that a newly added service access token is typed as such in the group's member list."""
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid, service_access_token=True)]
+
+        self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        url = (
+            f"{reverse('v1_management:group-principals', kwargs={'uuid': self.group.uuid})}"
+            "?principal_type=service-account"
+        )
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        listed = [sa for sa in response.data.get("data") if str(sa["clientId"]) == sa_uuid]
+        self.assertEqual(1, len(listed), "the service access token should appear in the group's member list")
+        self.assertEqual(
+            MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+            listed[0].get("service_account_type"),
+            "the group member list must carry the mode which distinguishes a service access token",
+        )
+        self.assertEqual(1713876532, listed[0].get("time_expires"))
+        self.assertEqual(
+            "service-account",
+            listed[0].get("type"),
+            '"type" must stay "service-account" for a service access token, so that filtering on it keeps working',
+        )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_regular_service_account_listed_without_mode(self, sa_mock):
+        """Test that a newly added regular service account is listed exactly as it was before.
+
+        The back-compatibility half of the mode mapping: IT omits the attribute for a regular service account,
+        and an absent attribute must leave the response untouched rather than render as null.
+        """
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid)]
+
+        self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        url = (
+            f"{reverse('v1_management:group-principals', kwargs={'uuid': self.group.uuid})}"
+            "?principal_type=service-account"
+        )
+        client = APIClient()
+        response = client.get(url, **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        listed = [sa for sa in response.data.get("data") if str(sa["clientId"]) == sa_uuid]
+        self.assertEqual(1, len(listed))
+        self.assertEqual("service-account", listed[0].get("type"))
+        self.assertNotIn("service_account_type", listed[0])
+        self.assertNotIn("time_expires", listed[0])
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_remove_group_principals_service_access_token(self, sa_mock):
+        """Test that a service access token can be removed from a group by its client ID.
+
+        The removal half of the ticket's acceptance criterion. Removal is keyed on service_account_id and
+        never reads the mode, so this passes by construction today; it is here because "can be added to and
+        removed from a group" is the behaviour the ticket promises, and a promise with no test is a promise
+        nobody notices breaking.
+        """
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid, service_access_token=True)]
+
+        self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        url = (
+            f"{reverse('v1_management:group-principals', kwargs={'uuid': self.group.uuid})}"
+            f"?service-accounts={sa_uuid}"
+        )
+        client = APIClient()
+        response = client.delete(url, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            0,
+            Group.objects.get(uuid=self.group.uuid).principals.filter(service_account_id=sa_uuid).count(),
+            "the service access token should have been removed from the group",
+        )
+        # Removing it from the group must not delete the principal itself.
+        self.assertIsNotNone(Principal.objects.get(username=f"service-account-{sa_uuid}"))
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_service_account_rejects_cra_credential_format(self, sa_mock):
+        """Test that the CRA credential format for a service access token is rejected rather than coerced.
+
+        A service access token is presented to the container registry as "|service-account-{client_id}". Per
+        CIAM-ADR-00094 the plain client ID is what reaches RBAC, so the pipe-prefixed form is never valid here;
+        silently stripping the prefix would create a principal under a wrong client ID instead of erroring.
+        """
+        sa_uuid = str(uuid4())
+
+        response = self._add_service_account_to_group(f"|service-account-{sa_uuid}")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.json().get("errors")[0].get("detail"), "Must be a valid UUID.")
+        sa_mock.assert_not_called()
+        self.assertFalse(
+            Principal.objects.filter(service_account_id=sa_uuid).exists(),
+            "a rejected client ID must not leave a principal behind",
+        )
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")
