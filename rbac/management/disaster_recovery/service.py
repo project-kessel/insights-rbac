@@ -9,7 +9,7 @@ from management.disaster_recovery.corrective_writer import (
     write_corrective_events,
 )
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent, read_events_in_window
-from management.disaster_recovery.resource_checker import check_resources_exist
+from management.disaster_recovery.resource_checker import check_group_memberships, check_resources_exist
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,8 @@ def reconcile(
     logger.info("Read %d events with %d total tuples", len(events), len(all_tuples))
 
     existence_map = check_resources_exist(all_tuples)
-    actions = generate_corrective_actions(events, existence_map)
+    membership_map = check_group_memberships(all_tuples)
+    actions = generate_corrective_actions(events, existence_map, membership_map)
 
     adds = [a for a in actions if a.action == "add"]
     removes = [a for a in actions if a.action == "remove"]

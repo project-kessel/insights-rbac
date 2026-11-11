@@ -49,6 +49,13 @@ capacity, then retry the full window; this reader does not provide resumable off
 Check the task result for `status: failed` rather than treating task completion as
 successful reconciliation.
 
+For ordinary groups, reconciliation restores affected memberships to the state in
+the restored RBAC database. Default-group membership is maintained from external
+identity data rather than the group membership table, so a window containing such
+tuples fails before writing corrections. Unsupported group membership tuples and
+principal domains also fail; investigate and reconcile them with the appropriate
+identity data before retrying. Do not interpret a failed task as reconciled.
+
 ### Phases
 
 Both paths follow the same phase structure:
