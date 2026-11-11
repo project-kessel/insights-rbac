@@ -21,19 +21,17 @@ import uuid
 from functools import partial
 from unittest.mock import MagicMock, Mock, patch
 
+from core.base_consumer import RetryConfig
 from django.test import override_settings
-from prometheus_client import REGISTRY
-from rest_framework import status
-
+from kafka.structs import TopicPartition
 from management.group.definer import seed_group
 from management.group.model import Group
 from management.policy.model import Policy
 from management.principal.cleaner import (
     METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
     METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
-    MessageProcessingResult,
+    PrincipalKafkaConsumer,
     clean_tenant_principals,
-    process_principal_events_from_kafka,
 )
 from management.principal.model import Principal
 from management.tenant_mapping.model import TenantMapping
@@ -46,6 +44,8 @@ from migration_tool.in_memory_tuples import (
     resource,
     subject,
 )
+from prometheus_client import REGISTRY
+from rest_framework import status
 from tests.identity_request import IdentityRequest
 
 from api.models import Tenant
@@ -343,7 +343,7 @@ IT_MANAGED_KAFKA_CLUSTERS = {
 }
 
 
-@override_settings(KAFKA_CLUSTERS=IT_MANAGED_KAFKA_CLUSTERS)
+@override_settings(KAFKA_CLUSTERS=IT_MANAGED_KAFKA_CLUSTERS, KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC=None)
 class PrincipalKafkaTests(IdentityRequest):
     """Test the principal processor functions with Kafka."""
 
@@ -357,7 +357,35 @@ class PrincipalKafkaTests(IdentityRequest):
         self.group = Group(name="groupA", tenant=self.tenant)
         self.group.save()
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    def _make_consumer(self, dry_run: bool = False) -> PrincipalKafkaConsumer:
+        return PrincipalKafkaConsumer(
+            metrics=Mock(),
+            retry_config=RetryConfig(
+                operation_max_retries=3,
+                backoff_factor=2,
+                max_backoff_seconds=1,
+            ),
+            dry_run=dry_run,
+        )
+
+    def _make_internal_consumer_mock(self, messages):
+        messages = list(messages)
+
+        mock = MagicMock()
+        mock.__iter__.return_value = iter(messages)
+        mock.assignment.return_value = {TopicPartition(topic=m.topic, partition=m.partition) for m in messages}
+        return mock
+
+    def _assert_committed(self, commit_mock, expected_offsets: dict[int, int]):
+        self.assertEqual(commit_mock.call_count, 1)
+        actual_offsets = commit_mock.call_args.kwargs["offsets"]
+
+        self.assertCountEqual([p.partition for p in actual_offsets.keys()], expected_offsets.keys())
+
+        for topic_partition, actual_offset in actual_offsets.items():
+            self.assertEqual(actual_offset.offset, expected_offsets[topic_partition.partition])
+
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_cleanup_none(self, consumer_mock):
         """Test that we can run a principal clean up with no messages."""
@@ -368,45 +396,13 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
         self.assertTrue(before == after or before is None and after is None)
         consumer_instance.close.assert_called_once()
 
-    @patch(
-        "management.principal.proxy.PrincipalProxy.request_filtered_principals",
-        return_value={"status_code": 200, "data": []},
-    )
-    @patch("management.principal.cleaner.process_kafka_message")
-    @patch("management.principal.cleaner.time.monotonic")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", 15000)
-    def test_kafka_consumer_stops_after_drain_window(self, consumer_mock, monotonic_mock, process_mock, proxy_mock):
-        """Busy topics must still stop after the wall-clock drain budget so Celery can re-check Unleash."""
-        process_mock.return_value = MessageProcessingResult(should_continue=True, success=True)
-
-        messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(10)]
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter(messages)
-        consumer_mock.return_value = consumer_instance
-
-        # 1) deadline = monotonic() + 15s
-        # 2) first message: still inside window -> process
-        # 3) second message: past deadline -> break without processing further
-        monotonic_mock.side_effect = [1000.0, 1000.0, 1015.0]
-
-        result = process_principal_events_from_kafka()
-        self.assertIsNone(result)
-
-        process_mock.assert_called_once()
-        consumer_instance.commit.assert_called_once()
-        consumer_instance.close.assert_called_once()
-        # consumer_timeout_ms stays aligned with the wall-clock budget
-        self.assertEqual(consumer_mock.call_args[1]["consumer_timeout_ms"], 15000)
-
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac-service")
     @patch("management.principal.cleaner.settings.ENV_NAME", "ephemeral-pr-123")
@@ -417,7 +413,7 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         # Verify KafkaConsumer was called with group_id containing both SA_NAME and ENV_NAME
         consumer_mock.assert_called_once()
@@ -436,7 +432,7 @@ class PrincipalKafkaTests(IdentityRequest):
         # Verify it includes the topic discriminator
         self.assertIn("principal-cleanup", group_id)
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_consumer_targets_it_managed_cluster(self, consumer_mock):
         """The cleanup consumer connects to the IT-managed cluster, not the Clowder one."""
@@ -444,7 +440,7 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_mock.assert_called_once()
         call_kwargs = consumer_mock.call_args[1]
@@ -459,12 +455,13 @@ class PrincipalKafkaTests(IdentityRequest):
         # ...but producer-only configs are stripped so KafkaConsumer does not reject them.
         self.assertNotIn("retries", call_kwargs)
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(KAFKA_CLUSTERS={})
-    def test_consumer_no_ops_when_it_managed_unconfigured(self, consumer_mock):
+    def test_consumer_errors_when_it_managed_unconfigured(self, consumer_mock):
         """With no IT-managed cluster configured, the consumer safely no-ops (no Clowder fallback)."""
-        process_principal_events_from_kafka()
+        with self.assertRaises(RuntimeError):
+            self._make_consumer()
 
         consumer_mock.assert_not_called()
 
@@ -476,7 +473,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.group.model.AccessCache")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test that we can run a principal clean up on a tenant with a principal in a group."""
@@ -496,7 +493,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         cache_mock = MagicMock()
         cache_class.return_value = cache_mock
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
@@ -510,7 +507,7 @@ class PrincipalKafkaTests(IdentityRequest):
         self.principal.save()
 
         consumer_instance.__iter__.return_value = iter([mock_message])
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
 
     @patch(
@@ -520,7 +517,7 @@ class PrincipalKafkaTests(IdentityRequest):
             "data": [],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_does_not_exist(self, consumer_mock, proxy_mock):
         """Test that can run a principal clean up with a principal does not exist."""
@@ -533,11 +530,11 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
 
         consumer_instance.__iter__.return_value = iter([create_mock_kafka_message(KAFKA_MESSAGE_SPECIAL)])
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
         # Verify second message processing also doesn't delete the existing principal
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
 
@@ -559,7 +556,7 @@ class PrincipalKafkaTests(IdentityRequest):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
     def test_principal_creation_event_updates_existing_principal(self, consumer_mock, proxy_mock):
@@ -574,7 +571,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         tenant = Tenant.objects.get(org_id="17685860")
         Principal.objects.create(tenant=tenant, username="principal-test")
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
@@ -585,7 +582,7 @@ class PrincipalKafkaTests(IdentityRequest):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.principal.cleaner.retrieve_user_info_kafka")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_failure_processing_message(self, consumer_mock, retrieve_user_mock, proxy_mock):
         """Test failure handling when processing message."""
@@ -603,16 +600,22 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        retrieve_user_mock.side_effect = Exception("Something went wrong")
-        process_principal_events_from_kafka()
+        retrieve_user_mock.side_effect = RuntimeError("Something went wrong")
+
+        consumer = self._make_consumer()
+
+        with self.assertRaises(RuntimeError):
+            consumer.start_consuming()
 
         after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL)
         success_after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
         self.group.refresh_from_db()
         self.assertTrue(self.group.principals.all())
-        self.assertTrue((before + 1 == after) or (before is None and after == 1))
-        self.assertTrue(success_before == success_after or (success_before is None and success_after is None))
+        self.assertEqual(
+            (before if before is not None else 0) + 1 + consumer.retry_config.operation_max_retries, after
+        )
+        self.assertTrue(success_before == success_after)
 
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
@@ -621,7 +624,7 @@ class PrincipalKafkaTests(IdentityRequest):
             "data": [],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_dry_run_mode_does_not_modify_database(self, consumer_mock, proxy_mock):
         """Test that dry-run mode processes messages but doesn't modify the database."""
@@ -643,7 +646,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Run in dry-run mode
         before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
+        self._make_consumer(dry_run=True).start_consuming()
         after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
 
         # Dry-run must not call BOP (payload-only validation)
@@ -670,7 +673,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.RBACProducer")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
     def test_dry_run_mode_handles_errors_gracefully(self, consumer_mock, dlq_producer_mock, proxy_mock):
@@ -687,7 +690,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Run in dry-run mode
         before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
+        self._make_consumer(dry_run=True).start_consuming()
         after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
 
         # Verify error metric was incremented
@@ -714,7 +717,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.RBACProducer")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
     def test_dry_run_mode_handles_transient_errors(
@@ -736,7 +739,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Run in dry-run mode
         before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
-        process_principal_events_from_kafka(dry_run=True)
+        self._make_consumer(dry_run=True).start_consuming()
         after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
 
         # Verify error metric was incremented
@@ -757,7 +760,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_kafka_consumer_handles_xml_messages_from_bridge(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that Kafka consumer can process XML messages from UMB->Kafka bridge."""
@@ -787,7 +790,7 @@ class PrincipalKafkaTests(IdentityRequest):
         bootstrap_mock.return_value = mock_service
 
         # Run in normal mode - should parse XML and call update_user
-        process_principal_events_from_kafka(dry_run=False)
+        self._make_consumer().start_consuming()
 
         # Verify update_user was called (XML message was successfully parsed)
         mock_service.update_user.assert_called()
@@ -800,7 +803,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_format_detection_prefers_json_over_xml(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that format detection tries JSON first before XML."""
@@ -830,7 +833,7 @@ class PrincipalKafkaTests(IdentityRequest):
                 kafka_retrieve_mock.return_value = mock_user
 
                 # Run in normal mode
-                process_principal_events_from_kafka(dry_run=False)
+                self._make_consumer().start_consuming()
 
                 # Verify JSON retrieval was called (not XML retrieval)
                 kafka_retrieve_mock.assert_called_once()
@@ -844,7 +847,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.RBACProducer")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", "test-dlq-topic")
     def test_transaction_rollback_on_permanent_error_after_partial_db_write(
@@ -893,7 +896,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Run in normal mode (not dry-run) - should send to DLQ
         before_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
-        process_principal_events_from_kafka(dry_run=False)
+        self._make_consumer().start_consuming()
         after_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
 
         # Verify failure metric was incremented
@@ -916,14 +919,13 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_dry_run_mode_does_not_call_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that dry-run mode does not call bootstrap_service.update_user()."""
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([mock_message])
+        consumer_instance = self._make_internal_consumer_mock([mock_message])
         consumer_mock.return_value = consumer_instance
 
         # Mock bootstrap service
@@ -931,7 +933,7 @@ class PrincipalKafkaTests(IdentityRequest):
         bootstrap_mock.return_value = mock_service
 
         # Run in dry-run mode
-        process_principal_events_from_kafka(dry_run=True)
+        self._make_consumer(dry_run=True).start_consuming()
 
         # Verify update_user was NOT called
         mock_service.update_user.assert_not_called()
@@ -946,7 +948,7 @@ class PrincipalKafkaTests(IdentityRequest):
         },
     )
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_normal_mode_calls_update_user(self, consumer_mock, bootstrap_mock, proxy_mock):
         """Test that normal mode (not dry-run) calls bootstrap_service.update_user()."""
@@ -961,14 +963,14 @@ class PrincipalKafkaTests(IdentityRequest):
         bootstrap_mock.return_value = mock_service
 
         # Run in normal mode (dry_run=False)
-        process_principal_events_from_kafka(dry_run=False)
+        self._make_consumer(dry_run=False).start_consuming()
 
         # Verify update_user WAS called
         mock_service.update_user.assert_called()
 
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=100, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
     def test_bop_batch_dedupes_duplicate_user_ids(self, consumer_mock, proxy_mock, bootstrap_mock):
@@ -990,28 +992,21 @@ class PrincipalKafkaTests(IdentityRequest):
 
         # Three messages for the same user_id
         messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(3)]
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_instance = self._make_internal_consumer_mock(messages)
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         proxy_mock.assert_called_once()
         called_user_ids = proxy_mock.call_args[0][0]
         self.assertEqual(called_user_ids, ["56780000"])
         # BOP is deduped; DB apply still runs per message for safe at-least-once semantics
         self.assertEqual(mock_service.update_user.call_count, 3)
-        self.assertEqual(consumer_instance.commit.call_count, 3)
-        # Commits must be per-message offsets (not a bare commit of the batch position)
-        for i, call in enumerate(consumer_instance.commit.call_args_list):
-            committed = call[0][0]
-            tp = next(iter(committed.keys()))
-            self.assertEqual(tp.partition, 0)
-            self.assertEqual(committed[tp].offset, i + 1)
+        self._assert_committed(consumer_instance.commit, {0: 3})
 
     @patch("management.principal.cleaner.get_tenant_bootstrap_service")
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=100, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
     def test_bop_batch_dedupes_cross_partition_user_ids(self, consumer_mock, proxy_mock, bootstrap_mock):
@@ -1035,34 +1030,14 @@ class PrincipalKafkaTests(IdentityRequest):
             create_mock_kafka_message(KAFKA_MESSAGE_BODY, partition=0, offset=10),
             create_mock_kafka_message(KAFKA_MESSAGE_BODY, partition=1, offset=5),
         ]
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter(messages)
+        consumer_instance = self._make_internal_consumer_mock(messages)
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         proxy_mock.assert_called_once()
         self.assertEqual(mock_service.update_user.call_count, 2)
-        self.assertEqual(consumer_instance.commit.call_count, 2)
-
-    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    @override_settings(KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE=2, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
-    def test_bop_batch_flushes_at_batch_size(self, consumer_mock, proxy_mock):
-        """BOP should be called once per batch when messages exceed batch size."""
-        proxy_mock.return_value = {"status_code": 200, "data": []}
-
-        messages = [create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=i) for i in range(3)]
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter(messages)
-        consumer_mock.return_value = consumer_instance
-
-        process_principal_events_from_kafka()
-
-        # batch_size=2 -> first flush at 2 msgs, then flush remaining 1
-        self.assertEqual(proxy_mock.call_count, 2)
-        self.assertEqual(consumer_instance.commit.call_count, 3)
+        self._assert_committed(consumer_instance.commit, {0: 11, 1: 6})
 
 
 @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)
@@ -1081,7 +1056,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_same_principal_name_in_multiple_tenants(self, consumer_mock, proxy_mock):
         """Test that can run a principal clean up with a principal that have multiple tenants."""
@@ -1097,7 +1072,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         self.assertFalse(Principal.objects.filter(username=self.principal_name, tenant=self.tenant).exists())
@@ -1107,7 +1082,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_cleanup_principal_does_not_exist_no_tenant(self, consumer_mock, proxy_mock):
         """Test cleanup when principal exists but tenant doesn't match."""
@@ -1122,7 +1097,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         # Principal in other tenant should remain
         self.assertTrue(Principal.objects.filter(username=principal_name, tenant=other_tenant).exists())
@@ -1146,7 +1121,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_bootstraps_new_tenant(self, consumer_mock, proxy_mock):
         """Test that principal creation event creates and bootstraps a new tenant."""
@@ -1160,7 +1135,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         with patch(
             "management.principal.cleaner.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)
         ):
-            process_principal_events_from_kafka()
+            self._make_consumer().start_consuming()
 
             consumer_instance.close.assert_called_once()
 
@@ -1185,7 +1160,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_bootstraps_existing_tenants(self, consumer_mock, proxy_mock):
         """Test that principal creation event bootstraps existing tenant."""
@@ -1197,7 +1172,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         with patch(
             "management.principal.cleaner.OutboxReplicator", new=partial(InMemoryRelationReplicator, self._tuples)
         ):
-            process_principal_events_from_kafka()
+            self._make_consumer().start_consuming()
 
             consumer_instance.close.assert_called_once()
 
@@ -1221,7 +1196,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_bootstrap_already_bootstraped_tenant(self, consumer_mock, proxy_mock):
         """Test that already bootstrapped tenant stays ready."""
@@ -1234,7 +1209,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         tenant.refresh_from_db()
@@ -1258,7 +1233,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_create_principal(self, consumer_mock, proxy_mock):
         """Test that principal creation event creates tenant but does not create principal (upsert=False)."""
@@ -1269,14 +1244,14 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         self.assertTrue(Tenant.objects.filter(org_id="17685860").exists())
         self.assertFalse(Principal.objects.filter(user_id=self.principal_user_id).exists())
 
     @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals", return_value={"status_code": 500})
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_creation_event_does_not_create_principal_nor_tenant(self, consumer_mock, proxy_mock):
         """Test that nothing is created when proxy returns error."""
@@ -1287,7 +1262,8 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        with self.assertRaises(Exception):
+            self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         # Nothing should be created on proxy error
@@ -1312,7 +1288,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ],
         },
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=False)
     def test_principal_creation_event_disabled(self, consumer_mock, proxy_mock):
@@ -1324,7 +1300,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_instance.close.assert_called_once()
         self.assertFalse(Tenant.objects.filter(org_id="17685860").exists())
@@ -1335,7 +1311,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.group.model.AccessCache")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_disable_principal_which_is_in_or_not_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test deleting a principal that is in a group when inactive."""
@@ -1353,7 +1329,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         cache_mock = MagicMock()
         cache_class.return_value = cache_mock
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         # Principal should be deleted when inactive and not found in proxy
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
@@ -1364,7 +1340,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         return_value={"status_code": 200, "data": []},
     )
     @patch("management.group.model.AccessCache")
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_disable_principal_without_user_id_in_group(self, consumer_mock, cache_class, proxy_mock):
         """Test deleting a principal without user_id that is in a group when inactive."""
@@ -1384,7 +1360,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         cache_mock = MagicMock()
         cache_class.return_value = cache_mock
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         # Principal should be deleted when inactive and not found in proxy
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
@@ -1394,7 +1370,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_same_tenant_keeps_ready(self, consumer_mock, proxy_mock):
         """Test that ready tenant stays ready after principal event."""
@@ -1407,7 +1383,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         tenant.refresh_from_db()
         self.assertTrue(tenant.ready)
@@ -1416,7 +1392,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_same_tenant_keeps_unready(self, consumer_mock, proxy_mock):
         """Test that unready tenant stays unready after update event."""
@@ -1430,7 +1406,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         tenant.refresh_from_db()
         self.assertFalse(tenant.ready)
@@ -1440,7 +1416,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={"status_code": 200, "data": []},
     )
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @override_settings(V2_BOOTSTRAP_TENANT=False)
     def test_non_bootstrapped_tenant_no_principal_disabled_user_does_not_produce_replication_event(
@@ -1456,7 +1432,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         # Principal should be deleted when inactive and not found in proxy
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
@@ -1543,7 +1519,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
             ),
         )
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac")
     @patch("management.principal.cleaner.settings.ENV_NAME", "stage")
@@ -1553,7 +1529,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_mock.assert_called_once()
         call_kwargs = consumer_mock.call_args[1]
@@ -1575,7 +1551,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         consumer_instance.close.assert_called_once()
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac")
     @patch("management.principal.cleaner.settings.ENV_NAME", "stage")
@@ -1586,7 +1562,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_mock.assert_called_once()
         call_kwargs = consumer_mock.call_args[1]
@@ -1601,7 +1577,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         consumer_instance.close.assert_called_once()
 
-    @patch("management.principal.cleaner.KafkaConsumer")
+    @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac")
     @patch("management.principal.cleaner.settings.ENV_NAME", "stage")
@@ -1616,7 +1592,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
 
-        process_principal_events_from_kafka()
+        self._make_consumer().start_consuming()
 
         consumer_mock.assert_called_once()
         call_kwargs = consumer_mock.call_args[1]
@@ -1627,96 +1603,3 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertEqual(call_kwargs["max_poll_interval_ms"], 600000)
 
         consumer_instance.close.assert_called_once()
-
-    @patch("management.principal.cleaner._release_kafka_consumer_lock")
-    @patch("management.principal.cleaner._try_acquire_kafka_consumer_lock", return_value=False)
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_single_consumer_guard_no_op_when_lock_not_acquired(
-        self, consumer_mock, lock_acquire_mock, lock_release_mock
-    ):
-        """Test that consumer no-ops cleanly when lock is not acquired (another worker running)."""
-        process_principal_events_from_kafka()
-
-        # Lock was attempted (inside try block)
-        lock_acquire_mock.assert_called_once()
-
-        # KafkaConsumer was NOT constructed (guard prevented it)
-        consumer_mock.assert_not_called()
-
-        # Lock release should NOT be called when lock was not acquired (consumer_lock_held=False)
-        lock_release_mock.assert_not_called()
-
-    @patch("management.principal.cleaner._release_kafka_consumer_lock")
-    @patch("management.principal.cleaner._try_acquire_kafka_consumer_lock", return_value=True)
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_consumer_lock_released_in_finally_when_acquired(
-        self, consumer_mock, lock_acquire_mock, lock_release_mock
-    ):
-        """Test that consumer lock is released in finally block when it was acquired."""
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
-        consumer_mock.return_value = consumer_instance
-
-        process_principal_events_from_kafka()
-
-        # Lock acquired
-        lock_acquire_mock.assert_called_once()
-
-        # Consumer constructed and closed
-        consumer_mock.assert_called_once()
-        consumer_instance.close.assert_called_once()
-
-        # Lock released in finally (because consumer_lock_held=True)
-        lock_release_mock.assert_called_once()
-
-    @patch("management.principal.cleaner._release_kafka_consumer_lock")
-    @patch("management.principal.cleaner._try_acquire_kafka_consumer_lock", return_value=True)
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_consumer_lock_released_even_when_kafka_error_raised(
-        self, consumer_mock, lock_acquire_mock, lock_release_mock
-    ):
-        """Test that lock is released when KafkaError is raised after lock acquisition (designed error path)."""
-        # Import KafkaError to simulate the designed error path
-        from kafka.errors import KafkaError
-
-        # Make KafkaConsumer raise KafkaError after lock is acquired
-        consumer_mock.side_effect = KafkaError("Simulated Kafka connection error")
-
-        # KafkaError should NOT propagate (caught by except KafkaError clause)
-        process_principal_events_from_kafka()
-
-        # Lock was acquired
-        lock_acquire_mock.assert_called_once()
-
-        # Consumer construction was attempted
-        consumer_mock.assert_called_once()
-
-        # Lock MUST still be released in finally (because consumer_lock_held=True)
-        lock_release_mock.assert_called_once()
-
-    @patch("management.principal.cleaner._release_kafka_consumer_lock")
-    @patch("management.principal.cleaner._try_acquire_kafka_consumer_lock", return_value=True)
-    @patch("management.principal.cleaner.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    def test_consumer_lock_released_when_non_kafka_exception_propagates(
-        self, consumer_mock, lock_acquire_mock, lock_release_mock
-    ):
-        """Test that lock is released even when non-KafkaError exception propagates from constructor."""
-        # Make KafkaConsumer raise a generic exception (not KafkaError)
-        consumer_mock.side_effect = Exception("Simulated Kafka connection error")
-
-        # Generic Exception should propagate (NOT caught by except KafkaError clause)
-        with self.assertRaisesRegex(Exception, "Simulated Kafka connection error"):
-            process_principal_events_from_kafka()
-
-        # Lock was acquired
-        lock_acquire_mock.assert_called_once()
-
-        # Consumer construction was attempted
-        consumer_mock.assert_called_once()
-
-        # Lock MUST still be released in finally despite exception propagation (because consumer_lock_held=True)
-        lock_release_mock.assert_called_once()
