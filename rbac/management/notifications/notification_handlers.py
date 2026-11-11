@@ -26,9 +26,8 @@ from uuid import uuid4
 
 from core.kafka import RBACProducer
 from django.conf import settings
+from management.notifications.model import RhNotificationEvent
 from management.role.v2_model import RoleV2
-
-from api.models import Tenant
 
 EVENT_TYPE_RH_TAM_REQUEST_CREATED = "rh-new-tam-request-created"
 
@@ -53,19 +52,20 @@ def build_notifications_message(event_type, payload, org_id=None):
 
 
 def notify(event_type, payload, org_id=None):
-    """Actually send notifications message."""
+    """Actually send notifications message. Returns True if the message was handed to the producer."""
     noto_message = build_notifications_message(event_type, payload, org_id)
     noto_headers = [("rh-message-id", str(uuid4()).encode("utf-8"))]
-    noto_producer.send_kafka_message(noto_topic, noto_message, noto_headers)
+    return noto_producer.send_kafka_message(noto_topic, noto_message, noto_headers)
 
 
-def notify_all(event_type, payload):
-    """Notify all tenants."""
-    # To avoid memory overloaded, use iterator:
-    # https://docs.djangoproject.com/en/4.0/ref/models/querysets/#django.db.models.query.QuerySet.iterator
-    for tenant in Tenant.objects.exclude(tenant_name="public").filter(ready=True).iterator():
-        # Tenant name pattern is acct12345
-        notify(event_type, payload, tenant.org_id)
+def queue_rh_notification(event_type, payload):
+    """
+    Queue an RH system notification for every ready tenant.
+
+    The event is saved in the caller's transaction, so it is kept exactly when the change it reports commits, and is
+    sent later by the rate-limited send_rh_notifications_in_worker beat task.
+    """
+    RhNotificationEvent.objects.create(event_type=event_type, payload=payload)
 
 
 def _rh_notifications_suppressed() -> bool:
@@ -91,7 +91,7 @@ def handle_system_role_change_notification(role_obj, operation):
     else:
         raise Exception("Not recognized operation for updating Red Hat managed group.")
 
-    notify_all(event_type, payload)
+    queue_rh_notification(event_type, payload)
 
 
 def role_obj_change_notification_handler(role_obj, operation, user=None):
@@ -174,7 +174,7 @@ def handle_platform_group_role_change_notification(group_obj, role_obj, operatio
     else:
         raise Exception("Not recognized operation for updating Red Hat managed platform default access group.")
 
-    notify_all(event_type, payload)
+    queue_rh_notification(event_type, payload)
 
 
 def group_role_change_notification_handler(user, group_obj, role_obj, operation):
