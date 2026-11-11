@@ -42,6 +42,12 @@ The toolkit simulates database restores and verifies that the reconciliation end
 | `--rbac-hbi` | `/_private/api/disaster_recovery/workspaces/` | RBAC DB ↔ HBI (workspace Kafka events) |
 
 For the Kessel Relations endpoint, ISO 8601 timestamps without an offset are interpreted as UTC.
+The relations reader fails the task without writing corrections when it reaches
+`DR_MAX_EVENTS_PER_RECONCILE` (default 10,000), even if the window contains
+exactly that many events. Increase the worker's limit after considering memory
+capacity, then retry the full window; this reader does not provide resumable offsets.
+Check the task result for `status: failed` rather than treating task completion as
+successful reconciliation.
 
 ### Phases
 
