@@ -623,6 +623,24 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertIsNone(tenant1.org_id)
         self.assertIsNone(tenant2.org_id)
 
+    @patch("management.principal.proxy.requests.post")
+    def test_populate_tenant_org_id_invalid_bop_payload_preserves_tenants(self, mock_post):
+        """Invalid JSON shapes must not be interpreted as an empty mapping and delete tenants."""
+        tenant = Tenant.objects.create(tenant_name="acct_invalid_mapping", account_id="900003", org_id=None)
+        workspace = Workspace.objects.create(name="Root", tenant=tenant, type=Workspace.Types.ROOT, parent=None)
+        mock_post.return_value.status_code = 200
+        for payload in (None, False, 0, "", [], ["900003"]):
+            with self.subTest(payload=payload):
+                mock_post.reset_mock()
+                mock_post.return_value.json.return_value = payload
+                response = self.client.post("/_private/api/utils/populate_tenant_org_id/", **self.request.META)
+                mock_post.assert_called_once()
+                self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+                self.assertEqual(response.json(), {"error": "Failed to fetch account-org mapping from BOP"})
+                tenant.refresh_from_db()
+                self.assertIsNone(tenant.org_id)
+                self.assertTrue(Workspace.objects.filter(pk=workspace.pk, tenant=tenant).exists())
+
     def test_get_invalid_default_admin_groups(self):
         """Test that we can get invalid groups."""
         invalid_admin_default_group = Group.objects.create(
@@ -738,22 +756,28 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertIn(expected_message, response.content.decode())
 
-    @patch("internal.views.requests")
-    def test_get_org_admin_timeout(self, mock_requests):
+    @patch("internal.views.bop_request_status_count")
+    @patch("internal.views.requests.get")
+    def test_get_org_admin_timeout(self, mock_get, mock_counter):
         """Test getting the org admin and timing out on BOP request."""
         import requests as real_requests
 
-        mock_requests.get.side_effect = real_requests.exceptions.Timeout("Connection timed out")
-        mock_requests.exceptions = real_requests.exceptions
-        response = self.client.get(
-            "/_private/api/utils/get_org_admin/123456/?type=account_id",
-            **self.request.META,
-        )
-        expected_message = "Unable to connect for URL"
-        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        self.assertIn(expected_message, response.content.decode())
-        mock_requests.get.assert_called_once()
-        self.assertEqual(mock_requests.get.call_args.kwargs.get("timeout"), settings.OUTBOUND_HTTP_TIMEOUT)
+        for timeout_type in (real_requests.exceptions.ConnectTimeout, real_requests.exceptions.ReadTimeout):
+            with self.subTest(timeout_type=timeout_type):
+                mock_get.reset_mock()
+                mock_counter.reset_mock()
+                mock_get.side_effect = timeout_type("Connection timed out")
+                response = self.client.get(
+                    "/_private/api/utils/get_org_admin/123456/?type=account_id",
+                    **self.request.META,
+                )
+                self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+                self.assertEqual(response["Content-Type"], "application/json")
+                self.assertEqual(response.json(), {"errors": [{"detail": "BOP request timed out.", "status": "500"}]})
+                mock_get.assert_called_once()
+                self.assertEqual(mock_get.call_args.kwargs.get("timeout"), settings.OUTBOUND_HTTP_TIMEOUT)
+                mock_counter.labels.assert_called_once_with(method="GET", status=500)
+                mock_counter.labels.return_value.inc.assert_called_once_with()
 
     @patch("internal.views.requests")
     def test_get_org_admin_account(self, mock_proxy):

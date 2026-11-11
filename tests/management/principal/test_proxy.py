@@ -463,6 +463,31 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual(call_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
         self.assertEqual(result, {"acc1": "org1", "acc2": "org2"})
 
+    @patch("management.principal.proxy.bop_request_status_count")
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_invalid_json_shape(self, mock_post, mock_counter):
+        """Reject non-object JSON, including empty arrays, without reporting success."""
+        proxy = PrincipalProxy()
+        for payload in (None, False, 0, 12, "", "invalid", [], ["acc1"]):
+            with self.subTest(payload=payload):
+                mock_counter.reset_mock()
+                mock_post.reset_mock()
+                mock_post.return_value = MockResponse("http://test", payload, status.HTTP_200_OK)
+                self.assertIsNone(proxy.fetch_account_org_mapping(["acc1"]))
+                mock_post.assert_called_once()
+                mock_counter.labels.assert_called_once_with(method="POST", status=500)
+                mock_counter.labels.return_value.inc.assert_called_once_with()
+
+    @patch("management.principal.proxy.bop_request_status_count")
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_empty_object(self, mock_post, mock_counter):
+        """An empty object remains a valid mapping and is counted as success."""
+        mock_post.return_value = MockResponse("http://test", {}, status.HTTP_200_OK)
+        self.assertEqual(PrincipalProxy().fetch_account_org_mapping(["acc1"]), {})
+        mock_post.assert_called_once()
+        mock_counter.labels.assert_called_once_with(method="POST", status=200)
+        mock_counter.labels.return_value.inc.assert_called_once_with()
+
     def test_fetch_account_org_mapping_empty_input(self):
         """Test fetch_account_org_mapping with empty account_ids returns empty dict."""
         proxy = PrincipalProxy()

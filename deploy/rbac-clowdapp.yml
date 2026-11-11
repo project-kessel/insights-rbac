@@ -2012,7 +2012,7 @@ parameters:
 - name: IT_TOKEN_JKWS_CACHE_LIFETIME
   value: '28800'
 - name: OUTBOUND_HTTP_TIMEOUT
-  description: Timeout in seconds for outbound HTTP requests to BOP and JWKS endpoints (does not affect IT service, which uses IT_SERVICE_TIMEOUT_SECONDS)
+  description: Timeout in seconds for outbound BOP HTTP requests (IT service and JWKS use IT_SERVICE_TIMEOUT_SECONDS)
   value: '10'
 - name: PRINCIPAL_USER_DOMAIN
   description: >

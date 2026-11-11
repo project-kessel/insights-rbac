@@ -406,6 +406,10 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
             if response.status_code == status.HTTP_200_OK:
                 mapping = response.json()
+                if not isinstance(mapping, dict):
+                    LOGGER.error("Invalid account-org mapping response from BOP: expected an object")
+                    bop_request_status_count.labels(method="POST", status=500).inc()
+                    return None
                 LOGGER.info(f"Successfully fetched {len(mapping)} account-org mappings from BOP")
                 bop_request_status_count.labels(method="POST", status=200).inc()
                 return mapping
