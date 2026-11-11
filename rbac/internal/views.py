@@ -4400,7 +4400,6 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     "end_timestamp" is optional and defaults to now (at task execution time) so
     the reconciled window also covers events produced between the restore
     point and when the task runs, not just events before the restore point.
-
     Returns 202 with task_id on success.
     """
     if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
@@ -4502,6 +4501,7 @@ def disaster_recovery_reconcile(request):
     "end_timestamp" is optional and defaults to now (at task execution time) so
     the reconciled window also covers events produced between the restore
     point and when the task runs, not just events before the restore point.
+    Timestamps without an offset are interpreted as UTC.
     """
     if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
@@ -4518,9 +4518,11 @@ def disaster_recovery_reconcile(request):
 
     try:
         dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
-        restore_timestamp_ms = int(dt.timestamp() * 1000)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    restore_timestamp_ms = int(dt.timestamp() * 1000)
 
     buffer_seconds = body.get("buffer_seconds", 300)
     if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
@@ -4531,11 +4533,11 @@ def disaster_recovery_reconcile(request):
     if end_timestamp_str is not None:
         try:
             end_dt = datetime.fromisoformat(end_timestamp_str.replace("Z", "+00:00"))
-            end_timestamp_ms = int(end_dt.timestamp() * 1000)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return JsonResponse({"error": "Invalid end_timestamp format, expected ISO 8601"}, status=400)
         if end_dt.tzinfo is None:
             end_dt = end_dt.replace(tzinfo=timezone.utc)
+        end_timestamp_ms = int(end_dt.timestamp() * 1000)
         if end_dt > datetime.now(timezone.utc):
             return JsonResponse({"error": "end_timestamp must be in the past"}, status=400)
         if end_timestamp_ms < restore_timestamp_ms:

@@ -41,6 +41,8 @@ The toolkit simulates database restores and verifies that the reconciliation end
 | `--rbac-kessel` | `/_private/api/disaster_recovery/reconcile/` | RBAC DB ↔ Kessel Relations (SpiceDB tuples) |
 | `--rbac-hbi` | `/_private/api/disaster_recovery/workspaces/` | RBAC DB ↔ HBI (workspace Kafka events) |
 
+For the Kessel Relations endpoint, ISO 8601 timestamps without an offset are interpreted as UTC.
+
 ### Phases
 
 Both paths follow the same phase structure:
