@@ -158,6 +158,16 @@ Guards:
 - `skip_rh_notifications` context var suppresses during seeding
 - `KAFKA_ENABLED=False` disables all notifications
 
+Red Hat system notifications are not sent by the seeding run. The handlers call `queue_rh_notification()`, which saves an `RhNotificationEvent` row in the same transaction as the role or group change, so an event exists exactly when its change commits, even if seeding fails later. The `send_rh_notifications_in_worker` beat task runs every minute (registered when `NOTIFICATIONS_RH_ENABLED=True`) and sends them:
+
+- Once no event was queued for 5 minutes, the queued events are bundled into one `RhNotificationDelivery`, so a seeding run goes out as one delivery. Events queued while a delivery is active wait for the next one.
+- Each run sends every event of the active delivery to the next batch of ready tenants, in tenant id order, and commits the tenant cursor. Runs are at least 55 seconds apart, and no run sends during the UTC quiet window. The window is re-checked before each tenant, so the tenant being sent when it starts still receives all of its events.
+- A transaction-level Postgres advisory lock (`pg_try_advisory_xact_lock(44)`) admits one run at a time. It is released when the transaction ends or its connection drops, so a dead worker never leaves it held.
+- Delivery is at least once. A worker that dies mid-batch commits nothing, and the next run resends that batch. A send counts once the producer accepts it; broker-side failures after that are not retried. A failed send stops the batch at the last tenant that received all events, and the next run retries from there, replaying that tenant's events. After 5 consecutive failed runs the delivery is marked `failed` and logged.
+- Finished deliveries (`done` or `failed`) are deleted with their events after 7 days, so recent sends can be inspected in the database.
+
+The rate setting is a batch-sizing target, not a hard per-minute limit: a batch always sends all events for at least one tenant, so it exceeds the target when a delivery has more events than the configured rate.
+
 ## 9. Celery Tasks and Beat Schedule
 
 Broker: Redis (`CELERY_BROKER_URL`). Config namespace: `CELERY_`.
@@ -167,6 +177,7 @@ Scheduled tasks in `rbac/rbac/celery.py`:
 - `run_redis_cache_health` -- every 30 seconds
 - `principal_cleanup_via_kafka` -- every 60 seconds (when `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True`)
 - `principal_cleanup` -- every 7 days (fallback when Kafka cleanup is disabled)
+- `send_rh_notifications_in_worker` -- every 60 seconds (when `NOTIFICATIONS_RH_ENABLED=True`), see section 8
 
 Worker starts a Prometheus metrics server on Clowder's `metricsPort` (default 9000). Failure to start metrics server exits the process.
 
@@ -185,6 +196,8 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_ENABLED` | `False` | Enables Kafka producer/consumer |
 | `NOTIFICATIONS_ENABLED` | `False` | Enables custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enables RH system notifications |
+| `NOTIFICATIONS_RH_RATE_PER_MINUTE` | `3000` | Target RH notification messages per batch; not a hard per-minute limit |
+| `NOTIFICATIONS_RH_QUIET_START` / `NOTIFICATIONS_RH_QUIET_END` | `23:30` / `00:30` | UTC quiet window (HH:MM) with no RH notification sending |
 | `BYPASS_BOP_VERIFICATION` | `False` | Skips BOP calls, uses local DB |
 | `IT_BYPASS_IT_CALLS` | `False` | Mocks IT service responses |
 | `MOCK_KAFKA` | `False` | Uses FakeKafkaProducer |

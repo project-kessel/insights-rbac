@@ -26,6 +26,9 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
+from django.db import connection, transaction
+from django.db.models import Max
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +158,179 @@ def run_seeds_in_worker(kwargs):
             },
         )
         raise
+
+
+RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS = 5
+# A delivery starts only once no new event was queued for this long, so one seeding run's events go out together.
+RH_NOTIFICATIONS_SETTLE_SECONDS = 5 * 60
+# Beat runs the task every 60 seconds; the tolerance keeps scheduling jitter from skipping a batch.
+RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS = 55
+RH_NOTIFICATIONS_RETENTION = datetime.timedelta(days=7)
+RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS = 30
+# Transaction-level advisory lock that lets one task run send at a time (42 and 43 are used by principal cleanup).
+RH_NOTIFICATIONS_LOCK_ID = 44
+RH_NOTIFICATIONS_DEFAULT_QUIET_START = "23:30"
+RH_NOTIFICATIONS_DEFAULT_QUIET_END = "00:30"
+
+
+def _parse_quiet_time(setting_name, default):
+    """Parse an HH:MM quiet window setting, falling back to the default when it is invalid."""
+    value = getattr(settings, setting_name, default)
+    try:
+        return datetime.datetime.strptime(value, "%H:%M").time()
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s value %r, using default %s.", setting_name, value, default)
+        return datetime.datetime.strptime(default, "%H:%M").time()
+
+
+def _in_rh_notifications_quiet_window(now):
+    """Return True when now (UTC) falls in the window in which RH notifications are not sent."""
+    start = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_START", RH_NOTIFICATIONS_DEFAULT_QUIET_START)
+    end = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_END", RH_NOTIFICATIONS_DEFAULT_QUIET_END)
+    if start == end:
+        return False
+    current = now.astimezone(datetime.timezone.utc).time()
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+def _try_rh_notifications_lock():
+    """Take the advisory lock for the current transaction; it is released on commit, rollback or a lost connection."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_xact_lock(%s);", [RH_NOTIFICATIONS_LOCK_ID])
+        return cursor.fetchone()[0]
+
+
+def _start_rh_notifications_delivery(now):
+    """Bundle the queued events into a new delivery once the newest of them is older than the settle time."""
+    from management.notifications.model import RhNotificationDelivery, RhNotificationEvent
+
+    queued = RhNotificationEvent.objects.filter(delivery__isnull=True)
+    newest = queued.aggregate(newest=Max("created"))["newest"]
+    if newest is None:
+        return None
+    if now - newest < datetime.timedelta(seconds=RH_NOTIFICATIONS_SETTLE_SECONDS):
+        logger.info("Waiting for queued RH notification events to settle before sending them.")
+        return None
+
+    delivery = RhNotificationDelivery.objects.create(created=now)
+    count = queued.filter(created__lte=newest).update(delivery=delivery)
+    logger.info("Started RH notification delivery %s with %d event(s).", delivery.id, count)
+    return delivery
+
+
+def _send_rh_notifications_batch(delivery, now):
+    """Send every event of the delivery to the next batch of ready tenants and advance its tenant cursor."""
+    from api.models import Tenant
+    from management.notifications.model import RhNotificationDelivery
+    from management.notifications.notification_handlers import noto_producer, notify
+
+    events = list(delivery.events.order_by("created", "id").values("event_type", "payload"))
+    ready_tenants = Tenant.objects.exclude(tenant_name="public").filter(ready=True)
+    batch_size = max(1, max(1, settings.NOTIFICATIONS_RH_RATE_PER_MINUTE) // max(1, len(events)))
+    tenants = list(ready_tenants.filter(id__gt=delivery.after_tenant_id).order_by("id")[:batch_size])
+
+    start_cursor = delivery.after_tenant_id
+    sent_tenants = 0
+    send_failed = False
+    reached_quiet_window = False
+    for tenant in tenants:
+        # Checked per tenant so that a slow batch stops at the window; a started tenant still gets all its events.
+        if _in_rh_notifications_quiet_window(timezone.now()):
+            reached_quiet_window = True
+            break
+        if not all(notify(event["event_type"], event["payload"], tenant.org_id) for event in events):
+            send_failed = True
+            break
+        delivery.after_tenant_id = tenant.id
+        sent_tenants += 1
+
+    try:
+        noto_producer.get_producer().flush(RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception("Failed to flush the notifications producer.")
+
+    logger.info(
+        "Sent RH notification delivery %s to %d tenant(s) (%d message(s)) after tenant id %d.",
+        delivery.id,
+        sent_tenants,
+        sent_tenants * len(events),
+        start_cursor,
+    )
+
+    delivery.last_batch_at = now
+    if send_failed:
+        delivery.failed_attempts += 1
+        if delivery.failed_attempts >= RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS:
+            delivery.status = RhNotificationDelivery.Status.FAILED
+            delivery.finished_at = now
+            logger.error(
+                "Giving up RH notification delivery %s after %d failed attempt(s); it stopped after tenant id %d.",
+                delivery.id,
+                delivery.failed_attempts,
+                delivery.after_tenant_id,
+            )
+        else:
+            logger.warning(
+                "Sending RH notification delivery %s failed; retrying after tenant id %d on the next run.",
+                delivery.id,
+                delivery.after_tenant_id,
+            )
+    else:
+        delivery.failed_attempts = 0
+        if not reached_quiet_window and not ready_tenants.filter(id__gt=delivery.after_tenant_id).exists():
+            delivery.status = RhNotificationDelivery.Status.DONE
+            delivery.finished_at = now
+            logger.info("Finished RH notification delivery %s.", delivery.id)
+    delivery.save()
+
+
+@shared_task
+def send_rh_notifications_in_worker():
+    """
+    Send the next batch of queued Red Hat system notifications. Celery beat runs it every minute.
+
+    Events are queued as database rows in the transaction of the change they report. Once no event was queued for
+    RH_NOTIFICATIONS_SETTLE_SECONDS, the queued events are bundled into a delivery, which each run sends to the next
+    batch of ready tenants, in tenant id order. A batch holds NOTIFICATIONS_RH_RATE_PER_MINUTE messages, rounded down to
+    whole tenants but never fewer than one tenant, so a single tenant's events are never split. Runs are at least
+    RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS apart, and no batch is sent during the UTC quiet window.
+
+    A transaction-level advisory lock admits one run at a time and is released if the worker dies. The tenant cursor is
+    committed after the batch is sent, so a worker that dies mid-batch makes the next run resend that batch: delivery
+    is at least once. A send counts as done once the producer accepts it. A failed send keeps the cursor at the last
+    tenant that received all events, and the next run retries from there; after RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS
+    consecutive failures the delivery is marked failed. Finished deliveries are deleted after
+    RH_NOTIFICATIONS_RETENTION.
+    """
+    from management.notifications.model import RhNotificationDelivery
+
+    if not (settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
+        logger.info("RH notifications are disabled (NOTIFICATIONS_ENABLED or NOTIFICATIONS_RH_ENABLED), skipping.")
+        return
+    now = timezone.now()
+    if _in_rh_notifications_quiet_window(now):
+        logger.info("RH notifications quiet window is active, skipping this run.")
+        return
+
+    with transaction.atomic():
+        if not _try_rh_notifications_lock():
+            logger.info("Another RH notifications run is in progress, skipping.")
+            return
+
+        RhNotificationDelivery.objects.filter(finished_at__lt=now - RH_NOTIFICATIONS_RETENTION).delete()
+
+        last_batch_at = RhNotificationDelivery.objects.aggregate(last=Max("last_batch_at"))["last"]
+        if last_batch_at and (now - last_batch_at).total_seconds() < RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS:
+            logger.info("The previous RH notification batch was sent less than a minute ago, skipping.")
+            return
+
+        delivery = RhNotificationDelivery.objects.filter(
+            status=RhNotificationDelivery.Status.ACTIVE
+        ).first() or _start_rh_notifications_delivery(now)
+        if delivery is not None:
+            _send_rh_notifications_batch(delivery, now)
 
 
 @shared_task

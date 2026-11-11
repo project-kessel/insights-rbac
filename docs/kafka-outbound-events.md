@@ -84,7 +84,7 @@ Sent when a tenant user modifies groups or their membership.
 
 #### Red Hat System Role & Group Events
 
-Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all tenants** via `notify_all()`. Username is always `"Red Hat"`.
+Sent during system role seeding when Red Hat updates built-in roles. These are broadcast to **all ready tenants**. Each event is saved in the database with the change it reports and sent by the `send_rh_notifications_in_worker` beat task, once a minute in batches of about `NOTIFICATIONS_RH_RATE_PER_MINUTE` messages (whole tenants, at least one tenant per batch), pausing during the UTC quiet window (`NOTIFICATIONS_RH_QUIET_START` to `NOTIFICATIONS_RH_QUIET_END`, default 23:30 to 00:30). Delivery is at least once: a batch interrupted by a failure or a lost worker is resent from the last tenant that received all events, which can duplicate notifications for that tenant. See `docs/integration-guidelines.md` section 8 for the queueing and retry rules. Username is always `"Red Hat"`.
 
 | Event Type | Occasion | Payload |
 |---|---|---|
@@ -234,6 +234,8 @@ No additional headers.
 | `MOCK_KAFKA` | `False` | Use `FakeKafkaProducer` (no-op) for dev/test |
 | `NOTIFICATIONS_ENABLED` | `False` | Enable custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enable Red Hat system notifications |
+| `NOTIFICATIONS_RH_RATE_PER_MINUTE` | `3000` | Target Red Hat notification messages per batch; not a hard per-minute limit |
+| `NOTIFICATIONS_RH_QUIET_START` / `NOTIFICATIONS_RH_QUIET_END` | `23:30` / `00:30` | UTC window (HH:MM, may cross midnight) in which Red Hat notifications are not sent |
 | `NOTIFICATIONS_TOPIC` | (env) | Kafka topic for user-facing notifications |
 | `EXTERNAL_SYNC_TOPIC` | (env) | Kafka topic for external service sync |
 | `EXTERNAL_CHROME_TOPIC` | (env) | Kafka topic for Chrome UI invalidation |
