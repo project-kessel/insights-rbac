@@ -121,7 +121,7 @@ Key env vars: `INVENTORY_API_SERVER`, `INVENTORY_API_CLIENT_ID`, `INVENTORY_API_
 - TLS: Clowder CA or local cert at `management/principal/certs/client.pem`
 - Bypass: `BYPASS_BOP_VERIFICATION=True` returns principals from local DB without calling BOP
 
-Env vars: `PRINCIPAL_PROXY_SERVICE_PROTOCOL`, `_HOST`, `_PORT`, `_PATH`, `PRINCIPAL_PROXY_CLIENT_ID`, `PRINCIPAL_PROXY_API_TOKEN`.
+Env vars: `PRINCIPAL_PROXY_SERVICE_PROTOCOL`, `_HOST`, `_PORT`, `_PATH`, `PRINCIPAL_PROXY_CLIENT_ID`, `PRINCIPAL_PROXY_API_TOKEN`, `OUTBOUND_HTTP_TIMEOUT` (default 10 seconds; applies to BOP requests).
 
 Metrics: `rbac_proxy_request_processing_seconds` (histogram), `bop_request_status_total` (counter by method+status).
 
@@ -134,7 +134,7 @@ Metrics: `rbac_proxy_request_processing_seconds` (histogram), `bop_request_statu
 - Pagination: IT returns pages of 100; client loops until response length < limit
 - Bypass: `IT_BYPASS_IT_CALLS=True` returns mock service accounts from local DB
 
-Env vars: `IT_SERVICE_HOST`, `IT_SERVICE_PORT`, `IT_SERVICE_BASE_PATH`, `IT_SERVICE_PROTOCOL_SCHEME`, `IT_SERVICE_TIMEOUT_SECONDS`.
+Env vars: `IT_SERVICE_HOST`, `IT_SERVICE_PORT`, `IT_SERVICE_BASE_PATH`, `IT_SERVICE_PROTOCOL_SCHEME`, `IT_SERVICE_TIMEOUT_SECONDS` (default 10 seconds; applies to IT service, OIDC configuration, and JWKS requests).
 
 ## 7. Principal Lifecycle Events (Kafka)
 

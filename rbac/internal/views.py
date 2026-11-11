@@ -500,7 +500,12 @@ def get_org_admin(request, org_or_account):
                 API_TOKEN_HEADER: PROXY.api_token,
             }
             params = PROXY._create_params(limit=limit, offset=offset)
-            kwargs = {"headers": headers, "params": params, "verify": PROXY.ssl_verify}
+            kwargs = {
+                "headers": headers,
+                "params": params,
+                "verify": PROXY.ssl_verify,
+                "timeout": settings.OUTBOUND_HTTP_TIMEOUT,
+            }
             if PROXY.source_cert:
                 kwargs["verify"] = PROXY.client_cert_path
             response = requests.get(url, **kwargs)
@@ -510,6 +515,10 @@ def get_org_admin(request, org_or_account):
                 "userCount": data.get("userCount"),
                 "users": data.get("users"),
             }
+        except requests.exceptions.Timeout as timeout:
+            logger.warning("BOP request timed out for URL %s: %s", url, timeout)
+            bop_request_status_count.labels(method="GET", status=500).inc()
+            return JsonResponse({"errors": [{"detail": "BOP request timed out.", "status": "500"}]}, status=500)
         except requests.exceptions.ConnectionError as conn:
             bop_request_status_count.labels(method="GET", status=500).inc()
             return HttpResponse(f"Unable to connect for URL {url} with error: {conn}", status=500)
