@@ -205,7 +205,8 @@ def get_role_queryset(request) -> QuerySet:
         return base_query
     system_param = request.query_params.get("system")
     if system_param and system_param.lower() == "true":
-        return base_query
+        # Scope here; do not rely on RoleFilter alone for authorization boundaries.
+        return base_query.filter(system=True)
     access = user_has_perm(request, "role")
     if access == "All":
         return base_query

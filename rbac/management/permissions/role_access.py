@@ -36,6 +36,7 @@ class RoleAccessPermission(permissions.BasePermission):
         if request.user.admin:
             return True
         if request.method in permissions.SAFE_METHODS:
+            # Public catalog of system roles; get_role_queryset scopes to system=True.
             system_param = request.query_params.get("system")
             if system_param and system_param.lower() == "true":
                 return True
