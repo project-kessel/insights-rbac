@@ -253,6 +253,14 @@ class TokenValidatorTests(IdentityRequest):
         # And the "import key set" method should also have been called with the same contents.
         import_key_set.assert_called_with(self.jwks_certificates_response_json)
 
+        # Assert that each requests.get call received the timeout kwarg.
+        for call in get.call_args_list:
+            self.assertEqual(
+                call.kwargs.get("timeout"),
+                settings.IT_SERVICE_TIMEOUT_SECONDS,
+                "each requests.get call must include timeout=settings.IT_SERVICE_TIMEOUT_SECONDS",
+            )
+
     @mock.patch("management.authorization.jwks_source.time.sleep", return_value=None)
     @mock.patch("management.authorization.jwks_source.JWKSCache.get_jwks_response")
     @mock.patch("management.authorization.jwks_source.requests.get")

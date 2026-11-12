@@ -702,6 +702,10 @@ IT_SERVICE_REALM = ENVIRONMENT.get_value("IT_SERVICE_REALM", default="/auth/real
 IT_SERVICE_TIMEOUT_SECONDS = ENVIRONMENT.int("IT_SERVICE_TIMEOUT_SECONDS", default=10)
 IT_TOKEN_JKWS_CACHE_LIFETIME = ENVIRONMENT.int("IT_TOKEN_JKWS_CACHE_LIFETIME", default=28800)
 
+# Outbound HTTP timeout (seconds) for BOP requests.
+# IT service and JWKS requests use IT_SERVICE_TIMEOUT_SECONDS above.
+OUTBOUND_HTTP_TIMEOUT = ENVIRONMENT.int("OUTBOUND_HTTP_TIMEOUT", default=10)
+
 PRINCIPAL_USER_DOMAIN = ENVIRONMENT.get_value("PRINCIPAL_USER_DOMAIN", default="localhost")
 
 # Settings for enabling/disabling deletion in principal cleanup job via Kafka
