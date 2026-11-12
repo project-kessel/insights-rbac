@@ -21,7 +21,6 @@ from typing import Optional
 from django.conf import settings
 from django.db.models import Q, QuerySet
 from django.db.models.aggregates import Count
-from django.urls import reverse
 from django.utils.translation import gettext as _
 from management.group.model import Group
 from management.permissions.role_access import RoleAccessPermission
@@ -83,11 +82,7 @@ def user_has_perm(request, resource):
 
 def has_group_all_access(request):
     """Quick check to determine if a request should have access to all groups on a tenant."""
-    return (
-        ENVIRONMENT.get_value("ALLOW_ANY", default=False, cast=bool)
-        or request.user.admin
-        or (request.path == reverse("v1_management:group-list") and request.method == "GET")
-    )
+    return ENVIRONMENT.get_value("ALLOW_ANY", default=False, cast=bool) or request.user.admin
 
 
 def get_group_queryset(request, args=None, kwargs=None, base_query: Optional[QuerySet] = None):
