@@ -45,7 +45,9 @@ IT_PATH_GET_SERVICE_ACCOUNTS = "/service_accounts/v1"
 # the first one "type", which is why we re-expose it as "service_account_type": our own "type" already means
 # "user or service account" and the console filters on it.
 IT_KEY_SERVICE_ACCOUNT_TYPE = "type"
-IT_KEY_SERVICE_ACCOUNT_EXPIRATION = "expiration"
+# CIAM-ADR-00090: "Get, list, and search return type and expiresAt for a SAT and omit them for an ordinary
+# service account." expiresAt is the decimal epoch *second* at which the credential stops being accepted.
+IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT = "expiresAt"
 
 # Service account fields holding a Unix timestamp, mapped to the sort key used when the field is missing or is not
 # a number. A regular service account has no expiry, so it sorts after every expiring one when ascending. An
@@ -608,7 +610,7 @@ class ITService:
         created_at = service_account_from_it_service.get("createdAt")
         user_id = service_account_from_it_service.get("userId")
         service_account_type = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_TYPE)
-        expiration = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_EXPIRATION)
+        expires_at = service_account_from_it_service.get(IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT)
 
         if client_id:
             service_account["clientId"] = client_id
@@ -638,13 +640,21 @@ class ITService:
         if service_account_type:
             service_account["service_account_type"] = service_account_type
 
-        if expiration:
+        # Coerced to an int because IT stores expiresAt as a Keycloak client attribute, which is always a string
+        # (CIAM-ADR-00090). Without this the two endpoints would disagree: the group principals endpoint runs the
+        # value through an IntegerField while the flat principals endpoint passes it through untouched, so a
+        # string from IT would come back quoted on one and unquoted on the other. A value we cannot represent as
+        # an integer is left out, which the response contract already treats as a regular service account.
+        if expires_at:
             try:
-                service_account["time_expires"] = int(expiration)
+                service_account["time_expires"] = int(expires_at)
             except (TypeError, ValueError, OverflowError):
-                # The response field is an integer, so a value which cannot be represented as one is omitted
-                # rather than failing serialization of the whole service account.
-                pass
+                LOGGER.warning(
+                    "Service account '%s' has an unparseable %s from IT, omitting it from the response: %r",
+                    client_id,
+                    IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT,
+                    expires_at,
+                )
 
         return service_account
 
