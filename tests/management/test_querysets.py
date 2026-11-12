@@ -109,6 +109,68 @@ class QuerySetTest(TestCase):
         queryset = get_group_queryset(req)
         self.assertEqual(queryset.count(), 5)
 
+    def test_get_group_queryset_non_admin_group_list_path_does_not_grant_all(self):
+        """GET group-list path alone must not bypass group access filtering (RHCLOUD-43070)."""
+        self._create_groups()
+        access = {"group": {"read": []}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 0)
+
+    def test_get_group_queryset_get_all(self):
+        """Test get_group_queryset as a user with all group access."""
+        self._create_groups()
+        access = {"group": {"read": ["*"]}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 5)
+
+    def test_get_group_queryset_get_some(self):
+        """Test get_group_queryset as a user with access to one group."""
+        self._create_groups()
+        accessible = Group.objects.first()
+        access = {"group": {"read": [accessible.uuid]}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 1)
+        self.assertEqual(queryset.first().uuid, accessible.uuid)
+
+    def test_get_group_queryset_get_none(self):
+        """Test get_group_queryset as a user with no group access."""
+        self._create_groups()
+        access = {"group": {"read": []}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 0)
+
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={
