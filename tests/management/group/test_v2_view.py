@@ -2047,7 +2047,47 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.assertEqual(principal.username, "service-account-sat-new")
         self.assertEqual(principal.type, Principal.Types.SERVICE_ACCOUNT)
         self.assertEqual(principal.user_id, user_id)
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
         self.assertTrue(self.group_b.principals.filter(pk=principal.pk).exists())
+
+    def test_add_service_account_stores_no_mode(self):
+        """An ordinary service account is stored with a null mode, since IT omits the attribute for one.
+
+        NULL therefore means "IT said nothing", which is indistinguishable from "not learned yet" -- that
+        ambiguity is by design and is what the reconciliation job exists to narrow.
+        """
+        self.it_client_ids.add("plain-sa")
+        self.it_user_ids["plain-sa"] = f"sa-{uuid.uuid4()}"
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["plain-sa"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(
+            Principal.objects.get(tenant=self.tenant, service_account_id="plain-sa").service_account_type
+        )
+
+    def test_add_service_access_token_populates_missing_mode(self):
+        """A principal already stored without a mode gets one from IT on a later group add.
+
+        This is how a principal created by username lookup, which never sees an IT payload, acquires its
+        mode. Without it the column would stay null for every such principal forever.
+        """
+        self._register_service_access_token("sat-existing-mode")
+        Principal.objects.create(
+            username="service-account-sat-existing-mode",
+            service_account_id="sat-existing-mode",
+            type=Principal.Types.SERVICE_ACCOUNT,
+            user_id="already-set",
+            service_account_type=None,
+            tenant=self.tenant,
+        )
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["sat-existing-mode"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="sat-existing-mode")
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
+        self.assertEqual(principal.user_id, "already-set", "an existing user ID must not be overwritten")
 
     def test_add_service_access_token_alongside_service_account(self):
         """A single request may mix a service access token and a regular service account."""

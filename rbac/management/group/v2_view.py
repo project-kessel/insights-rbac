@@ -368,6 +368,9 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         # Development and testing environments may skip IT, in which case the local backfill still runs.
         user_ids_by_client_id: dict[str, str | None] = dict.fromkeys(client_ids)
+        # Sub-kind of each service account, as reported by IT. Absent for an ordinary service account, and
+        # left as None when IT is bypassed, since there is no payload to learn it from.
+        service_account_types_by_client_id: dict[str, str | None] = dict.fromkeys(client_ids)
         if not settings.IT_BYPASS_IT_CALLS:
             try:
                 it_service_accounts = ITService().request_service_accounts(
@@ -382,10 +385,14 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                     set(),
                 )
             it_user_ids = {sa["clientId"]: sa.get("userId") for sa in it_service_accounts}
+            it_service_account_types = {sa["clientId"]: sa.get("service_account_type") for sa in it_service_accounts}
             missing = client_ids - it_user_ids.keys()
             if missing:
                 return None, missing
             user_ids_by_client_id = {client_id: it_user_ids[client_id] for client_id in client_ids}
+            service_account_types_by_client_id = {
+                client_id: it_service_account_types[client_id] for client_id in client_ids
+            }
 
         # Bulk-fetch existing principals up front, so only genuinely new client IDs need a per-item
         # get_or_create() call below. get_or_create() (not bulk_create()) survives two concurrent
@@ -398,6 +405,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
         }
         principals_to_update = []
         for client_id, user_id in user_ids_by_client_id.items():
+            service_account_type = service_account_types_by_client_id[client_id]
             principal = existing_principals.get(client_id)
             if principal is None:
                 principal, created = Principal.objects.get_or_create(
@@ -406,6 +414,7 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                     defaults={
                         "user_id": user_id,
                         "service_account_id": client_id,
+                        "service_account_type": service_account_type,
                         "type": Principal.Types.SERVICE_ACCOUNT,
                     },
                 )
@@ -416,13 +425,21 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                         request.user.org_id,
                     )
                     continue
+            changed = False
             if principal.user_id is None and user_id is not None:
                 # The principal may have been lazily created without a user ID.
                 principal.user_id = user_id
+                changed = True
+            # Only ever filled in, never cleared. A principal created from a username alone carries no mode,
+            # and this is one of the two places an IT payload is available to supply it.
+            if principal.service_account_type is None and service_account_type is not None:
+                principal.service_account_type = service_account_type
+                changed = True
+            if changed:
                 principals_to_update.append(principal)
 
         if principals_to_update:
-            Principal.objects.bulk_update(principals_to_update, ["user_id"])
+            Principal.objects.bulk_update(principals_to_update, ["user_id", "service_account_type"])
 
         return None, set()
 
