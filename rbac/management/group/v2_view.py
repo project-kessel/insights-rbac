@@ -403,7 +403,6 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             p.service_account_id: p
             for p in Principal.objects.filter(tenant=request.tenant, service_account_id__in=client_ids)
         }
-        principals_to_update = []
         for client_id, user_id in user_ids_by_client_id.items():
             service_account_type = service_account_types_by_client_id[client_id]
             principal = existing_principals.get(client_id)
@@ -425,21 +424,22 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
                         request.user.org_id,
                     )
                     continue
-            changed = False
+            # Each column is filled by its own statement, guarded on the column still being NULL in the
+            # database, rather than written back from the snapshot read above. This backfill deliberately
+            # runs outside the request's transaction, so a concurrent request may have filled either
+            # column in between. A bulk_update() would write every listed column for every row in the
+            # batch, so a row queued only to gain a mode would also have its snapshot user_id written --
+            # putting a stale NULL back over a user ID another request had just filled, and leaving the
+            # principal without the resource ID its membership replication needs.
             if principal.user_id is None and user_id is not None:
                 # The principal may have been lazily created without a user ID.
-                principal.user_id = user_id
-                changed = True
+                Principal.objects.filter(pk=principal.pk, user_id__isnull=True).update(user_id=user_id)
             # Only ever filled in, never cleared. A principal created from a username alone carries no mode,
             # and this is one of the two places an IT payload is available to supply it.
             if principal.service_account_type is None and service_account_type is not None:
-                principal.service_account_type = service_account_type
-                changed = True
-            if changed:
-                principals_to_update.append(principal)
-
-        if principals_to_update:
-            Principal.objects.bulk_update(principals_to_update, ["user_id", "service_account_type"])
+                Principal.objects.filter(pk=principal.pk, service_account_type__isnull=True).update(
+                    service_account_type=service_account_type
+                )
 
         return None, set()
 

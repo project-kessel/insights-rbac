@@ -24,8 +24,10 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 import requests
+from django.db import connection
 from django.db.models import ProtectedError
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, reverse
 from management import v2_urls
 from management.audit_log.model import AuditLog
@@ -2065,6 +2067,48 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.assertIsNone(
             Principal.objects.get(tenant=self.tenant, service_account_id="plain-sa").service_account_type
         )
+
+    def test_add_service_access_token_mode_fill_does_not_write_user_id(self):
+        """Filling only the mode must not write user_id back from the snapshot read before it.
+
+        This backfill runs outside the request transaction, so a concurrent request may fill user_id
+        between that snapshot and the write. Writing both columns together would put the stale NULL
+        back and leave the principal with no resource ID for its membership replication, so each
+        column gets its own NULL-guarded statement. The race itself is not reproducible in a unit
+        test; what is checkable, and what regressed, is that the mode-only path never names user_id.
+        """
+        client_id = "sat-no-user-id"
+        self.it_client_ids.add(client_id)
+        self.mock_it.side_effect = lambda bearer_token, client_ids=None: [
+            {"clientId": client_id, "service_account_type": MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN}
+            for requested in client_ids
+            if requested == client_id
+        ]
+        Principal.objects.create(
+            username=f"service-account-{client_id}",
+            service_account_id=client_id,
+            type=Principal.Types.SERVICE_ACCOUNT,
+            user_id=None,
+            tenant=self.tenant,
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self._add(self.group_b.uuid, {"service_accounts": [client_id]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id=client_id)
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
+        self.assertIsNone(principal.user_id, "IT returned no user ID, so none should have been invented")
+
+        principal_updates = [
+            query["sql"]
+            for query in queries.captured_queries
+            if query["sql"].lstrip().upper().startswith("UPDATE") and "management_principal" in query["sql"]
+        ]
+        self.assertTrue(principal_updates, "the mode should have been written")
+        for sql in principal_updates:
+            self.assertNotIn("user_id", sql, "a mode-only backfill must not name the user_id column")
 
     def test_add_service_access_token_populates_missing_mode(self):
         """A principal already stored without a mode gets one from IT on a later group add.
