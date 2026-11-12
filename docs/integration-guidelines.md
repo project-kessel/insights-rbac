@@ -153,8 +153,8 @@ Notifications are sent via Kafka to the `NOTIFICATIONS_TOPIC`. The producer (`co
 Event types: `custom-role-created`, `custom-role-deleted`, `custom-role-updated`, `group-created`, `group-deleted`, `group-updated`, `rh-new-role-available`, `rh-platform-default-role-updated`, `rh-new-tam-request-created`, etc.
 
 Guards:
-- `NOTIFICATIONS_ENABLED` controls custom resource notifications
-- `NOTIFICATIONS_RH_ENABLED` controls Red Hat system role/group notifications
+- `NOTIFICATIONS_ENABLED` controls custom resource notifications and is also required for Red Hat system notifications
+- `NOTIFICATIONS_RH_ENABLED` additionally enables Red Hat system role/group notifications; both flags must be true for queueing and delivery
 - `skip_rh_notifications` context var suppresses during seeding
 - `KAFKA_ENABLED=False` disables all notifications
 
