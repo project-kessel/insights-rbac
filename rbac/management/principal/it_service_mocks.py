@@ -87,6 +87,10 @@ def generate_it_service_accounts(
             "createdAt": now,
         }
 
+        # A principal without a user ID cannot supply IT's userId field; omit it rather than returning null.
+        if principal.user_id is not None:
+            it_service_account["userId"] = principal.user_id
+
         # Mock a mix of regular service accounts and service access tokens so that both shapes get exercised in
         # the environments which bypass IT.
         if is_service_access_token(principal.service_account_id):
