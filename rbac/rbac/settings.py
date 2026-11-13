@@ -563,6 +563,9 @@ RBAC_KAFKA_CUSTOM_CONSUMER_BROKER = ENVIRONMENT.get_value("RBAC_KAFKA_CUSTOM_CON
 
 KAFKA_PRINCIPAL_CLEANUP_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_TOPIC", default="")
 KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC = ENVIRONMENT.get_value("KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", default="")
+KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS = ENVIRONMENT.get_value(
+    "KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS", default=50000
+)
 KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS = ENVIRONMENT.get_value(
     "KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS", default=45000
 )
@@ -575,9 +578,6 @@ KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS = ENVIRONMENT.get_value(
 KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED = ENVIRONMENT.bool(
     "KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED", default=True
 )
-# Wall-clock budget per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval
-# with headroom for consumer setup and shutdown.
-KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS = ENVIRONMENT.int("KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS", default=50000)
 # Max Kafka messages per BOP lookup. Duplicate user_ids within a batch are deduped.
 KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE = ENVIRONMENT.int("KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE", default=100)
 
@@ -708,18 +708,8 @@ OUTBOUND_HTTP_TIMEOUT = ENVIRONMENT.int("OUTBOUND_HTTP_TIMEOUT", default=10)
 
 PRINCIPAL_USER_DOMAIN = ENVIRONMENT.get_value("PRINCIPAL_USER_DOMAIN", default="localhost")
 
-# Settings for enabling/disabling deletion in principal cleanup job via Kafka
-PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA", default=False)
+# Settings for enabling/disabling updating principals in Kafka consumer
 PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA = ENVIRONMENT.bool("PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA", default=False)
-KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED = ENVIRONMENT.bool("KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED", default=True)
-
-# Validate Kafka principal cleanup configuration at startup
-# Fail fast if Kafka cleanup is enabled but topic is not configured
-if PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA and not KAFKA_PRINCIPAL_CLEANUP_TOPIC:
-    raise ValueError(
-        "PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA is True but KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
-        "Set KAFKA_PRINCIPAL_CLEANUP_TOPIC to a valid Kafka topic name or disable Kafka cleanup."
-    )
 
 # Service account name
 SA_NAME = ENVIRONMENT.get_value("SA_NAME", default="nonprod-hcc-rbac")

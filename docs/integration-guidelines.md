@@ -140,10 +140,8 @@ Env vars: `IT_SERVICE_HOST`, `IT_SERVICE_PORT`, `IT_SERVICE_BASE_PATH`, `IT_SERV
 
 Principal create/update/disable events are consumed from Kafka in `management/principal/cleaner.py`. UMB (STOMP) was the original transport; it has been fully decommissioned. Kafka is now the sole message bus.
 
-- Controlled by `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED` and `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` flags
-- Runs as a Celery beat task every 60 seconds when enabled
+- Runs in a dedicated Kafka consumer.
 - XML messages bridged from the former UMB path are still supported (`retrieve_user_info_xml`)
-- Falls back to BOP-based cleanup (`clean_tenants_principals`) every 7 days when Kafka cleanup is disabled
 - `dry_run=True` mode is available for manual validation of the Kafka consumer without side effects
 
 ## 8. Notifications Service
@@ -165,8 +163,6 @@ Broker: Redis (`CELERY_BROKER_URL`). Config namespace: `CELERY_`.
 Scheduled tasks in `rbac/rbac/celery.py`:
 - `cross_account_cleanup` -- daily at midnight
 - `run_redis_cache_health` -- every 30 seconds
-- `principal_cleanup_via_kafka` -- every 60 seconds (when `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True`)
-- `principal_cleanup` -- every 7 days (fallback when Kafka cleanup is disabled)
 
 Worker starts a Prometheus metrics server on Clowder's `metricsPort` (default 9000). Failure to start metrics server exits the process.
 
@@ -188,9 +184,6 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `BYPASS_BOP_VERIFICATION` | `False` | Skips BOP calls, uses local DB |
 | `IT_BYPASS_IT_CALLS` | `False` | Mocks IT service responses |
 | `MOCK_KAFKA` | `False` | Uses FakeKafkaProducer |
-| `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA` | `False` | Kafka-based principal cleanup |
-| `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED` | `True` | Enables Kafka principal cleanup beat task (requires `PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA`) |
-| `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` | `50000` | Wall-clock budget (ms) per Kafka cleanup cycle |
 | `KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE` | `100` | Max Kafka messages per BOP lookup (user_ids deduped within each batch; each message still applies DB) |
 | `READ_YOUR_WRITES_WORKSPACE_ENABLED` | `False` | Enables workspace create blocking |
 

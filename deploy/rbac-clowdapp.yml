@@ -300,8 +300,6 @@ objects:
             value: ${KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
             value: ${KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED}
-          - name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
-            value: ${KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
             value: ${KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE}
           - name: IT_KAFKA_BOOTSTRAP_SERVERS
@@ -373,10 +371,6 @@ objects:
             value: ${PARITY_CHECK_ORG_IDS}
           - name: PARITY_CHECK_SCHEDULE
             value: ${PARITY_CHECK_SCHEDULE}
-          - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
-            value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA}
-          - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
-            value: ${KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED}
           - name: READ_ONLY_API_MODE
             value: ${READ_ONLY_API_MODE}
           - name: PARITY_CHECK_ENABLED
@@ -2021,15 +2015,9 @@ parameters:
     or from a single identity infrastructure domain (identity header, SSO, BOP).
     This defines that single domain.
   value: 'redhat'
-- name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
-  description: Allow cleanup job to delete principals via messages from Kafka
-  value: 'False'
 - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
   description: Allow cleanup job to update principals via messages from Kafka
   value: 'False'
-- name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
-  description: Enable the Kafka-based principal cleanup job
-  value: 'True'
 - name: PARITY_CHECK_ENABLED
   description: Enable Kessel-RBAC parity checks background job
   value: 'False'
@@ -2201,9 +2189,6 @@ parameters:
 - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
   description: Enable static consumer-group membership (group.instance.id) for the principal-cleanup consumer to avoid full rebalance on each periodic rejoin.
   value: 'True'
-- name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
-  description: Wall-clock budget (ms) per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval with headroom for consumer setup and shutdown.
-  value: '50000'
 - name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
   description: Max Kafka messages per BOP user lookup for principal cleanup. Duplicate user_ids within a batch are deduplicated before the call.
   value: '100'

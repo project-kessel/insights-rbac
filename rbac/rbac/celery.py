@@ -56,30 +56,6 @@ app.conf.beat_schedule = {
     },
 }
 
-# Principal cleanup scheduling: Kafka-only with simple on/off flag
-if settings.PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA:
-    if settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-        app.conf.beat_schedule["principal-cleanup-every-minute"] = {
-            "task": "management.tasks.principal_cleanup_via_kafka",
-            "schedule": 60,  # Every 60 seconds
-            "args": [],
-        }
-    else:
-        # Kafka cleanup is enabled but KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False
-        # Fall back to 7-day cleanup to prevent silent failure
-        app.conf.beat_schedule["principal-cleanup-every-sevenish-days"] = {
-            "task": "management.tasks.principal_cleanup",
-            "schedule": crontab(0, 0, day_of_month="7-28/7"),
-            "args": [],
-        }
-else:
-    # Kafka cleanup is not enabled - fall back to 7-day cleanup
-    app.conf.beat_schedule["principal-cleanup-every-sevenish-days"] = {
-        "task": "management.tasks.principal_cleanup",
-        "schedule": crontab(0, 0, day_of_month="7-28/7"),
-        "args": [],
-    }
-
 if settings.PARITY_CHECK_ENABLED:
     app.conf.beat_schedule["parity-access-checks"] = {
         "task": "management.tasks.run_parity_access_checks_in_worker",
