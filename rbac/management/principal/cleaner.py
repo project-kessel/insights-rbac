@@ -364,8 +364,7 @@ class MessageProcessingResult(NamedTuple):
 def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None):
     """Parse a Kafka message into a User object.
 
-    Handles tombstones, JSON and XML formats.
-    Returns (user, None) on success or (None, 'tombstone') for tombstones.
+    Handles JSON and XML formats.
     Raises on parse failure.
 
     Args:
@@ -373,26 +372,17 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by
         skip_bop: If True, do not call BOP (message-payload User only). Used for dry-run.
         bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
     """
-    if message.value is None:
-        return None, "tombstone"
-
     message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
 
     try:
         message_data = json.loads(message_value)
         canonical_message = message_data.get("CanonicalMessage", message_data)
-        return (
-            retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
-            None,
-        )
+        return retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id)
     except json.JSONDecodeError as json_error:
         try:
             data_dict = xmltodict.parse(message_value)
             canonical_message = data_dict.get("CanonicalMessage")
-            return (
-                retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
-                None,
-            )
+            return retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id)
         except ExpatError as xml_error:
             raise Exception(
                 f"Message is neither valid JSON nor valid XML. " f"JSON error: {json_error}. XML error: {xml_error}"
@@ -400,7 +390,7 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by
 
 
 def _try_extract_user_id_from_kafka_message(message) -> Optional[str]:
-    """Best-effort user_id extraction for BOP batching. Returns None for tombstones/unparseable."""
+    """Best-effort user_id extraction for BOP batching. Returns None for unparseable."""
     if message.value is None:
         return None
 
@@ -466,7 +456,6 @@ class _MetricStatus(enum.StrEnum):
     DLQ_SENT = "dlq"
     DLQ_ERROR = "dlq_error"
     DLQ_ERROR_IGNORED = "dlq_error_ignored"
-    TOMBSTONE_ACKNOWLEDGED = "acknowledged"
     LOCK_CONTENTION = "lock_contention"
 
 
@@ -571,12 +560,15 @@ def _process_kafka_message(
     def record_status(message_type: str, recorded_status: _MetricStatus):
         metrics.messages_processed_total.labels(message_type=message_type, status=str(recorded_status)).inc()
 
+    if message is None:
+        raise TypeError("Tombstone should have been handled in base consumer")
+
     # --- 1. Parse message (+ resolve user via BOP unless dry-run / prefetched) ---
     # Live mode calls BOP (network I/O) so can raise transient errors too.
     # Dry-run skips BOP and builds User from the payload only for structural validation.
     # When bop_user_by_id is provided, BOP was already fetched for the batch.
     try:
-        user, marker = _parse_kafka_message_to_user(
+        user = _parse_kafka_message_to_user(
             message, skip_bop=dry_run, bop_user_by_id=None if dry_run else bop_user_by_id
         )
     except Exception as e:
@@ -622,17 +614,7 @@ def _process_kafka_message(
             record_status("unknown", _MetricStatus.ERROR)
             return MessageProcessingResult(should_continue=True, success=False)
 
-    # --- 2. Tombstone handling (no DB needed) ---
-    if marker == "tombstone":
-        logger.warning(
-            "process_kafka_message: Received tombstone message (null value) at offset %d. "
-            "Tombstones are not expected in principal cleanup topic. Skipping.",
-            message.offset,
-        )
-        record_status("tombstone", _MetricStatus.TOMBSTONE_ACKNOWLEDGED)
-        return MessageProcessingResult(should_continue=True, success=True)
-
-    # --- 3. Dry-run mode: structure validated above (no BOP, no DB writes) ---
+    # --- 2. Dry-run mode: structure validated above (no BOP, no DB writes) ---
     if dry_run:
         logger.debug(
             "DRY RUN: Validated message without BOP (user_id=%s); skipping DB writes",
@@ -642,7 +624,7 @@ def _process_kafka_message(
         kafka_dry_run_messages_total.inc()
         return MessageProcessingResult(should_continue=True, success=True)
 
-    # --- 4. Normal mode: DB work with proper outer retry ---
+    # --- 3. Normal mode: DB work with proper outer retry ---
     try:
 
         def _db_work():
@@ -718,7 +700,7 @@ def _consumer_config() -> dict:
 
     kafka_config = {
         "bootstrap_servers": it_kafka_servers,
-        # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
+        # No value_deserializer - leave as bytes to handle UTF-8 errors in process_kafka_message
         # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
         "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS,
         # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
