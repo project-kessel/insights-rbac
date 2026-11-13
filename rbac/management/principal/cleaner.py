@@ -739,6 +739,7 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
     def __init__(
         self,
         *,
+        topic: Optional[str] = None,
         metrics: BaseConsumerMetrics,
         health_check_interval: int = 30,
         retry_config: Optional[RetryConfig] = None,
@@ -747,12 +748,11 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
         dry_run: bool = False,
     ):
         """Initialize the Kafka consumer."""
-        topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
+        if topic is None:
+            topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
 
         if not topic:
-            raise RuntimeError(
-                "KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. Cannot process principal events from Kafka."
-            )
+            raise RuntimeError("Topic not configured. Cannot process principal events from Kafka.")
 
         super().__init__(
             topic=topic,
