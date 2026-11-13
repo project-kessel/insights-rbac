@@ -24,6 +24,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from core.kafka_consumer import RBACKafkaConsumer
 from django.core.management import call_command
 from django.test import TestCase
 
@@ -68,15 +69,23 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
+        super().setUp()
         self.command = Command()
+
+        self.mock_relations_consumer_class = self.enterContext(
+            patch.object(launch_rbac_kafka_consumer._consumer_types["relations"], "factory")
+        )
+
+        self.mock_principal_consumer_class = self.enterContext(
+            patch.object(launch_rbac_kafka_consumer._consumer_types["principals"], "factory")
+        )
 
     @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_handle_success(self, mock_consumer_class, mock_start_http_server):
+    def test_handle_relations_success(self, mock_start_http_server):
         """Test successful command execution."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         # Mock start_consuming to avoid infinite loop
         def side_effect():
@@ -88,20 +97,45 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
         out = StringIO()
 
         # This should not raise an exception
-        call_command("launch-rbac-kafka-consumer", stdout=out)
+        call_command("launch-rbac-kafka-consumer", "relations", stdout=out)
 
         mock_start_http_server.assert_called_once_with(9000, addr="0.0.0.0")
-        mock_consumer_class.assert_called_once_with(topic=None)
+        self.mock_relations_consumer_class.assert_called_once_with(topic=None)
+        self.mock_principal_consumer_class.assert_not_called()
         mock_consumer.start_consuming.assert_called_once()
         mock_consumer.stop_consuming.assert_called_once()
 
     @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_handle_with_custom_topic(self, mock_consumer_class, mock_start_http_server):
+    def test_handle_principals_success(self, mock_start_http_server):
+        """Test successful command execution."""
+        mock_consumer = Mock()
+        self.mock_principal_consumer_class.return_value = mock_consumer
+
+        # Mock start_consuming to avoid infinite loop
+        def side_effect():
+            # Simulate KeyboardInterrupt to exit gracefully
+            raise KeyboardInterrupt()
+
+        mock_consumer.start_consuming.side_effect = side_effect
+
+        out = StringIO()
+
+        # This should not raise an exception
+        call_command("launch-rbac-kafka-consumer", "principals", stdout=out)
+
+        mock_start_http_server.assert_called_once_with(9000, addr="0.0.0.0")
+        self.mock_principal_consumer_class.assert_called_once_with(topic=None)
+        self.mock_relations_consumer_class.assert_not_called()
+        mock_consumer.start_consuming.assert_called_once()
+        mock_consumer.stop_consuming.assert_called_once()
+
+    @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
+    @patch.object(launch_rbac_kafka_consumer, "start_http_server")
+    def test_handle_with_custom_topic(self, mock_start_http_server):
         """Test command execution with custom topic."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         # Mock start_consuming to avoid infinite loop
         def side_effect():
@@ -111,37 +145,35 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 
         out = StringIO()
 
-        call_command("launch-rbac-kafka-consumer", "--topic", "custom-topic", stdout=out)
+        call_command("launch-rbac-kafka-consumer", "relations", "--topic", "custom-topic", stdout=out)
 
         mock_start_http_server.assert_called_once_with(9000, addr="0.0.0.0")
-        mock_consumer_class.assert_called_once_with(topic="custom-topic")
+        self.mock_relations_consumer_class.assert_called_once_with(topic="custom-topic")
         mock_consumer.start_consuming.assert_called_once()
         mock_consumer.stop_consuming.assert_called_once()
 
     @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
     @patch("sys.exit")
-    def test_handle_consumer_exception(self, mock_exit, mock_consumer_class, mock_start_http_server):
+    def test_handle_consumer_exception(self, mock_exit, mock_start_http_server):
         """Test handling of consumer exceptions."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         # Mock start_consuming to raise an exception
         mock_consumer.start_consuming.side_effect = Exception("Consumer failed")
 
         out = StringIO()
 
-        call_command("launch-rbac-kafka-consumer", stdout=out)
+        call_command("launch-rbac-kafka-consumer", "relations", stdout=out)
 
         mock_exit.assert_called_once_with(1)
         mock_consumer.stop_consuming.assert_called_once()
 
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_signal_handler_sigterm(self, mock_consumer_class):
+    def test_signal_handler_sigterm(self):
         """Test SIGTERM signal handler."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         command = Command()
         command.consumer = mock_consumer
@@ -152,11 +184,10 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
             mock_consumer.stop_consuming.assert_called_once()
             mock_exit.assert_called_once_with(0)
 
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_signal_handler_sigint(self, mock_consumer_class):
+    def test_signal_handler_sigint(self):
         """Test SIGINT signal handler."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         command = Command()
         command.consumer = mock_consumer
@@ -192,11 +223,10 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
     @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
     @patch("signal.signal")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_signal_registration(self, mock_consumer_class, mock_signal, mock_start_http_server):
+    def test_signal_registration(self, mock_signal, mock_start_http_server):
         """Test that signal handlers are properly registered."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         # Mock start_consuming to avoid infinite loop
         def side_effect():
@@ -206,7 +236,7 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 
         out = StringIO()
 
-        call_command("launch-rbac-kafka-consumer", stdout=out)
+        call_command("launch-rbac-kafka-consumer", "relations", stdout=out)
 
         # Verify signal handlers were registered
         self.assertEqual(mock_signal.call_count, 2)
@@ -222,16 +252,15 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
         """Test command help text."""
         command = Command()
 
-        expected_help = "Launches the RBAC Kafka consumer with validation and health checks"
+        expected_help = "Launches the specified RBAC Kafka consumer with validation and health checks"
         self.assertEqual(command.help, expected_help)
 
     @patch.object(launch_rbac_kafka_consumer.LoadedConfig, "metricsPort", 9000)
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_add_arguments(self, mock_consumer_class, mock_start_http_server):
+    def test_add_arguments(self, mock_start_http_server):
         """Test command line argument parsing."""
         mock_consumer = Mock()
-        mock_consumer_class.return_value = mock_consumer
+        self.mock_relations_consumer_class.return_value = mock_consumer
 
         # Mock start_consuming to avoid infinite loop
         def side_effect():
@@ -242,13 +271,12 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
         out = StringIO()
 
         # Test with topic argument
-        call_command("launch-rbac-kafka-consumer", "--topic", "test-topic", stdout=out)
+        call_command("launch-rbac-kafka-consumer", "relations", "--topic", "test-topic", stdout=out)
 
-        mock_consumer_class.assert_called_once_with(topic="test-topic")
+        self.mock_relations_consumer_class.assert_called_once_with(topic="test-topic")
 
     @patch.object(launch_rbac_kafka_consumer, "start_http_server")
-    @patch.object(launch_rbac_kafka_consumer, "RBACKafkaConsumer")
-    def test_default_metrics_port_fallback_when_attribute_missing(self, mock_consumer_class, mock_start_http_server):
+    def test_default_metrics_port_fallback_when_attribute_missing(self, mock_start_http_server):
         """Test that metrics server falls back to port 9000 when LoadedConfig.metricsPort is not defined."""
         # Save original attribute if it exists
         original_value = None
@@ -259,7 +287,7 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 
         try:
             mock_consumer = Mock()
-            mock_consumer_class.return_value = mock_consumer
+            self.mock_relations_consumer_class.return_value = mock_consumer
 
             # Mock start_consuming to avoid infinite loop
             def side_effect():
@@ -269,7 +297,7 @@ class LaunchRBACKafkaConsumerCommandTests(TestCase):
 
             out = StringIO()
 
-            call_command("launch-rbac-kafka-consumer", stdout=out)
+            call_command("launch-rbac-kafka-consumer", "relations", stdout=out)
 
             # Should use default port 9000
             mock_start_http_server.assert_called_once_with(9000, addr="0.0.0.0")

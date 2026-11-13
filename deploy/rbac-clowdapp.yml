@@ -298,10 +298,6 @@ objects:
             value: ${KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS
             value: ${KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS}
-          - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
-            value: ${KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED}
-          - name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
-            value: ${KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
             value: ${KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE}
           - name: IT_KAFKA_BOOTSTRAP_SERVERS
@@ -373,10 +369,6 @@ objects:
             value: ${PARITY_CHECK_ORG_IDS}
           - name: PARITY_CHECK_SCHEDULE
             value: ${PARITY_CHECK_SCHEDULE}
-          - name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
-            value: ${PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA}
-          - name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
-            value: ${KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED}
           - name: READ_ONLY_API_MODE
             value: ${READ_ONLY_API_MODE}
           - name: PARITY_CHECK_ENABLED
@@ -876,7 +868,7 @@ objects:
           capabilities:
             drop:
               - ALL
-        command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer"]
+        command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer", "relations"]
         env:
           - name: APP_NAMESPACE
             valueFrom:
@@ -933,8 +925,6 @@ objects:
             value: ${KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS}
           - name: KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS
             value: ${KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS}
-          - name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
-            value: ${KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED}
           - name: REPLICATION_TO_RELATION_ENABLED
             value: ${REPLICATION_TO_RELATION_ENABLED}
           - name: EPH_ENV
@@ -1014,6 +1004,166 @@ objects:
           requests:
             cpu: ${RBAC_KAFKA_CONSUMER_CPU_REQUEST}
             memory: ${RBAC_KAFKA_CONSUMER_MEMORY_REQUEST}
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+        volumes:
+        - name: tmp
+          emptyDir: {}
+
+    - name: rbac-principals-consumer
+      minReplicas: ${{RBAC_PRINCIPAL_CONSUMER_REPLICAS}}
+      maxReplicas: ${{RBAC_PRINCIPAL_CONSUMER_REPLICAS}}
+      metadata:
+        annotations:
+          ignore-check.kube-linter.io/minimum-three-replicas: "A single consumer guarantees events are processed in the exact order they happened, maintaining the integrity and consistency."
+      podSpec:
+        image: ${IMAGE}:${IMAGE_TAG}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+              - ALL
+        command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer", "principals"]
+        env:
+          - name: APP_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: CLOWDER_ENABLED
+            value: ${CLOWDER_ENABLED}
+          - name: CW_NULL_WORKAROUND
+            value: ${CW_NULL_WORKAROUND}
+          - name: DJANGO_DEBUG
+            value: ${DJANGO_DEBUG}
+          - name: DJANGO_LOG_LEVEL
+            value: ${DJANGO_LOG_LEVEL}
+          # Logging configuration for consumer
+          - name: RBAC_LOG_LEVEL
+            value: ${RBAC_LOG_LEVEL}
+          - name: DJANGO_LOG_FORMATTER
+            value: ${DJANGO_LOG_FORMATTER}
+          - name: DJANGO_LOG_HANDLERS
+            value: ${DJANGO_LOG_HANDLERS}
+          # Use separate CloudWatch log stream for consumer
+          - name: CW_STREAM_NAME_SUFFIX
+            value: "-rbac-kafka-consumer"
+          - name: DJANGO_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                key: django-secret-key
+                name: rbac-secret
+                optional: false
+          - name: ENV_NAME
+            value: ${ENV_NAME}
+          # Glitchtip/Sentry for error monitoring
+          - name: GLITCHTIP_DSN
+            valueFrom:
+              secretKeyRef:
+                name: ${GLITCHTIP_SECRET}
+                key: dsn
+                optional: true
+          - name: KAFKA_ENABLED
+            value: ${KAFKA_ENABLED}
+          - name: RBAC_KAFKA_CONSUMER_TOPIC
+            value: ${RBAC_KAFKA_CONSUMER_TOPIC}
+          - name: RBAC_KAFKA_CONSUMER_GROUP_ID
+            value: ${RBAC_KAFKA_CONSUMER_GROUP_ID}
+          - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
+            value: ${RBAC_KAFKA_CUSTOM_CONSUMER_BROKER}
+          - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_TOPIC}
+          - name: KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
+            value: ${KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC}
+          - name: KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS
+            value: ${KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS}
+          - name: KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS
+            value: ${KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS}
+          - name: KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS
+            value: ${KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS}
+          - name: REPLICATION_TO_RELATION_ENABLED
+            value: ${REPLICATION_TO_RELATION_ENABLED}
+          - name: EPH_ENV
+            value: ${EPH_ENV}
+          - name: RELATION_API_SERVER
+            value: ${RELATION_API_SERVER}
+          # Relations API variables
+          - name: RELATION_API_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                key: rbac-client-id
+                name: service-accounts
+                optional: true
+          - name: RELATION_API_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                key: rbac-client-secret
+                name: service-accounts
+                optional: true
+          # Inventory API variables
+          - name: INVENTORY_API_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                key: rbac-client-id
+                name: service-accounts
+                optional: true
+          - name: INVENTORY_API_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                key: rbac-client-secret
+                name: service-accounts
+                optional: true
+          - name: INVENTORY_API_SERVER
+            value: ${INVENTORY_API_SERVER}
+          - name: INVENTORY_API_TOKEN_URL
+            value: ${INVENTORY_API_TOKEN_URL}
+          - name: SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID
+            value: ${SYSTEM_DEFAULT_ROOT_WORKSPACE_ROLE_UUID}
+          - name: SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID
+            value: ${SYSTEM_ADMIN_ROOT_WORKSPACE_ROLE_UUID}
+          - name: SYSTEM_DEFAULT_TENANT_ROLE_UUID
+            value: ${SYSTEM_DEFAULT_TENANT_ROLE_UUID}
+          - name: SYSTEM_ADMIN_TENANT_ROLE_UUID
+            value: ${SYSTEM_ADMIN_TENANT_ROLE_UUID}
+          - name: ROOT_SCOPE_PERMISSIONS
+            value: ${ROOT_SCOPE_PERMISSIONS}
+          - name: TENANT_SCOPE_PERMISSIONS
+            value: ${TENANT_SCOPE_PERMISSIONS}
+          - name: DEFAULT_SCOPE_PERMISSIONS
+            value: ${DEFAULT_SCOPE_PERMISSIONS}
+          - name: ALL_SCOPE_PERMISSIONS
+            value: ${ALL_SCOPE_PERMISSIONS}
+          - name: AUTOMATIC_SCOPE_MIGRATION_ENABLED
+            value: ${AUTOMATIC_SCOPE_MIGRATION_ENABLED}
+          - name: REDHAT_SSO
+            value: ${REDHAT_SSO}
+        livenessProbe:
+          exec:
+            command: ["test", "-f", "/tmp/kubernetes-liveness"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        readinessProbe:
+          exec:
+            command: ["test", "-f", "/tmp/kubernetes-readiness"]
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        resources:
+          limits:
+            cpu: ${RBAC_PRINCIPAL_CONSUMER_CPU_LIMIT}
+            memory: ${RBAC_PRINCIPAL_CONSUMER_MEMORY_LIMIT}
+          requests:
+            cpu: ${RBAC_PRINCIPAL_CONSUMER_CPU_REQUEST}
+            memory: ${RBAC_PRINCIPAL_CONSUMER_MEMORY_REQUEST}
         volumeMounts:
         - mountPath: /tmp
           name: tmp
@@ -2021,15 +2171,9 @@ parameters:
     or from a single identity infrastructure domain (identity header, SSO, BOP).
     This defines that single domain.
   value: 'redhat'
-- name: PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA
-  description: Allow cleanup job to delete principals via messages from Kafka
-  value: 'False'
 - name: PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA
   description: Allow cleanup job to update principals via messages from Kafka
   value: 'False'
-- name: KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED
-  description: Enable the Kafka-based principal cleanup job
-  value: 'True'
 - name: PARITY_CHECK_ENABLED
   description: Enable Kessel-RBAC parity checks background job
   value: 'False'
@@ -2183,6 +2327,21 @@ parameters:
 - name: RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
   description: Custom Kafka broker URL for the RBAC Kafka consumer (if empty, uses default Clowder/localhost configuration)
   value: ''
+- name: RBAC_PRINCIPAL_CONSUMER_CPU_LIMIT
+  description:
+  value: 500m
+- name: RBAC_PRINCIPAL_CONSUMER_CPU_REQUEST
+  description:
+  value: 100m
+- name: RBAC_PRINCIPAL_CONSUMER_MEMORY_LIMIT
+  description:
+  value: 300Mi
+- name: RBAC_PRINCIPAL_CONSUMER_MEMORY_REQUEST
+  description:
+  value: 300Mi
+- name: RBAC_PRINCIPAL_CONSUMER_REPLICAS
+  description: The number of replicas for the RBAC Kafka consumer (set to 0 to disable)
+  value: '1'
 - name: KAFKA_PRINCIPAL_CLEANUP_TOPIC
   description: Kafka topic name for principal cleanup events. REQUIRED when PRINCIPAL_CLEANUP_DELETION_ENABLED_KAFKA=true (deployment will fail if not set).
   value: ''
@@ -2198,12 +2357,6 @@ parameters:
 - name: KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS
   description: Kafka consumer max poll interval (ms) for the principal-cleanup consumer group.
   value: '300000'
-- name: KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED
-  description: Enable static consumer-group membership (group.instance.id) for the principal-cleanup consumer to avoid full rebalance on each periodic rejoin.
-  value: 'True'
-- name: KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
-  description: Wall-clock budget (ms) per Kafka principal-cleanup Celery cycle. Keep below the 60s beat interval with headroom for consumer setup and shutdown.
-  value: '50000'
 - name: KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
   description: Max Kafka messages per BOP user lookup for principal cleanup. Duplicate user_ids within a batch are deduplicated before the call.
   value: '100'

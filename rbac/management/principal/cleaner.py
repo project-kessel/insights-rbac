@@ -18,19 +18,25 @@
 """Handler for principal clean up."""
 
 import base64
+import enum
 import json
 import logging
-import time
 from typing import NamedTuple, Optional
 from xml.parsers.expat import ExpatError
 
 import xmltodict
+from core.base_consumer import (
+    BaseConsumerMetrics,
+    BaseRBACKafkaConsumer,
+    CommitConfig,
+    RetryConfig,
+    make_consumer_metrics,
+)
 from core.kafka import RBACProducer, get_cluster_config
 from django.conf import settings
 from django.db import connection
-from kafka import KafkaConsumer, TopicPartition
-from kafka.errors import KafkaError
-from kafka.structs import OffsetAndMetadata
+from kafka import TopicPartition
+from kafka.consumer.fetcher import ConsumerRecord
 from management.atomic_transactions import run_atomic_with_retry
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.principal.model import Principal
@@ -50,21 +56,11 @@ PROXY = PrincipalProxy()  # pylint: disable=invalid-name
 LOCK_ID = 42  # For Keith, with Love
 KAFKA_CONSUMER_LOCK_ID = 43  # Guards Kafka consumer construction to prevent multi-worker join thrash
 
-# KAFKA Metric Messages
-METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL = "kafka_messages_success_total"
-METRIC_KAFKA_MESSAGES_FAILURE_TOTAL = "kafka_messages_failure_total"
-kafka_messages_success_total = Counter(
-    METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
-    "Number of Kafka messages processed successfully",
-)
-kafka_messages_failure_total = Counter(
-    METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
-    "Number of Kafka messages that failed to be processed",
-)
+base_metrics = make_consumer_metrics("rbac_principal_consumer")
 
 # KAFKA Shadow Mode Metrics
-METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "kafka_dry_run_messages_total"
-METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "kafka_dry_run_errors_total"
+METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "rbac_principal_consumer_dry_run_messages_total"
+METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "rbac_principal_consumer_dry_run_errors_total"
 kafka_dry_run_messages_total = Counter(
     METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL,
     "Number of Kafka messages processed in dry-run/shadow mode",
@@ -345,30 +341,21 @@ def _user_from_kafka_message_payload(user_id: str, message_user: dict, identifie
     return user
 
 
-class _LockContention(Exception):
-    """Raised when the advisory listener lock cannot be acquired."""
-
-    pass
-
-
 class MessageProcessingResult(NamedTuple):
     """
     Result of processing a Kafka message.
 
     Attributes:
-        should_continue: False if another listener is running (lock contention), True otherwise
         success: True if message was processed successfully, False if it failed
     """
 
-    should_continue: bool
     success: bool
 
 
 def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by_id: Optional[dict] = None):
     """Parse a Kafka message into a User object.
 
-    Handles tombstones, JSON and XML formats.
-    Returns (user, None) on success or (None, 'tombstone') for tombstones.
+    Handles JSON and XML formats.
     Raises on parse failure.
 
     Args:
@@ -376,26 +363,17 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by
         skip_bop: If True, do not call BOP (message-payload User only). Used for dry-run.
         bop_user_by_id: Optional prefetched BOP results keyed by user_id (str).
     """
-    if message.value is None:
-        return None, "tombstone"
-
     message_value = message.value.decode("utf-8") if isinstance(message.value, bytes) else message.value
 
     try:
         message_data = json.loads(message_value)
         canonical_message = message_data.get("CanonicalMessage", message_data)
-        return (
-            retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
-            None,
-        )
+        return retrieve_user_info_kafka(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id)
     except json.JSONDecodeError as json_error:
         try:
             data_dict = xmltodict.parse(message_value)
             canonical_message = data_dict.get("CanonicalMessage")
-            return (
-                retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id),
-                None,
-            )
+            return retrieve_user_info_xml(canonical_message, skip_bop=skip_bop, bop_user_by_id=bop_user_by_id)
         except ExpatError as xml_error:
             raise Exception(
                 f"Message is neither valid JSON nor valid XML. " f"JSON error: {json_error}. XML error: {xml_error}"
@@ -403,7 +381,7 @@ def _parse_kafka_message_to_user(message, *, skip_bop: bool = False, bop_user_by
 
 
 def _try_extract_user_id_from_kafka_message(message) -> Optional[str]:
-    """Best-effort user_id extraction for BOP batching. Returns None for tombstones/unparseable."""
+    """Best-effort user_id extraction for BOP batching. Returns None for unparseable."""
     if message.value is None:
         return None
 
@@ -436,7 +414,7 @@ def _fetch_bop_users_by_ids(user_ids: list[str]) -> dict:
         return {}
 
     logger.info(
-        "process_principal_events_from_kafka: Batch BOP lookup for %d unique user_id(s) (from %d message(s))",
+        "Batch BOP lookup for %d unique user_id(s) (from %d message(s))",
         len(unique_ids),
         len(user_ids),
     )
@@ -463,113 +441,30 @@ def _collect_user_ids_from_kafka_messages(messages) -> list[str]:
     return user_ids
 
 
-def _commit_kafka_message(consumer, message) -> None:
-    """
-    Commit the offset for a single message.
-
-    Must use an explicit offset: messages are buffered into a batch before processing,
-    so the consumer position already points past the whole batch. A bare ``commit()``
-    would incorrectly mark unprocessed messages as done.
-    """
-    tp = TopicPartition(message.topic, message.partition)
-    consumer.commit({tp: OffsetAndMetadata(message.offset + 1, "")})
+class _MetricStatus(enum.StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
+    DLQ_SENT = "dlq"
+    DLQ_ERROR = "dlq_error"
+    DLQ_ERROR_IGNORED = "dlq_error_ignored"
 
 
-def _process_kafka_message_batch(
-    consumer,
-    messages,
-    bootstrap_service: TenantBootstrapService,
-    dlq_producer,
-    dry_run: bool,
-) -> bool:
-    """
-    Process a batch of Kafka messages with a single deduped BOP call.
-
-    Prefetches BOP data for unique user_ids in the batch, then processes and commits
-    each message in order (each message still runs ``update_user``; only the BOP
-    lookup is deduped). Returns False if the consumer should stop.
-    """
-    if not messages:
-        return True
-
-    bop_user_by_id = None
-    if not dry_run:
-        user_ids = _collect_user_ids_from_kafka_messages(messages)
-        try:
-            bop_user_by_id = _fetch_bop_users_by_ids(user_ids)
-        except Exception as e:
-            logger.error(
-                "process_principal_events_from_kafka: Batch BOP lookup failed: %s. "
-                "Stopping consumer without committing batch offsets.",
-                str(e),
-            )
-            capture_exception(e)
-            return False
-
-    for message in messages:
-        mode_suffix = " (DRY RUN)" if dry_run else ""
-        logger.info(
-            "process_principal_events_from_kafka: Processing message from partition %d at offset %d%s",
-            message.partition,
-            message.offset,
-            mode_suffix,
-        )
-        result = process_kafka_message(
-            message,
-            bootstrap_service,
-            dlq_producer,
-            dry_run=dry_run,
-            bop_user_by_id=bop_user_by_id,
-        )
-        if not result.should_continue:
-            logger.info("process_principal_events_from_kafka: Lock contention detected, aborting consumer.")
-            return False
-
-        if not result.success:
-            logger.warning(
-                "process_principal_events_from_kafka: Message processing failed at offset %d. "
-                "Stopping consumer to preserve at-least-once semantics. "
-                "Consumer will retry from this offset on restart.",
-                message.offset,
-            )
-            return False
-
-        try:
-            _commit_kafka_message(consumer, message)
-            logger.debug(
-                "process_principal_events_from_kafka: Committed offset %d for partition %d",
-                message.offset,
-                message.partition,
-            )
-        except Exception as commit_error:
-            logger.error(
-                "process_principal_events_from_kafka: Failed to commit offset %d: %s",
-                message.offset,
-                commit_error,
-            )
-            return False
-
-    return True
-
-
-def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResult:
+def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessingResult, _MetricStatus]:
     """Attempt to send a failed message to DLQ. Returns a MessageProcessingResult."""
     if not dlq_producer or not hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
         logger.warning(
-            "process_kafka_message: No DLQ producer configured. "
-            "Failed message at offset %d will be retried on restart.",
+            "No DLQ producer configured. Failed message at offset %d will be retried.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run)
+        return MessageProcessingResult(success=dry_run), _MetricStatus.ERROR
 
     dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
     if not dlq_topic:
         logger.warning(
-            "process_kafka_message: No DLQ topic configured. "
-            "Failed message at offset %d will be retried on restart.",
+            "No DLQ topic configured. Failed message at offset %d will be retried.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run)
+        return MessageProcessingResult(success=dry_run), _MetricStatus.ERROR
 
     try:
         # NOTE: original_message may contain PII (usernames, org/account IDs)
@@ -598,31 +493,35 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
 
         dlq_producer.send_kafka_message(dlq_topic, dlq_message)
         logger.info(
-            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+            "Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
             dlq_topic,
             message.partition,
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=True)
+        return MessageProcessingResult(success=True), _MetricStatus.DLQ_SENT
 
     except Exception as dlq_error:
         logger.error(
-            "process_kafka_message: Failed to send message to DLQ: %s. " "Message will be retried on restart.",
+            "Failed to send message to DLQ: %s. Message will be retried.",
             str(dlq_error),
         )
         capture_exception(dlq_error)
+
         if dry_run:
-            logger.warning("process_kafka_message: DLQ failure in dry-run mode, committing offset anyway")
-            return MessageProcessingResult(should_continue=True, success=True)
-        return MessageProcessingResult(should_continue=True, success=False)
+            logger.warning("DLQ failure in dry-run mode, committing offset anyway")
+            return MessageProcessingResult(success=True), _MetricStatus.DLQ_ERROR_IGNORED
+
+        return MessageProcessingResult(success=False), _MetricStatus.DLQ_ERROR
 
 
-def process_kafka_message(
+def _process_kafka_message(
     message,
+    *,
     bootstrap_service: TenantBootstrapService,
     dlq_producer=None,
     dry_run: bool = False,
     bop_user_by_id: Optional[dict] = None,
+    metrics: BaseConsumerMetrics,
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -642,22 +541,27 @@ def process_kafka_message(
 
     Returns:
         MessageProcessingResult with:
-        - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
+
+    def record_status(message_type: str, recorded_status: _MetricStatus):
+        metrics.messages_processed_total.labels(message_type=message_type, status=str(recorded_status)).inc()
+
+    if message is None:
+        raise TypeError("Tombstone should have been handled in base consumer")
+
     # --- 1. Parse message (+ resolve user via BOP unless dry-run / prefetched) ---
     # Live mode calls BOP (network I/O) so can raise transient errors too.
     # Dry-run skips BOP and builds User from the payload only for structural validation.
     # When bop_user_by_id is provided, BOP was already fetched for the batch.
     try:
-        user, marker = _parse_kafka_message_to_user(
+        user = _parse_kafka_message_to_user(
             message, skip_bop=dry_run, bop_user_by_id=None if dry_run else bop_user_by_id
         )
     except Exception as e:
         mode_msg = " (DRY RUN)" if dry_run else ""
-        logger.error("process_kafka_message: Error parsing Kafka message%s: %s", mode_msg, str(e))
+        logger.error("Error parsing Kafka message%s: %s", mode_msg, str(e))
         capture_exception(e)
-        kafka_messages_failure_total.inc()
 
         is_permanent_error = isinstance(
             e,
@@ -675,63 +579,53 @@ def process_kafka_message(
         if dry_run:
             kafka_dry_run_errors_total.inc()
             if is_permanent_error:
-                return _send_to_dlq(message, e, dlq_producer, dry_run=True)
+                result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=True)
+                record_status("unknown", dlq_status)
+                return result
             else:
                 # Transient error in dry-run: commit offset and continue
                 logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
-                return MessageProcessingResult(should_continue=True, success=True)
+                record_status("unknown", _MetricStatus.ERROR)
+                return MessageProcessingResult(success=True)
 
         if is_permanent_error:
-            return _send_to_dlq(message, e, dlq_producer, dry_run=False)
+            result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
+            record_status("unknown", dlq_status)
+            return result
         else:
             logger.warning(
-                "process_kafka_message: Transient error at offset %d. "
-                "Will not commit offset - message will be retried on next consumer run.",
+                "Transient error at offset %d. Will not commit offset - message will be retried.",
                 message.offset,
             )
-            return MessageProcessingResult(should_continue=True, success=False)
+            record_status("unknown", _MetricStatus.ERROR)
+            return MessageProcessingResult(success=False)
 
-    # --- 2. Tombstone handling (no DB needed) ---
-    if marker == "tombstone":
-        logger.warning(
-            "process_kafka_message: Received tombstone message (null value) at offset %d. "
-            "Tombstones are not expected in principal cleanup topic. Skipping.",
-            message.offset,
-        )
-        kafka_messages_success_total.inc()
-        return MessageProcessingResult(should_continue=True, success=True)
-
-    # --- 3. Dry-run mode: structure validated above (no BOP, no DB writes) ---
+    # --- 2. Dry-run mode: structure validated above (no BOP, no DB writes) ---
     if dry_run:
         logger.debug(
             "DRY RUN: Validated message without BOP (user_id=%s); skipping DB writes",
             getattr(user, "user_id", None),
         )
-        kafka_messages_success_total.inc()
+        record_status("principal", _MetricStatus.SUCCESS)
         kafka_dry_run_messages_total.inc()
-        return MessageProcessingResult(should_continue=True, success=True)
+        return MessageProcessingResult(success=True)
 
-    # --- 4. Normal mode: DB work with proper outer retry ---
+    # --- 3. Normal mode: DB work with proper outer retry ---
     try:
 
         def _db_work():
             if not _lock_listener():
-                raise _LockContention()
+                raise RuntimeError("Could not acquire lock")
             if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
                 bootstrap_service.update_user(user, ready_tenant=False)
 
         run_atomic_with_retry(5, _db_work)
-        kafka_messages_success_total.inc()
-        return MessageProcessingResult(should_continue=True, success=True)
-
-    except _LockContention:
-        logger.info("process_kafka_message: Another listener is running. Aborting.")
-        return MessageProcessingResult(should_continue=False, success=False)
+        record_status("principal", _MetricStatus.SUCCESS)
+        return MessageProcessingResult(success=True)
 
     except Exception as e:
-        logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
+        logger.error("Error processing Kafka message: %s", str(e))
         capture_exception(e)
-        kafka_messages_failure_total.inc()
 
         # Determine if this is a permanent error or transient error
         is_permanent_error = isinstance(
@@ -746,159 +640,15 @@ def process_kafka_message(
 
         if not is_permanent_error:
             logger.warning(
-                "process_kafka_message: Transient error at offset %d. "
-                "Will not commit offset - message will be retried on next consumer run.",
+                "Transient error at offset %d. Will not commit offset - message will be retried.",
                 message.offset,
             )
-            return MessageProcessingResult(should_continue=True, success=False)
+            record_status("principal", _MetricStatus.ERROR)
+            return MessageProcessingResult(success=False)
 
-        return _send_to_dlq(message, e, dlq_producer, dry_run=False)
-
-
-def process_principal_events_from_kafka(
-    bootstrap_service: Optional[TenantBootstrapService] = None, dry_run: bool = False
-):
-    """
-    Process principal events from Kafka.
-
-    Args:
-        bootstrap_service: Service for tenant/user operations
-        dry_run: If True, process messages but don't write to database (shadow mode)
-    """
-    mode_msg = " (DRY RUN - SHADOW MODE)" if dry_run else ""
-    logger.info(f"process_principal_events_from_kafka: Start processing principal events from Kafka{mode_msg}.")
-
-    if dry_run:
-        logger.warning(
-            "KAFKA SHADOW MODE: Messages will be parsed without BOP and with NO database writes. "
-            "This is for consume/commit validation only."
-        )
-    bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
-
-    # Validate required configuration
-    topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
-    if not topic:
-        logger.error(
-            "process_principal_events_from_kafka: KAFKA_PRINCIPAL_CLEANUP_TOPIC is not configured. "
-            "Cannot process principal events from Kafka."
-        )
-        return
-
-    # Build Kafka consumer configuration
-    # NOTE: This consumer runs periodically via Celery beat (every 60s) and consumes for 15s,
-    # creating a 45-second gap between consumption periods. This matches the historical
-    # message-bus consumption pattern. For continuous consumption, a persistent
-    # consumer (like launch-rbac-kafka-consumer) would be more appropriate, but this
-    # approach maintains compatibility with the existing periodic architecture.
-
-    # Include ENV_NAME in group_id to prevent offset interference across environments
-    # In multi-env setups (staging, ephemeral, CI) that share a Kafka cluster, environments
-    # must use distinct consumer groups to avoid message loss and offset conflicts
-    env_name = getattr(settings, "ENV_NAME", "stage")
-
-    it_kafka_servers, consumer_auth = get_cluster_config("it_managed", for_consumer=True)
-    if not it_kafka_servers or not consumer_auth:
-        # No IT-managed credentials wired yet (or missing) -> safely no-op instead of falling back to
-        # the Clowder cluster, which does not host the principal-cleanup topics.
-        logger.warning(
-            "process_principal_events_from_kafka: IT-managed Kafka cluster is not configured "
-            "(missing bootstrap servers or credentials). Skipping Kafka consume for topic '%s'.",
-            topic,
-        )
-        return
-
-    kafka_config = {
-        "bootstrap_servers": it_kafka_servers,
-        "group_id": f"{settings.SA_NAME}-{env_name}-principal-cleanup",
-        "auto_offset_reset": "earliest",
-        "enable_auto_commit": False,  # Manual commit for at-least-once semantics
-        # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
-        # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
-        "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS,
-        # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
-        "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,
-        "heartbeat_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS,
-        "max_poll_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS,
-    }
-    kafka_config.update(consumer_auth)
-
-    # Static membership: reuse same group.instance.id across periodic cycles to avoid full rebalance
-    if settings.KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED:
-        kafka_config["group_instance_id"] = f"{settings.SA_NAME}-{env_name}-principal-cleanup-static"
-
-    # Initialize consumer to None to avoid UnboundLocalError in finally block
-    consumer = None
-
-    consumer_lock_held = False
-
-    # Initialize DLQ producer if DLQ topic is configured. The DLQ topic is also on the IT-managed
-    # cluster, so the producer must target that profile (not the default Clowder one).
-    dlq_topic = getattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", None)
-    dlq_producer = None
-    if dlq_topic:
-        try:
-            dlq_producer = RBACProducer(cluster="it_managed")
-            logger.info("process_principal_events_from_kafka: DLQ producer initialized for topic: %s", dlq_topic)
-        except Exception as e:
-            logger.warning(
-                "process_principal_events_from_kafka: Failed to initialize DLQ producer: %s. "
-                "Failed messages will be retried instead of sent to DLQ.",
-                str(e),
-            )
-
-    try:
-        consumer_lock_held = _try_acquire_kafka_consumer_lock()
-        if not consumer_lock_held:
-            logger.info(
-                "process_principal_events_from_kafka: Another worker is already running the Kafka consumer. "
-                "Skipping this cycle to avoid consumer group rebalance thrash."
-            )
-            return
-
-        consumer = KafkaConsumer(topic, **kafka_config)
-        logger.info("process_principal_events_from_kafka: Connected to Kafka, subscribed to topic: %s", topic)
-
-        # Wall-clock budget so a busy topic cannot keep this Celery task alive past the drain window.
-        # consumer_timeout_ms alone only ends the iterator after idle polls.
-        drain_timeout_ms = settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS
-        drain_deadline = time.monotonic() + (drain_timeout_ms / 1000.0)
-        batch_size = settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
-        batch = []
-
-        # Process messages in batches so we can dedupe user_ids and make one BOP call per batch.
-        for message in consumer:
-            if time.monotonic() >= drain_deadline:
-                logger.info(
-                    "process_principal_events_from_kafka: Drain window of %dms elapsed, stopping cycle.",
-                    drain_timeout_ms,
-                )
-                break
-
-            batch.append(message)
-            if len(batch) >= batch_size:
-                if not _process_kafka_message_batch(consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run):
-                    batch = []
-                    break
-                batch = []
-
-        if batch and not _process_kafka_message_batch(
-            consumer, batch, bootstrap_service, dlq_producer, dry_run=dry_run
-        ):
-            logger.info("process_principal_events_from_kafka: Final batch processing stopped the consumer.")
-
-    except KafkaError as e:
-        logger.error("process_principal_events_from_kafka: Kafka error: %s", str(e))
-        capture_exception(e)
-    finally:
-        if consumer is not None:
-            try:
-                consumer.close()
-                logger.info("process_principal_events_from_kafka: Kafka consumer closed.")
-            except Exception as e:
-                logger.error("process_principal_events_from_kafka: Error closing consumer: %s", str(e))
-        if consumer_lock_held:
-            _release_kafka_consumer_lock()
-        logger.info("process_principal_events_from_kafka: Principal event processing finished.")
+        result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
+        record_status("principal", dlq_status)
+        return result
 
 
 def _lock_listener() -> bool:
@@ -911,28 +661,130 @@ def _lock_listener() -> bool:
     return result[0]  # Returns True if lock acquired, False otherwise
 
 
-def _try_acquire_kafka_consumer_lock() -> bool:
-    """
-    Attempt to acquire session-level advisory lock for Kafka consumer construction.
-
-    Uses a session-level lock (not transaction-level) so it can span the entire consume loop.
-    Returns True if lock acquired, False if another worker already holds it.
-    Must call _release_kafka_consumer_lock() in finally block when done.
-    """
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_try_advisory_lock(%s);", [KAFKA_CONSUMER_LOCK_ID])
-        result = cursor.fetchone()
-    if result is None:
-        raise Exception("Advisory lock returned none, expected bool.")
-    return result[0]  # Returns True if lock acquired, False otherwise
+def _env_name() -> str:
+    return getattr(settings, "ENV_NAME", "stage")
 
 
-def _release_kafka_consumer_lock():
-    """Release the session-level advisory lock for Kafka consumer."""
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_unlock(%s);", [KAFKA_CONSUMER_LOCK_ID])
-        result = cursor.fetchone()
-    if result is None:
-        raise Exception("Advisory unlock returned none, expected bool.")
-    if not result[0]:
-        logger.warning("_release_kafka_consumer_lock: Failed to release lock (was it held?)")
+def _consumer_group_id() -> str:
+    # Include ENV_NAME in group_id to prevent offset interference across environments
+    # In multi-env setups (staging, ephemeral, CI) that share a Kafka cluster, environments
+    # must use distinct consumer groups to avoid message loss and offset conflicts
+    return f"{settings.SA_NAME}-{_env_name()}-principal-cleanup"
+
+
+def _consumer_config() -> dict:
+    it_kafka_servers, consumer_auth = get_cluster_config("it_managed", for_consumer=True)
+
+    if not it_kafka_servers or not consumer_auth:
+        raise RuntimeError("IT-managed Kafka cluster is not configured (missing bootstrap servers or credentials). ")
+
+    kafka_config = {
+        "bootstrap_servers": it_kafka_servers,
+        # No value_deserializer - leave as bytes to handle UTF-8 errors
+        # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
+        "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,
+        "heartbeat_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS,
+        "max_poll_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS,
+    }
+
+    kafka_config.update(consumer_auth)
+    return kafka_config
+
+
+def _make_dlq_producer() -> Optional[RBACProducer]:
+    # Initialize DLQ producer if DLQ topic is configured. The DLQ topic is also on the IT-managed
+    # cluster, so the producer must target that profile (not the default Clowder one).
+    dlq_topic = getattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC", None)
+
+    if not dlq_topic:
+        return None
+
+    try:
+        dlq_producer = RBACProducer(cluster="it_managed")
+        logger.info("DLQ producer initialized for topic: %s", dlq_topic)
+
+        return dlq_producer
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize DLQ producer: %s. Failed messages will be retried instead of sent to DLQ.",
+            str(e),
+        )
+
+
+class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
+    """Consumer for processing user update events."""
+
+    _dry_run: bool
+
+    def __init__(
+        self,
+        *,
+        topic: Optional[str] = None,
+        health_check_interval: int = 30,
+        retry_config: Optional[RetryConfig] = None,
+        commit_config: Optional[CommitConfig] = None,
+        bootstrap_service: Optional[TenantBootstrapService] = None,
+        dry_run: bool = False,
+    ):
+        """Initialize the Kafka consumer."""
+        if topic is None:
+            topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
+
+        if not topic:
+            raise RuntimeError("Topic not configured. Cannot process principal events from Kafka.")
+
+        super().__init__(
+            topic=topic,
+            group_id=_consumer_group_id(),
+            metrics=base_metrics,
+            health_check_interval=health_check_interval,
+            retry_config=retry_config,
+            commit_config=commit_config,
+            extra_consumer_config=_consumer_config(),
+        )
+
+        self._dry_run = dry_run
+        self._bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
+        self._dlq_producer = _make_dlq_producer()
+
+    def _do_handle_partitions_revoked(self, revoked_partitions: list[TopicPartition]):
+        pass
+
+    def _do_handle_partitions_assigned(self, assigned_partitions: list[TopicPartition]):
+        pass
+
+    def _batch_size(self) -> int:
+        return settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
+
+    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]) -> Optional[dict]:
+        if self._dry_run:
+            return None
+
+        user_ids = _collect_user_ids_from_kafka_messages(list(batch))
+
+        try:
+            return _fetch_bop_users_by_ids(user_ids)
+        except Exception as e:
+            logger.exception("Batch BOP lookup failed.", exc_info=e)
+            raise
+
+    def _prepare_for_message(self, message, first_message: bool):
+        pass
+
+    def _process_single(self, message: ConsumerRecord, batch_data: Optional[dict]) -> bool:
+        if (batch_data is None) and (not self._dry_run):
+            raise AssertionError("batch_data should be present when not in dry-run mode")
+
+        result = _process_kafka_message(
+            message,
+            bootstrap_service=self._bootstrap_service,
+            dlq_producer=self._dlq_producer,
+            dry_run=self._dry_run,
+            bop_user_by_id=batch_data,
+            metrics=self.metrics,
+        )
+
+        if not result.success:
+            return False
+
+        return True

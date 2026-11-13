@@ -29,7 +29,7 @@ if [ "$MODE" = "background" ]; then
       -e METRICS_PORT=9000 \
       --name rbac-kafka-consumer-test \
       --rm \
-      rbac_server python rbac/manage.py launch-rbac-kafka-consumer)
+      rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations)
 
     echo "Consumer started with container ID: $CONTAINER_ID"
     echo "Check logs with: $CONTAINER_RUNTIME logs rbac-kafka-consumer-test -f"
@@ -46,5 +46,5 @@ else
       -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
       -e METRICS_PORT=9000 \
       --rm \
-      rbac_server python rbac/manage.py launch-rbac-kafka-consumer
+      rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations
 fi

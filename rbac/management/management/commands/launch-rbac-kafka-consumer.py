@@ -4,13 +4,17 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import dataclass
+from typing import Optional, Protocol
 
 import sentry_sdk
 from app_common_python import LoadedConfig
+from core.base_consumer import BaseRBACKafkaConsumer
 from core.constants import CONSUMER_COMPONENT
 from core.kafka_consumer import RBACKafkaConsumer
 from django.conf import settings
 from django.core.management import BaseCommand
+from management.principal.cleaner import PrincipalKafkaConsumer
 from prometheus_client import start_http_server
 from sentry_sdk.integrations.logging import LoggingIntegration
 
@@ -103,10 +107,28 @@ def initialize_consumer_sentry():
         logger.exception(f"[{CONSUMER_COMPONENT}] Failed to initialize Sentry/Glitchtip")
 
 
+class _ConsumerFactory(Protocol):
+    def __call__(self, *, topic: Optional[str]) -> BaseRBACKafkaConsumer:
+        """Create a new consumer instance with the provided topic (or, if None, the default)."""
+        ...
+
+
+@dataclass
+class _ConsumerSpec:
+    factory: _ConsumerFactory
+    description: str
+
+
+_consumer_types = {
+    "relations": _ConsumerSpec(RBACKafkaConsumer, "relations consumer"),
+    "principals": _ConsumerSpec(PrincipalKafkaConsumer, "principal consumer"),
+}
+
+
 class Command(BaseCommand):
     """Command for launching the Kafka consumer for the read-after-writes."""
 
-    help = "Launches the RBAC Kafka consumer with validation and health checks"
+    help = "Launches the specified RBAC Kafka consumer with validation and health checks"
 
     def __init__(self, *args, **kwargs):
         """Initialize the command."""
@@ -115,6 +137,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         """Add command line arguments."""
+        parser.add_argument("consumer_type", choices=list(_consumer_types.keys()))
+
         parser.add_argument(
             "--topic",
             type=str,
@@ -146,9 +170,11 @@ class Command(BaseCommand):
                 # Exit the entire process, we don't want to spin up the consumer without metrics
                 sys.exit(1)
 
+            consumer_spec = _consumer_types[options["consumer_type"]]
+
             # Create and start consumer
             topic = options.get("topic")
-            self.consumer = RBACKafkaConsumer(topic=topic)
+            self.consumer = consumer_spec.factory(topic=topic)
 
             logger.info("Starting RBAC Kafka consumer...")
             self.consumer.start_consuming()

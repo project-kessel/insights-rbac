@@ -53,8 +53,6 @@ from core.kafka_consumer import (
     RetryConfig,
     _save_consistency_token_best_effort,
     consistency_token_save_total,
-    last_message_processed_time,
-    last_poll_time,
 )
 from django.db import OperationalError
 from django.test import TestCase
@@ -1308,7 +1306,7 @@ class RetryAllErrorsTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(_mock_message(message_value), self.topic_partition)
+                self.consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1332,7 +1330,7 @@ class RetryAllErrorsTests(TestCase):
         with patch.object(self.consumer, "_process_debezium_message", return_value=False):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                self.consumer._process_message_with_retry(_mock_message(message_value), self.topic_partition)
+                self.consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -1432,7 +1430,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         consumer._process_debezium_message = Mock(side_effect=mock_process_side_effect)
 
         try:
-            result = consumer._process_message_with_retry(_mock_message(test_message), topic_partition)
+            result = consumer._process_message_with_retry(_mock_message(test_message), batch_data=None)
         finally:
             # Restore original method
             consumer._process_debezium_message = original_method
@@ -1474,7 +1472,7 @@ class RBACKafkaConsumerRetryTests(TestCase):
         ):
             # Should raise RuntimeError after max retries are exceeded
             with self.assertRaises(RuntimeError) as ctx:
-                consumer._process_message_with_retry(_mock_message(message_value), topic_partition)
+                consumer._process_message_with_retry(_mock_message(message_value), batch_data=None)
 
             # Verify the error message indicates max retries exceeded
             self.assertIn("Max operation retries", str(ctx.exception))
@@ -2290,7 +2288,7 @@ class HeartbeatMetricTests(TestCase):
 
         before = time.time()
         message_value = json.loads(message.value.decode("utf-8"))
-        result = self.consumer._process_and_commit_message(message, tp, {})
+        result = self.consumer._process_and_commit_message(message, tp, {}, batch_data=None)
         after = time.time()
 
         # Assert processing succeeded
@@ -2299,7 +2297,7 @@ class HeartbeatMetricTests(TestCase):
         # Assert offset was stored
         self.consumer.offset_manager.store.assert_called_once_with(tp, message.offset, message.leader_epoch)
 
-        metric_value = last_message_processed_time._value.get()
+        metric_value = self.consumer.metrics.last_message_processed_time._value.get()
         self.assertGreaterEqual(metric_value, before)
         self.assertLessEqual(metric_value, after)
 
@@ -2308,7 +2306,7 @@ class HeartbeatMetricTests(TestCase):
         """Test that a successful health check updates last_poll_time even without messages."""
         import time
 
-        last_poll_time.set(0)
+        self.consumer.metrics.last_poll_time.set(0)
         self.consumer.is_consuming = True
         self.consumer.topic = "test-topic"
         self.consumer.consumer.partitions_for_topic.return_value = {0}
@@ -2319,7 +2317,7 @@ class HeartbeatMetricTests(TestCase):
         self.consumer._health_check_loop_iteration()
         after = time.time()
 
-        metric_value = last_poll_time._value.get()
+        metric_value = self.consumer.metrics.last_poll_time._value.get()
         self.assertGreaterEqual(metric_value, before)
         self.assertLessEqual(metric_value, after)
 
@@ -2330,7 +2328,7 @@ class HeartbeatMetricTests(TestCase):
     @override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     def test_health_check_failure_does_not_update_last_poll_time(self):
         """Test that a failed health check does not update last_poll_time."""
-        last_poll_time.set(42.0)
+        self.consumer.metrics.last_poll_time.set(42.0)
         self.consumer.is_consuming = True
         self.consumer.topic = "test-topic"
         self.consumer.consumer.partitions_for_topic.side_effect = Exception("Kafka unreachable")
@@ -2339,7 +2337,7 @@ class HeartbeatMetricTests(TestCase):
 
         self.consumer._health_check_loop_iteration()
 
-        self.assertEqual(last_poll_time._value.get(), 42.0)
+        self.assertEqual(self.consumer.metrics.last_poll_time._value.get(), 42.0)
 
         # Assert liveness kept but readiness removed on failure
         self.consumer.liveness_file.touch.assert_called_once()
@@ -2350,7 +2348,7 @@ class HeartbeatMetricTests(TestCase):
         """Test that tombstone messages update last_message_processed_time."""
         import time
 
-        last_message_processed_time.set(0)
+        self.consumer.metrics.last_message_processed_time.set(0)
 
         message = Mock()
         message.partition = 0
@@ -2370,6 +2368,6 @@ class HeartbeatMetricTests(TestCase):
         self.consumer.offset_manager.store.assert_called_once_with(tp, message.offset, message.leader_epoch)
 
         # Assert heartbeat metric was updated
-        metric_value = last_message_processed_time._value.get()
+        metric_value = self.consumer.metrics.last_message_processed_time._value.get()
         self.assertGreaterEqual(metric_value, before)
         self.assertLessEqual(metric_value, after)

@@ -74,44 +74,6 @@ def principal_cleanup():
 
 
 @shared_task
-def principal_cleanup_via_kafka():
-    """Celery task to clean up principals via Kafka (Kafka-only deployments)."""
-    from management.principal.cleaner import process_principal_events_from_kafka
-
-    process_principal_events_from_kafka()
-
-
-@shared_task
-def principal_cleanup_kafka_tick():
-    """
-    Kafka principal-cleanup tick.
-
-    Processes principal cleanup events from Kafka when enabled.
-    If KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False, logs a warning and returns.
-    """
-    from management.principal.cleaner import process_principal_events_from_kafka
-
-    if not settings.KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED:
-        logger.warning("Kafka principal cleanup job is disabled (KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED is False)")
-        return
-
-    logger.info("Kafka principal cleanup: processing via Kafka")
-    process_principal_events_from_kafka(dry_run=False)
-
-
-@shared_task
-def principal_cleanup_via_message_bus():
-    """
-    Compatibility dispatcher for principal cleanup via message bus.
-
-    This task remains for backward compatibility with tests and manual invocation.
-    Routes directly to Kafka cleanup.
-    """
-    logger.info("Principal cleanup via message bus: routing to Kafka")
-    principal_cleanup_kafka_tick()
-
-
-@shared_task
 def run_migrations_in_worker():
     """Celery task to run migrations."""
     call_command("migrate")
@@ -558,8 +520,9 @@ def replicate_deleted_workspaces_in_worker(since: str):
 @shared_task
 def recompute_tenant_role_bindings_in_worker(org_id: str):
     """Celery task to recompute role bindings for tenant."""
-    from api.models import Tenant
     from internal.migrations.recompute_role_bindings import recompute_tenant_role_bindings
+
+    from api.models import Tenant
 
     # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-1 pii_manipulation)
     logger.info(
@@ -665,7 +628,6 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
 
     logger.info(f"[PCH] Starting Kessel parity checks for {len(org_ids)} org(s): {org_ids}")
 
-    from api.models import Tenant
     from management.group.model import Group
     from management.inventory_checker.inventory_api_check import (
         BootstrappedTenantInventoryChecker,
@@ -679,6 +641,8 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
     from management.role.v2_model import CustomRoleV2, SeededRoleV2
     from management.tenant_mapping.model import TenantMapping
     from management.workspace.model import Workspace
+
+    from api.models import Tenant
 
     stats = {
         "total_tenants": 0,
