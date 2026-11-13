@@ -696,7 +696,7 @@ def _consumer_config() -> dict:
         "bootstrap_servers": it_kafka_servers,
         # No value_deserializer - leave as bytes to handle tombstones and UTF-8 errors in process_kafka_message
         # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
-        "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS,
+        "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS,
         # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
         "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,
         "heartbeat_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS,
