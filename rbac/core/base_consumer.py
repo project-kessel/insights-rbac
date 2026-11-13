@@ -874,9 +874,10 @@ class BaseRBACKafkaConsumer(abc.ABC):
             f"(partition: {message.partition}, offset: {message.offset})"
         )
         # Treat None messages as successfully processed
-        self.offset_manager.store(topic_partition, message.offset, message.leader_epoch)
-        if self.offset_manager.should_commit(message.offset):
-            self.offset_manager.commit()  # Don't need to check return value here
+        if self.offset_manager:
+            self.offset_manager.store(topic_partition, message.offset, message.leader_epoch)
+            if self.offset_manager.should_commit(message.offset):
+                self.offset_manager.commit()  # Don't need to check return value here
 
         # Update activity timestamp and heartbeat metric for tombstones too,
         # so the consumer doesn't appear inactive when processing tombstones.
