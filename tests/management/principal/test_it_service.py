@@ -26,7 +26,7 @@ from django.test import override_settings
 from management.group.model import Group
 from management.principal.it_service import (
     ITService,
-    IT_KEY_SERVICE_ACCOUNT_EXPIRATION,
+    IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT,
     IT_KEY_SERVICE_ACCOUNT_TYPE,
     UnexpectedStatusCodeFromITError,
 )
@@ -99,7 +99,7 @@ class ITServiceTests(IdentityRequest):
             # "service-account" for both shapes. IT leaves these keys out for regular service accounts.
             if i % 2 == 0:
                 service_account[IT_KEY_SERVICE_ACCOUNT_TYPE] = MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
-                service_account[IT_KEY_SERVICE_ACCOUNT_EXPIRATION] = 1713876532 + i
+                service_account[IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT] = 1713876532 + i
 
             service_accounts.append(service_account)
 
@@ -334,7 +334,7 @@ class ITServiceTests(IdentityRequest):
                 )
 
                 self.assertEqual(
-                    it_sa.get(IT_KEY_SERVICE_ACCOUNT_EXPIRATION),
+                    it_sa.get(IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT),
                     rbac_sa.get("time_expires"),
                     "the time expires and expiration fields for the RBAC and IT models do not match",
                 )
@@ -1757,7 +1757,7 @@ class ITServiceTests(IdentityRequest):
             "createdBy": "service-account-owner",
             "createdAt": 1700000000,
             IT_KEY_SERVICE_ACCOUNT_TYPE: MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
-            IT_KEY_SERVICE_ACCOUNT_EXPIRATION: expiration,
+            IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT: expiration,
         }
 
         # Call the function under test.
@@ -1785,13 +1785,15 @@ class ITServiceTests(IdentityRequest):
     def test_transform_incoming_payload_raw_it_wire_keys(self) -> None:
         """Test transformation using literal IT wire keys rather than imported constants.
 
-        This guards against a mapping regression where the constants themselves drift from IT's actual contract.
-        The keys used here are the literal strings from the verified IT contract (CIAM-ADR-00090).
+        This guards against a mapping regression where the constants themselves drift from IT's actual contract,
+        so the keys here are literal strings taken from keycloak-idp!2655 and CIAM-ADR-00090 rather than from
+        our own constants. Asserting through the constants would only prove we are self-consistent: that is how
+        "expiration" survived here until the identity service's own merge request showed the key is "expiresAt".
         """
         client_id = str(uuid.uuid4())
-        expiration = 1800000000
+        expires_at = 1800000000
 
-        # Literal IT wire keys — NOT using IT_KEY_SERVICE_ACCOUNT_TYPE / IT_KEY_SERVICE_ACCOUNT_EXPIRATION.
+        # Literal IT wire keys — NOT using IT_KEY_SERVICE_ACCOUNT_TYPE / IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT.
         it_service_account = {
             "clientId": client_id,
             "name": "raw-wire-name",
@@ -1799,7 +1801,7 @@ class ITServiceTests(IdentityRequest):
             "createdBy": "raw-wire-owner",
             "createdAt": 1700000000,
             "type": "service_access_token",
-            "expiration": expiration,
+            "expiresAt": expires_at,
         }
 
         result = self.it_service._transform_incoming_payload(service_account_from_it_service=it_service_account)
@@ -1810,9 +1812,9 @@ class ITServiceTests(IdentityRequest):
             'literal IT wire key "type" must map to "service_account_type" in the response',
         )
         self.assertEqual(
-            expiration,
+            expires_at,
             result.get("time_expires"),
-            'literal IT wire key "expiration" must map to "time_expires" in the response',
+            'literal IT wire key "expiresAt" must map to "time_expires" in the response',
         )
         self.assertEqual(
             "service-account",
@@ -1886,7 +1888,7 @@ class ITServiceTests(IdentityRequest):
             service_account_from_it_service={
                 **base_service_account,
                 IT_KEY_SERVICE_ACCOUNT_TYPE: "",
-                IT_KEY_SERVICE_ACCOUNT_EXPIRATION: 0,
+                IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT: 0,
             }
         )
 
@@ -1900,13 +1902,29 @@ class ITServiceTests(IdentityRequest):
         invalid_expiration = self.it_service._transform_incoming_payload(
             service_account_from_it_service={
                 **base_service_account,
-                IT_KEY_SERVICE_ACCOUNT_EXPIRATION: "not-an-integer",
+                IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT: "not-an-integer",
             }
         )
         self.assertNotIn(
             "time_expires",
             invalid_expiration,
             "an expiration that cannot be represented as an integer should be omitted",
+        )
+
+        # The realistic case: IT persists expiresAt as a Keycloak client attribute, and those are always
+        # strings. A numeric string must come back as an int so that the flat principals endpoint, which
+        # passes the value through untouched, agrees with the group principals endpoint, which runs it
+        # through an IntegerField.
+        string_expiry = self.it_service._transform_incoming_payload(
+            service_account_from_it_service={
+                **base_service_account,
+                IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT: "1800000000",
+            }
+        )
+        self.assertEqual(
+            1800000000,
+            string_expiry.get("time_expires"),
+            "a numeric string expiry from IT must be coerced to an int, not passed through as a string",
         )
 
     def test_service_account_sort_key_timestamps_are_numeric(self) -> None:

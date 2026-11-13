@@ -71,7 +71,7 @@ def generate_it_service_accounts(
     # Imported here rather than at module scope: it_service defers its import of this module to avoid a cycle,
     # and importing the key names eagerly in both directions would reintroduce one.
     from management.principal.it_service import (
-        IT_KEY_SERVICE_ACCOUNT_EXPIRATION,
+        IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT,
         IT_KEY_SERVICE_ACCOUNT_TYPE,
     )
 
@@ -92,7 +92,7 @@ def generate_it_service_accounts(
         if is_service_access_token(principal.service_account_id):
             it_service_account[IT_KEY_SERVICE_ACCOUNT_TYPE] = MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
             # Each SAT gets a stable, varied expiry so they do not all tie when sorted by time_expires.
-            it_service_account[IT_KEY_SERVICE_ACCOUNT_EXPIRATION] = (
+            it_service_account[IT_KEY_SERVICE_ACCOUNT_EXPIRES_AT] = (
                 now + MOCK_SERVICE_ACCESS_TOKEN_LIFETIME_SECONDS + _sat_expiry_offset(principal.service_account_id)
             )
 
