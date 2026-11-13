@@ -463,8 +463,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
     """Attempt to send a failed message to DLQ. Returns a MessageProcessingResult."""
     if not dlq_producer or not hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
         logger.warning(
-            "process_kafka_message: No DLQ producer configured. "
-            "Failed message at offset %d will be retried on restart.",
+            "No DLQ producer configured. Failed message at offset %d will be retried.",
             message.offset,
         )
         return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
@@ -472,8 +471,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
     dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
     if not dlq_topic:
         logger.warning(
-            "process_kafka_message: No DLQ topic configured. "
-            "Failed message at offset %d will be retried on restart.",
+            "No DLQ topic configured. Failed message at offset %d will be retried.",
             message.offset,
         )
         return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
@@ -505,7 +503,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
 
         dlq_producer.send_kafka_message(dlq_topic, dlq_message)
         logger.info(
-            "process_kafka_message: Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
+            "Sent failed message to DLQ topic %s (partition=%d, offset=%d)",
             dlq_topic,
             message.partition,
             message.offset,
@@ -514,13 +512,13 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
 
     except Exception as dlq_error:
         logger.error(
-            "process_kafka_message: Failed to send message to DLQ: %s. " "Message will be retried on restart.",
+            "Failed to send message to DLQ: %s. Message will be retried.",
             str(dlq_error),
         )
         capture_exception(dlq_error)
 
         if dry_run:
-            logger.warning("process_kafka_message: DLQ failure in dry-run mode, committing offset anyway")
+            logger.warning("DLQ failure in dry-run mode, committing offset anyway")
             return MessageProcessingResult(should_continue=True, success=True), _MetricStatus.DLQ_ERROR_IGNORED
 
         return MessageProcessingResult(should_continue=True, success=False), _MetricStatus.DLQ_ERROR
@@ -573,7 +571,7 @@ def _process_kafka_message(
         )
     except Exception as e:
         mode_msg = " (DRY RUN)" if dry_run else ""
-        logger.error("process_kafka_message: Error parsing Kafka message%s: %s", mode_msg, str(e))
+        logger.error("Error parsing Kafka message%s: %s", mode_msg, str(e))
         capture_exception(e)
 
         is_permanent_error = isinstance(
@@ -607,8 +605,7 @@ def _process_kafka_message(
             return result
         else:
             logger.warning(
-                "process_kafka_message: Transient error at offset %d. "
-                "Will not commit offset - message will be retried on next consumer run.",
+                "Transient error at offset %d. Will not commit offset - message will be retried.",
                 message.offset,
             )
             record_status("unknown", _MetricStatus.ERROR)
@@ -638,12 +635,12 @@ def _process_kafka_message(
         return MessageProcessingResult(should_continue=True, success=True)
 
     except _LockContention:
-        logger.info("process_kafka_message: Another listener is running. Aborting.")
+        logger.info("Another listener is running. Aborting.")
         record_status("principal", _MetricStatus.LOCK_CONTENTION)
         return MessageProcessingResult(should_continue=False, success=False)
 
     except Exception as e:
-        logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
+        logger.error("Error processing Kafka message: %s", str(e))
         capture_exception(e)
 
         # Determine if this is a permanent error or transient error
@@ -659,8 +656,7 @@ def _process_kafka_message(
 
         if not is_permanent_error:
             logger.warning(
-                "process_kafka_message: Transient error at offset %d. "
-                "Will not commit offset - message will be retried on next consumer run.",
+                "Transient error at offset %d. Will not commit offset - message will be retried.",
                 message.offset,
             )
             record_status("principal", _MetricStatus.ERROR)
@@ -700,7 +696,7 @@ def _consumer_config() -> dict:
 
     kafka_config = {
         "bootstrap_servers": it_kafka_servers,
-        # No value_deserializer - leave as bytes to handle UTF-8 errors in process_kafka_message
+        # No value_deserializer - leave as bytes to handle UTF-8 errors
         # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
         "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS,
         # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
