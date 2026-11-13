@@ -484,6 +484,9 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
         await self._run_in_thread(self._on_assigned, list(assigned))
 
 
+_not_batched = object()
+
+
 class BaseRBACKafkaConsumer[BatchData](abc.ABC):
     """Common base class for standalone Kafka consumers."""
 
@@ -943,16 +946,25 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         last_committed_offsets = {}
 
         for batch in itertools.batched(self.consumer, self._batch_size()):
-            batch_data = self._prepare_for_batch(batch)
+            try:
+                initial_batch_data = self._prepare_for_batch(batch)
+            except Exception as e:
+                logger.warning("Failed to prepare batch; falling back to individual preparation.", exc_info=e)
+                initial_batch_data = _not_batched
 
             for message in batch:
                 # Record poll activity — each iteration processes one message from a poll batch.
                 # During idle periods (no messages), the health check thread keeps this metric fresh.
                 self._metrics.last_poll_time.set(time.time())
 
-                self._prepare_for_message(message=message, first_message=(len(last_committed_offsets) == 0))
-
                 try:
+                    if initial_batch_data is _not_batched:
+                        effective_batch_data = self._prepare_for_batch((message,))
+                    else:
+                        effective_batch_data = initial_batch_data
+
+                    self._prepare_for_message(message=message, first_message=(len(last_committed_offsets) == 0))
+
                     topic_partition = TopicPartition(message.topic, message.partition)
 
                     # Initialize offset tracking for new partitions
@@ -969,7 +981,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
                         message=message,
                         topic_partition=topic_partition,
                         last_committed_offsets=last_committed_offsets,
-                        batch_data=batch_data,
+                        batch_data=effective_batch_data,
                     )
 
                     if not should_continue:
