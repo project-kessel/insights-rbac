@@ -4,7 +4,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from django.conf import settings
 from django.db.models import Model, Q
+from management.disaster_recovery.kafka_reader import DisasterRecoveryError
 from management.group.model import Group
 from management.inventory_replicator.types import RelationTuple
 from management.principal.model import Principal
@@ -112,6 +114,40 @@ def check_resources_exist(tuples: list[RelationTuple]) -> dict[tuple[str, str], 
     _enrich_from_tenant_mapping(result)
 
     return result
+
+
+def check_group_memberships(tuples: list[RelationTuple]) -> dict[RelationTuple, bool]:
+    """Resolve ordinary group memberships from the restored database, failing on virtual groups."""
+    memberships = {
+        t
+        for t in tuples
+        if t.resource.type.namespace == "rbac" and t.resource.type.name == "group" and t.relation == "member"
+    }
+    if not memberships:
+        return {}
+    if any(
+        t.subject.subject.type.namespace != "rbac"
+        or t.subject.subject.type.name != "principal"
+        or t.subject.relation is not None
+        for t in memberships
+    ):
+        raise DisasterRecoveryError("Cannot verify unsupported group membership tuple")
+
+    group_ids = {t.resource.id for t in memberships}
+    virtual_ids = _find_in_tenant_mapping(group_ids, _TENANT_MAPPING_GROUP_FIELDS)
+    groups = Group.objects.filter(uuid__in=group_ids)
+    virtual_ids.update(str(g.uuid) for g in groups if g.platform_default or g.admin_default)
+    if virtual_ids:
+        raise DisasterRecoveryError("Cannot verify default group membership from restored RBAC data")
+
+    domain = settings.PRINCIPAL_USER_DOMAIN + "/"
+    if any(not t.subject.subject.id.startswith(domain) for t in memberships):
+        raise DisasterRecoveryError("Cannot verify group membership for an unknown principal domain")
+
+    user_ids = {t.subject.subject.id.removeprefix(domain) for t in memberships}
+    existing = set(groups.filter(principals__user_id__in=user_ids).values_list("uuid", "principals__user_id"))
+    existing = {(str(group_id), domain + user_id) for group_id, user_id in existing}
+    return {t: (t.resource.id, t.subject.subject.id) in existing for t in memberships}
 
 
 def _enrich_from_tenant_mapping(result: dict[tuple[str, str], bool]) -> None:

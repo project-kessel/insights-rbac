@@ -12,6 +12,7 @@ from management.disaster_recovery.kafka_reader import (
     _parse_event,
     read_events_in_window,
 )
+from tests.identity_request import IdentityRequest
 
 
 def _make_debezium_message(relations_to_add=None, relations_to_remove=None, event_type="create_workspace"):
@@ -249,8 +250,9 @@ class ReadEventsInWindowTest(TestCase):
         ]
         consumer.poll.side_effect = [{tp: messages}, {}, {}, {}]
 
-        events = read_events_in_window(900, 2000)
-        self.assertEqual(len(events), 2)
+        with self.assertRaisesRegex(DisasterRecoveryError, "event limit \\(2\\) reached"):
+            read_events_in_window(900, 2000)
+        consumer.close.assert_called_once()
 
     @override_settings(
         KAFKA_ENABLED=True,
@@ -268,3 +270,44 @@ class ReadEventsInWindowTest(TestCase):
 
         events = read_events_in_window(1000, 2000)
         self.assertEqual(events, [])
+
+
+class EventCapWorkerTest(IdentityRequest):
+    """A capped read must not write corrections or report success."""
+
+    @override_settings(
+        DR_RELATIONS_RECONCILE_ENABLED=True,
+        KAFKA_ENABLED=True,
+        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+        KAFKA_SERVERS=["localhost:9092"],
+        KAFKA_AUTH={},
+        DR_MAX_EVENTS_PER_RECONCILE=1,
+    )
+    @patch("management.disaster_recovery.service.write_corrective_events")
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_cap_fails_worker_without_writes(self, mock_consumer_cls, mock_write):
+        """The Celery task reports failure when a Kafka window hits the cap."""
+        from kafka import TopicPartition
+        from management.tasks import run_disaster_recovery_reconcile
+
+        consumer = mock_consumer_cls.return_value
+        tp = TopicPartition("test-topic", 0)
+        consumer.partitions_for_topic.return_value = {0}
+        consumer.offsets_for_times.return_value = {tp: MagicMock(offset=0)}
+        message = _make_kafka_message(_make_debezium_message(relations_to_add=[_make_relation_dict()]))
+        consumer.poll.return_value = {tp: [message]}
+
+        result = run_disaster_recovery_reconcile.run(restore_timestamp_ms=1000000, end_timestamp_ms=1000000)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("event limit (1) reached", result["error"])
+        mock_write.assert_not_called()
+        consumer.close.assert_called_once()
+
+    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic", DR_MAX_EVENTS_PER_RECONCILE=0)
+    @patch("management.disaster_recovery.kafka_reader.KafkaConsumer")
+    def test_nonpositive_cap_fails_before_connecting(self, mock_consumer_cls):
+        """A zero cap cannot silently produce an empty successful read."""
+        with self.assertRaisesRegex(DisasterRecoveryError, "must be positive"):
+            read_events_in_window(1000, 2000)
+        mock_consumer_cls.assert_not_called()
