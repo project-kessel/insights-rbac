@@ -139,10 +139,10 @@ urls:
 	DJANGO_READ_DOT_ENV_FILE=True $(PYTHON) $(PYDIR)/manage.py show_urls
 
 kafka-consumer:
-	KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group pipenv run python $(PYDIR)/manage.py launch-rbac-kafka-consumer
+	KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group pipenv run python $(PYDIR)/manage.py launch-rbac-kafka-consumer relations
 
 kafka-consumer-debug:
-	KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group DJANGO_LOG_LEVEL=DEBUG pipenv run python $(PYDIR)/manage.py launch-rbac-kafka-consumer
+	KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group DJANGO_LOG_LEVEL=DEBUG pipenv run python $(PYDIR)/manage.py launch-rbac-kafka-consumer relations
 
 
 create-test-db-file: run-migrations

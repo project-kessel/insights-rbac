@@ -577,7 +577,7 @@ ensure_kafka_consumer() {
             --name "$CONSUMER_CONTAINER_NAME" \
             $gateway_flag \
             --env-file "$env_file" \
-            rbac-server python rbac/manage.py launch-rbac-kafka-consumer
+            rbac-server python rbac/manage.py launch-rbac-kafka-consumer relations
     )
 
     sleep 5

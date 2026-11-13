@@ -870,7 +870,7 @@ objects:
           capabilities:
             drop:
               - ALL
-        command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer"]
+        command: ["/opt/rbac/rbac/manage.py", "launch-rbac-kafka-consumer", "relations"]
         env:
           - name: APP_NAMESPACE
             valueFrom:
