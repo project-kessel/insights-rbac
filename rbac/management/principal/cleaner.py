@@ -18,7 +18,6 @@
 """Handler for principal clean up."""
 
 import base64
-import datetime
 import enum
 import json
 import logging
