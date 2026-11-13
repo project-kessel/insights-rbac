@@ -18,13 +18,21 @@
 """Handler for principal clean up."""
 
 import base64
+import datetime
+import enum
 import json
 import logging
 from typing import NamedTuple, Optional
 from xml.parsers.expat import ExpatError
 
 import xmltodict
-from core.base_consumer import BaseConsumerMetrics, BaseRBACKafkaConsumer, CommitConfig, RetryConfig
+from core.base_consumer import (
+    BaseConsumerMetrics,
+    BaseRBACKafkaConsumer,
+    CommitConfig,
+    RetryConfig,
+    make_consumer_metrics,
+)
 from core.kafka import RBACProducer, get_cluster_config
 from django.conf import settings
 from django.db import connection
@@ -49,21 +57,11 @@ PROXY = PrincipalProxy()  # pylint: disable=invalid-name
 LOCK_ID = 42  # For Keith, with Love
 KAFKA_CONSUMER_LOCK_ID = 43  # Guards Kafka consumer construction to prevent multi-worker join thrash
 
-# KAFKA Metric Messages
-METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL = "kafka_messages_success_total"
-METRIC_KAFKA_MESSAGES_FAILURE_TOTAL = "kafka_messages_failure_total"
-kafka_messages_success_total = Counter(
-    METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
-    "Number of Kafka messages processed successfully",
-)
-kafka_messages_failure_total = Counter(
-    METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
-    "Number of Kafka messages that failed to be processed",
-)
+base_metrics = make_consumer_metrics("rbac_principal_consumer")
 
 # KAFKA Shadow Mode Metrics
-METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "kafka_dry_run_messages_total"
-METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "kafka_dry_run_errors_total"
+METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL = "rbac_principal_consumer_dry_run_messages_total"
+METRIC_KAFKA_DRY_RUN_ERRORS_TOTAL = "rbac_principal_consumer_dry_run_errors_total"
 kafka_dry_run_messages_total = Counter(
     METRIC_KAFKA_DRY_RUN_MESSAGES_TOTAL,
     "Number of Kafka messages processed in dry-run/shadow mode",
@@ -462,7 +460,17 @@ def _collect_user_ids_from_kafka_messages(messages) -> list[str]:
     return user_ids
 
 
-def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResult:
+class _MetricStatus(enum.StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
+    DLQ_SENT = "dlq"
+    DLQ_ERROR = "dlq_error"
+    DLQ_ERROR_IGNORED = "dlq_error_ignored"
+    TOMBSTONE_ACKNOWLEDGED = "acknowledged"
+    LOCK_CONTENTION = "lock_contention"
+
+
+def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessingResult, _MetricStatus]:
     """Attempt to send a failed message to DLQ. Returns a MessageProcessingResult."""
     if not dlq_producer or not hasattr(settings, "KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC"):
         logger.warning(
@@ -470,7 +478,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
             "Failed message at offset %d will be retried on restart.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run)
+        return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
 
     dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
     if not dlq_topic:
@@ -479,7 +487,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
             "Failed message at offset %d will be retried on restart.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run)
+        return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
 
     try:
         # NOTE: original_message may contain PII (usernames, org/account IDs)
@@ -513,7 +521,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
             message.partition,
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=True)
+        return MessageProcessingResult(should_continue=True, success=True), _MetricStatus.DLQ_SENT
 
     except Exception as dlq_error:
         logger.error(
@@ -521,18 +529,22 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> MessageProcessingResu
             str(dlq_error),
         )
         capture_exception(dlq_error)
+
         if dry_run:
             logger.warning("process_kafka_message: DLQ failure in dry-run mode, committing offset anyway")
-            return MessageProcessingResult(should_continue=True, success=True)
-        return MessageProcessingResult(should_continue=True, success=False)
+            return MessageProcessingResult(should_continue=True, success=True), _MetricStatus.DLQ_ERROR_IGNORED
+
+        return MessageProcessingResult(should_continue=True, success=False), _MetricStatus.DLQ_ERROR
 
 
 def _process_kafka_message(
     message,
+    *,
     bootstrap_service: TenantBootstrapService,
     dlq_producer=None,
     dry_run: bool = False,
     bop_user_by_id: Optional[dict] = None,
+    metrics: BaseConsumerMetrics,
 ) -> MessageProcessingResult:
     """
     Process each Kafka message.
@@ -555,6 +567,10 @@ def _process_kafka_message(
         - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
+
+    def record_status(message_type: str, recorded_status: _MetricStatus):
+        metrics.messages_processed_total.labels(message_type=message_type, status=str(recorded_status)).inc()
+
     # --- 1. Parse message (+ resolve user via BOP unless dry-run / prefetched) ---
     # Live mode calls BOP (network I/O) so can raise transient errors too.
     # Dry-run skips BOP and builds User from the payload only for structural validation.
@@ -567,7 +583,6 @@ def _process_kafka_message(
         mode_msg = " (DRY RUN)" if dry_run else ""
         logger.error("process_kafka_message: Error parsing Kafka message%s: %s", mode_msg, str(e))
         capture_exception(e)
-        kafka_messages_failure_total.inc()
 
         is_permanent_error = isinstance(
             e,
@@ -585,20 +600,26 @@ def _process_kafka_message(
         if dry_run:
             kafka_dry_run_errors_total.inc()
             if is_permanent_error:
-                return _send_to_dlq(message, e, dlq_producer, dry_run=True)
+                result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=True)
+                record_status("unknown", dlq_status)
+                return result
             else:
                 # Transient error in dry-run: commit offset and continue
                 logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
+                record_status("unknown", _MetricStatus.ERROR)
                 return MessageProcessingResult(should_continue=True, success=True)
 
         if is_permanent_error:
-            return _send_to_dlq(message, e, dlq_producer, dry_run=False)
+            result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
+            record_status("unknown", dlq_status)
+            return result
         else:
             logger.warning(
                 "process_kafka_message: Transient error at offset %d. "
                 "Will not commit offset - message will be retried on next consumer run.",
                 message.offset,
             )
+            record_status("unknown", _MetricStatus.ERROR)
             return MessageProcessingResult(should_continue=True, success=False)
 
     # --- 2. Tombstone handling (no DB needed) ---
@@ -608,7 +629,7 @@ def _process_kafka_message(
             "Tombstones are not expected in principal cleanup topic. Skipping.",
             message.offset,
         )
-        kafka_messages_success_total.inc()
+        record_status("tombstone", _MetricStatus.TOMBSTONE_ACKNOWLEDGED)
         return MessageProcessingResult(should_continue=True, success=True)
 
     # --- 3. Dry-run mode: structure validated above (no BOP, no DB writes) ---
@@ -617,7 +638,7 @@ def _process_kafka_message(
             "DRY RUN: Validated message without BOP (user_id=%s); skipping DB writes",
             getattr(user, "user_id", None),
         )
-        kafka_messages_success_total.inc()
+        record_status("principal", _MetricStatus.SUCCESS)
         kafka_dry_run_messages_total.inc()
         return MessageProcessingResult(should_continue=True, success=True)
 
@@ -631,17 +652,17 @@ def _process_kafka_message(
                 bootstrap_service.update_user(user, ready_tenant=False)
 
         run_atomic_with_retry(5, _db_work)
-        kafka_messages_success_total.inc()
+        record_status("principal", _MetricStatus.SUCCESS)
         return MessageProcessingResult(should_continue=True, success=True)
 
     except _LockContention:
         logger.info("process_kafka_message: Another listener is running. Aborting.")
+        record_status("principal", _MetricStatus.LOCK_CONTENTION)
         return MessageProcessingResult(should_continue=False, success=False)
 
     except Exception as e:
         logger.error("process_kafka_message: Error processing Kafka message: %s", str(e))
         capture_exception(e)
-        kafka_messages_failure_total.inc()
 
         # Determine if this is a permanent error or transient error
         is_permanent_error = isinstance(
@@ -660,9 +681,12 @@ def _process_kafka_message(
                 "Will not commit offset - message will be retried on next consumer run.",
                 message.offset,
             )
+            record_status("principal", _MetricStatus.ERROR)
             return MessageProcessingResult(should_continue=True, success=False)
 
-        return _send_to_dlq(message, e, dlq_producer, dry_run=False)
+        result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
+        record_status("principal", dlq_status)
+        return result
 
 
 def _lock_listener() -> bool:
@@ -740,7 +764,6 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
         self,
         *,
         topic: Optional[str] = None,
-        metrics: BaseConsumerMetrics,
         health_check_interval: int = 30,
         retry_config: Optional[RetryConfig] = None,
         commit_config: Optional[CommitConfig] = None,
@@ -757,7 +780,7 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
         super().__init__(
             topic=topic,
             group_id=_consumer_group_id(),
-            metrics=metrics,
+            metrics=base_metrics,
             health_check_interval=health_check_interval,
             retry_config=retry_config,
             commit_config=commit_config,
@@ -802,6 +825,7 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
             dlq_producer=self._dlq_producer,
             dry_run=self._dry_run,
             bop_user_by_id=batch_data,
+            metrics=self.metrics,
         )
 
         if not result.should_continue:

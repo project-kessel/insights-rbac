@@ -55,6 +55,10 @@ class BaseConsumerMetrics:
     message_retry_duration: Histogram
     rebalance_events_total: Counter
     last_message_processed_time: Gauge
+
+    # Updated by the message loop on each consumed message AND by the health check
+    # thread every 30s (even when the topic is idle), so the PollStalled alert only
+    # fires when the consumer is truly unresponsive.
     last_poll_time: Gauge
 
 
@@ -484,6 +488,49 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
         await self._run_in_thread(self._on_assigned, list(assigned))
 
 
+def make_consumer_metrics(prefix: str) -> BaseConsumerMetrics:
+    """Create a BaseConsumerMetrics with appropriate metrics for the provided name prefix."""
+    return BaseConsumerMetrics(
+        consumer_start_time=Gauge(
+            f"{prefix}_start_time_seconds",
+            "Unix timestamp when the consumer started",
+        ),
+        consumer_info=Gauge(
+            f"{prefix}_consumer_info",
+            "Consumer running state: 1=running, 0=stopped",
+            ["topic", "group_id"],
+        ),
+        messages_processed_total=Counter(
+            f"{prefix}_messages_processed_total",
+            "Total number of messages processed",
+            ["message_type", "status"],
+        ),
+        retry_attempts_total=Counter(
+            f"{prefix}_retry_attempts_total",
+            "Total number of message retry attempts",
+            ["retry_reason", "attempt_number"],
+        ),
+        message_retry_duration=Histogram(
+            f"{prefix}_message_retry_duration_seconds",
+            "Time spent retrying message processing",
+            ["retry_reason"],
+        ),
+        rebalance_events_total=Counter(
+            f"{prefix}_rebalance_events_total",
+            "Total number of rebalance events",
+            ["event_type"],  # partitions_assigned, partitions_revoked
+        ),
+        last_message_processed_time=Gauge(
+            f"{prefix}_last_message_processed_timestamp_seconds",
+            "Unix timestamp of the last successfully processed message",
+        ),
+        last_poll_time=Gauge(
+            f"{prefix}_last_poll_timestamp_seconds",
+            "Unix timestamp of the last successful Kafka poll (with or without messages)",
+        ),
+    )
+
+
 _not_batched = object()
 
 
@@ -521,7 +568,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         self._stop_health_check = threading.Event()
         self.last_activity = time.time()
         self._shutdown_in_progress = False
-        self._metrics = metrics
+        self.metrics = metrics
 
         # Offset manager (will be initialized when consumer is created)
         self.offset_manager: Optional[OffsetManager] = None
@@ -610,7 +657,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
 
                     # Consumer is alive and connected
                     self._update_health_status(True)
-                    self._metrics.last_poll_time.set(time.time())
+                    self.metrics.last_poll_time.set(time.time())
                     logger.debug("Health check passed: consumer is connected and ready")
 
                 except Exception as e:
@@ -691,7 +738,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
             retry_config=self.retry_config,
             shutdown_event=self._stop_health_check,
             error_handler=should_skip_retry,
-            metrics=self._metrics,
+            metrics=self.metrics,
         )
 
         # Process message with retry logic
@@ -729,7 +776,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
                 f"Message content: {message.value}"
             )
             logger.error(error_msg)
-            self._metrics.messages_processed_total.labels(message_type="unknown", status="max_retries_exceeded").inc()
+            self.metrics.messages_processed_total.labels(message_type="unknown", status="max_retries_exceeded").inc()
 
             # Mark consumer as paused to prevent offset commit on shutdown
             self.is_paused_for_retry = True
@@ -752,7 +799,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
                 f"Consumer will stop to prevent silent message loss."
             )
             logger.error(error_msg)
-            self._metrics.messages_processed_total.labels(message_type="unknown", status="error_handler_skip").inc()
+            self.metrics.messages_processed_total.labels(message_type="unknown", status="error_handler_skip").inc()
             raise
 
     def _initialize_consumer_setup(self):
@@ -792,7 +839,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         We commit our current offsets to ensure we don't lose progress.
         """
         # Track rebalance event
-        self._metrics.rebalance_events_total.labels(event_type="partitions_revoked").inc()
+        self.metrics.rebalance_events_total.labels(event_type="partitions_revoked").inc()
 
         if not self.commit_config.commit_on_rebalance:
             logger.debug("Rebalance offset commit disabled by config")
@@ -831,7 +878,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
             assigned_partitions: List of TopicPartition objects being assigned
         """
         # Track rebalance event
-        self._metrics.rebalance_events_total.labels(event_type="partitions_assigned").inc()
+        self.metrics.rebalance_events_total.labels(event_type="partitions_assigned").inc()
         logger.info(f"Partitions assigned: {assigned_partitions}")
 
         self._do_handle_partitions_assigned(assigned_partitions)
@@ -876,7 +923,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         # Update activity timestamp and heartbeat metric for tombstones too,
         # so the consumer doesn't appear inactive when processing tombstones.
         self.last_activity = time.time()
-        self._metrics.last_message_processed_time.set(self.last_activity)
+        self.metrics.last_message_processed_time.set(self.last_activity)
         return True
 
     def _process_and_commit_message(self, message, topic_partition, last_committed_offsets, batch_data: BatchData):
@@ -919,7 +966,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
 
             # Update activity timestamp and heartbeat metric
             self.last_activity = time.time()
-            self._metrics.last_message_processed_time.set(self.last_activity)
+            self.metrics.last_message_processed_time.set(self.last_activity)
             return True  # Continue processing
         else:
             # Shutdown interrupted - InterruptedError
@@ -955,7 +1002,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
             for message in batch:
                 # Record poll activity — each iteration processes one message from a poll batch.
                 # During idle periods (no messages), the health check thread keeps this metric fresh.
-                self._metrics.last_poll_time.set(time.time())
+                self.metrics.last_poll_time.set(time.time())
 
                 try:
                     if initial_batch_data is _not_batched:
@@ -997,7 +1044,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
                         f"Message will be retried on restart."
                     )
 
-                    self._metrics.messages_processed_total.labels(
+                    self.metrics.messages_processed_total.labels(
                         message_type="unknown", status="unexpected_error"
                     ).inc()
 
@@ -1011,14 +1058,14 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         """
         try:
             # Record consumer start time
-            self._metrics.consumer_start_time.set_to_current_time()
+            self.metrics.consumer_start_time.set_to_current_time()
             logger.info("Consumer start time recorded in metrics")
 
             # Initialize consumer and subscribe to topic
             self._initialize_consumer_setup()
 
             # Record consumer info after successful initialization
-            self._metrics.consumer_info.labels(
+            self.metrics.consumer_info.labels(
                 topic=self.topic,
                 group_id=self.group_id,
             ).set(1)
@@ -1071,7 +1118,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
 
         # Update consumer status metric
         if hasattr(self, "topic"):
-            self._metrics.consumer_info.labels(topic=self.topic, group_id=self.group_id).set(0)
+            self.metrics.consumer_info.labels(topic=self.topic, group_id=self.group_id).set(0)
             logger.info("Consumer status metric updated to stopped")
 
         # Commit any remaining offsets on stop ONLY if not paused for retry

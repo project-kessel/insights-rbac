@@ -28,8 +28,6 @@ from management.group.definer import seed_group
 from management.group.model import Group
 from management.policy.model import Policy
 from management.principal.cleaner import (
-    METRIC_KAFKA_MESSAGES_FAILURE_TOTAL,
-    METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL,
     PrincipalKafkaConsumer,
     clean_tenant_principals,
 )
@@ -359,7 +357,6 @@ class PrincipalKafkaTests(IdentityRequest):
 
     def _make_consumer(self, dry_run: bool = False) -> PrincipalKafkaConsumer:
         return PrincipalKafkaConsumer(
-            metrics=Mock(),
             retry_config=RetryConfig(
                 operation_max_retries=3,
                 backoff_factor=2,
@@ -385,11 +382,38 @@ class PrincipalKafkaTests(IdentityRequest):
         for topic_partition, actual_offset in actual_offsets.items():
             self.assertEqual(actual_offset.offset, expected_offsets[topic_partition.partition])
 
+    def _get_metric(self, name: str, labels: dict[str, str]) -> int:
+        return REGISTRY.get_sample_value(name, labels) or 0
+
+    def _get_principal_error_metric(self):
+        return self._get_metric(
+            "rbac_principal_consumer_messages_processed_total",
+            {"message_type": "principal", "status": "error"},
+        )
+
+    def _get_unexpected_error_metric(self):
+        return self._get_metric(
+            "rbac_principal_consumer_messages_processed_total",
+            {"message_type": "unknown", "status": "unexpected_error"},
+        )
+
+    def _get_dlq_metric(self, message_type: str):
+        return self._get_metric(
+            "rbac_principal_consumer_messages_processed_total",
+            {"message_type": message_type, "status": "dlq"},
+        )
+
+    def _get_success_metric(self):
+        return self._get_metric(
+            "rbac_principal_consumer_messages_processed_total",
+            {"message_type": "principal", "status": "success"},
+        )
+
     @patch("core.base_consumer.KafkaConsumer")
     @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
     def test_principal_cleanup_none(self, consumer_mock):
         """Test that we can run a principal clean up with no messages."""
-        before = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        before = self._get_success_metric()
 
         # Mock consumer with no messages
         consumer_instance = MagicMock()
@@ -398,7 +422,7 @@ class PrincipalKafkaTests(IdentityRequest):
 
         self._make_consumer().start_consuming()
 
-        after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        after = self._get_success_metric()
         self.assertTrue(before == after or before is None and after is None)
         consumer_instance.close.assert_called_once()
 
@@ -483,7 +507,7 @@ class PrincipalKafkaTests(IdentityRequest):
         self.group.principals.add(self.principal)
         self.group.save()
 
-        before = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        before = self._get_success_metric()
 
         # Mock consumer with one message
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
@@ -495,7 +519,7 @@ class PrincipalKafkaTests(IdentityRequest):
         cache_class.return_value = cache_mock
         self._make_consumer().start_consuming()
 
-        after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        after = self._get_success_metric()
         self.assertFalse(Principal.objects.filter(username=principal_name).exists())
         self.group.refresh_from_db()
         self.assertFalse(self.group.principals.all())
@@ -592,8 +616,8 @@ class PrincipalKafkaTests(IdentityRequest):
         self.group.principals.add(principal)
         self.group.save()
 
-        before = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL)
-        success_before = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        before = self._get_unexpected_error_metric()
+        success_before = self._get_success_metric()
 
         mock_message = create_mock_kafka_message(KAFKA_MESSAGE_BODY)
         consumer_instance = MagicMock()
@@ -607,14 +631,12 @@ class PrincipalKafkaTests(IdentityRequest):
         with self.assertRaises(RuntimeError):
             consumer.start_consuming()
 
-        after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL)
-        success_after = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_SUCCESS_TOTAL)
+        after = self._get_unexpected_error_metric()
+        success_after = self._get_success_metric()
         self.assertTrue(Principal.objects.filter(username=principal_name).exists())
         self.group.refresh_from_db()
         self.assertTrue(self.group.principals.all())
-        self.assertEqual(
-            (before if before is not None else 0) + 1 + consumer.retry_config.operation_max_retries, after
-        )
+        self.assertEqual(before + 1, after)
         self.assertTrue(success_before == success_after)
 
     @patch(
@@ -645,9 +667,9 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_mock.return_value = consumer_instance
 
         # Run in dry-run mode
-        before_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
+        before_dry_run = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_messages_total") or 0
         self._make_consumer(dry_run=True).start_consuming()
-        after_dry_run = REGISTRY.get_sample_value("kafka_dry_run_messages_total") or 0
+        after_dry_run = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_messages_total") or 0
 
         # Dry-run must not call BOP (payload-only validation)
         proxy_mock.assert_not_called()
@@ -689,9 +711,9 @@ class PrincipalKafkaTests(IdentityRequest):
         dlq_producer_mock.return_value = mock_dlq_instance
 
         # Run in dry-run mode
-        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+        before_errors = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_errors_total") or 0
         self._make_consumer(dry_run=True).start_consuming()
-        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+        after_errors = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_errors_total") or 0
 
         # Verify error metric was incremented
         self.assertEqual(
@@ -738,9 +760,9 @@ class PrincipalKafkaTests(IdentityRequest):
         retrieve_user_mock.side_effect = ConnectionError("Network timeout")
 
         # Run in dry-run mode
-        before_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+        before_errors = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_errors_total") or 0
         self._make_consumer(dry_run=True).start_consuming()
-        after_errors = REGISTRY.get_sample_value("kafka_dry_run_errors_total") or 0
+        after_errors = REGISTRY.get_sample_value("rbac_principal_consumer_dry_run_errors_total") or 0
 
         # Verify error metric was incremented
         self.assertEqual(
@@ -894,13 +916,12 @@ class PrincipalKafkaTests(IdentityRequest):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        # Run in normal mode (not dry-run) - should send to DLQ
-        before_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
+        before_dlq = self._get_dlq_metric("unknown")
         self._make_consumer().start_consuming()
-        after_failures = REGISTRY.get_sample_value(METRIC_KAFKA_MESSAGES_FAILURE_TOTAL) or 0
+        after_dlq = self._get_dlq_metric("unknown")
 
         # Verify failure metric was incremented
-        self.assertEqual(after_failures, before_failures + 1)
+        self.assertEqual(after_dlq, before_dlq + 1)
 
         # Verify message was sent to DLQ
         mock_dlq_instance.send_kafka_message.assert_called_once()

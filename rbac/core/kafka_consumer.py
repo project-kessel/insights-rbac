@@ -26,7 +26,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import grpc
-from core.base_consumer import BaseConsumerMetrics, BaseRBACKafkaConsumer, CommitConfig, RetryConfig, ValidationError
+from core.base_consumer import (
+    BaseRBACKafkaConsumer,
+    CommitConfig,
+    RetryConfig,
+    ValidationError,
+    make_consumer_metrics,
+)
 from core.kafka import PRODUCER_ONLY_CONFIGS
 from django.conf import settings
 from django.db import OperationalError, connection, transaction
@@ -36,7 +42,7 @@ from kafka import TopicPartition
 from kafka.consumer.fetcher import ConsumerRecord
 from kessel.inventory.v1beta2 import relationship_pb2
 from management.inventory_replicator.inventory_api_replicator import InventoryApiReplicator
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import Counter, Histogram
 
 from api.models import Tenant
 
@@ -45,22 +51,7 @@ inventory_api_replication = InventoryApiReplicator()
 logger = logging.getLogger("rbac.core.kafka_consumer")
 
 # Metrics
-consumer_start_time = Gauge(
-    "rbac_kafka_consumer_start_time_seconds",
-    "Unix timestamp when the consumer started",
-)
-
-consumer_info = Gauge(
-    "rbac_kafka_consumer_info",
-    "Consumer running state: 1=running, 0=stopped",
-    ["topic", "group_id"],
-)
-
-messages_processed_total = Counter(
-    "rbac_kafka_consumer_messages_processed_total",
-    "Total number of messages processed",
-    ["message_type", "status"],
-)
+base_metrics = make_consumer_metrics("rbac_kafka_consumer")
 
 message_processing_duration = Histogram(
     "rbac_kafka_consumer_message_processing_duration_seconds",
@@ -79,24 +70,6 @@ validation_errors_total = Counter(
     "rbac_kafka_consumer_validation_errors_total",
     "Total number of validation errors",
     ["error_type"],
-)
-
-retry_attempts_total = Counter(
-    "rbac_kafka_consumer_retry_attempts_total",
-    "Total number of message retry attempts",
-    ["retry_reason", "attempt_number"],
-)
-
-message_retry_duration = Histogram(
-    "rbac_kafka_consumer_message_retry_duration_seconds",
-    "Time spent retrying message processing",
-    ["retry_reason"],
-)
-
-rebalance_events_total = Counter(
-    "rbac_kafka_consumer_rebalance_events_total",
-    "Total number of rebalance events",
-    ["event_type"],  # partitions_assigned, partitions_revoked
 )
 
 lock_acquisition_total = Counter(
@@ -146,19 +119,6 @@ consistency_token_save_total = Counter(
     "rbac_kafka_consumer_consistency_token_save_total",
     "Consistency token save attempts and outcomes",
     ["status"],  # success, lock_timeout, error
-)
-
-last_message_processed_time = Gauge(
-    "rbac_kafka_consumer_last_message_processed_timestamp_seconds",
-    "Unix timestamp of the last successfully processed message",
-)
-
-# Updated by the message loop on each consumed message AND by the health check
-# thread every 30s (even when the topic is idle), so the PollStalled alert only
-# fires when the consumer is truly unresponsive.
-last_poll_time = Gauge(
-    "rbac_kafka_consumer_last_poll_timestamp_seconds",
-    "Unix timestamp of the last successful Kafka poll (with or without messages)",
 )
 
 
@@ -406,16 +366,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
             retry_config=retry_config,
             commit_config=commit_config,
             extra_consumer_config=_consumer_config(topic=topic),
-            metrics=BaseConsumerMetrics(
-                consumer_start_time=consumer_start_time,
-                consumer_info=consumer_info,
-                messages_processed_total=messages_processed_total,
-                retry_attempts_total=retry_attempts_total,
-                message_retry_duration=message_retry_duration,
-                rebalance_events_total=rebalance_events_total,
-                last_message_processed_time=last_message_processed_time,
-                last_poll_time=last_poll_time,
-            ),
+            metrics=base_metrics,
         )
 
         self.validator = MessageValidator()
@@ -705,7 +656,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
             logger.error(
                 f"Error processing Debezium message (partition: {message_partition}, offset: {message_offset}): {e}"
             )
-            messages_processed_total.labels(message_type="debezium", status="error").inc()
+            self.metrics.messages_processed_total.labels(message_type="debezium", status="error").inc()
             # Re-raise to allow retry logic to handle
             raise
 
@@ -722,7 +673,9 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
                     f"(partition: {message_partition}, offset: {message_offset}). "
                     f"Payload content: {debezium_msg.payload}"
                 )
-                messages_processed_total.labels(message_type="relations", status="validation_failed").inc()
+                self.metrics.messages_processed_total.labels(
+                    message_type="relations", status="validation_failed"
+                ).inc()
                 raise ValidationError(
                     f"Replication message validation failed for aggregateid: {debezium_msg.aggregateid}"
                 )
@@ -885,7 +838,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
                 f"replication_event_latency: {f'{latency_seconds:.3f}s' if latency_seconds is not None else 'N/A'})"
             )
 
-            messages_processed_total.labels(message_type="relations", status="success").inc()
+            self.metrics.messages_processed_total.labels(message_type="relations", status="success").inc()
             return True
 
         except ValidationError:
@@ -901,21 +854,21 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
                     f"(partition: {message_partition}, offset: {message_offset})"
                 )
                 logger.error(error_msg)
-                messages_processed_total.labels(message_type="relations", status="fencing_failed").inc()
+                self.metrics.messages_processed_total.labels(message_type="relations", status="fencing_failed").inc()
                 raise RuntimeError(error_msg) from e
             else:
                 logger.error(
                     f"gRPC error processing relations message: {e.code()}: {e.details()} "
                     f"(partition: {message_partition}, offset: {message_offset})"
                 )
-                messages_processed_total.labels(message_type="relations", status="grpc_error").inc()
+                self.metrics.messages_processed_total.labels(message_type="relations", status="grpc_error").inc()
                 raise
         except Exception as e:
             logger.error(
                 f"Error processing relations message: {e} "
                 f"(partition: {message_partition}, offset: {message_offset})"
             )
-            messages_processed_total.labels(message_type="relations", status="error").inc()
+            self.metrics.messages_processed_total.labels(message_type="relations", status="error").inc()
             # Re-raise to trigger retry logic
             raise
 
@@ -944,7 +897,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
                 f"Fix the producer or manually skip the offset, then restart the consumer."
             )
             logger.error(error_msg)
-            messages_processed_total.labels(message_type="unknown", status="json_error").inc()
+            self.metrics.messages_processed_total.labels(message_type="unknown", status="json_error").inc()
             raise
 
     def _ensure_lock_token_on_assignment(self):
