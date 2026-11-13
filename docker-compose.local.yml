@@ -266,7 +266,7 @@ services:
     container_name: rbac_local_kafka_consumer
     build: *rbac-build
     working_dir: /opt/rbac/rbac
-    entrypoint: ["python", "manage.py", "launch-rbac-kafka-consumer"]
+    entrypoint: ["python", "manage.py", "launch-rbac-kafka-consumer", "relations"]
     environment:
       <<: *rbac-env
       KAFKA_ENABLED: "True"

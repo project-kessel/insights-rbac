@@ -417,7 +417,7 @@ start_kafka_consumer() {
     RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group-local \
     DJANGO_LOG_HANDLERS=console \
     DJANGO_LOG_FILE=/tmp/rbac_consumer_ryw_test.log \
-    $PYTHON manage.py launch-rbac-kafka-consumer > "$SCRIPT_DIR/kafka_consumer.log" 2>&1 &
+    $PYTHON manage.py launch-rbac-kafka-consumer relations > "$SCRIPT_DIR/kafka_consumer.log" 2>&1 &
     echo $! > "$PIDS_DIR/kafka_consumer.pid"
 
     # Give consumer time to connect and subscribe
@@ -522,7 +522,9 @@ check_debezium_running() {
     # Note: pass JSON via env var, NOT stdin — heredoc uses stdin for the Python code
     local parsed
     parsed=$(DBZ_RESPONSE="$response" python3 << 'PYEOF'
-import json, os, re
+import json
+import os
+import re
 
 try:
     d = json.loads(os.environ['DBZ_RESPONSE'])
