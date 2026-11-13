@@ -157,6 +157,16 @@ def clone_default_group_in_public_schema(group, tenant) -> Optional[Group]:
     return group
 
 
+def _notify_group_role_change(user, group, role, operation):
+    """Queue system events transactionally; defer custom-group Kafka sends until commit."""
+    if (group.platform_default or group.admin_default) and group.system:
+        group_role_change_notification_handler(user, group, role, operation)
+    else:
+        transaction.on_commit(
+            partial(group_role_change_notification_handler, user, group, role, operation), robust=True
+        )
+
+
 def add_roles(group, roles_or_role_ids, tenant, user=None):
     """Process list of roles and add them to the group."""
     roles = _roles_by_query_or_ids(roles_or_role_ids, tenant)
@@ -222,12 +232,7 @@ def add_roles(group, roles_or_role_ids, tenant, user=None):
             continue
 
         system_policy.roles.add(role)
-        # Send notifications after the transaction commits, so a rolled-back retry attempt
-        # does not emit a Kafka message for a change that never landed.
-        transaction.on_commit(
-            partial(group_role_change_notification_handler, user, group, role, "added"),
-            robust=True,
-        )
+        _notify_group_role_change(user, group, role, "added")
         added_roles.append(role)
 
     if not added_roles:
@@ -258,12 +263,7 @@ def remove_roles(group, roles_or_role_ids, tenant, user=None):
                 policy.roles.remove(role)
                 logger.info(f"Removing role {role} from group {group.name} for tenant {tenant.org_id}.")
 
-                # Send notifications after the transaction commits, so a rolled-back retry attempt
-                # does not emit a Kafka message for a change that never landed.
-                transaction.on_commit(
-                    partial(group_role_change_notification_handler, user, group, role, "removed"),
-                    robust=True,
-                )
+                _notify_group_role_change(user, group, role, "removed")
                 removed_roles.append(role)
 
     if tenant.tenant_name != "public":

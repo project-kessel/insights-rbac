@@ -16,10 +16,11 @@
 #
 """Test the group definer."""
 
-from unittest.mock import ANY, call, patch
+import json
+from unittest.mock import Mock, patch
 from api.models import Tenant
 
-from django.conf import settings
+from django.db import transaction
 from django.test import override_settings
 from management.group.definer import (
     seed_group,
@@ -29,9 +30,10 @@ from management.group.definer import (
     _roles_by_query_or_ids,
 )
 from management.role.definer import seed_roles
+from management.notifications.model import RhNotificationEvent
 from tests.identity_request import IdentityRequest
-from tests.core.test_kafka import copy_call_args
-from management.models import Group, Role, Policy
+from tests.management.notifications.utils import collected_rh_events
+from management.models import Group, Role
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -76,25 +78,20 @@ class GroupDefinerTests(IdentityRequest):
         self.assertEqual(group.tenant, self.public_tenant)
         group.roles().get(name="Approval Administrator Local Test")
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_default_group_seeding_reassign_roles(self, send_kafka_message):
+    def test_default_group_seeding_reassign_roles(self):
         """Test that previous assigned roles would be eliminated before assigning new roles."""
-        kafka_mock = copy_call_args(send_kafka_message)
         self.modify_default_group()
         new_platform_role = Role.objects.create(
             name="new_platform_role", platform_default=True, system=True, tenant=self.public_tenant
         )
         role_to_remove = Role.objects.get(name="User Access administrator")
 
-        Tenant.objects.create(tenant_name="unready1", org_id="unready1", ready=False)
-        Tenant.objects.create(tenant_name="unready2", org_id="unready2", ready=False)
-
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
-            try:
-                with self.captureOnCommitCallbacks(execute=True):
+            with collected_rh_events(self) as events:
+                try:
                     group, admin_group = seed_group()
-            except Exception:
-                self.fail(msg="update seed_group encountered an exception")
+                except Exception:
+                    self.fail(msg="update seed_group encountered an exception")
 
             # Assert return values match the persisted default groups
             persisted_group = Group.objects.get(platform_default=True, tenant=self.public_tenant)
@@ -109,62 +106,92 @@ class GroupDefinerTests(IdentityRequest):
             for role in group.roles():
                 self.assertTrue(role.platform_default)
 
-            org_id = self.customer_data["org_id"]
+            added_event = {
+                "event_type": "rh-new-role-added-to-default-access",
+                "payload": {
+                    "username": "Red Hat",
+                    "name": group.name,
+                    "uuid": str(group.uuid),
+                    "role": {"name": new_platform_role.name, "uuid": str(new_platform_role.uuid)},
+                },
+            }
+            self.assertEqual(events.count(added_event), 1)
+            removed_event = {
+                "event_type": "rh-role-removed-from-default-access",
+                "payload": {
+                    "username": "Red Hat",
+                    "name": group.name,
+                    "uuid": str(group.uuid),
+                    "role": {"name": role_to_remove.name, "uuid": str(role_to_remove.uuid)},
+                },
+            }
+            self.assertEqual(events.count(removed_event), 1)
+            json.dumps(events)
 
-            notification_messages = [
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-new-role-added-to-default-access",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "username": "Red Hat",
-                                    "name": group.name,
-                                    "uuid": str(group.uuid),
-                                    "role": {"name": new_platform_role.name, "uuid": str(new_platform_role.uuid)},
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
-                    },
-                    ANY,
-                ),
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-role-removed-from-default-access",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "username": "Red Hat",
-                                    "name": group.name,
-                                    "uuid": str(group.uuid),
-                                    "role": {"name": role_to_remove.name, "uuid": str(role_to_remove.uuid)},
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
-                    },
-                    ANY,
-                ),
-            ]
-            kafka_mock.assert_has_calls(notification_messages, any_order=True)
+    @override_settings(NOTIFICATIONS_ENABLED=True, NOTIFICATIONS_RH_ENABLED=True)
+    def test_system_group_events_follow_role_change_transaction(self):
+        """Both additions and removals queue before commit and roll back with their role changes."""
+        for group in Group.objects.filter(tenant=self.public_tenant, system=True).filter(
+            platform_default=True
+        ) | Group.objects.filter(tenant=self.public_tenant, system=True, admin_default=True):
+            role = Role.objects.create(name=f"transaction test {group.name}", tenant=self.public_tenant, system=True)
+            for operation in ("added", "removed"):
+                with self.subTest(group=group.name, operation=operation):
+                    event_type = (
+                        "rh-new-role-added-to-default-access"
+                        if operation == "added"
+                        else "rh-role-removed-from-default-access"
+                    )
+                    change = add_roles if operation == "added" else remove_roles
+                    with self.assertRaisesMessage(RuntimeError, "rollback"):
+                        with transaction.atomic():
+                            change(group, [str(role.uuid)], self.public_tenant)
+                            self.assertTrue(
+                                RhNotificationEvent.objects.filter(
+                                    event_type=event_type, payload__role__uuid=str(role.uuid)
+                                ).exists()
+                            )
+                            raise RuntimeError("rollback")
+                    self.assertEqual(group.roles().filter(pk=role.pk).exists(), operation == "removed")
+                    self.assertFalse(
+                        RhNotificationEvent.objects.filter(
+                            event_type=event_type, payload__role__uuid=str(role.uuid)
+                        ).exists()
+                    )
+                    with transaction.atomic():
+                        change(group, [str(role.uuid)], self.public_tenant)
+                        self.assertTrue(
+                            RhNotificationEvent.objects.filter(
+                                event_type=event_type, payload__role__uuid=str(role.uuid)
+                            ).exists()
+                        )
 
-            for call_args in kafka_mock.call_args_list:
-                topic = call_args.args[0]
-                if topic != settings.NOTIFICATIONS_TOPIC:
-                    continue
-                body = call_args.args[1]
-                self.assertNotIn(body.get("org_id"), ["unready1", "unready2"], "Unready tenant should not be notified")
+    @override_settings(NOTIFICATIONS_ENABLED=True, NOTIFICATIONS_RH_ENABLED=True)
+    def test_system_queue_failure_rolls_back_role_change(self):
+        """Queue failure prevents the corresponding group role change from committing."""
+        group = Group.objects.get(platform_default=True, tenant=self.public_tenant)
+        role = Role.objects.create(name="failed queue role", tenant=self.public_tenant, system=True)
+        with patch(
+            "management.notifications.notification_handlers.queue_rh_notification",
+            side_effect=RuntimeError("queue failed"),
+        ):
+            with self.assertRaisesMessage(RuntimeError, "queue failed"):
+                with transaction.atomic():
+                    add_roles(group, [str(role.uuid)], self.public_tenant)
+        self.assertFalse(group.roles().filter(pk=role.pk).exists())
+
+    @override_settings(NOTIFICATIONS_ENABLED=True, REPLICATION_TO_RELATION_ENABLED=False)
+    def test_custom_group_notifications_wait_for_commit(self):
+        """Custom-group Kafka notifications remain deferred until the transaction commits."""
+        group = Group.objects.create(name="custom group", tenant=self.tenant)
+        role = Role.objects.create(name="custom role", tenant=self.tenant)
+        user = Mock()
+        with patch("management.group.definer.group_role_change_notification_handler") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                add_roles(group, [str(role.uuid)], self.tenant, user)
+                remove_roles(group, [str(role.uuid)], self.tenant, user)
+                notify.assert_not_called()
+            self.assertEqual([call.args[-1] for call in notify.call_args_list], ["added", "removed"])
 
     def modify_default_group(self, system=True):
         """Add a role to the default group and/or change the system flag"""
