@@ -24,8 +24,10 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 import requests
+from django.db import connection
 from django.db.models import ProtectedError
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, reverse
 from management import v2_urls
 from management.audit_log.model import AuditLog
@@ -38,6 +40,7 @@ from management.group.v2_service import GroupV2Service
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.permissions.group_v2_access import GroupV2KesselAccessPermission
 from management.policy.model import Policy
+from management.principal.it_service_mocks import MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
 from management.principal.model import Principal
 from management.principal.unexpected_status_code_from_it import UnexpectedStatusCodeFromITError
 from management.role.model import Role
@@ -2004,6 +2007,187 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         self.assertEqual(principal.type, Principal.Types.SERVICE_ACCOUNT)
         self.assertEqual(principal.user_id, self.it_user_ids["new-sa"])
         self.assertTrue(self.group_b.principals.filter(pk=principal.pk).exists())
+
+    def _register_service_access_token(self, client_id):
+        """Make IT report the given client ID as a service access token, and return its user ID.
+
+        Wraps the shared IT mock rather than replacing it, so a request mixing a service access token
+        with a regular service account still resolves both.
+        """
+        self.it_client_ids.add(client_id)
+        self.it_user_ids.setdefault(client_id, f"sa-{uuid.uuid4()}")
+        base_side_effect = self.mock_it.side_effect
+
+        def _mock_it_with_service_access_token(bearer_token, client_ids=None):
+            service_accounts = base_side_effect(bearer_token, client_ids=client_ids)
+            for service_account in service_accounts:
+                if service_account["clientId"] == client_id:
+                    service_account["service_account_type"] = MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
+                    service_account["time_expires"] = 1713876532
+            return service_accounts
+
+        self.mock_it.side_effect = _mock_it_with_service_access_token
+
+        return self.it_user_ids[client_id]
+
+    def test_add_by_service_access_token(self):
+        """A service access token is added to a group by client ID, like a regular service account.
+
+        This is the V2 principal-assignment path the Workspaces picker drives. It validates against IT
+        and reads only clientId and userId, so the service access token attributes are inert here -- but
+        nothing else exercises this path with a service access token at all, and the user ID matters
+        beyond the add: principal_resource_id() is built from it, so a service access token without one
+        would join the group and be granted nothing.
+        """
+        user_id = self._register_service_access_token("sat-new")
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["sat-new"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="sat-new")
+        self.assertEqual(principal.username, "service-account-sat-new")
+        self.assertEqual(principal.type, Principal.Types.SERVICE_ACCOUNT)
+        self.assertEqual(principal.user_id, user_id)
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
+        self.assertTrue(self.group_b.principals.filter(pk=principal.pk).exists())
+
+    def test_add_service_account_stores_no_mode(self):
+        """An ordinary service account is stored with a null mode, since IT omits the attribute for one.
+
+        NULL therefore means "IT said nothing", which is indistinguishable from "not learned yet" -- that
+        ambiguity is by design and is what the reconciliation job exists to narrow.
+        """
+        self.it_client_ids.add("plain-sa")
+        self.it_user_ids["plain-sa"] = f"sa-{uuid.uuid4()}"
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["plain-sa"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(
+            Principal.objects.get(tenant=self.tenant, service_account_id="plain-sa").service_account_type
+        )
+
+    def test_add_service_access_token_mode_fill_does_not_write_user_id(self):
+        """Filling only the mode must not write user_id back from the snapshot read before it.
+
+        This backfill runs outside the request transaction, so a concurrent request may fill user_id
+        between that snapshot and the write. Writing both columns together would put the stale NULL
+        back and leave the principal with no resource ID for its membership replication, so each
+        column gets its own NULL-guarded statement. The race itself is not reproducible in a unit
+        test; what is checkable, and what regressed, is that the mode-only path never names user_id.
+        """
+        client_id = "sat-no-user-id"
+        self.it_client_ids.add(client_id)
+        self.mock_it.side_effect = lambda bearer_token, client_ids=None: [
+            {"clientId": client_id, "service_account_type": MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN}
+            for requested in client_ids
+            if requested == client_id
+        ]
+        Principal.objects.create(
+            username=f"service-account-{client_id}",
+            service_account_id=client_id,
+            type=Principal.Types.SERVICE_ACCOUNT,
+            user_id=None,
+            tenant=self.tenant,
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self._add(self.group_b.uuid, {"service_accounts": [client_id]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id=client_id)
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
+        self.assertIsNone(principal.user_id, "IT returned no user ID, so none should have been invented")
+
+        principal_updates = [
+            query["sql"]
+            for query in queries.captured_queries
+            if query["sql"].lstrip().upper().startswith("UPDATE") and "management_principal" in query["sql"]
+        ]
+        self.assertTrue(principal_updates, "the mode should have been written")
+        for sql in principal_updates:
+            self.assertNotIn("user_id", sql, "a mode-only backfill must not name the user_id column")
+
+    def test_add_service_access_token_populates_missing_mode(self):
+        """A principal already stored without a mode gets one from IT on a later group add.
+
+        This is how a principal created by username lookup, which never sees an IT payload, acquires its
+        mode. Without it the column would stay null for every such principal forever.
+        """
+        self._register_service_access_token("sat-existing-mode")
+        Principal.objects.create(
+            username="service-account-sat-existing-mode",
+            service_account_id="sat-existing-mode",
+            type=Principal.Types.SERVICE_ACCOUNT,
+            user_id="already-set",
+            service_account_type=None,
+            tenant=self.tenant,
+        )
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["sat-existing-mode"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="sat-existing-mode")
+        self.assertEqual(principal.service_account_type, MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN)
+        self.assertEqual(principal.user_id, "already-set", "an existing user ID must not be overwritten")
+
+    def test_add_service_access_token_alongside_service_account(self):
+        """A single request may mix a service access token and a regular service account."""
+        self._register_service_access_token("sat-new")
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["sat-new", "xyz"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertCountEqual(
+            self.group_b.principals.filter(type=Principal.Types.SERVICE_ACCOUNT).values_list(
+                "service_account_id", flat=True
+            ),
+            ["sat-new", "xyz"],
+        )
+
+    def test_add_service_access_token_populates_missing_user_id(self):
+        """A lazily created principal gets its user ID from IT when a service access token is added."""
+        user_id = self._register_service_access_token("sat-existing")
+        Principal.objects.create(
+            username="service-account-sat-existing",
+            service_account_id="sat-existing",
+            type=Principal.Types.SERVICE_ACCOUNT,
+            user_id=None,
+            tenant=self.tenant,
+        )
+
+        response = self._add(self.group_b.uuid, {"service_accounts": ["sat-existing"]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        principal = Principal.objects.get(tenant=self.tenant, service_account_id="sat-existing")
+        self.assertEqual(principal.user_id, user_id)
+
+    def test_add_service_access_token_is_listed_as_a_service_account(self):
+        """A service access token added through V2 comes back from the V2 member list as a service account.
+
+        The add-then-list round trip the picker performs. V2 reads the database, which carries no mode
+        column, so a service access token is indistinguishable from a regular service account here by
+        design. Persisting the mode has to come with a deliberate decision about what V2 exposes, and
+        this is what forces that decision rather than letting it drift.
+        """
+        self._register_service_access_token("sat-new")
+        self.assertEqual(
+            status.HTTP_200_OK, self._add(self.group_b.uuid, {"service_accounts": ["sat-new", "xyz"]}).status_code
+        )
+
+        response = self.client.get(
+            self._principals_url(self.group_b.uuid), {"principal_type": "service-account"}, **self.headers
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        listed = {entry["service_account_id"]: entry for entry in response.json()["data"]}
+        self.assertCountEqual(listed, ["sat-new", "xyz"])
+        self.assertEqual("service-account", listed["sat-new"]["type"])
+        self.assertEqual(sorted(listed["sat-new"]), sorted(listed["xyz"]))
+        self.assertNotIn("service_account_type", listed["sat-new"])
+        self.assertNotIn("time_expires", listed["sat-new"])
 
     def test_add_service_account_populates_missing_user_id(self):
         """An existing service account Principal without a user ID gets it from IT; nothing else changes."""

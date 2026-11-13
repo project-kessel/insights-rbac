@@ -47,6 +47,18 @@ class Principal(TenantAwareModel):
     type = models.CharField(null=False, default=Types.USER, choices=Types.choices, max_length=20, db_index=True)
     service_account_id = models.CharField(max_length=255, null=True, db_index=True)
     user_id = models.CharField(max_length=256, null=True, db_index=True)
+    # Sub-kind of a service account, as reported by IT's "type" attribute: "service_access_token", or NULL.
+    # A separate flag rather than a new Types value, following the cross_account precedent, so that
+    # type="service-account" keeps matching every service account and no existing filter changes meaning.
+    #
+    # NULL means "not learned from IT yet", which is NOT the same as "IT says this is an ordinary service
+    # account" -- IT omits the attribute in that case too. The two are indistinguishable in this column by
+    # design: a principal can be created from a username alone (management.utils.get_principal) with no IT
+    # payload to read, so nulls keep appearing and are reconciled out of band.
+    #
+    # Stored verbatim rather than as choices. CIAM-12576 calls "service_access_token" the *current* set of
+    # values, so an unrecognised value must round-trip rather than fail a write.
+    service_account_type = models.CharField(max_length=64, null=True, db_index=True)
 
     def principal_resource_id(self) -> Optional[str]:
         """Return the principal resource ID suitable for use in the Kessel access graph."""
