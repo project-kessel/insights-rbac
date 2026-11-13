@@ -342,22 +342,14 @@ def _user_from_kafka_message_payload(user_id: str, message_user: dict, identifie
     return user
 
 
-class _LockContention(Exception):
-    """Raised when the advisory listener lock cannot be acquired."""
-
-    pass
-
-
 class MessageProcessingResult(NamedTuple):
     """
     Result of processing a Kafka message.
 
     Attributes:
-        should_continue: False if another listener is running (lock contention), True otherwise
         success: True if message was processed successfully, False if it failed
     """
 
-    should_continue: bool
     success: bool
 
 
@@ -456,7 +448,6 @@ class _MetricStatus(enum.StrEnum):
     DLQ_SENT = "dlq"
     DLQ_ERROR = "dlq_error"
     DLQ_ERROR_IGNORED = "dlq_error_ignored"
-    LOCK_CONTENTION = "lock_contention"
 
 
 def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessingResult, _MetricStatus]:
@@ -466,7 +457,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
             "No DLQ producer configured. Failed message at offset %d will be retried.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
+        return MessageProcessingResult(success=dry_run), _MetricStatus.ERROR
 
     dlq_topic = settings.KAFKA_PRINCIPAL_CLEANUP_DLQ_TOPIC
     if not dlq_topic:
@@ -474,7 +465,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
             "No DLQ topic configured. Failed message at offset %d will be retried.",
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=dry_run), _MetricStatus.ERROR
+        return MessageProcessingResult(success=dry_run), _MetricStatus.ERROR
 
     try:
         # NOTE: original_message may contain PII (usernames, org/account IDs)
@@ -508,7 +499,7 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
             message.partition,
             message.offset,
         )
-        return MessageProcessingResult(should_continue=True, success=True), _MetricStatus.DLQ_SENT
+        return MessageProcessingResult(success=True), _MetricStatus.DLQ_SENT
 
     except Exception as dlq_error:
         logger.error(
@@ -519,9 +510,9 @@ def _send_to_dlq(message, error, dlq_producer, dry_run) -> tuple[MessageProcessi
 
         if dry_run:
             logger.warning("DLQ failure in dry-run mode, committing offset anyway")
-            return MessageProcessingResult(should_continue=True, success=True), _MetricStatus.DLQ_ERROR_IGNORED
+            return MessageProcessingResult(success=True), _MetricStatus.DLQ_ERROR_IGNORED
 
-        return MessageProcessingResult(should_continue=True, success=False), _MetricStatus.DLQ_ERROR
+        return MessageProcessingResult(success=False), _MetricStatus.DLQ_ERROR
 
 
 def _process_kafka_message(
@@ -551,7 +542,6 @@ def _process_kafka_message(
 
     Returns:
         MessageProcessingResult with:
-        - should_continue: False if another listener is running (lock contention), True otherwise
         - success: True if message was processed successfully, False if it failed
     """
 
@@ -597,7 +587,7 @@ def _process_kafka_message(
                 # Transient error in dry-run: commit offset and continue
                 logger.warning("DRY RUN: Transient error detected - message would be retried in production.")
                 record_status("unknown", _MetricStatus.ERROR)
-                return MessageProcessingResult(should_continue=True, success=True)
+                return MessageProcessingResult(success=True)
 
         if is_permanent_error:
             result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
@@ -609,7 +599,7 @@ def _process_kafka_message(
                 message.offset,
             )
             record_status("unknown", _MetricStatus.ERROR)
-            return MessageProcessingResult(should_continue=True, success=False)
+            return MessageProcessingResult(success=False)
 
     # --- 2. Dry-run mode: structure validated above (no BOP, no DB writes) ---
     if dry_run:
@@ -619,25 +609,20 @@ def _process_kafka_message(
         )
         record_status("principal", _MetricStatus.SUCCESS)
         kafka_dry_run_messages_total.inc()
-        return MessageProcessingResult(should_continue=True, success=True)
+        return MessageProcessingResult(success=True)
 
     # --- 3. Normal mode: DB work with proper outer retry ---
     try:
 
         def _db_work():
             if not _lock_listener():
-                raise _LockContention()
+                raise RuntimeError("Could not acquire lock")
             if not user.is_active or settings.PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA:
                 bootstrap_service.update_user(user, ready_tenant=False)
 
         run_atomic_with_retry(5, _db_work)
         record_status("principal", _MetricStatus.SUCCESS)
-        return MessageProcessingResult(should_continue=True, success=True)
-
-    except _LockContention:
-        logger.info("Another listener is running. Aborting.")
-        record_status("principal", _MetricStatus.LOCK_CONTENTION)
-        return MessageProcessingResult(should_continue=False, success=False)
+        return MessageProcessingResult(success=True)
 
     except Exception as e:
         logger.error("Error processing Kafka message: %s", str(e))
@@ -660,7 +645,7 @@ def _process_kafka_message(
                 message.offset,
             )
             record_status("principal", _MetricStatus.ERROR)
-            return MessageProcessingResult(should_continue=True, success=False)
+            return MessageProcessingResult(success=False)
 
         result, dlq_status = _send_to_dlq(message, e, dlq_producer, dry_run=False)
         record_status("principal", dlq_status)
@@ -805,10 +790,6 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
             bop_user_by_id=batch_data,
             metrics=self.metrics,
         )
-
-        if not result.should_continue:
-            logger.info("Lock contention detected.")
-            return False
 
         if not result.success:
             return False
