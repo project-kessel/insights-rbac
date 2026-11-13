@@ -682,16 +682,10 @@ def _consumer_config() -> dict:
         "bootstrap_servers": it_kafka_servers,
         # No value_deserializer - leave as bytes to handle UTF-8 errors
         # idle-poll stop; aligned with wall-clock drain so a quiet topic ends the cycle promptly
-        "consumer_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_CONSUMER_TIMEOUT_MS,
-        # Timeout tuning: beat interval + drain must fit in session/max_poll without LeaveGroup
         "session_timeout_ms": settings.KAFKA_PRINCIPAL_CLEANUP_SESSION_TIMEOUT_MS,
         "heartbeat_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_HEARTBEAT_INTERVAL_MS,
         "max_poll_interval_ms": settings.KAFKA_PRINCIPAL_CLEANUP_MAX_POLL_INTERVAL_MS,
     }
-
-    # Static membership: reuse same group.instance.id across periodic cycles to avoid full rebalance
-    if settings.KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED:
-        kafka_config["group_instance_id"] = f"{settings.SA_NAME}-{_env_name()}-principal-cleanup-static"
 
     kafka_config.update(consumer_auth)
     return kafka_config

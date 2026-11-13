@@ -1545,7 +1545,7 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
     @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac")
     @patch("management.principal.cleaner.settings.ENV_NAME", "stage")
     def test_kafka_config_includes_static_membership_and_timeouts(self, consumer_mock):
-        """Test that kafka_config includes group_instance_id and timeout tuning by default."""
+        """Test that kafka_config includes timeout tuning by default."""
         consumer_instance = MagicMock()
         consumer_instance.__iter__.return_value = iter([])
         consumer_mock.return_value = consumer_instance
@@ -1554,11 +1554,6 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
 
         consumer_mock.assert_called_once()
         call_kwargs = consumer_mock.call_args[1]
-
-        # Assert static membership is enabled by default
-        self.assertIn("group_instance_id", call_kwargs)
-        expected_instance_id = "test-rbac-stage-principal-cleanup-static"
-        self.assertEqual(call_kwargs["group_instance_id"], expected_instance_id)
 
         # Assert timeout values are configured
         self.assertIn("session_timeout_ms", call_kwargs)
@@ -1569,32 +1564,6 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         self.assertEqual(call_kwargs["session_timeout_ms"], 45000)
         self.assertEqual(call_kwargs["heartbeat_interval_ms"], 15000)
         self.assertEqual(call_kwargs["max_poll_interval_ms"], 300000)
-
-        consumer_instance.close.assert_called_once()
-
-    @patch("core.base_consumer.KafkaConsumer")
-    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
-    @patch("management.principal.cleaner.settings.SA_NAME", "test-rbac")
-    @patch("management.principal.cleaner.settings.ENV_NAME", "stage")
-    @override_settings(KAFKA_PRINCIPAL_CLEANUP_STATIC_MEMBERSHIP_ENABLED=False)
-    def test_kafka_config_static_membership_can_be_disabled(self, consumer_mock):
-        """Test that static membership can be disabled via setting."""
-        consumer_instance = MagicMock()
-        consumer_instance.__iter__.return_value = iter([])
-        consumer_mock.return_value = consumer_instance
-
-        self._make_consumer().start_consuming()
-
-        consumer_mock.assert_called_once()
-        call_kwargs = consumer_mock.call_args[1]
-
-        # Assert group_instance_id is NOT present when static membership disabled
-        self.assertNotIn("group_instance_id", call_kwargs)
-
-        # Timeouts should still be configured
-        self.assertIn("session_timeout_ms", call_kwargs)
-        self.assertIn("heartbeat_interval_ms", call_kwargs)
-        self.assertIn("max_poll_interval_ms", call_kwargs)
 
         consumer_instance.close.assert_called_once()
 
