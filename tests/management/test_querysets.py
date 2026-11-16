@@ -109,6 +109,68 @@ class QuerySetTest(TestCase):
         queryset = get_group_queryset(req)
         self.assertEqual(queryset.count(), 5)
 
+    def test_get_group_queryset_non_admin_group_list_path_does_not_grant_all(self):
+        """GET group-list path alone must not bypass group access filtering (RHCLOUD-43070)."""
+        self._create_groups()
+        access = {"group": {"read": []}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 0)
+
+    def test_get_group_queryset_get_all(self):
+        """Test get_group_queryset as a user with all group access."""
+        self._create_groups()
+        access = {"group": {"read": ["*"]}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 5)
+
+    def test_get_group_queryset_get_some(self):
+        """Test get_group_queryset as a user with access to one group."""
+        self._create_groups()
+        accessible = Group.objects.first()
+        access = {"group": {"read": [accessible.uuid]}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 1)
+        self.assertEqual(queryset.first().uuid, accessible.uuid)
+
+    def test_get_group_queryset_get_none(self):
+        """Test get_group_queryset as a user with no group access."""
+        self._create_groups()
+        access = {"group": {"read": []}}
+        user = Mock(spec=User, admin=False, access=access)
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={},
+            path=reverse("v1_management:group-list"),
+        )
+        queryset = get_group_queryset(req)
+        self.assertEqual(queryset.count(), 0)
+
     @patch(
         "management.principal.proxy.PrincipalProxy.request_filtered_principals",
         return_value={
@@ -886,6 +948,34 @@ class QuerySetTest(TestCase):
 
         # Make sure the underlying function gets called.
         get_admin_from_proxy.assert_called_with(request=request, username=username)
+
+
+class RoleQuerySetSystemParamTest(IdentityRequest):
+    """Tests for system=true role-catalog scoping in get_role_queryset."""
+
+    def tearDown(self):
+        """Clean up roles created by these tests."""
+        Role.objects.filter(tenant=self.tenant, name__in=["custom_role", "system_role"]).delete()
+        super().tearDown()
+
+    def test_get_role_queryset_system_true_scopes_to_system_roles(self):
+        """system=true must return only system roles, not the full tenant catalog."""
+        custom_role = Role.objects.create(name="custom_role", tenant=self.tenant, system=False)
+        system_role = Role.objects.create(name="system_role", tenant=self.tenant, system=True)
+        access = {"role": {"read": [], "write": []}}
+        user = Mock(spec=User, admin=False, access=access, username="test_user")
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={"system": "true"},
+            path=reverse("v1_management:role-list"),
+        )
+        queryset = get_role_queryset(req)
+        self.assertTrue(queryset.filter(uuid=system_role.uuid).exists())
+        self.assertFalse(queryset.filter(uuid=custom_role.uuid).exists())
+        self.assertFalse(queryset.filter(system=False).exists())
+        self.assertTrue(all(role.system for role in queryset))
 
 
 class BypassBOPVerificationTest(IdentityRequest):
