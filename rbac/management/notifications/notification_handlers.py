@@ -58,6 +58,13 @@ def notify(event_type, payload, org_id=None):
     return noto_producer.send_kafka_message(noto_topic, noto_message, noto_headers)
 
 
+def notify_with_future(event_type, payload, org_id):
+    """Enqueue an RH notification and return its Kafka future for acknowledgment checking."""
+    noto_message = build_notifications_message(event_type, payload, org_id)
+    noto_headers = [("rh-message-id", str(uuid4()).encode("utf-8"))]
+    return noto_producer.send_kafka_message_future(noto_topic, noto_message, noto_headers)
+
+
 def queue_rh_notification(event_type, payload):
     """
     Queue an RH system notification for every ready tenant.

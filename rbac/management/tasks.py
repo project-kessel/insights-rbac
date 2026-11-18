@@ -160,7 +160,8 @@ def run_seeds_in_worker(kwargs):
         raise
 
 
-RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS = 5
+RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD = 5
+RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS = 15 * 60
 # A delivery starts only once no new event was queued for this long, so one seeding run's events go out together.
 RH_NOTIFICATIONS_SETTLE_SECONDS = 5 * 60
 # Beat runs the task every 60 seconds; the tolerance keeps scheduling jitter from skipping a batch.
@@ -221,10 +222,10 @@ def _start_rh_notifications_delivery(now):
 
 
 def _send_rh_notifications_batch(delivery, now):
-    """Send every event of the delivery to the next batch of ready tenants and advance its tenant cursor."""
+    """Advance the cursor only past tenants whose every Kafka send was acknowledged."""
     from api.models import Tenant
     from management.notifications.model import RhNotificationDelivery
-    from management.notifications.notification_handlers import noto_producer, notify
+    from management.notifications.notification_handlers import noto_producer, notify_with_future
 
     events = list(delivery.events.order_by("created", "id").values("event_type", "payload"))
     ready_tenants = Tenant.objects.exclude(tenant_name="public").filter(ready=True)
@@ -235,21 +236,44 @@ def _send_rh_notifications_batch(delivery, now):
     sent_tenants = 0
     send_failed = False
     reached_quiet_window = False
+    tenant_futures = []
+    sent_any = False
     for tenant in tenants:
         # Checked per tenant so that a slow batch stops at the window; a started tenant still gets all its events.
         if _in_rh_notifications_quiet_window(timezone.now()):
             reached_quiet_window = True
             break
-        if not all(notify(event["event_type"], event["payload"], tenant.org_id) for event in events):
+        futures = []
+        try:
+            for event in events:
+                futures.append(notify_with_future(event["event_type"], event["payload"], tenant.org_id))
+                sent_any = True
+        except Exception:
+            logger.exception("Failed to enqueue RH notification delivery %s for tenant %s.", delivery.id, tenant.id)
+            send_failed = True
+            break
+        tenant_futures.append((tenant, futures))
+
+    try:
+        if sent_any:
+            noto_producer.get_producer().flush(RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception(
+            "Failed to flush RH notification delivery %s; retrying from tenant id %d.", delivery.id, start_cursor
+        )
+        send_failed = True
+        tenant_futures = []
+
+    for tenant, futures in tenant_futures:
+        try:
+            for future in futures:
+                future.get(timeout=0)  # A successful flush completed every previously sent future.
+        except Exception:
+            logger.exception("RH notification delivery %s was not acknowledged for tenant %s.", delivery.id, tenant.id)
             send_failed = True
             break
         delivery.after_tenant_id = tenant.id
         sent_tenants += 1
-
-    try:
-        noto_producer.get_producer().flush(RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS)
-    except Exception:
-        logger.exception("Failed to flush the notifications producer.")
 
     logger.info(
         "Sent RH notification delivery %s to %d tenant(s) (%d message(s)) after tenant id %d.",
@@ -259,31 +283,40 @@ def _send_rh_notifications_batch(delivery, now):
         start_cursor,
     )
 
-    delivery.last_batch_at = now
+    if not reached_quiet_window or sent_any:
+        delivery.last_batch_at = now
     if send_failed:
-        delivery.failed_attempts += 1
-        if delivery.failed_attempts >= RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS:
-            delivery.status = RhNotificationDelivery.Status.FAILED
-            delivery.finished_at = now
+        delivery.failed_attempts = min(delivery.failed_attempts + 1, 32767)
+        if delivery.failed_attempts >= RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD:
             logger.error(
-                "Giving up RH notification delivery %s after %d failed attempt(s); it stopped after tenant id %d.",
+                "RH notification delivery %s has failed %d consecutive run(s); it remains active after tenant id %d.",
                 delivery.id,
                 delivery.failed_attempts,
                 delivery.after_tenant_id,
             )
         else:
             logger.warning(
-                "Sending RH notification delivery %s failed; retrying after tenant id %d on the next run.",
+                "Sending RH notification delivery %s failed (%d consecutive run(s)); retrying after tenant id %d.",
                 delivery.id,
+                delivery.failed_attempts,
                 delivery.after_tenant_id,
             )
     else:
-        delivery.failed_attempts = 0
+        if sent_tenants:
+            delivery.failed_attempts = 0
         if not reached_quiet_window and not ready_tenants.filter(id__gt=delivery.after_tenant_id).exists():
+            delivery.failed_attempts = 0
             delivery.status = RhNotificationDelivery.Status.DONE
             delivery.finished_at = now
             logger.info("Finished RH notification delivery %s.", delivery.id)
     delivery.save()
+
+
+def _rh_notifications_retry_delay_seconds(failed_attempts):
+    """Back off repeated failures, capped at fifteen minutes while keeping the delivery active."""
+    if not failed_attempts:
+        return RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS
+    return min(RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS, 60 * 2 ** min(failed_attempts - 1, 4))
 
 
 @shared_task
@@ -298,16 +331,15 @@ def send_rh_notifications_in_worker():
     RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS apart, and no batch is sent during the UTC quiet window.
 
     A transaction-level advisory lock admits one run at a time and is released if the worker dies. The tenant cursor is
-    committed after the batch is sent, so a worker that dies mid-batch makes the next run resend that batch: delivery
-    is at least once. A send counts as done once the producer accepts it. A failed send keeps the cursor at the last
-    tenant that received all events, and the next run retries from there; after RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS
-    consecutive failures the delivery is marked failed. Finished deliveries are deleted after
+    committed only after broker acknowledgments for every event of a tenant. A worker that dies mid-batch or a flush
+    timeout leaves the previous cursor for retry, which may duplicate sends. Failed deliveries stay active and retry
+    with capped exponential backoff; failures are logged. Only completed deliveries are deleted after
     RH_NOTIFICATIONS_RETENTION.
     """
     from management.notifications.model import RhNotificationDelivery
 
-    if not (settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
-        logger.info("RH notifications are disabled (NOTIFICATIONS_ENABLED or NOTIFICATIONS_RH_ENABLED), skipping.")
+    if not (settings.KAFKA_ENABLED and settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
+        logger.info("RH notifications are disabled (KAFKA_ENABLED or notification flags), skipping.")
         return
     now = timezone.now()
     if _in_rh_notifications_quiet_window(now):
@@ -319,16 +351,31 @@ def send_rh_notifications_in_worker():
             logger.info("Another RH notifications run is in progress, skipping.")
             return
 
-        RhNotificationDelivery.objects.filter(finished_at__lt=now - RH_NOTIFICATIONS_RETENTION).delete()
+        RhNotificationDelivery.objects.filter(
+            status=RhNotificationDelivery.Status.DONE, finished_at__lt=now - RH_NOTIFICATIONS_RETENTION
+        ).delete()
+
+        delivery = RhNotificationDelivery.objects.filter(status=RhNotificationDelivery.Status.ACTIVE).first()
+        if delivery is None:
+            # Recover deliveries left in the terminal state by older worker versions.
+            delivery = (
+                RhNotificationDelivery.objects.filter(status=RhNotificationDelivery.Status.FAILED)
+                .order_by("created")
+                .first()
+            )
+            if delivery is not None:
+                delivery.status = RhNotificationDelivery.Status.ACTIVE
+                delivery.finished_at = None
+                delivery.save(update_fields=["status", "finished_at"])
+                logger.warning("Resuming previously failed RH notification delivery %s.", delivery.id)
 
         last_batch_at = RhNotificationDelivery.objects.aggregate(last=Max("last_batch_at"))["last"]
-        if last_batch_at and (now - last_batch_at).total_seconds() < RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS:
-            logger.info("The previous RH notification batch was sent less than a minute ago, skipping.")
+        retry_delay = _rh_notifications_retry_delay_seconds(delivery.failed_attempts if delivery else 0)
+        if last_batch_at and (now - last_batch_at).total_seconds() < retry_delay:
+            logger.info("The previous RH notification batch is within its %d-second spacing, skipping.", retry_delay)
             return
 
-        delivery = RhNotificationDelivery.objects.filter(
-            status=RhNotificationDelivery.Status.ACTIVE
-        ).first() or _start_rh_notifications_delivery(now)
+        delivery = delivery or _start_rh_notifications_delivery(now)
         if delivery is not None:
             _send_rh_notifications_batch(delivery, now)
 

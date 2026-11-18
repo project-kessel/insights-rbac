@@ -163,10 +163,12 @@ Red Hat system notifications are not sent by the seeding run. The handlers call 
 - Once no event was queued for 5 minutes, the queued events are bundled into one `RhNotificationDelivery`, so a seeding run goes out as one delivery. Events queued while a delivery is active wait for the next one.
 - Each run sends every event of the active delivery to the next batch of ready tenants, in tenant id order, and commits the tenant cursor. Runs are at least 55 seconds apart, and no run sends during the UTC quiet window. The window is re-checked before each tenant, so the tenant being sent when it starts still receives all of its events.
 - A transaction-level Postgres advisory lock (`pg_try_advisory_xact_lock(44)`) admits one run at a time. It is released when the transaction ends or its connection drops, so a dead worker never leaves it held.
-- Delivery is at least once. A worker that dies mid-batch commits nothing, and the next run resends that batch. A send counts once the producer accepts it; broker-side failures after that are not retried. A failed send stops the batch at the last tenant that received all events, and the next run retries from there, replaying that tenant's events. After 5 consecutive failed runs the delivery is marked `failed` and logged.
-- Finished deliveries (`done` or `failed`) are deleted with their events after 7 days, so recent sends can be inspected in the database.
+- Delivery is at least once up to Kafka broker acknowledgment (`acks=all`); it does not guarantee processing by the Notifications consumer. The worker flushes the producer, checks every send future, and commits the cursor only through tenants whose every event was acknowledged. A failed future, flush timeout, or interrupted worker leaves an earlier cursor for retry. A retry can duplicate messages that Kafka already accepted.
+- A failed run leaves the delivery `active` and retries on later beat ticks with exponential backoff from 1 minute to 15 minutes. Five consecutive failures and every later failure emit an error log with the delivery id, failure count, and tenant cursor. Successful progress resets the failure count. Only `done` deliveries are deleted with their events after 7 days; older `failed` deliveries from a previous worker version are resumed instead of deleted.
 
 The rate setting is a batch-sizing target, not a hard per-minute limit: a batch always sends all events for at least one tenant, so it exceeds the target when a delivery has more events than the configured rate.
+
+**Team decision for Libor/JayZ:** Confirm the indefinite retry policy (15-minute backoff cap, error logs starting at five consecutive failures), whether it needs a Prometheus alert for active deliveries stalled at the same cursor, and whether the five-minute settle delay fits seeding duration. Until then the worker keeps retrying; no manual requeue is needed after a temporary Kafka outage.
 
 ## 9. Celery Tasks and Beat Schedule
 

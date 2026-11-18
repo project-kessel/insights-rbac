@@ -25,6 +25,7 @@ from django.core.management import call_command
 from django.db import connections, transaction
 from django.test import override_settings
 from django.utils import timezone
+from kafka.errors import KafkaError, KafkaTimeoutError
 from management.notifications.model import RhNotificationDelivery, RhNotificationEvent
 from management.notifications.notification_handlers import (
     handle_platform_group_role_change_notification,
@@ -35,9 +36,11 @@ from management.notifications.notification_handlers import (
 from management.tasks import (
     RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS,
     RH_NOTIFICATIONS_LOCK_ID,
-    RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS,
+    RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD,
+    RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS,
     RH_NOTIFICATIONS_SETTLE_SECONDS,
     _in_rh_notifications_quiet_window,
+    _rh_notifications_retry_delay_seconds,
     _try_rh_notifications_lock,
     send_rh_notifications_in_worker,
 )
@@ -48,6 +51,7 @@ from tests.management.notifications.utils import collected_rh_events
 from api.models import Tenant
 
 NOTIFY = "management.notifications.notification_handlers.notify"
+NOTIFY_WITH_FUTURE = "management.notifications.notification_handlers.notify_with_future"
 PRODUCER = "management.notifications.notification_handlers.noto_producer"
 QUIET_WINDOW = "management.tasks._in_rh_notifications_quiet_window"
 
@@ -247,7 +251,7 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.quiet = quiet.start()
         self.addCleanup(quiet.stop)
 
-        notify = patch(NOTIFY, return_value=True)
+        notify = patch(NOTIFY_WITH_FUTURE)
         self.notify = notify.start()
         self.addCleanup(notify.stop)
 
@@ -376,9 +380,15 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.assertEqual(list(second.events.values_list("event_type", flat=True)), ["b"])
 
     def test_failed_send_keeps_the_cursor_and_retries_on_the_next_run(self):
-        """A failed send stops the batch at the last complete tenant; the next run replays the failed tenant."""
+        """A failed enqueue keeps the cursor at the last complete tenant and retries the partial tenant."""
         queue_settled_events("a", "b")
-        self.notify.side_effect = lambda event_type, payload, org_id: not (org_id == "org1" and event_type == "b")
+
+        def enqueue(event_type, payload, org_id):
+            if org_id == "org1" and event_type == "b":
+                raise KafkaError("broker unavailable")
+            return MagicMock()
+
+        self.notify.side_effect = enqueue
 
         send_rh_notifications_in_worker()
 
@@ -396,26 +406,54 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.assertEqual(delivery.failed_attempts, 0)
 
     @patch("management.tasks.logger")
-    def test_delivery_fails_after_max_consecutive_failures(self, logger):
-        """Consecutive failures mark the delivery failed, and the failure is logged."""
+    def test_repeated_failures_back_off_then_recover(self, logger):
+        """Five failures remain retryable; backoff caps and a later successful run completes the delivery."""
         queue_settled_events("a")
-        self.notify.return_value = False
+        self.notify.side_effect = KafkaError("broker unavailable")
 
-        for _ in range(RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS):
-            run_next_batch()
+        for _ in range(RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD + 2):
+            RhNotificationDelivery.objects.exclude(last_batch_at=None).update(
+                last_batch_at=timezone.now() - datetime.timedelta(minutes=16)
+            )
+            send_rh_notifications_in_worker()
 
         delivery = RhNotificationDelivery.objects.get()
-        self.assertEqual(delivery.status, RhNotificationDelivery.Status.FAILED)
-        self.assertEqual(delivery.failed_attempts, RH_NOTIFICATIONS_MAX_FAILED_ATTEMPTS)
-        self.assertIsNotNone(delivery.finished_at)
-        logger.error.assert_called_once()
+        self.assertEqual(delivery.status, RhNotificationDelivery.Status.ACTIVE)
+        self.assertEqual(delivery.failed_attempts, RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD + 2)
+        self.assertIsNone(delivery.finished_at)
+        self.assertEqual(logger.error.call_count, 3)
+        self.assertEqual(
+            [_rh_notifications_retry_delay_seconds(attempts) for attempts in range(7)],
+            [
+                55,
+                60,
+                120,
+                240,
+                480,
+                RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS,
+                RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS,
+            ],
+        )
+
+        self.notify.reset_mock()
+        self.notify.side_effect = None
+        send_rh_notifications_in_worker()
+        self.notify.assert_not_called()  # A retry must wait for the backoff.
+
+        delivery.last_batch_at = timezone.now() - datetime.timedelta(minutes=16)
+        delivery.save(update_fields=["last_batch_at"])
+        send_rh_notifications_in_worker()
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, RhNotificationDelivery.Status.DONE)
+        self.assertEqual(delivery.failed_attempts, 0)
+        self.assertEqual(self.sent_org_ids(), [f"org{i}" for i in range(5)])
 
     def test_unexpected_error_rolls_back_so_the_next_run_resends_the_batch(self):
         """A run that dies mid-batch commits nothing, so the next run resends from the last committed cursor."""
         queue_settled_events("a")
-        self.notify.side_effect = [True, RuntimeError("worker lost")]
+        self.notify.side_effect = [MagicMock(), KeyboardInterrupt("worker lost")]
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(KeyboardInterrupt):
             send_rh_notifications_in_worker()
 
         self.assertFalse(RhNotificationDelivery.objects.exists())
@@ -426,6 +464,26 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         send_rh_notifications_in_worker()
 
         self.assertEqual(self.sent_org_ids(), [f"org{i}" for i in range(5)])
+
+    @override_settings(NOTIFICATIONS_RH_RATE_PER_MINUTE=2)
+    def test_interrupted_later_batch_keeps_the_prior_committed_cursor(self):
+        """An interruption after a successful batch cannot commit partial progress in the next batch."""
+        queue_settled_events("a")
+        send_rh_notifications_in_worker()
+        delivery = RhNotificationDelivery.objects.get()
+        self.assertEqual(delivery.after_tenant_id, self.ready[1].id)
+
+        self.notify.reset_mock()
+        self.notify.side_effect = [MagicMock(), KeyboardInterrupt("worker lost")]
+        with self.assertRaises(KeyboardInterrupt):
+            run_next_batch()
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.after_tenant_id, self.ready[1].id)
+
+        self.notify.reset_mock()
+        self.notify.side_effect = None
+        run_next_batch()
+        self.assertEqual(self.sent_org_ids(), ["org2", "org3"])
 
     def test_quiet_window_skips_the_run(self):
         """No delivery starts and nothing is sent during the quiet window."""
@@ -450,12 +508,30 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.assertEqual(delivery.after_tenant_id, self.ready[0].id)
         self.assertEqual(delivery.status, RhNotificationDelivery.Status.ACTIVE)
 
+    def test_quiet_window_before_retry_does_not_reset_failed_attempts(self):
+        """A run that sends nothing at the quiet boundary retains its retry history."""
+        queue_settled_events("a")
+        self.notify.side_effect = KafkaError("broker unavailable")
+        send_rh_notifications_in_worker()
+        delivery = RhNotificationDelivery.objects.get()
+
+        self.notify.reset_mock()
+        self.notify.side_effect = None
+        self.quiet.side_effect = [False, True]
+        run_next_batch()
+
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.failed_attempts, 1)
+        self.assertEqual(delivery.after_tenant_id, 0)
+        self.notify.assert_not_called()
+
     def test_disabled_settings_exit_early(self):
         """Either flag turned off stops sending, and the queued events stay for later."""
         queue_settled_events("a")
         for flags in (
             {"NOTIFICATIONS_ENABLED": False, "NOTIFICATIONS_RH_ENABLED": True},
             {"NOTIFICATIONS_ENABLED": True, "NOTIFICATIONS_RH_ENABLED": False},
+            {"KAFKA_ENABLED": False},
         ):
             with self.subTest(**flags), override_settings(**flags):
                 send_rh_notifications_in_worker()
@@ -473,14 +549,65 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         self.notify.assert_not_called()
         self.assertFalse(RhNotificationDelivery.objects.exists())
 
-    def test_flush_failure_does_not_stop_the_delivery(self):
-        """A flush error is logged and the cursor still advances."""
+    def test_flush_failure_keeps_the_cursor_for_retry(self):
+        """A flush timeout leaves the cursor before the batch even if sends were enqueued."""
         queue_settled_events("a", "b")
-        self.producer.get_producer.return_value.flush.side_effect = RuntimeError("flush failed")
+        self.producer.get_producer.return_value.flush.side_effect = KafkaTimeoutError("flush timed out")
 
         send_rh_notifications_in_worker()
 
-        self.assertEqual(RhNotificationDelivery.objects.get().after_tenant_id, self.ready[2].id)
+        delivery = RhNotificationDelivery.objects.get()
+        self.assertEqual(delivery.after_tenant_id, 0)
+        self.assertEqual(delivery.failed_attempts, 1)
+        self.assertEqual(delivery.status, RhNotificationDelivery.Status.ACTIVE)
+        self.notify.return_value.get.assert_not_called()
+
+        self.producer.get_producer.return_value.flush.side_effect = None
+        run_next_batch()
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.after_tenant_id, self.ready[2].id)
+
+    def test_failed_acknowledgment_keeps_only_the_confirmed_tenant_prefix(self):
+        """A failed future cannot advance past its tenant even if later sends were enqueued."""
+        queue_settled_events("a", "b")
+        futures = [MagicMock() for _ in range(6)]
+        futures[3].get.side_effect = KafkaError("broker rejected send")
+        self.notify.side_effect = futures
+
+        send_rh_notifications_in_worker()
+
+        delivery = RhNotificationDelivery.objects.get()
+        self.assertEqual(delivery.after_tenant_id, self.ready[0].id)
+        self.assertEqual(delivery.failed_attempts, 1)
+        self.assertEqual(delivery.status, RhNotificationDelivery.Status.ACTIVE)
+        for future in futures[:4]:
+            future.get.assert_called_once_with(timeout=0)
+        for future in futures[4:]:
+            future.get.assert_not_called()
+
+        self.notify.reset_mock()
+        self.notify.side_effect = None
+        run_next_batch()
+        self.assertEqual(self.sent_org_ids(), ["org1", "org1", "org2", "org2", "org3", "org3"])
+
+    def test_retries_previous_failed_delivery_instead_of_deleting_it(self):
+        """A legacy FAILED delivery is reactivated and sent from its saved cursor."""
+        event = queue_settled_events("a")[0]
+        delivery = RhNotificationDelivery.objects.create(
+            status=RhNotificationDelivery.Status.FAILED,
+            after_tenant_id=self.ready[2].id,
+            failed_attempts=5,
+            finished_at=timezone.now() - datetime.timedelta(days=8),
+            last_batch_at=timezone.now() - datetime.timedelta(days=8),
+        )
+        event.delivery = delivery
+        event.save(update_fields=["delivery"])
+
+        send_rh_notifications_in_worker()
+
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, RhNotificationDelivery.Status.DONE)
+        self.assertEqual(self.sent_org_ids(), ["org3", "org4"])
 
     def test_finished_deliveries_are_deleted_after_seven_days(self):
         """Deliveries finished more than seven days ago are deleted with their events; recent ones are kept."""
@@ -490,7 +617,7 @@ class SendRhNotificationsTaskTests(IdentityRequest):
         )
         RhNotificationEvent.objects.create(event_type="old", payload={}, delivery=old)
         recent = RhNotificationDelivery.objects.create(
-            status=RhNotificationDelivery.Status.FAILED, finished_at=now - datetime.timedelta(days=6)
+            status=RhNotificationDelivery.Status.DONE, finished_at=now - datetime.timedelta(days=6)
         )
 
         send_rh_notifications_in_worker()
@@ -531,10 +658,10 @@ class SendRhNotificationsKafkaMessageTests(IdentityRequest):
         quiet.start()
         self.addCleanup(quiet.stop)
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_ready_tenants_receive_the_full_message(self, send_kafka_message):
+    @patch("core.kafka.RBACProducer.send_kafka_message_future")
+    def test_ready_tenants_receive_the_full_message(self, send_kafka_message_future):
         """Each ready tenant gets the unchanged message envelope; public and unready tenants get nothing."""
-        kafka_mock = copy_call_args(send_kafka_message)
+        kafka_mock = copy_call_args(send_kafka_message_future)
         payload = {"username": "Red Hat", "name": "role", "uuid": "00000000-0000-0000-0000-000000000001"}
         RhNotificationEvent.objects.create(
             event_type="rh-new-role-available",
