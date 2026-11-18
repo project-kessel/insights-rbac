@@ -153,10 +153,22 @@ Notifications are sent via Kafka to the `NOTIFICATIONS_TOPIC`. The producer (`co
 Event types: `custom-role-created`, `custom-role-deleted`, `custom-role-updated`, `group-created`, `group-deleted`, `group-updated`, `rh-new-role-available`, `rh-platform-default-role-updated`, `rh-new-tam-request-created`, etc.
 
 Guards:
-- `NOTIFICATIONS_ENABLED` controls custom resource notifications
-- `NOTIFICATIONS_RH_ENABLED` controls Red Hat system role/group notifications
+- `NOTIFICATIONS_ENABLED` controls custom resource notifications and is also required for Red Hat system notifications
+- `NOTIFICATIONS_RH_ENABLED` additionally enables Red Hat system role/group notifications; both flags must be true for queueing and delivery
 - `skip_rh_notifications` context var suppresses during seeding
 - `KAFKA_ENABLED=False` disables all notifications
+
+Red Hat system notifications are not sent by the seeding run. The handlers call `queue_rh_notification()`, which saves an `RhNotificationEvent` row in the same transaction as the role or group change, so an event exists exactly when its change commits, even if seeding fails later. The `send_rh_notifications_in_worker` beat task runs every minute (registered when `NOTIFICATIONS_RH_ENABLED=True`) and sends them:
+
+- Once no event was queued for 5 minutes, the queued events are bundled into one `RhNotificationDelivery`, so a seeding run goes out as one delivery. Events queued while a delivery is active wait for the next one.
+- Each run sends every event of the active delivery to the next batch of ready tenants, in tenant id order, and commits the tenant cursor. Runs are at least 55 seconds apart, and no run sends during the UTC quiet window. The window is re-checked before each tenant, so the tenant being sent when it starts still receives all of its events.
+- A transaction-level Postgres advisory lock (`pg_try_advisory_xact_lock(44)`) admits one run at a time. It is released when the transaction ends or its connection drops, so a dead worker never leaves it held.
+- Delivery is at least once up to Kafka broker acknowledgment (`acks=all`); it does not guarantee processing by the Notifications consumer. The worker flushes the producer, checks every send future, and commits the cursor only through tenants whose every event was acknowledged. A failed future, flush timeout, or interrupted worker leaves an earlier cursor for retry. A retry can duplicate messages that Kafka already accepted.
+- A failed run leaves the delivery `active` and retries on later beat ticks with exponential backoff from 1 minute to 15 minutes. Five consecutive failures and every later failure emit an error log with the delivery id, failure count, and tenant cursor. Successful progress resets the failure count. Only `done` deliveries are deleted with their events after 7 days; older `failed` deliveries from a previous worker version are resumed instead of deleted.
+
+The rate setting is a batch-sizing target, not a hard per-minute limit: a batch always sends all events for at least one tenant, so it exceeds the target when a delivery has more events than the configured rate.
+
+**Team decision for Libor/JayZ:** Confirm the indefinite retry policy (15-minute backoff cap, error logs starting at five consecutive failures), whether it needs a Prometheus alert for active deliveries stalled at the same cursor, and whether the five-minute settle delay fits seeding duration. Until then the worker keeps retrying; no manual requeue is needed after a temporary Kafka outage.
 
 ## 9. Celery Tasks and Beat Schedule
 
@@ -167,6 +179,7 @@ Scheduled tasks in `rbac/rbac/celery.py`:
 - `run_redis_cache_health` -- every 30 seconds
 - `principal_cleanup_via_kafka` -- every 60 seconds (when `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED=True`)
 - `principal_cleanup` -- every 7 days (fallback when Kafka cleanup is disabled)
+- `send_rh_notifications_in_worker` -- every 60 seconds (when `NOTIFICATIONS_RH_ENABLED=True`), see section 8
 
 Worker starts a Prometheus metrics server on Clowder's `metricsPort` (default 9000). Failure to start metrics server exits the process.
 
@@ -185,6 +198,8 @@ Env vars: `READ_YOUR_WRITES_WORKSPACE_ENABLED`, `READ_YOUR_WRITES_CHANNEL`, `REA
 | `KAFKA_ENABLED` | `False` | Enables Kafka producer/consumer |
 | `NOTIFICATIONS_ENABLED` | `False` | Enables custom resource notifications |
 | `NOTIFICATIONS_RH_ENABLED` | `False` | Enables RH system notifications |
+| `NOTIFICATIONS_RH_RATE_PER_MINUTE` | `3000` | Target RH notification messages per batch; not a hard per-minute limit |
+| `NOTIFICATIONS_RH_QUIET_START` / `NOTIFICATIONS_RH_QUIET_END` | `23:30` / `00:30` | UTC quiet window (HH:MM) with no RH notification sending |
 | `BYPASS_BOP_VERIFICATION` | `False` | Skips BOP calls, uses local DB |
 | `IT_BYPASS_IT_CALLS` | `False` | Mocks IT service responses |
 | `MOCK_KAFKA` | `False` | Uses FakeKafkaProducer |
