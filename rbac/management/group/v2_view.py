@@ -431,15 +431,20 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
             # batch, so a row queued only to gain a mode would also have its snapshot user_id written --
             # putting a stale NULL back over a user ID another request had just filled, and leaving the
             # principal without the resource ID its membership replication needs.
+            # The primary key already pins the row, and it came from a tenant-scoped read, so the tenant
+            # filter is redundant here. It is included anyway: every query against a tenant-aware model
+            # constrains by tenant, and an exception would have to be re-justified by each later reader.
             if principal.user_id is None and user_id is not None:
                 # The principal may have been lazily created without a user ID.
-                Principal.objects.filter(pk=principal.pk, user_id__isnull=True).update(user_id=user_id)
+                Principal.objects.filter(pk=principal.pk, tenant=request.tenant, user_id__isnull=True).update(
+                    user_id=user_id
+                )
             # Only ever filled in, never cleared. A principal created from a username alone carries no mode,
             # and this is one of the two places an IT payload is available to supply it.
             if principal.service_account_type is None and service_account_type is not None:
-                Principal.objects.filter(pk=principal.pk, service_account_type__isnull=True).update(
-                    service_account_type=service_account_type
-                )
+                Principal.objects.filter(
+                    pk=principal.pk, tenant=request.tenant, service_account_type__isnull=True
+                ).update(service_account_type=service_account_type)
 
         return None, set()
 

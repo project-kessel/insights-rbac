@@ -58,7 +58,12 @@ class Principal(TenantAwareModel):
     #
     # Stored verbatim rather than as choices. CIAM-12576 calls "service_access_token" the *current* set of
     # values, so an unrecognised value must round-trip rather than fail a write.
-    service_account_type = models.CharField(max_length=64, null=True, db_index=True)
+    #
+    # Deliberately unindexed. Nothing filters on it yet, and indexing it here would build two indexes
+    # inside the ALTER TABLE's transaction, holding a lock on a table that is on the request path. When a
+    # filter does arrive, the index can be added on its own with AddIndexConcurrently -- and its shape
+    # chosen then, since a column holding one value or NULL is a poor fit for a plain b-tree.
+    service_account_type = models.CharField(max_length=64, null=True)
 
     def principal_resource_id(self) -> Optional[str]:
         """Return the principal resource ID suitable for use in the Kessel access graph."""
