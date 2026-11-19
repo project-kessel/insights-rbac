@@ -950,6 +950,34 @@ class QuerySetTest(TestCase):
         get_admin_from_proxy.assert_called_with(request=request, username=username)
 
 
+class RoleQuerySetSystemParamTest(IdentityRequest):
+    """Tests for system=true role-catalog scoping in get_role_queryset."""
+
+    def tearDown(self):
+        """Clean up roles created by these tests."""
+        Role.objects.filter(tenant=self.tenant, name__in=["custom_role", "system_role"]).delete()
+        super().tearDown()
+
+    def test_get_role_queryset_system_true_scopes_to_system_roles(self):
+        """system=true must return only system roles, not the full tenant catalog."""
+        custom_role = Role.objects.create(name="custom_role", tenant=self.tenant, system=False)
+        system_role = Role.objects.create(name="system_role", tenant=self.tenant, system=True)
+        access = {"role": {"read": [], "write": []}}
+        user = Mock(spec=User, admin=False, access=access, username="test_user")
+        req = Mock(
+            user=user,
+            method="GET",
+            tenant=self.tenant,
+            query_params={"system": "true"},
+            path=reverse("v1_management:role-list"),
+        )
+        queryset = get_role_queryset(req)
+        self.assertTrue(queryset.filter(uuid=system_role.uuid).exists())
+        self.assertFalse(queryset.filter(uuid=custom_role.uuid).exists())
+        self.assertFalse(queryset.filter(system=False).exists())
+        self.assertTrue(all(role.system for role in queryset))
+
+
 class BypassBOPVerificationTest(IdentityRequest):
     """Tests for BYPASS_BOP_VERIFICATION behavior in queryset helpers.
 
