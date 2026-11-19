@@ -683,18 +683,28 @@ class GroupViewSet(
                     username__iexact=SERVICE_ACCOUNT_USERNAME_FORMAT.format(clientId=client_id),
                     tenant=tenant,
                 )
-                changed = False
+                changed_fields: list[str] = []
                 if principal.user_id is None and user_id is not None:
                     # May happen in case principal is lazily created without user ID.
                     principal.user_id = user_id
-                    changed = True
+                    changed_fields.append("user_id")
                 # Only ever filled in, never cleared: a principal created from a username alone has no mode,
                 # and this is one of the two places an IT payload is available to supply it.
                 if principal.service_account_type is None and service_account_type is not None:
                     principal.service_account_type = service_account_type
-                    changed = True
-                if changed:
-                    principal.save()
+                    changed_fields.append("service_account_type")
+                if changed_fields:
+                    # Only the fields this request filled. A bare save() writes every column, so a request
+                    # that filled just the mode would also write back the user_id it read moments earlier --
+                    # NULL, when IT sent none -- undoing a concurrent fill. The surrounding transaction does
+                    # not prevent that: backfill_atomic only runs SERIALIZABLE when
+                    # PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED is set, which outside ephemeral environments
+                    # it is not, so this read-then-write races under READ COMMITTED.
+                    #
+                    # The narrower write also stops save() persisting its username lowercasing, which is
+                    # incidental here: usernames are written lower case on create and this row was matched
+                    # case-insensitively, so there is nothing to normalise.
+                    principal.save(update_fields=changed_fields)
             except Principal.DoesNotExist:
                 principal = Principal.objects.create(
                     username=SERVICE_ACCOUNT_USERNAME_FORMAT.format(clientId=client_id),
