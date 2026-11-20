@@ -5491,6 +5491,206 @@ class GroupPrincipalV2SyncTests(IdentityRequest):
         self.assertEqual(admin_group_tuple_count, 1, "Expected admin group membership tuple")
 
 
+class GroupServiceAccessTokenReplicationTests(IdentityRequest):
+    """Test that service access tokens replicate to Kessel exactly like regular service accounts.
+
+    Service access tokens are assigned to groups and bound at the group level like any other service account,
+    so authorization needs no change for them. That premise is load-bearing: if replication produced different
+    tuples for a service access token, the scope would grow to include authorization work which has been
+    explicitly ruled out.
+    """
+
+    def setUp(self):
+        """Set up the replication parity tests."""
+        super().setUp()
+        request = self.request_context["request"]
+        user = User()
+        user.username = self.user_data["username"]
+        user.account = self.customer_data["account_id"]
+        user.org_id = self.customer_data["org_id"]
+        user.admin = True
+        request.user = user
+
+        self.group = Group(name="satReplicationGroup", tenant=self.tenant)
+        self.group.save()
+
+        # Bootstrap with a no-op replicator so that only the tuples from the request under test are captured.
+        V2TenantBootstrapService(NoopReplicator()).bootstrap_tenant(self.tenant)
+
+    @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_USER_DOMAIN="redhat", IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_service_access_token_replicates_like_service_account(self, sa_mock, mock_replicate):
+        """Test that adding a service access token to a group produces the same tuples as a regular one."""
+        from management.group.definer import seed_group
+
+        Tenant.objects.get_or_create(tenant_name="public")
+        seed_group()
+
+        tuples = InMemoryTuples()
+        mock_replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        service_access_token_client_id = str(uuid4())
+        regular_client_id = str(uuid4())
+
+        # Both are organizational service accounts as far as IT is concerned; the only difference is the
+        # service access token attributes on one of them.
+        sa_mock.return_value = [
+            {
+                "clientId": service_access_token_client_id,
+                "name": "sat-name",
+                "description": "sat-description",
+                "owner": "jsmith",
+                "username": f"service-account-{service_access_token_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "service_account_type": MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+                "time_expires": 1713876532,
+                "userId": "sat-user-id",
+            },
+            {
+                "clientId": regular_client_id,
+                "name": "sa-name",
+                "description": "sa-description",
+                "owner": "jsmith",
+                "username": f"service-account-{regular_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "userId": "sa-user-id",
+            },
+        ]
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {
+            "principals": [
+                {"clientId": service_access_token_client_id, "type": "service-account"},
+                {"clientId": regular_client_id, "type": "service-account"},
+            ]
+        }
+        response = client.post(url, request_body, format="json", **self.headers)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Each should have produced exactly one group membership tuple, and the two should be identical apart
+        # from the principal they point at.
+        service_access_token_tuples = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(self.group.uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/sat-user-id"),
+            )
+        )
+        regular_tuples = tuples.count_tuples(
+            all_of(
+                resource("rbac", "group", str(self.group.uuid)),
+                relation("member"),
+                subject("rbac", "principal", "redhat/sa-user-id"),
+            )
+        )
+        service_access_token_subject_tuples = tuples.count_tuples(subject("rbac", "principal", "redhat/sat-user-id"))
+        regular_subject_tuples = tuples.count_tuples(subject("rbac", "principal", "redhat/sa-user-id"))
+
+        self.assertEqual(
+            1,
+            regular_tuples,
+            "a regular service account should have produced one group membership tuple",
+        )
+        self.assertEqual(
+            regular_tuples,
+            service_access_token_tuples,
+            "a service access token should replicate exactly like a regular service account; a difference here"
+            " would contradict the premise that authorization needs no change for service access tokens",
+        )
+        self.assertEqual(
+            service_access_token_tuples,
+            service_access_token_subject_tuples,
+            "the service access token should produce no tuple beyond its group membership tuple",
+        )
+        self.assertEqual(
+            regular_tuples,
+            regular_subject_tuples,
+            "the regular service account should produce no tuple beyond its group membership tuple",
+        )
+
+    @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_USER_DOMAIN="redhat", IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_service_access_token_removal_replicates_like_service_account(self, sa_mock, mock_replicate):
+        """Test that removing a service access token from a group retracts the same tuples as a regular one."""
+        from management.group.definer import seed_group
+
+        Tenant.objects.get_or_create(tenant_name="public")
+        seed_group()
+
+        service_access_token_client_id = str(uuid4())
+        regular_client_id = str(uuid4())
+        sa_mock.return_value = [
+            {
+                "clientId": service_access_token_client_id,
+                "name": "sat-name",
+                "owner": "jsmith",
+                "username": f"service-account-{service_access_token_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "service_account_type": MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+                "time_expires": 1713876532,
+                "userId": "sat-user-id",
+            },
+            {
+                "clientId": regular_client_id,
+                "name": "sa-name",
+                "owner": "jsmith",
+                "username": f"service-account-{regular_client_id}",
+                "time_created": 1706784741,
+                "type": "service-account",
+                "userId": "sa-user-id",
+            },
+        ]
+
+        # A single store spans the add and the remove, so that a retraction which never happens shows up as a
+        # leftover tuple. Counting only the removal's events would compare two empty sets and always pass.
+        tuples = InMemoryTuples()
+        mock_replicate.side_effect = InMemoryRelationReplicator(tuples).replicate
+
+        url = reverse("v1_management:group-principals", kwargs={"uuid": self.group.uuid})
+        client = APIClient()
+        request_body = {
+            "principals": [
+                {"clientId": service_access_token_client_id, "type": "service-account"},
+                {"clientId": regular_client_id, "type": "service-account"},
+            ]
+        }
+        self.assertEqual(
+            status.HTTP_200_OK,
+            client.post(url, request_body, format="json", **self.headers).status_code,
+        )
+
+        # Both must actually be present first, otherwise the removal below proves nothing.
+        self.assertEqual(1, tuples.count_tuples(subject("rbac", "principal", "redhat/sat-user-id")))
+        self.assertEqual(1, tuples.count_tuples(subject("rbac", "principal", "redhat/sa-user-id")))
+
+        for client_id in (service_access_token_client_id, regular_client_id):
+            response = client.delete(f"{url}?service-accounts={client_id}", format="json", **self.headers)
+            self.assertEqual(status.HTTP_204_NO_CONTENT, response.status_code)
+
+        self.assertEqual(
+            0,
+            tuples.count_tuples(subject("rbac", "principal", "redhat/sa-user-id")),
+            "removing a regular service account should retract its group membership tuple",
+        )
+        self.assertEqual(
+            0,
+            tuples.count_tuples(subject("rbac", "principal", "redhat/sat-user-id")),
+            "removing a service access token should retract its tuple exactly as a regular service account does",
+        )
+        self.assertEqual(
+            0,
+            Group.objects.get(uuid=self.group.uuid).principals.count(),
+            "both service accounts should have been removed from the group",
+        )
+
+
 class GroupViewNonAdminTests(IdentityRequest):
     """Test the group view for nonadmin user."""
 
