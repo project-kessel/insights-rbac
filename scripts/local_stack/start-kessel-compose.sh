@@ -17,14 +17,18 @@ RBAC_OVERRIDE_FILE="${2:?compose override file required}"
 
 detect_container_runtime
 
-COMPOSE_DIR="${INVENTORY_API_REPO}/development/full-kessel"
+COMPOSE_DIR="${FULL_KESSEL_COMPOSE_DIR:-${INVENTORY_API_REPO}/development/full-kessel}"
+if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+  python3 "${SCRIPT_DIR}/prepare-slot-compose.py" \
+    "${INVENTORY_API_REPO}" "${COMPOSE_DIR}" "${FULL_STACK_PORT_OFFSET:-0}"
+fi
 ENV_FILE="${COMPOSE_DIR}/.env"
 
-prepare_full_kessel_configs "${INVENTORY_API_REPO}" "${REPO_ROOT}"
+prepare_full_kessel_configs "${INVENTORY_API_REPO}" "${REPO_ROOT}" "${COMPOSE_DIR}"
 
-NETWORK_CHECK=$("${CONTAINER_RUNTIME}" network ls --filter name=kessel --format json)
-if [[ -z "${NETWORK_CHECK}" || "${NETWORK_CHECK}" == "[]" ]]; then
-  "${CONTAINER_RUNTIME}" network create kessel
+KESSEL_NETWORK_NAME="${KESSEL_NETWORK_NAME:-kessel}"
+if ! "${CONTAINER_RUNTIME}" network inspect "${KESSEL_NETWORK_NAME}" >/dev/null 2>&1; then
+  "${CONTAINER_RUNTIME}" network create "${KESSEL_NETWORK_NAME}"
 fi
 
 export DOCKER="${CONTAINER_RUNTIME}"
@@ -41,7 +45,7 @@ write_spicedb_schema() {
   }
 
   log-info 'Applying selected schema directly to SpiceDB...'
-  "${CONTAINER_RUNTIME}" run --rm --network kessel \
+  "${CONTAINER_RUNTIME}" run --rm --network "${KESSEL_NETWORK_NAME}" \
     -e "ZED_TOKEN=${spicedb_token}" \
     -e ZED_ENDPOINT=spicedb:50051 \
     -e ZED_INSECURE=true \

@@ -36,4 +36,5 @@ services:
 
 networks:
   kessel:
+    name: ${KESSEL_NETWORK_NAME:-kessel}
     external: true
