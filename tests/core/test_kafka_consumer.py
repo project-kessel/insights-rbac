@@ -531,10 +531,8 @@ class RBACKafkaConsumerTests(TestCase):
     @override_settings(KAFKA_ENABLED=False)
     def test_create_consumer_kafka_disabled(self):
         """Test consumer creation fails when Kafka is disabled."""
-        consumer = RBACKafkaConsumer()
-
         with self.assertRaises(RuntimeError) as cm:
-            consumer._create_consumer()
+            RBACKafkaConsumer()
 
         self.assertIn("Kafka must be enabled", str(cm.exception))
 

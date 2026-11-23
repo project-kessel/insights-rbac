@@ -349,6 +349,9 @@ def _save_consistency_token_best_effort(org_id: str, token: str, aggregateid: st
 
 
 def _consumer_config(topic: str):
+    if not settings.KAFKA_ENABLED:
+        raise RuntimeError("Kafka must be enabled")
+
     # Check if custom broker is configured for the consumer
     custom_broker = settings.RBAC_KAFKA_CUSTOM_CONSUMER_BROKER
 
