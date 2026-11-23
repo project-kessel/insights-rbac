@@ -112,6 +112,7 @@ Key rules:
 - The `aggregatetype` field controls Debezium topic routing: `"relations-replication-event"` or `"workspace"`.
 - The `aggregateid` field is the partition key (currently environment-level). All events within a partition are ordered.
 - Empty replication events (no adds, no removes) are logged as warnings and skipped.
+- System-role deletion streams binding, group, and distinct principal relations in database chunks before batching outbox events. Legacy unmigrated binding mappings contain JSON whose size is not bounded by the event limit. All cleanup remains in the deletion transaction and environment partition.
 
 ## Transaction Management
 
