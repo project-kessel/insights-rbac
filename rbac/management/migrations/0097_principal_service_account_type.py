@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("management", "0095_alter_auditlog_resource_type_group_v2"),
+        ("management", "0096_rh_notification_queue"),
     ]
 
     operations = [
