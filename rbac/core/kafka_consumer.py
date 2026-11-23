@@ -649,10 +649,6 @@ class RebalanceListener(AsyncConsumerRebalanceListener):
         The returned KafkaFuture is compatible with kafka-python's internal
         event loop, so ``await future`` properly yields control back to the
         NetworkSelector (keeping heartbeats alive) until the thread completes.
-
-        After the worker thread resolves the future, it wakes the
-        NetworkSelector so the suspended coroutine resumes immediately
-        rather than waiting for the next heartbeat / select timeout.
         """
         future = KafkaFuture()
 
