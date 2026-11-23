@@ -10,6 +10,8 @@ source "${SCRIPT_DIR}/../common/container_runtime.sh"
 
 detect_container_runtime
 
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
+HBI_COMPOSE_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
 FAILURES=0
 
 fail() {
@@ -81,8 +83,8 @@ check_http() {
 }
 
 log-info "Checking full Kessel, RBAC, and HBI containers..."
-check_containers '^full-kessel-' 'Kessel/RBAC containers'
-check_containers '^hbi-kessel-local-' 'HBI containers'
+check_containers "^${COMPOSE_PROJECT_NAME}-" 'Kessel/RBAC containers'
+check_containers "^${HBI_COMPOSE_PROJECT}-" 'HBI containers'
 
 log-info "Checking published full-stack endpoints..."
 check_http "${RBAC_HEALTH_URL:-http://localhost:9080/metrics}" 'RBAC API'

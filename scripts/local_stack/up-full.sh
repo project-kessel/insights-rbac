@@ -104,6 +104,8 @@ INVENTORY_API_REPO_FROM_CONFIG="${INVENTORY_API_REPO:-}"
 HBI_REPO_FROM_CONFIG="${HBI_REPO:-}"
 unset RBAC_LOCAL_REPO_WAS_SET RBAC_LOCAL_REPO_FROM_ENV RBAC_CONFIG_REPO_WAS_SET RBAC_CONFIG_REPO_FROM_ENV
 unset INVENTORY_API_REPO_WAS_SET INVENTORY_API_REPO_FROM_ENV HBI_REPO_WAS_SET HBI_REPO_FROM_ENV
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
+RBAC_SERVER_CONTAINER="${RBAC_SERVER_CONTAINER:-${COMPOSE_PROJECT_NAME}-rbac-server-1}"
 
 usage() {
   cat <<'EOF'
@@ -661,7 +663,7 @@ select_hbi_source() {
 
 stack_is_running() {
   # Return true when the full Kessel RBAC server container is running.
-  [[ "$("${CONTAINER_RUNTIME}" container inspect --format '{{.State.Running}}' full-kessel-rbac-server-1 2>/dev/null || true)" == true ]]
+  [[ "$("${CONTAINER_RUNTIME}" container inspect --format '{{.State.Running}}' "${RBAC_SERVER_CONTAINER}" 2>/dev/null || true)" == true ]]
 }
 
 print_source_summary() {
@@ -833,9 +835,25 @@ start_hbi() {
 
   log-info "Building and starting Host Inventory from ${HBI_REPO}..."
 
-  "${COMPOSE_CMD[@]}" -p "${HBI_COMPOSE_PROJECT}" \
-    -f "${HBI_REPO}/dev.yml" \
-    -f "${REPO_ROOT}/scripts/local_stack/hbi.integration.yml" \
+  local hbi_compose_file="${FULL_HBI_COMPOSE_FILE:-${HBI_REPO}/dev.yml}"
+  local -a hbi_compose_args
+  if [[ -n "${FULL_HBI_COMPOSE_FILE:-}" ]]; then
+    mkdir -p "$(dirname "${hbi_compose_file}")"
+    cp "${HBI_REPO}/dev.yml" "${hbi_compose_file}"
+  fi
+
+  hbi_compose_args=(
+    -p "${HBI_COMPOSE_PROJECT}"
+    --project-directory "${HBI_REPO}"
+    -f "${hbi_compose_file}"
+    -f "${REPO_ROOT}/scripts/local_stack/hbi.integration.yml"
+  )
+  if [[ -n "${FULL_STACK_SLOT:-}" ]]; then
+    mkdir -p "${HBI_PG_DATA:?}" "${HBI_MINIO_DATA:?}"
+    hbi_compose_args+=(-f "${REPO_ROOT}/scripts/local_stack/hbi.slot.override.yml")
+  fi
+
+  "${COMPOSE_CMD[@]}" "${hbi_compose_args[@]}" \
     up -d --build --no-deps db hbi-web hbi-mq
 }
 
@@ -853,10 +871,10 @@ load_default_users() {
   log-info "Waiting for RBAC API before loading default full-stack users..."
   local attempt
   for attempt in $(seq 1 60); do
-    if curl -fsS http://localhost:9080/metrics >/dev/null 2>&1; then
+    if curl -fsS "http://localhost:${RBAC_API_PORT:-9080}/metrics" >/dev/null 2>&1; then
       log-info "Loading default V1/V2 local users from ${DEFAULT_USERS_FIXTURE}..."
       CONTAINER_RUNTIME="${CONTAINER_RUNTIME}" \
-        RBAC_SERVER_CONTAINER=full-kessel-rbac-server-1 \
+        RBAC_SERVER_CONTAINER="${RBAC_SERVER_CONTAINER}" \
         "${DEFAULT_USERS_APPLY_SCRIPT}" --file "${DEFAULT_USERS_FIXTURE}"
       return 0
     fi
@@ -871,11 +889,11 @@ print_endpoints() {
   cat <<EOF
 
 Stack endpoints:
-  RBAC API:          http://localhost:9080
-  RBAC Postgres:     localhost:15432
-  SpiceDB (zed):     localhost:50051
-  Inventory API:     localhost:9081
-  Kafka Connect:     http://localhost:8083
+  RBAC API:          http://localhost:${RBAC_API_PORT:-9080}
+  RBAC Postgres:     localhost:${RBAC_DB_PORT:-15432}
+  SpiceDB (zed):     localhost:${SPICEDB_PORT:-50051}
+  Inventory API:     localhost:${INVENTORY_API_GRPC_PORT:-9081}
+  Kafka Connect:     http://localhost:${KAFKA_CONNECT_PORT:-8083}
   HBI API:           http://localhost:${HBI_WEB_PORT:-8080}
   HBI Postgres:      localhost:${INVENTORY_DB_PORT:-15433}
 

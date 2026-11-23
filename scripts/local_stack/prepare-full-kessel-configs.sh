@@ -7,7 +7,7 @@ prepare_full_kessel_configs() {
   local inventory_api_repo="${1:?inventory-api repo path required}"
   local repo_root="${2:?insights-rbac repo root required}"
 
-  local compose_dir="${inventory_api_repo}/development/full-kessel"
+  local compose_dir="${3:-${inventory_api_repo}/development/full-kessel}"
   local env_file="${compose_dir}/.env"
   local requested_rbac_image="${RBAC_IMAGE:-}"
   local requested_schema_zed_file="${SCHEMA_ZED_FILE:-}"
