@@ -66,9 +66,22 @@ Check that the full-stack containers and published endpoints are healthy:
 make docker-local-full-health
 ```
 
-The command builds `insights-rbac-local:dev`, uses Docker or Podman Compose,
-and resolves the upstream Kessel Inventory and Host Inventory checkouts under
-`.local-deps/`. If either checkout is absent, it creates a shallow clone.
+Run the validation scripts against the healthy stack:
+
+```bash
+make docker-local-full-validate
+```
+
+When finished, stop the full local stack:
+
+```bash
+make docker-local-full-down
+```
+
+Starting the stack builds `insights-rbac-local:dev`, uses Docker or Podman
+Compose, and resolves the upstream Kessel Inventory and Host Inventory
+checkouts under `.local-deps/`. If either checkout is absent, it creates a
+shallow clone.
 Ensure the container VM has enough memory for the full stack.
 
 Each deployment also loads four idempotent local identities in organization
