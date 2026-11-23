@@ -80,6 +80,14 @@ else:
         "args": [],
     }
 
+if settings.NOTIFICATIONS_RH_ENABLED:
+    # Sends one rate-limited batch of queued Red Hat role notifications per run.
+    app.conf.beat_schedule["rh-notifications-every-minute"] = {
+        "task": "management.tasks.send_rh_notifications_in_worker",
+        "schedule": 60,
+        "args": [],
+    }
+
 if settings.PARITY_CHECK_ENABLED:
     app.conf.beat_schedule["parity-access-checks"] = {
         "task": "management.tasks.run_parity_access_checks_in_worker",

@@ -57,6 +57,8 @@ from management.principal.model import Principal
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
 from management.role.model import Access, ResourceDefinition
+from management.role.v2_model import SeededRoleV2
+from management.role_binding.model import RoleBinding
 from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
@@ -858,6 +860,28 @@ class InternalViewsetTests(BaseInternalViewsetTests):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
     @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
+    @patch("internal.views.replicate_system_role_deletion")
+    def test_delete_role_rolls_back_when_replication_fails(self, mock_replicate_deletion):
+        """A failure while replicating the deletion rolls back everything done in the transaction."""
+        self.role.tenant = self.public_tenant
+        self.role.description = "original"
+        self.role.save()
+
+        def write_then_fail(role):
+            # Stands in for outbox events written by an earlier batch before the failure.
+            Role.objects.filter(pk=role.pk).update(description="changed")
+            raise RuntimeError("replication failed")
+
+        mock_replicate_deletion.side_effect = write_then_fail
+
+        response = self.client.delete(f"/_private/api/utils/role/?name={self.role.name}", **self.request.META)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.content.decode(), "Role cannot be deleted.")
+        self.role.refresh_from_db()
+        self.assertEqual(self.role.description, "original")
+
+    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
     @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     def test_delete_role_clears_relations(self, replicate):
         """Test that deleting a system role clears its relations."""
@@ -917,6 +941,37 @@ class InternalViewsetTests(BaseInternalViewsetTests):
                 )
             ),
         )
+
+    @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=valid_destructive_time())
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    def test_delete_role_clears_role_binding_relations(self, replicate):
+        """Deleting a system role through the internal endpoint also clears its role bindings' relations."""
+        replicator = InMemoryRelationReplicator(self._tuples)
+        replicate.side_effect = replicator.replicate
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role_system = fixture.new_system_role(name="test_system_role_bound", permissions=["inventory:hosts:read"])
+        group, _ = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role_system),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+
+        binding_relations = binding.all_tuples()
+        self.assertTrue(binding_relations)
+        for relation_tuple in binding_relations:
+            self._tuples.add(relation_tuple)
+
+        response = self.client.delete(f"/_private/api/utils/role/?name={role_system.name}", **self.request.META)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self.assertFalse(RoleBinding.objects.filter(id=binding.id).exists())
+        for relation_tuple in binding_relations:
+            self.assertNotIn(relation_tuple, self._tuples)
 
     @override_settings(INTERNAL_DESTRUCTIVE_API_OK_UNTIL=invalid_destructive_time())
     def test_delete_selective_permission_disallowed(self):

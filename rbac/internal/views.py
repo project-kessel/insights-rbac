@@ -116,7 +116,7 @@ from management.principal.proxy import (
     bop_request_time_tracking,
     external_principal_to_user,
 )
-from management.role.definer import delete_permission
+from management.role.definer import delete_permission, replicate_system_role_deletion
 from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
@@ -1042,40 +1042,42 @@ def role_removal(request):
         role_name = escape(role_name)
         # Add tenant public to prevent deletion of custom roles
         role_obj = get_object_or_404(Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public"))
-        with transaction.atomic():
-            try:
-                dual_write_handler = SeedingInventoryApiDualWriteHandler(role_obj)
-                dual_write_handler.replicate_deleted_system_role()
+        try:
+            # The try must wrap the atomic block, not sit inside it: swallowing the exception
+            # inside would let the transaction commit the outbox events of an already-streamed
+            # batch without the role deletion.
+            with transaction.atomic():
+                replicate_system_role_deletion(role_obj)
                 role_obj.delete()
-                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
-                logger.info(
-                    f"System role '{role_name}' deleted. Requested by '{request.user.username}'",
-                    extra={
-                        "action": "DELETE",
-                        "resource_type": "role",
-                        "resource_id": role_name,
-                        "outcome": "success",
-                        "org_id": getattr(request.user, "org_id", None),
-                        "username": getattr(request.user, "username", None),
-                    },
-                )
-                return HttpResponse(f"Role '{role_name}' deleted.", status=204)
-            except Exception:
-                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-                logger.error(
-                    "System role deletion failed",
-                    extra={
-                        "action": "DELETE",
-                        "resource_type": "role",
-                        "resource_id": role_name,
-                        "outcome": "failure",
-                        "org_id": getattr(request.user, "org_id", None),
-                        "username": getattr(request.user, "username", None),
-                        "reason": "deletion_error",
-                    },
-                    exc_info=True,
-                )
-                return HttpResponse("Role cannot be deleted.", status=400)
+        except Exception:
+            # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+            logger.error(
+                "System role deletion failed",
+                extra={
+                    "action": "DELETE",
+                    "resource_type": "role",
+                    "resource_id": role_name,
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "deletion_error",
+                },
+                exc_info=True,
+            )
+            return HttpResponse("Role cannot be deleted.", status=400)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            f"System role '{role_name}' deleted. Requested by '{request.user.username}'",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role",
+                "resource_id": role_name,
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
+        return HttpResponse(f"Role '{role_name}' deleted.", status=204)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
 

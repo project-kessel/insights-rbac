@@ -5704,6 +5704,149 @@
           }
         }
       }
+    },
+    "/api/utils/tenant_v2_opt_in/{org_id}/": {
+      "get": {
+        "tags": [
+          "V2"
+        ],
+        "summary": "Get a tenant's V2 opt-in state.",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The organization ID of the tenant to check."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The opt-in state of the tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2OptInState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "V2"
+        ],
+        "summary": "Update a tenant's V2 opt-in state.",
+        "description": "Update a tenant's V2 opt-in state. Can opt a tenant in or (if no V2 write has been performed) out of V2.",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The organization ID of the tenant to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "v2_opted_in": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "V2 opt-in state updated (if requested)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2OptInState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Tenant could not be updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected Error"
+          }
+        }
+      }
     }
   },
   "servers": [
@@ -6556,6 +6699,16 @@
           "subject",
           "relation"
         ]
+      },
+      "V2OptInState": {
+        "type": "object",
+        "description": "The V2 opt-in of a tenant",
+        "properties": {
+          "v2_opted_in": {
+            "type": "boolean"
+          }
+        },
+        "required": ["v2_opted_in"]
       }
     }
   }
