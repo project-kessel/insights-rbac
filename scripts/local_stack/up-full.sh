@@ -139,6 +139,7 @@ refreshed and a summary is printed.
 
 Environment:
   RBAC_IMAGE           Docker image tag for RBAC services (default depends on source)
+  RBAC_BUILD_NETWORK   Optional network mode for the local RBAC image build
   INVENTORY_DB_PORT    Host port for HBI Postgres (default: 15433)
   HBI_WEB_PORT         Host port for HBI API (default: 8080)
   UNLEASH_TOKEN        Required by Host Inventory dev.yml parsing (default: local-dev-token)
@@ -929,7 +930,11 @@ print_source_summary
 prepare_inventory_api_source
 
 log-info "Building local RBAC image ${RBAC_IMAGE}..."
-"${CONTAINER_RUNTIME}" build -t "${RBAC_IMAGE}" "${RBAC_LOCAL_REPO:-${REPO_ROOT}}"
+build_args=(-t "${RBAC_IMAGE}")
+if [[ -n "${RBAC_BUILD_NETWORK:-}" ]]; then
+  build_args+=(--network "${RBAC_BUILD_NETWORK}")
+fi
+"${CONTAINER_RUNTIME}" build "${build_args[@]}" "${RBAC_LOCAL_REPO:-${REPO_ROOT}}"
 export RBAC_FORCE_RECREATE=true
 
 start_kessel_stack

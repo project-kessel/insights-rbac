@@ -72,6 +72,9 @@ Run the validation scripts against the healthy stack:
 make docker-local-full-validate
 ```
 
+The V2 CRUD validation uses the host `zed` CLI when available, otherwise it
+runs the `authzed/zed` container on the selected Kessel network.
+
 When finished, stop the full local stack:
 
 ```bash
@@ -83,6 +86,34 @@ Compose, and resolves the upstream Kessel Inventory and Host Inventory
 checkouts under `.local-deps/`. If either checkout is absent, it creates a
 shallow clone.
 Ensure the container VM has enough memory for the full stack.
+If the local RBAC image build cannot reach package mirrors through the default
+BuildKit network, set `RBAC_BUILD_NETWORK=host` for the startup command.
+
+To run alongside another local RBAC stack, set an isolated Compose project,
+network, data directories, and port offset. For example:
+
+```bash
+export FULL_STACK_SLOT=example
+export FULL_STACK_PORT_OFFSET=2000
+export FULL_KESSEL_COMPOSE_DIR="${TMPDIR:-/tmp}/insights-rbac-example/development/full-kessel"
+export COMPOSE_PROJECT_NAME=example-kessel
+export HBI_COMPOSE_PROJECT=example-hbi
+export KESSEL_NETWORK_NAME=example-kessel-net
+export HBI_PG_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-postgres"
+export HBI_MINIO_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-minio"
+make docker-local-full-up rbac=local rbac-config=upstream inventory=upstream hbi=upstream
+make docker-local-full-health
+make docker-local-full-validate
+make docker-local-full-down
+```
+
+Keep these variables exported for every command; `make` and its child scripts
+cannot read shell variables that were only sourced without `export`.
+
+Health checks and validations derive their published ports from
+`FULL_STACK_PORT_OFFSET`; explicit port variables override those defaults.
+`docker-local-full-down` stops the selected full-stack projects and leaves
+separate RBAC Compose projects running.
 
 Each deployment also loads four idempotent local identities in organization
 `local-full-stack` / account `10001`: `local-v1-org-admin`,
@@ -240,8 +271,7 @@ as its workspace source of truth:
 ./scripts/validations/api/create-workspace.sh --no-start --check-hbi
 ```
 
-Stop the full stack and leftover legacy RBAC containers with
-`make docker-local-full-down`. This preserves volumes;
+Stop the full stack with `make docker-local-full-down`. This preserves HBI volumes;
 pass `--volumes` to `scripts/local_stack/down-full.sh` when a clean HBI data
 volume is required. If the RBAC Kafka consumer is unhealthy, restart the stack
 with `make docker-local-full-up`; the consumer should report that it acquired a
