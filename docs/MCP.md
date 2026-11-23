@@ -437,8 +437,10 @@ List access permissions for a principal (V1 API only). By default shows access f
 **Returns:** `{meta: {count}, links, data: [{permission, resourceDefinitions: [...]}]}`.
 
 **Caveats:**
-- V1-only endpoint. For V2 organizations, use `check_user_permission` or `list_role_bindings` instead. V2 write-activated organizations can only call it for applications in `V2_MIGRATION_APP_EXCLUDE_LIST`.
-- Shows flattened effective permissions but not which role or group granted each one. For V2 orgs, use `get_role` and `list_role_bindings` to trace the full chain.
+- V1-only endpoint; it does not include V2 role binding permissions. For V2 write-activated organizations, the MCP dispatcher permits only applications in `V2_MIGRATION_APP_EXCLUDE_LIST`.
+- V1-only endpoint. `check_user_permission` uses V2 bindings only after V2 write activation; in an opt-in-only org it repeats the V1 request and may also return unknown. If V2 bindings are available, inspect `list_role_bindings(granted_subject_type='user', granted_subject_id='<principal UUID>')`, or use `granted_subject_type='principal'` with `granted_subject_principal_user_id='<external user_id>'` (not necessarily the username). Inspect the roles and resource scope; bindings alone do not prove effective access.
+- When `GET /api/v1/access/` rejects the call (e.g. a V2-opted-in org querying an application outside the migration exclude list), the tool returns `{error, detail, tool, endpoint, hint}` instead of `data`. That is a rejection, not "no access".
+- Shows flattened effective permissions but not which role or group granted each one. For V2 orgs, use `get_role` and `list_role_bindings` to trace the chain.
 
 ---
 
@@ -1362,6 +1364,7 @@ Investigate why a user has or lacks expected permissions, especially when they b
 **Returns:** V1: `{user, org_version, groups: [{roles: [{permissions}]}], effective_access, analysis, permission_sources}`. V2: `{user, org_version, groups, role_bindings: [{role: {permissions}}], effective_access, analysis}`.
 
 **Caveats:**
+- In V1, `analysis.effective_access_error` indicates effective access could not be retrieved; `effective_access` is empty, not proof of denial. Expected permission is unknown (`null`) unless the caller is an org admin (the admin bypass still reports it granted), and explicit group analysis is partial because implicit defaults are not checked.
 - Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions.
 - In V1, roles are assigned to groups. In V2, roles are bound to subjects via role bindings.
 - Permission names are naming conventions only.
@@ -1384,9 +1387,10 @@ Check whether a specific user has a specific permission. Returns true/false with
 **Permission:** `rbac_roles_read` / `principal:read`
 **Calls:** V1: `GET /api/v1/access/?username=X&application=Y` | V2: role-bindings -> roles resolution (in-process)
 
-**Returns:** `{allowed: bool, username, permission, matched_permission, role_name, role_uuid, org_version}`.
+**Returns:** `{allowed: bool | null, username, permission, matched_permission, role_name, role_uuid, org_version}`. When `GET /api/v1/access/` rejects the call, `allowed` is `null` and the response also carries `error` and `hint`.
 
 **Caveats:**
+- In V1, `allowed` is `null` with an `error` and `hint` when `GET /api/v1/access/` rejected the call: the permission could not be verified, which is not the same as being denied.
 - Org admins bypass all RBAC checks; this tool returns only explicitly assigned permissions.
 - ResourceDefinition filters are enforced by the consuming application, not RBAC.
 
@@ -1411,6 +1415,7 @@ Get comprehensive state for a specific user in one call. Returns groups, roles, 
 **Returns:** `{username, org_version, groups: [{name, roles, recent_activity}], access, user_actions: {total_count, by_group, by_type, recent}, summary, hints}`.
 
 **Caveats:**
+- In V1, an `access_errors: [{application, status, detail}]` list is added for applications whose access call was rejected. When it is present, `access` and `summary.permission_count` are incomplete and `hints.incomplete_access` says so. Applications that succeeded are still listed in `access`.
 - Org admins have implicit full access not reflected in the returned data.
 
 ---
