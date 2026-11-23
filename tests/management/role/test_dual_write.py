@@ -1513,6 +1513,64 @@ class DualWriteSystemRolesTestCase(DualWriteTestCase):
         tuples = self.tuples.find_tuples(predicate=resource_type("rbac", "role"))
         self.assertEqual(len(tuples), 0)
 
+    def _system_role_binding(self, role: Role) -> RoleBinding:
+        """Bind the given system role to the default workspace for a group and a principal."""
+        group, principals = self.given_group("binding_group", users=["binding_user"])
+
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role),
+            resource_type="workspace",
+            resource_id=self.default_workspace(),
+        )
+        binding.update_groups([group])
+        binding.update_principals([("group", principals[0])])
+
+        return binding
+
+    def test_delete_system_role_removes_extra_relations(self):
+        """Relations passed as extra_remove are removed along with the role's own relations."""
+        role = self.given_v1_system_role("d_r5", ["app1:hosts:read"])
+        binding_relations = self._system_role_binding(role).all_tuples()
+
+        for relation_tuple in binding_relations:
+            self.tuples.add(relation_tuple)
+
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(
+            role, replicator=InMemoryRelationReplicator(self.tuples)
+        )
+        dual_write_handler.replicate_deleted_system_role(extra_remove=binding_relations)
+
+        self.assertEqual(len(self.tuples.find_tuples(predicate=resource_type("rbac", "role"))), 0)
+        for relation_tuple in binding_relations:
+            self.assertNotIn(relation_tuple, self.tuples)
+
+    @patch("management.role.inventory_api_dual_write_handler.DELETE_SYSTEM_ROLE_RELATIONS_PER_EVENT", 2)
+    def test_delete_system_role_chunks_relations_across_events(self):
+        """Role and extra relations are split across several DELETE_SYSTEM_ROLE events."""
+        role = self.given_v1_system_role("d_r6", ["app1:hosts:read"])
+        # The binding's role, resource, group and principal relations.
+        binding_relations = self._system_role_binding(role).all_tuples()
+        self.assertEqual(len(binding_relations), 4)
+        # The role's single permission relation.
+        role_relations = list(self.tuples.find_tuples(predicate=resource("rbac", "role", str(role.uuid))))
+        self.assertEqual(len(role_relations), 1)
+
+        replicator = InMemoryRelationReplicator(self.tuples)
+        dual_write_handler = SeedingInventoryApiDualWriteHandler(role, replicator=replicator)
+
+        with patch.object(replicator, "replicate", wraps=replicator.replicate) as spy:
+            dual_write_handler.replicate_deleted_system_role(extra_remove=binding_relations)
+
+        events = [call.args[0] for call in spy.call_args_list]
+        self.assertEqual([len(event.remove) for event in events], [2, 2, 1])
+        for event in events:
+            self.assertEqual(event.event_type, ReplicationEventType.DELETE_SYSTEM_ROLE)
+            self.assertEqual(event.add, [])
+
+        replicated = [relation_tuple for event in events for relation_tuple in event.remove]
+        self.assertCountEqual(replicated, [*role_relations, *binding_relations])
+
     def test_updating_platform_role_scope_transitions(self):
         """Test platform role scope transitions: ROOT->TENANT, DEFAULT->TENANT, and DEFAULT->ROOT."""
 
