@@ -34,6 +34,9 @@ prepare_full_kessel_configs() {
 
   local schema_dest="${compose_dir}/configs/schema.zed"
   local local_config_dir="${TMPDIR:-/tmp}/insights-rbac-full-kessel"
+  if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+    local_config_dir="${compose_dir}/generated"
+  fi
   local local_inventory_config="${local_config_dir}/inventory-api.yaml"
 
   mkdir -p "${local_config_dir}"

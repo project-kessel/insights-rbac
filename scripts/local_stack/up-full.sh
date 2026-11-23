@@ -104,6 +104,8 @@ INVENTORY_API_REPO_FROM_CONFIG="${INVENTORY_API_REPO:-}"
 HBI_REPO_FROM_CONFIG="${HBI_REPO:-}"
 unset RBAC_LOCAL_REPO_WAS_SET RBAC_LOCAL_REPO_FROM_ENV RBAC_CONFIG_REPO_WAS_SET RBAC_CONFIG_REPO_FROM_ENV
 unset INVENTORY_API_REPO_WAS_SET INVENTORY_API_REPO_FROM_ENV HBI_REPO_WAS_SET HBI_REPO_FROM_ENV
+# shellcheck source=slot-port-defaults.sh
+source "${SCRIPT_DIR}/slot-port-defaults.sh"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
 RBAC_SERVER_CONTAINER="${RBAC_SERVER_CONTAINER:-${COMPOSE_PROJECT_NAME}-rbac-server-1}"
 
@@ -837,7 +839,7 @@ start_hbi() {
 
   local hbi_compose_file="${FULL_HBI_COMPOSE_FILE:-${HBI_REPO}/dev.yml}"
   local -a hbi_compose_args
-  if [[ -n "${FULL_HBI_COMPOSE_FILE:-}" ]]; then
+  if [[ -n "${FULL_HBI_COMPOSE_FILE:-}" && ! "${hbi_compose_file}" -ef "${HBI_REPO}/dev.yml" ]]; then
     mkdir -p "$(dirname "${hbi_compose_file}")"
     cp "${HBI_REPO}/dev.yml" "${hbi_compose_file}"
   fi

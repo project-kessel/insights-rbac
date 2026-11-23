@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -53,6 +54,7 @@ def main() -> int:
         "RELATIONS_HTTP_PORT": (8100,),
         "RELATIONS_PORT": (9100,),
     }
+    replacements = {}
     for variable, (default_host, container_port) in ports.items():
         host_port = int(os.environ.get(variable, default_host + port_offset))
         source_hosts = (default_host, *source_host_overrides.get(variable, ()))
@@ -70,7 +72,10 @@ def main() -> int:
             raise RuntimeError(f"ambiguous Compose mapping for {variable}: {ambiguous or matches}")
         if not matches:
             continue
-        contents = contents.replace(matches[0], f'"{host_port}:{container_port}"')
+        replacements[matches[0]] = f'"{host_port}:{container_port}"'
+    if replacements:
+        pattern = re.compile("|".join(re.escape(mapping) for mapping in replacements))
+        contents = pattern.sub(lambda match: replacements[match.group()], contents)
     contents = contents.replace(
         "name: kessel\n    external: true",
         "name: ${KESSEL_NETWORK_NAME:-kessel}\n    external: true",

@@ -10,6 +10,8 @@ source "${SCRIPT_DIR}/../common/container_runtime.sh"
 
 detect_container_runtime
 
+# shellcheck source=slot-port-defaults.sh
+source "${SCRIPT_DIR}/slot-port-defaults.sh"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
 HBI_COMPOSE_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
 FAILURES=0
@@ -87,9 +89,9 @@ check_containers "^${COMPOSE_PROJECT_NAME}-" 'Kessel/RBAC containers'
 check_containers "^${HBI_COMPOSE_PROJECT}-" 'HBI containers'
 
 log-info "Checking published full-stack endpoints..."
-check_http "${RBAC_HEALTH_URL:-http://localhost:9080/metrics}" 'RBAC API'
-check_http "${INVENTORY_HEALTH_URL:-http://localhost:8081/api/kessel/v1/livez}" 'Kessel Inventory API'
-check_http "${KAFKA_CONNECT_HEALTH_URL:-http://localhost:8083/connectors}" 'Kafka Connect'
+check_http "${RBAC_HEALTH_URL:-http://localhost:${RBAC_API_PORT}/metrics}" 'RBAC API'
+check_http "${INVENTORY_HEALTH_URL:-http://localhost:${INVENTORY_API_HTTP_PORT}/api/kessel/v1/livez}" 'Kessel Inventory API'
+check_http "${KAFKA_CONNECT_HEALTH_URL:-http://localhost:${KAFKA_CONNECT_PORT}/connectors}" 'Kafka Connect'
 check_tcp localhost "${RBAC_DB_PORT:-15432}" 'RBAC PostgreSQL'
 check_tcp localhost "${SPICEDB_PORT:-50051}" 'SpiceDB'
 
