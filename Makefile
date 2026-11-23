@@ -375,9 +375,20 @@ docker-local-full-apply-users:
 
 .PHONY: docker-local-full-validate
 docker-local-full-validate:
-	@set -e; for script in $$(find scripts/validations -type f -name '*.sh' | sort); do \
+	@set -e; \
+	. ./scripts/local_stack/slot-port-defaults.sh; \
+	export RBAC_SERVER_CONTAINER="$${RBAC_SERVER_CONTAINER:-$${COMPOSE_PROJECT_NAME:-full-kessel}-rbac-server-1}"; \
+	export API_URL="$${API_URL:-http://localhost:$${RBAC_API_PORT}}"; \
+	export API_PORT="$${API_PORT:-$${RBAC_API_PORT}}"; \
+	export DB_PORT="$${DB_PORT:-$${RBAC_DB_PORT}}"; \
+	export INVENTORY_API_ENDPOINT="$${INVENTORY_API_ENDPOINT:-localhost:$${INVENTORY_API_GRPC_PORT}}"; \
+	export SPICEDB_ENDPOINT="$${SPICEDB_ENDPOINT:-localhost:$${SPICEDB_PORT}}"; \
+	for script in $$(find scripts/validations -type f -name '*.sh' | sort); do \
 		printf '\n==> %s\n' "$$script"; \
-		bash "$$script"; \
+		case "$$script" in \
+			*/create-workspace.sh) bash "$$script" --no-start ;; \
+			*) bash "$$script" ;; \
+		esac; \
 	done
 
 docker-local-full-down:
