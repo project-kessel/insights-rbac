@@ -2,7 +2,7 @@ from copy import deepcopy
 from unittest.mock import DEFAULT, Mock, patch
 
 from django.test import TestCase, override_settings
-from core.kafka import RBACProducer, get_cluster_config
+from core.kafka import FakeKafkaProducer, RBACProducer, get_cluster_config
 from kafka.errors import KafkaError, KafkaTimeoutError
 from tests.identity_request import IdentityRequest
 
@@ -182,6 +182,27 @@ class SendKafkaMessageTests(TestCase):
         result = self.producer.send_kafka_message("test-topic", {"key": "value"})
         self.mock_kafka.send.assert_called_once_with("test-topic", value=b'{"key": "value"}', headers=None)
         self.assertTrue(result)
+
+    def test_future_send_returns_the_kafka_future_without_waiting(self):
+        """The RH worker can inspect the Kafka future while the existing send API stays unchanged."""
+        future = self.mock_kafka.send.return_value
+
+        result = self.producer.send_kafka_message_future("test-topic", {"key": "value"})
+
+        self.assertIs(result, future)
+        self.mock_kafka.send.assert_called_once_with("test-topic", value=b'{"key": "value"}', headers=None)
+        future.get.assert_not_called()
+
+    def test_future_send_propagates_enqueue_failure(self):
+        """A synchronous Kafka failure reaches the RH worker for retry."""
+        self.mock_kafka.send.side_effect = KafkaTimeoutError("buffer full")
+
+        with self.assertRaises(KafkaTimeoutError):
+            self.producer.send_kafka_message_future("test-topic", {"key": "value"})
+
+    def test_fake_producer_returns_a_completed_future(self):
+        """Development's no-op producer supports the RH acknowledgment path."""
+        self.assertIsNone(FakeKafkaProducer().send("test-topic", value=b"{}").get(timeout=0))
 
     def test_send_wraps_single_header_in_list(self):
         header = ("key", b"value")

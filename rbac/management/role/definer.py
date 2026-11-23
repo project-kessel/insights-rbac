@@ -21,17 +21,21 @@ import dataclasses
 import json
 import logging
 import os
+from typing import Iterable, Iterator
 
 from core.utils import destructive_ok
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, QuerySet
+from django.db.models import CharField, F, QuerySet
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.utils import timezone
 from internal.migrations.migrate_role_scope import migrate_role_scope_if_changed
 from management.atomic_transactions import atomic, atomic_with_retry
 from management.group.definer import seed_group
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.types import RelationTuple
 from management.notifications.notification_handlers import role_obj_change_notification_handler
 from management.permission.model import Permission
 from management.permission.scope_service import CONCRETE_SCOPES, ImplicitResourceService
@@ -39,17 +43,27 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
-from management.role.model import Access, ExtRoleRelation, ExtTenant, ResourceDefinition, Role, RoleScopeState
+from management.role.model import (
+    Access,
+    BindingMapping,
+    ExtRoleRelation,
+    ExtTenant,
+    ResourceDefinition,
+    Role,
+    RoleScopeState,
+)
 from management.role.platform import (
     admin_platform_parent_scopes_for_seeded_system_role,
     platform_v2_role_uuid_for,
 )
-from management.role.v2_model import PlatformRoleV2, SeededRoleV2
+from management.role.v2_model import PlatformRoleV2, RoleV2, SeededRoleV2
+from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType
 
 from api.models import Tenant
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+_BINDING_RELATION_CHUNK_SIZE = 1000
 
 
 def _add_ext_relation_if_it_exists(external_relation, role):
@@ -194,14 +208,109 @@ def _update_or_create_roles(roles, config: _SeedRolesConfig, platform_roles=None
     return current_roles
 
 
+def _role_binding_relations_to_remove(role: Role) -> Iterator[RelationTuple]:
+    """Yield the relations of every role binding that cascades away with this system role.
+
+    Deleting a V1 role cascades through ``RoleV2.v1_source`` to its V2 roles and their role
+    bindings, and through ``BindingMapping.role`` to its binding mappings, so the relations of
+    both must be removed along with the role's own.
+
+    Streamed rather than collected so that a role bound in every tenant does not have all of its
+    relations in memory at once.
+    """
+    bindings = RoleBinding.objects.filter(role__v1_source=role)
+    for binding in bindings.select_related("role").iterator(chunk_size=_BINDING_RELATION_CHUNK_SIZE):
+        yield from binding.binding_tuples()
+
+    # Stream subjects independently: a single binding can have arbitrarily many entries.
+    for entry in (
+        RoleBindingGroup.objects.filter(binding__role__v1_source=role)
+        .select_related("binding", "group")
+        .iterator(chunk_size=_BINDING_RELATION_CHUNK_SIZE)
+    ):
+        yield entry.binding._group_subject_tuple(entry.group)
+
+    # One principal may have multiple sources for the same binding. Deduplicate in SQL,
+    # rather than retaining a potentially unbounded set of principals in Python.
+    for entry in (
+        RoleBindingPrincipal.objects.filter(binding__role__v1_source=role)
+        .order_by("binding_id", "principal_id")
+        .distinct("binding_id", "principal_id")
+        .select_related("binding", "principal")
+        .iterator(chunk_size=_BINDING_RELATION_CHUNK_SIZE)
+    ):
+        yield entry.binding._user_subject_tuple(entry.principal)
+
+    # A V1 group assignment of a system role is tracked by a BindingMapping, which is only migrated
+    # to a RoleBinding lazily. Mappings not migrated yet still own live relations, which the loop
+    # above cannot see. A migrated mapping shares its RoleBinding's UUID, hence its tuples, so it is
+    # skipped to keep the same relation out of two events.
+    #
+    # Deduplication is pushed to the database so the Python process does not need to retain every
+    # migrated binding UUID in memory.
+    migrated_uuids = (
+        RoleBinding.objects.filter(role__v1_source=role)
+        .annotate(uuid_str=Cast("uuid", output_field=CharField()))
+        .values("uuid_str")
+    )
+    for mapping in (
+        BindingMapping.objects.filter(role=role)
+        .annotate(binding_id=KeyTextTransform("id", "mappings"))
+        .exclude(binding_id__in=migrated_uuids)
+        .iterator(chunk_size=1000)
+    ):
+        yield from mapping.get_role_binding().as_tuples()
+
+
+def _lock_role_for_deletion(role: Role) -> None:
+    """Block concurrent assignments of the role until the deletion transaction ends.
+
+    Group assignment paths lock the role's binding mappings and role bindings, and a new mapping
+    takes a key-share lock on the role row. V2 assignments insert role bindings that reference the
+    V2 role, taking a key-share lock on that row instead, so the V2 roles are locked as well.
+    Taking the same locks here, before the relations are collected, means an assignment cannot
+    commit between collection and cascade, which would leave tuples of a cascaded binding behind.
+    Rows are consumed one chunk at a time, not retained.
+
+    Lock order matters: the V1 group-role removal path locks a ``BindingMapping`` and then creates a
+    ``RoleBinding``, which takes a key-share lock on the ``RoleV2`` row. Locking ``RoleV2`` before
+    ``BindingMapping`` here would invert that order and allow a deadlock, so the order is
+    Role, BindingMapping, RoleV2, RoleBinding.
+    """
+    Role.objects.select_for_update().filter(pk=role.pk).first()
+    for locked in (
+        BindingMapping.objects.select_for_update().filter(role=role),
+        RoleV2.objects.select_for_update(of=("self",)).filter(v1_source=role),
+        RoleBinding.objects.select_for_update(of=("self",)).filter(role__v1_source=role),
+    ):
+        for _ in locked.values_list("pk", flat=True).iterator(chunk_size=_BINDING_RELATION_CHUNK_SIZE):
+            pass
+
+
+def replicate_system_role_deletion(role: Role) -> None:
+    """Replicate the removal of a system role together with the relations of its cascaded bindings.
+
+    Must be called inside a transaction before the role is deleted, while its role bindings and
+    binding mappings still exist. Shared by seeding and the internal role removal endpoint so both
+    clean up the same relations.
+    """
+    dual_write_handler = SeedingInventoryApiDualWriteHandler(role)
+    if dual_write_handler.replication_enabled():
+        _lock_role_for_deletion(role)
+        extra_remove: Iterable[RelationTuple] = _role_binding_relations_to_remove(role)
+    else:
+        extra_remove = ()
+
+    dual_write_handler.replicate_deleted_system_role(extra_remove=extra_remove)
+
+
 # SERIALIZABLE for the same reason as _make_role above.
 @atomic
 def _do_delete_system_roles(roles: QuerySet):
     logger.info(f"Removing the following role(s): {roles.values()}")
 
     for role in roles:
-        dual_write_handler = SeedingInventoryApiDualWriteHandler(role)
-        dual_write_handler.replicate_deleted_system_role()
+        replicate_system_role_deletion(role)
 
     roles.delete()
 

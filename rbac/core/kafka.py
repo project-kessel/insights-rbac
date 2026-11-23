@@ -68,7 +68,19 @@ class FakeKafkaProducer:
 
     def send(self, topic, value=None, headers=None):
         """No operation method."""
+        return FakeKafkaFuture()
+
+    def flush(self, timeout=None):
+        """No operation method."""
         pass
+
+
+class FakeKafkaFuture:
+    """A completed send future for the no-op producer."""
+
+    def get(self, timeout=None):
+        """Report the fake send as complete."""
+        return None
 
 
 class RBACProducer:
@@ -147,6 +159,14 @@ class RBACProducer:
                 list(message.keys()) if isinstance(message, dict) else type(message).__name__,
             )
             return False
+
+    def send_kafka_message_future(self, topic, message, headers=None):
+        """Enqueue a message and return its future so a caller can verify broker acknowledgment."""
+        producer = self.get_producer()
+        json_data = json.dumps(message).encode("utf-8")
+        if headers and not isinstance(headers, list):
+            headers = [headers]
+        return producer.send(topic, value=json_data, headers=headers)
 
 
 """
