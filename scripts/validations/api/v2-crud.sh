@@ -34,8 +34,9 @@ USER_ID="v2-crud-user-${RUN_ID}"
 USERNAME="v2-crud-user-${RUN_ID}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-SPICEDB_ENV_FILE="${SPICEDB_ENV_FILE:-${REPO_ROOT}/.local-deps/inventory-api/development/full-kessel/.env}"
+SPICEDB_ENV_FILE="${SPICEDB_ENV_FILE:-${FULL_KESSEL_COMPOSE_DIR:-${REPO_ROOT}/.local-deps/inventory-api/development/full-kessel}/.env}"
 SPICEDB_ENDPOINT="${SPICEDB_ENDPOINT:-localhost:50051}"
+SPICEDB_CONTAINER_ENDPOINT="${SPICEDB_CONTAINER_ENDPOINT:-spicedb:50051}"
 KESSEL_PRINCIPAL_DOMAIN="${KESSEL_PRINCIPAL_DOMAIN:-redhat}"
 RBAC_SERVER_CONTAINER="${RBAC_SERVER_CONTAINER:-full-kessel-rbac-server-1}"
 if [[ -n "${CONTAINER_RUNTIME:-}" ]]; then
@@ -122,8 +123,12 @@ Environment:
   API_PATH_PREFIX           Path prefix for RBAC API routes (default: /api/rbac)
   SPICEDB_ENV_FILE          Local Kessel .env file containing its PSK
                             (default: <repo>/.local-deps/inventory-api/development/full-kessel/.env)
-  SPICEDB_ENDPOINT          SpiceDB gRPC endpoint (default: localhost:50051)
+  SPICEDB_ENDPOINT             Host SpiceDB gRPC endpoint (default: localhost:50051)
+  SPICEDB_CONTAINER_ENDPOINT   SpiceDB endpoint from the Kessel network (default: spicedb:50051)
   SPICEDB_TOKEN             SpiceDB pre-shared key; overrides SPICEDB_ENV_FILE when set
+  ZED_IMAGE                 Container image used when host zed is unavailable
+                            (default: docker.io/authzed/zed:latest)
+  KESSEL_NETWORK_NAME       Docker/Podman network for containerized zed (default: kessel)
   KESSEL_PRINCIPAL_DOMAIN   Domain prefix for Kessel principals (default: redhat)
   RBAC_SERVER_CONTAINER     RBAC server container (default: full-kessel-rbac-server-1)
   CONTAINER_RUNTIME         docker or podman (auto-detected from RBAC_SERVER_CONTAINER)
@@ -305,13 +310,22 @@ load_spicedb_token() {
   [[ -n "$SPICEDB_TOKEN" ]] || die "SPICEDB_GRPC_PRESHARED_KEY is missing from ${SPICEDB_ENV_FILE}"
 }
 
+zed_cli() {
+  if command -v zed &>/dev/null; then
+    ZED_TOKEN="$SPICEDB_TOKEN" ZED_ENDPOINT="$SPICEDB_ENDPOINT" ZED_INSECURE=true zed "$@"
+  else
+    "$CONTAINER_RUNTIME" run --rm --network "${KESSEL_NETWORK_NAME:-kessel}" \
+      -e "ZED_TOKEN=$SPICEDB_TOKEN" -e "ZED_ENDPOINT=$SPICEDB_CONTAINER_ENDPOINT" -e ZED_INSECURE=true \
+      "${ZED_IMAGE:-docker.io/authzed/zed:latest}" "$@"
+  fi
+}
+
 touch_relationship() {
   local resource="$1"
   local relation="$2"
   local subject="$3"
 
-  ZED_TOKEN="$SPICEDB_TOKEN" ZED_ENDPOINT="$SPICEDB_ENDPOINT" ZED_INSECURE=true \
-    zed relationship touch "$resource" "$relation" "$subject" >/dev/null
+  zed_cli relationship touch "$resource" "$relation" "$subject" >/dev/null
   CREATED_RELATIONSHIPS+=("${resource}|${relation}|${subject}")
 }
 
@@ -323,8 +337,7 @@ read_relationship() {
 
   [[ -z "$relation" ]] || args+=("$relation")
   [[ -z "$subject" ]] || args+=("$subject")
-  ZED_TOKEN="$SPICEDB_TOKEN" ZED_ENDPOINT="$SPICEDB_ENDPOINT" ZED_INSECURE=true \
-    zed relationship read "${args[@]}"
+  zed_cli relationship read "${args[@]}"
 }
 
 display_relationships() {
@@ -570,8 +583,7 @@ cleanup() {
   if [[ -n "${CREATED_RELATIONSHIPS[*]:-}" ]]; then
     for relationship in "${CREATED_RELATIONSHIPS[@]}"; do
       IFS='|' read -r resource relation subject <<< "$relationship"
-      ZED_TOKEN="$SPICEDB_TOKEN" ZED_ENDPOINT="$SPICEDB_ENDPOINT" ZED_INSECURE=true \
-        zed relationship delete "$resource" "$relation" "$subject" >/dev/null 2>&1 \
+      zed_cli relationship delete "$resource" "$relation" "$subject" >/dev/null 2>&1 \
         || { printf '%s⚠ cleanup: failed to delete Kessel tuple %s#%s@%s%s\n' "$YELLOW" "$resource" "$relation" "$subject" "$RESET" >&2; ((++CLEANUP_FAILURES)); }
     done
   fi
@@ -593,7 +605,6 @@ main() {
   require_cmd base64
   require_cmd curl
   require_cmd jq
-  require_cmd zed
   require_cmd "$CONTAINER_RUNTIME"
   load_spicedb_token
   load_temporary_user_fixture
