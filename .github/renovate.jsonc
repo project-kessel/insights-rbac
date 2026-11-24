@@ -2,9 +2,9 @@
 // Overrides MintMaker's global config: https://github.com/konflux-ci/mintmaker/blob/main/config/renovate/renovate.json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  // GitHub auto-merge never completes when a bypass actor meets the approval rule.
-  // Renovate merges instead, on the first run where GitHub allows it.
-  "platformAutomerge": false,
+  // Use GitHub auto-merge so eligible updates enter the required merge queue.
+  // The repository must allow auto-merge, and Konflux must be exempt on the approval-only ruleset.
+  "platformAutomerge": true,
   "ignoreTests": false,
   "extends": [
     // Keep even when every action is pinned: it pins the next one added.
