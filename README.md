@@ -95,7 +95,9 @@ If the local RBAC image build cannot reach package mirrors through the default
 BuildKit network, set `RBAC_BUILD_NETWORK=host` for the startup command.
 
 To run alongside another local RBAC stack, set an isolated Compose project,
-network, data directories, and port offset. For example:
+network, data directories, and port offset. Each isolated project gets a
+project-specific RBAC image tag unless `RBAC_IMAGE` is set explicitly. For
+example:
 
 ```bash
 export FULL_STACK_SLOT=example

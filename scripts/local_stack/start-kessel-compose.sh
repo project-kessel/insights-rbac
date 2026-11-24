@@ -17,6 +17,7 @@ RBAC_OVERRIDE_FILE="${2:?compose override file required}"
 
 detect_container_runtime
 
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
 KESSEL_NETWORK_NAME="${KESSEL_NETWORK_NAME:-kessel}"
 if [[ -z "${FULL_KESSEL_COMPOSE_DIR:-}" && "${KESSEL_NETWORK_NAME}" != kessel ]]; then
   log-err "A custom KESSEL_NETWORK_NAME requires FULL_KESSEL_COMPOSE_DIR so the Compose network can be isolated."
@@ -67,7 +68,7 @@ if [[ "${RBAC_FORCE_RECREATE:-false}" == "true" ]]; then
   compose_up_args+=(--force-recreate)
 fi
 
-"${COMPOSE_CMD[@]}" --env-file "${ENV_FILE}" \
+"${COMPOSE_CMD[@]}" -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" \
   --profile consumer --profile rbac \
   -f "${COMPOSE_DIR}/docker-compose.yaml" \
   -f "${RBAC_OVERRIDE_FILE}" \

@@ -36,6 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SPICEDB_ENV_FILE="${SPICEDB_ENV_FILE:-${FULL_KESSEL_COMPOSE_DIR:-${REPO_ROOT}/.local-deps/inventory-api/development/full-kessel}/.env}"
 SPICEDB_ENDPOINT="${SPICEDB_ENDPOINT:-localhost:50051}"
+SPICEDB_CONTAINER_ENDPOINT="${SPICEDB_CONTAINER_ENDPOINT:-spicedb:50051}"
 KESSEL_PRINCIPAL_DOMAIN="${KESSEL_PRINCIPAL_DOMAIN:-redhat}"
 RBAC_SERVER_CONTAINER="${RBAC_SERVER_CONTAINER:-full-kessel-rbac-server-1}"
 if [[ -n "${CONTAINER_RUNTIME:-}" ]]; then
@@ -122,7 +123,8 @@ Environment:
   API_PATH_PREFIX           Path prefix for RBAC API routes (default: /api/rbac)
   SPICEDB_ENV_FILE          Local Kessel .env file containing its PSK
                             (default: <repo>/.local-deps/inventory-api/development/full-kessel/.env)
-  SPICEDB_ENDPOINT          SpiceDB gRPC endpoint (default: localhost:50051)
+  SPICEDB_ENDPOINT             Host SpiceDB gRPC endpoint (default: localhost:50051)
+  SPICEDB_CONTAINER_ENDPOINT   SpiceDB endpoint from the Kessel network (default: spicedb:50051)
   SPICEDB_TOKEN             SpiceDB pre-shared key; overrides SPICEDB_ENV_FILE when set
   ZED_IMAGE                 Container image used when host zed is unavailable
                             (default: docker.io/authzed/zed:latest)
@@ -313,7 +315,7 @@ zed_cli() {
     ZED_TOKEN="$SPICEDB_TOKEN" ZED_ENDPOINT="$SPICEDB_ENDPOINT" ZED_INSECURE=true zed "$@"
   else
     "$CONTAINER_RUNTIME" run --rm --network "${KESSEL_NETWORK_NAME:-kessel}" \
-      -e "ZED_TOKEN=$SPICEDB_TOKEN" -e ZED_ENDPOINT=spicedb:50051 -e ZED_INSECURE=true \
+      -e "ZED_TOKEN=$SPICEDB_TOKEN" -e "ZED_ENDPOINT=$SPICEDB_CONTAINER_ENDPOINT" -e ZED_INSECURE=true \
       "${ZED_IMAGE:-docker.io/authzed/zed:latest}" "$@"
   fi
 }

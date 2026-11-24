@@ -87,6 +87,8 @@ fi
 if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
   compose_dir="${FULL_KESSEL_COMPOSE_DIR}"
   if [[ -f "${compose_dir}/docker-compose.yaml" ]]; then
+    compose_dir="$(cd "${compose_dir}" && pwd)"
+    export RBAC_INVENTORY_API_CONFIG="${compose_dir}/generated/inventory-api.yaml"
     kessel_down_args=(down --remove-orphans)
     if [[ "${REMOVE_VOLUMES}" == true ]]; then
       kessel_down_args=(down --volumes --remove-orphans)

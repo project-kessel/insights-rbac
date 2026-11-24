@@ -10,25 +10,48 @@ import sys
 from pathlib import Path
 
 
+def ensure_private_slot_root(slot_root: Path) -> None:
+    if slot_root.is_symlink():
+        raise RuntimeError(f"refusing symlink slot directory: {slot_root}")
+    slot_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if slot_root.is_symlink():
+        raise RuntimeError(f"refusing symlink slot directory: {slot_root}")
+    metadata = slot_root.stat()
+    if metadata.st_uid != os.getuid():
+        raise RuntimeError(f"slot directory is not owned by the current user: {slot_root}")
+    if metadata.st_mode & 0o077:
+        slot_root.chmod(0o700)
+
+
 def main() -> int:
     if len(sys.argv) != 4:
         raise SystemExit("usage: prepare-slot-compose.py INVENTORY_REPO COMPOSE_DIR PORT_OFFSET")
     source_repo = Path(sys.argv[1]).resolve()
-    compose_dir = Path(sys.argv[2]).resolve()
+    requested_compose_dir = Path(os.path.abspath(sys.argv[2]))
+    slot_root = requested_compose_dir.parent.parent
+    ensure_private_slot_root(slot_root)
+    for destination in (requested_compose_dir.parent, requested_compose_dir):
+        if destination.is_symlink():
+            raise RuntimeError(f"refusing symlink slot path: {destination}")
+    compose_dir = requested_compose_dir.resolve()
     port_offset = int(sys.argv[3])
-    target_development = compose_dir.parent
+    target_development = compose_dir.parent.resolve()
     source_development = source_repo / "development"
-    target_development = target_development.resolve()
     # Slot directories are reused; clear a stale directory where Compose expects
     # schema.zed to be a file before merging the fresh Compose tree.
     target_schema = compose_dir / "configs" / "schema.zed"
+    if target_schema.is_symlink():
+        raise RuntimeError(f"refusing symlink Compose schema destination: {target_schema}")
     if target_schema.is_dir():
         shutil.rmtree(target_schema)
     shutil.copytree(source_development / "full-kessel", compose_dir, dirs_exist_ok=True)
     shutil.copytree(source_development / "configs", target_development / "configs", dirs_exist_ok=True)
     schema_cache = source_repo / "schema_cache.json"
+    target_schema_cache = target_development.parent / "schema_cache.json"
     if schema_cache.is_file():
-        shutil.copy2(schema_cache, target_development.parent / "schema_cache.json")
+        if target_schema_cache.is_symlink():
+            raise RuntimeError(f"refusing symlink schema cache destination: {target_schema_cache}")
+        shutil.copy2(schema_cache, target_schema_cache)
 
     ports = {
         "ZOOKEEPER_HOST_PORT": (2181, 2181),

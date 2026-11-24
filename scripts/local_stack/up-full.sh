@@ -533,15 +533,28 @@ is_commit_sha() {
   [[ "${1}" =~ ^[0-9a-fA-F]{7,64}$ ]]
 }
 
+set_default_local_rbac_image() {
+  [[ -n "${RBAC_IMAGE}" ]] && return 0
+  if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+    local slot_identity slot_tag
+    slot_identity="${COMPOSE_PROJECT_NAME}-${FULL_STACK_SLOT:-slot}"
+    slot_tag="$(printf '%s' "${slot_identity}" | tr '[:upper:]' '[:lower:]')"
+    slot_tag="$(printf '%s' "${slot_tag}" | sed 's/[^a-z0-9_.-]/-/g' | cut -c1-100)"
+    RBAC_IMAGE="insights-rbac-local:slot-${slot_tag:-local}"
+  else
+    RBAC_IMAGE="insights-rbac-local:dev"
+  fi
+}
+
 select_rbac_source() {
   case "${RBAC_SOURCE}" in
     local)
       RBAC_SOURCE_KIND=local
-      RBAC_IMAGE="${RBAC_IMAGE:-insights-rbac-local:dev}"
+      set_default_local_rbac_image
       ;;
     upstream)
       RBAC_SOURCE_KIND=upstream
-      RBAC_IMAGE="${RBAC_IMAGE:-insights-rbac-local:dev}"
+      set_default_local_rbac_image
       ;;
     https://github.com/*/pull/[0-9]*|https://github.com/*/pull/[0-9]*/*)
       RBAC_SOURCE_KIND=pr
@@ -821,6 +834,7 @@ pull_repository() {
 
 start_kessel_stack() {
   export RBAC_IMAGE
+  export COMPOSE_PROJECT_NAME
   export COMPOSE_PULL_MODE
   export DOCKER="${CONTAINER_RUNTIME}"
   export RBAC_FORCE_RECREATE
