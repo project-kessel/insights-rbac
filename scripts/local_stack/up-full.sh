@@ -446,6 +446,9 @@ start_rbac_worktree() {
   cp "${SCRIPT_DIR}/extract_rbac_role_definitions.py" \
     "${pr_worktree}/scripts/local_stack/extract_rbac_role_definitions.py"
   cp "${SCRIPT_DIR}/hbi.integration.yml" "${pr_worktree}/scripts/local_stack/hbi.integration.yml"
+  cp "${SCRIPT_DIR}/hbi.slot.override.yml" "${pr_worktree}/scripts/local_stack/hbi.slot.override.yml"
+  cp "${SCRIPT_DIR}/prepare-slot-compose.py" "${pr_worktree}/scripts/local_stack/prepare-slot-compose.py"
+  cp "${SCRIPT_DIR}/slot-port-defaults.sh" "${pr_worktree}/scripts/local_stack/slot-port-defaults.sh"
   chmod +x "${pr_worktree}/scripts/local_stack/up-full.sh"
 
   log-info "Using RBAC ${RBAC_SOURCE_LABEL} checkout at ${pr_worktree}"

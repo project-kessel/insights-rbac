@@ -72,6 +72,11 @@ Run the validation scripts against the healthy stack:
 make docker-local-full-validate
 ```
 
+The target runs each validation script directly, passing `--no-start` to
+`create-workspace.sh`. It also runs `apply-rbac-users-config.sh` with its
+bundled fixture; this may create or update tenants, users, groups, custom
+roles, and role bindings in local RBAC.
+
 The V2 CRUD validation uses the host `zed` CLI when available, otherwise it
 runs the `authzed/zed` container on the selected Kessel network.
 
@@ -241,8 +246,8 @@ make docker-local-full-apply-users file=/tmp/local-rbac-users.yaml
 
 ##### Run every local validation
 
-Run every shell validation below `scripts/validations/` in lexical order. The
-command stops at the first failure:
+Run every shell script below `scripts/validations/` in lexical order, including
+scripts that apply local RBAC fixtures. The command stops at the first failure:
 
 ```bash
 make docker-local-full-validate

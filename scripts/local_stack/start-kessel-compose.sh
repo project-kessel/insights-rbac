@@ -17,6 +17,12 @@ RBAC_OVERRIDE_FILE="${2:?compose override file required}"
 
 detect_container_runtime
 
+KESSEL_NETWORK_NAME="${KESSEL_NETWORK_NAME:-kessel}"
+if [[ -z "${FULL_KESSEL_COMPOSE_DIR:-}" && "${KESSEL_NETWORK_NAME}" != kessel ]]; then
+  log-err "A custom KESSEL_NETWORK_NAME requires FULL_KESSEL_COMPOSE_DIR so the Compose network can be isolated."
+  exit 1
+fi
+
 COMPOSE_DIR="${FULL_KESSEL_COMPOSE_DIR:-${INVENTORY_API_REPO}/development/full-kessel}"
 if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
   python3 "${SCRIPT_DIR}/prepare-slot-compose.py" \
@@ -26,7 +32,6 @@ ENV_FILE="${COMPOSE_DIR}/.env"
 
 prepare_full_kessel_configs "${INVENTORY_API_REPO}" "${REPO_ROOT}" "${COMPOSE_DIR}"
 
-KESSEL_NETWORK_NAME="${KESSEL_NETWORK_NAME:-kessel}"
 if ! "${CONTAINER_RUNTIME}" network inspect "${KESSEL_NETWORK_NAME}" >/dev/null 2>&1; then
   "${CONTAINER_RUNTIME}" network create "${KESSEL_NETWORK_NAME}"
 fi

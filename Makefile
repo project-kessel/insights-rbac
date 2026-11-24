@@ -70,7 +70,7 @@ Please use `make <target>` where <target> is one of:
   docker-local-full-apply-users
                             create users/groups/roles from a YAML fixture
   docker-local-full-validate
-                            run all scripts below scripts/validations/
+                            run scripts/validations/ (includes RBAC fixture writes)
   docker-local-full-down   stop full Kessel/HBI and legacy local RBAC containers
 
 --- Commands using an OpenShift Cluster ---
