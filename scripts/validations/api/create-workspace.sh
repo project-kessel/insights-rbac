@@ -37,6 +37,8 @@ LOG_DIR="$PROJECT_DIR/scripts/.create_workspace_logs"
 # Defaults (override via environment)
 API_URL="${API_URL:-http://localhost:9080}"
 API_PORT="${API_PORT:-9080}"
+FULL_KESSEL_PROJECT="${COMPOSE_PROJECT_NAME:-full-kessel}"
+FULL_HBI_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
 API_PATH_PREFIX="${API_PATH_PREFIX:-/api/rbac}"
 INVENTORY_API_ENDPOINT="${INVENTORY_API_ENDPOINT:-localhost:9081}"
 CHECK_HBI="${CHECK_HBI:-auto}"
@@ -75,14 +77,14 @@ detect_runtime() {
     # Prefer the runtime that already owns the full local stack.  In Podman
     # development environments `podman info` can be unavailable to the host
     # shell even though container commands used by the validation work.
-    if command -v docker &> /dev/null && docker container inspect full-kessel-rbac-server-1 &> /dev/null 2>&1; then
+    if command -v docker &> /dev/null && docker container inspect "${FULL_KESSEL_PROJECT}-rbac-server-1" &> /dev/null 2>&1; then
         CONTAINER_RUNTIME="docker"
         if docker compose version &> /dev/null 2>&1; then
             COMPOSE_CMD="docker compose"
         else
             COMPOSE_CMD="docker-compose"
         fi
-    elif command -v podman &> /dev/null && podman container inspect full-kessel-rbac-server-1 &> /dev/null 2>&1; then
+    elif command -v podman &> /dev/null && podman container inspect "${FULL_KESSEL_PROJECT}-rbac-server-1" &> /dev/null 2>&1; then
         CONTAINER_RUNTIME="podman"
         COMPOSE_CMD="podman compose"
     elif command -v docker &> /dev/null && docker info &> /dev/null 2>&1; then
@@ -133,14 +135,14 @@ is_container_running() {
 }
 
 is_full_kessel_stack_running() {
-    if $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE '^full-kessel-rbac-server-'; then
+    if $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE "^${FULL_KESSEL_PROJECT}-rbac-server-"; then
         return 0
     fi
     curl -sf "http://localhost:${API_PORT}/metrics" >/dev/null 2>&1
 }
 
 is_full_kessel_database_running() {
-    $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE '^full-kessel-rbac-database-'
+    $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE "^${FULL_KESSEL_PROJECT}-rbac-database-"
 }
 
 resolve_ryw_user() {
@@ -178,7 +180,7 @@ resolve_ryw_user() {
 }
 
 is_hbi_stack_running() {
-    $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE '^hbi-kessel-local-hbi-web-'
+    $CONTAINER_RUNTIME ps --format '{{.Names}}' | grep -qE "^${FULL_HBI_PROJECT}-hbi-web-"
 }
 
 resolve_check_hbi() {
@@ -599,7 +601,7 @@ wait_for_full_kessel_consumer() {
     while [ "$elapsed" -lt "$timeout" ]; do
         container_names=$($CONTAINER_RUNTIME ps --format '{{.Names}}')
         while IFS= read -r container_name; do
-            if [[ "$container_name" == full-kessel-rbac-kafka-consumer-* ]]; then
+            if [[ "$container_name" == "${FULL_KESSEL_PROJECT}-rbac-kafka-consumer-"* ]]; then
                 return 0
             fi
         done <<< "$container_names"
@@ -825,7 +827,7 @@ main() {
 
     log-info "========================================="
     if is_full_kessel_stack_running; then
-        log-info "  Consumer: podman logs -f full-kessel-rbac-kafka-consumer-1"
+        log-info "  Consumer: ${CONTAINER_RUNTIME} logs -f ${FULL_KESSEL_PROJECT}-rbac-kafka-consumer-1"
     else
         log-info "  Done. Consumer: podman logs -f $CONSUMER_CONTAINER_NAME"
     fi
