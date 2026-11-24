@@ -162,17 +162,57 @@ def _get_inventory_auth_token():
             time.sleep(INVENTORY_AUTH_TOKEN_BACKOFF_SECONDS * (2**retries))
 
 
+def _inventory_auth_client_id() -> str:
+    # kessel.auth.OAuth2ClientCredentials stores these as private attrs.
+    return (
+        getattr(inventory_auth_credentials, "_client_id", None)
+        or getattr(inventory_auth_credentials, "client_id", None)
+        or ""
+    )
+
+
+def _inventory_auth_client_secret() -> str:
+    return (
+        getattr(inventory_auth_credentials, "_client_secret", None)
+        or getattr(inventory_auth_credentials, "client_secret", None)
+        or ""
+    )
+
+
+def _ensure_inventory_auth_credentials() -> None:
+    """Ephemeral: on first call, resolve Keycloak SA into inventory_auth_credentials in-flight.
+
+    Stage/prod already have client id/secret on inventory_auth_credentials from Vault at import.
+    """
+    if _inventory_auth_client_id() and _inventory_auth_client_secret():
+        return
+    if not settings.EPH_ENV:
+        return
+
+    from management.inventory_ephemeral_sa import ensure_ephemeral_inventory_sa
+
+    try:
+        client_id, client_secret = ensure_ephemeral_inventory_sa()
+    except Exception as exc:
+        logger.warning("Ephemeral Inventory Keycloak SA bootstrap failed", exc_info=True)
+        raise InventoryAuthUnavailableError() from exc
+
+    inventory_auth_credentials._client_id = client_id
+    inventory_auth_credentials._client_secret = client_secret
+
+
 def get_inventory_auth_metadata() -> list:
     """Build gRPC auth metadata for Inventory API calls using OAuth2 client credentials.
 
     Returns empty metadata (unauthenticated) only when Inventory API credentials aren't
-    configured at all, e.g. local/ephemeral environments where Inventory API doesn't
-    enforce auth. If credentials are configured but the token fetch fails or returns no
-    access_token, this raises rather than silently returning unauthenticated metadata --
-    swallowing that failure is what caused every Inventory API call to go out
-    unauthenticated in a prior incident.
+    configured outside ephemeral. In ephemeral, the first call bootstraps a Keycloak SA
+    in-flight (no Vault). If credentials exist / bootstrap succeeds but the token fetch
+    fails or returns no access_token, this raises rather than silently returning
+    unauthenticated metadata -- swallowing that failure is what caused every Inventory
+    API call to go out unauthenticated in a prior incident.
     """
-    if not settings.INVENTORY_API_CLIENT_ID or not settings.INVENTORY_API_CLIENT_SECRET:
+    _ensure_inventory_auth_credentials()
+    if not _inventory_auth_client_id() or not _inventory_auth_client_secret():
         return []
     try:
         token_response = _get_inventory_auth_token()
