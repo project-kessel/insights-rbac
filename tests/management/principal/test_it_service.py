@@ -30,7 +30,10 @@ from management.principal.it_service import (
     IT_KEY_SERVICE_ACCOUNT_TYPE,
     UnexpectedStatusCodeFromITError,
 )
-from management.principal.it_service_mocks import MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
+from management.principal.it_service_mocks import (
+    MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+    generate_it_service_accounts,
+)
 from management.principal.model import Principal
 from rest_framework import serializers, status
 from tests.identity_request import IdentityRequest
@@ -2088,6 +2091,29 @@ class ITServiceTests(IdentityRequest):
             [result.get("service_account_type") for result in repeated_results],
             "the mocked service account type should be stable for a given service account across calls",
         )
+
+    def test_mock_service_accounts_preserve_user_id_when_available(self) -> None:
+        """The bypass path should expose the same userId field as an IT response when it is known."""
+        principals = [
+            Principal(
+                service_account_id="00000000-0000-0000-0000-000000000000",
+                username="with-user-id",
+                user_id="service-account-user-id",
+            ),
+            Principal(
+                service_account_id="00000000-0000-0000-0000-000000000001",
+                username="without-user-id",
+                user_id=None,
+            ),
+        ]
+
+        raw_accounts = list(generate_it_service_accounts(principals))
+        self.assertEqual("service-account-user-id", raw_accounts[0]["userId"])
+        self.assertNotIn("userId", raw_accounts[1])
+
+        transformed_accounts = self.it_service._get_mock_service_accounts(principals)
+        self.assertEqual("service-account-user-id", transformed_accounts[0]["userId"])
+        self.assertNotIn("userId", transformed_accounts[1])
 
     def test_merge_principals_it_service_accounts_keeps_service_access_token_fields(self) -> None:
         """Test that merging the IT service accounts with our principals does not drop the new fields."""
