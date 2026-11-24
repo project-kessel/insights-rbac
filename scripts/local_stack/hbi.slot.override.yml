@@ -1,0 +1,9 @@
+# Keep writable Host Inventory data separate for each local stack slot.
+services:
+  db:
+    volumes:
+      - "${HBI_PG_DATA:-~/.pg_data}:/var/lib/postgresql/data"
+
+  minio:
+    volumes:
+      - "${HBI_MINIO_DATA:-./tmp/minio}:/data:Z"

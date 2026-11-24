@@ -66,10 +66,62 @@ Check that the full-stack containers and published endpoints are healthy:
 make docker-local-full-health
 ```
 
-The command builds `insights-rbac-local:dev`, uses Docker or Podman Compose,
-and resolves the upstream Kessel Inventory and Host Inventory checkouts under
-`.local-deps/`. If either checkout is absent, it creates a shallow clone.
+Run the validation scripts against the healthy stack:
+
+```bash
+make docker-local-full-validate
+```
+
+The target runs each validation script directly, passing `--no-start` to
+`create-workspace.sh`. It also runs `apply-rbac-users-config.sh` with its
+bundled fixture; this may create or update tenants, users, groups, custom
+roles, and role bindings in local RBAC.
+
+The V2 CRUD validation uses the host `zed` CLI when available, otherwise it
+runs the `authzed/zed` container on the selected Kessel network.
+
+When finished, stop the full local stack:
+
+```bash
+make docker-local-full-down
+```
+
+Starting the stack builds `insights-rbac-local:dev`, uses Docker or Podman
+Compose, and resolves the upstream Kessel Inventory and Host Inventory
+checkouts under `.local-deps/`. If either checkout is absent, it creates a
+shallow clone.
 Ensure the container VM has enough memory for the full stack.
+If the local RBAC image build cannot reach package mirrors through the default
+BuildKit network, set `RBAC_BUILD_NETWORK=host` for the startup command.
+
+To run alongside another local RBAC stack, set an isolated Compose project,
+network, data directories, and port offset. Each isolated project gets a
+project-specific RBAC image tag unless `RBAC_IMAGE` is set explicitly. For
+example:
+
+```bash
+export FULL_STACK_SLOT=example
+export FULL_STACK_PORT_OFFSET=2000
+export FULL_KESSEL_COMPOSE_DIR="${TMPDIR:-/tmp}/insights-rbac-example/development/full-kessel"
+export COMPOSE_PROJECT_NAME=example-kessel
+export HBI_COMPOSE_PROJECT=example-hbi
+export KESSEL_NETWORK_NAME=example-kessel-net
+export HBI_PG_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-postgres"
+export HBI_MINIO_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-minio"
+make docker-local-full-up rbac=local rbac-config=upstream inventory=upstream hbi=upstream
+make docker-local-full-health
+make docker-local-full-validate
+make docker-local-full-down
+```
+
+Keep these variables exported for every command; `make` and its child scripts
+cannot read shell variables that were only sourced without `export`.
+
+When `FULL_KESSEL_COMPOSE_DIR` is set, startup, health checks, and
+validations derive published ports from `FULL_STACK_PORT_OFFSET`; explicit
+port variables override those defaults.
+`docker-local-full-down` stops the selected full-stack projects and leaves
+separate RBAC Compose projects running.
 
 Each deployment also loads four idempotent local identities in organization
 `local-full-stack` / account `10001`: `local-v1-org-admin`,
@@ -197,8 +249,8 @@ make docker-local-full-apply-users file=/tmp/local-rbac-users.yaml
 
 ##### Run every local validation
 
-Run every shell validation below `scripts/validations/` in lexical order. The
-command stops at the first failure:
+Run every shell script below `scripts/validations/` in lexical order, including
+scripts that apply local RBAC fixtures. The command stops at the first failure:
 
 ```bash
 make docker-local-full-validate
@@ -227,10 +279,10 @@ as its workspace source of truth:
 ./scripts/validations/api/create-workspace.sh --no-start --check-hbi
 ```
 
-Stop the full stack and leftover legacy RBAC containers with
-`make docker-local-full-down`. This preserves volumes;
-pass `--volumes` to `scripts/local_stack/down-full.sh` when a clean HBI data
-volume is required. If the RBAC Kafka consumer is unhealthy, restart the stack
+Stop the full stack with `make docker-local-full-down`. This preserves HBI
+volumes and, when using an isolated Kessel Compose directory, its Kessel
+volumes. Pass `--volumes` to `scripts/local_stack/down-full.sh` to remove
+those volumes. If the RBAC Kafka consumer is unhealthy, restart the stack
 with `make docker-local-full-up`; the consumer should report that it acquired a
 fencing lock and is listening on `outbox.event.relations-replication-event`.
 
