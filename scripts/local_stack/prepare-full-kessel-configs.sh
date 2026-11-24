@@ -37,9 +37,11 @@ prepare_full_kessel_configs() {
   if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
     local_config_dir="${compose_dir}/generated"
   fi
-  local local_inventory_config="${local_config_dir}/inventory-api.yaml"
+  local local_inventory_config
 
   mkdir -p "${local_config_dir}"
+  local_config_dir="$(cd "${local_config_dir}" && pwd)"
+  local_inventory_config="${local_config_dir}/inventory-api.yaml"
   awk '
     /^authn:$/ {
       print

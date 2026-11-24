@@ -21,7 +21,7 @@ usage() {
   cat <<'EOF'
 Usage: down-full.sh [options]
 
-  -v, --volumes   Remove compose volumes when stopping HBI
+  -v, --volumes   Remove HBI and isolated Kessel Compose volumes
   -h, --help      Show this help
 EOF
 }
@@ -87,13 +87,17 @@ fi
 if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
   compose_dir="${FULL_KESSEL_COMPOSE_DIR}"
   if [[ -f "${compose_dir}/docker-compose.yaml" ]]; then
+    kessel_down_args=(down --remove-orphans)
+    if [[ "${REMOVE_VOLUMES}" == true ]]; then
+      kessel_down_args=(down --volumes --remove-orphans)
+    fi
     log-info "Stopping Kessel + Debezium + RBAC (${KESSEL_COMPOSE_PROJECT})..."
     "${COMPOSE_CMD[@]}" -p "${KESSEL_COMPOSE_PROJECT}" \
       --env-file "${compose_dir}/.env" \
       --profile consumer --profile rbac \
       -f "${compose_dir}/docker-compose.yaml" \
       -f "${REPO_ROOT}/scripts/local_stack/full-kessel.rbac-override.yml" \
-      down --volumes --remove-orphans
+      "${kessel_down_args[@]}"
   else
     log-warn "Slot Compose files not found; skipping Kessel stack teardown"
   fi

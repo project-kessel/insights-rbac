@@ -115,8 +115,9 @@ make docker-local-full-down
 Keep these variables exported for every command; `make` and its child scripts
 cannot read shell variables that were only sourced without `export`.
 
-Health checks and validations derive their published ports from
-`FULL_STACK_PORT_OFFSET`; explicit port variables override those defaults.
+When `FULL_KESSEL_COMPOSE_DIR` is set, startup, health checks, and
+validations derive published ports from `FULL_STACK_PORT_OFFSET`; explicit
+port variables override those defaults.
 `docker-local-full-down` stops the selected full-stack projects and leaves
 separate RBAC Compose projects running.
 
@@ -276,9 +277,10 @@ as its workspace source of truth:
 ./scripts/validations/api/create-workspace.sh --no-start --check-hbi
 ```
 
-Stop the full stack with `make docker-local-full-down`. This preserves HBI volumes;
-pass `--volumes` to `scripts/local_stack/down-full.sh` when a clean HBI data
-volume is required. If the RBAC Kafka consumer is unhealthy, restart the stack
+Stop the full stack with `make docker-local-full-down`. This preserves HBI
+volumes and, when using an isolated Kessel Compose directory, its Kessel
+volumes. Pass `--volumes` to `scripts/local_stack/down-full.sh` to remove
+those volumes. If the RBAC Kafka consumer is unhealthy, restart the stack
 with `make docker-local-full-up`; the consumer should report that it acquired a
 fencing lock and is listening on `outbox.event.relations-replication-event`.
 
