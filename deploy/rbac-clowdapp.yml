@@ -34,7 +34,6 @@ objects:
       replicas: 3
     optionalDependencies:
       - kessel-inventory
-      - kessel-relations
       - kessel-kafkaconnect
     deployments:
     - name: worker-service
@@ -205,6 +204,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -227,6 +228,12 @@ objects:
             value: ${NOTIFICATIONS_ENABLED}
           - name: NOTIFICATIONS_RH_ENABLED
             value: ${NOTIFICATIONS_RH_ENABLED}
+          - name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+            value: ${NOTIFICATIONS_RH_RATE_PER_MINUTE}
+          - name: NOTIFICATIONS_RH_QUIET_START
+            value: ${NOTIFICATIONS_RH_QUIET_START}
+          - name: NOTIFICATIONS_RH_QUIET_END
+            value: ${NOTIFICATIONS_RH_QUIET_END}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
           - name: DR_RELATIONS_RECONCILE_ENABLED
@@ -587,6 +594,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -1166,6 +1175,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1397,6 +1408,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1933,6 +1946,15 @@ parameters:
 - description: Enable sending out notification events of Red Hat changes
   name: NOTIFICATIONS_RH_ENABLED
   value: 'False'
+- description: Target Red Hat role notification messages per batch; the beat task sends one batch per minute
+  name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+  value: '3000'
+- description: Start of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_START
+  value: '23:30'
+- description: End of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_END
+  value: '00:30'
 - description: Enable sending out notification events (typo variant used by service deployer)
   name: NOTIFICATONS_ENABLED
   value: 'False'
@@ -2003,6 +2025,9 @@ parameters:
   value: '10'
 - name: IT_TOKEN_JKWS_CACHE_LIFETIME
   value: '28800'
+- name: OUTBOUND_HTTP_TIMEOUT
+  description: Timeout in seconds for outbound BOP HTTP requests (IT service and JWKS use IT_SERVICE_TIMEOUT_SECONDS)
+  value: '10'
 - name: PRINCIPAL_USER_DOMAIN
   description: >
     Kessel requires principal IDs to be qualified by a domain,

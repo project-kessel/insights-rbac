@@ -18,6 +18,7 @@
 """Proxy for principal management."""
 
 import logging
+from json import JSONDecodeError
 
 import requests
 from django.conf import settings
@@ -284,11 +285,17 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             "source": "principals",
         }
         try:
-            kwargs = {"headers": headers, "params": params, "json": data, "verify": self.ssl_verify}
+            kwargs = {
+                "headers": headers,
+                "params": params,
+                "json": data,
+                "verify": self.ssl_verify,
+                "timeout": settings.OUTBOUND_HTTP_TIMEOUT,
+            }
             if self.source_cert:
                 kwargs["verify"] = self.client_cert_path
             response = method(url, **kwargs)
-        except requests.exceptions.ConnectionError as conn:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as conn:
             LOGGER.error("Unable to connect for URL %s with error: %s", url, conn)
             resp = {"status_code": status.HTTP_500_INTERNAL_SERVER_ERROR, "errors": [unexpected_error]}
             bop_request_status_count.labels(method=metrics_method, status=resp.get("status_code")).inc()
@@ -385,7 +392,12 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 API_TOKEN_HEADER: self.api_token,
                 "Content-Type": "application/json",
             }
-            kwargs = {"headers": headers, "json": account_ids, "verify": self.ssl_verify}
+            kwargs = {
+                "headers": headers,
+                "json": account_ids,
+                "verify": self.ssl_verify,
+                "timeout": settings.OUTBOUND_HTTP_TIMEOUT,
+            }
             if self.source_cert:
                 kwargs["verify"] = self.client_cert_path
 
@@ -394,6 +406,10 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
             if response.status_code == status.HTTP_200_OK:
                 mapping = response.json()
+                if not isinstance(mapping, dict):
+                    LOGGER.error("Invalid account-org mapping response from BOP: expected an object")
+                    bop_request_status_count.labels(method="POST", status=500).inc()
+                    return None
                 LOGGER.info(f"Successfully fetched {len(mapping)} account-org mappings from BOP")
                 bop_request_status_count.labels(method="POST", status=200).inc()
                 return mapping
@@ -401,7 +417,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 LOGGER.error(f"BOP returned status {response.status_code}: {response.text}")
                 bop_request_status_count.labels(method="POST", status=response.status_code).inc()
                 return None
-        except Exception as e:
+        except (requests.exceptions.RequestException, JSONDecodeError) as e:
             LOGGER.error(f"Error fetching account-org mapping from BOP: {str(e)}")
             bop_request_status_count.labels(method="POST", status=500).inc()
             return None

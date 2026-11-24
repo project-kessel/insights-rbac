@@ -88,15 +88,6 @@ services:
     environment:
       KAFKA_HEAP_OPTS: "-Xms64M -Xmx128M"
 
-  relations-api:
-    # The RBAC consumer must acquire its fencing lock over this gRPC listener
-    # before it can process Kafka messages.
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9000'"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-
   # Keep the migration and serving containers on the same current SpiceDB
   # release; the upstream Compose file otherwise follows the mutable latest tag.
   spicedb-migrate:
@@ -119,8 +110,6 @@ services:
       READ_YOUR_WRITES_TIMEOUT_SECONDS: "30"
     depends_on:
       inventory-api:
-        condition: service_healthy
-      relations-api:
         condition: service_healthy
 
   rbac-worker:
