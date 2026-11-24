@@ -7,7 +7,7 @@ prepare_full_kessel_configs() {
   local inventory_api_repo="${1:?inventory-api repo path required}"
   local repo_root="${2:?insights-rbac repo root required}"
 
-  local compose_dir="${inventory_api_repo}/development/full-kessel"
+  local compose_dir="${3:-${inventory_api_repo}/development/full-kessel}"
   local env_file="${compose_dir}/.env"
   local requested_rbac_image="${RBAC_IMAGE:-}"
   local requested_schema_zed_file="${SCHEMA_ZED_FILE:-}"
@@ -34,9 +34,14 @@ prepare_full_kessel_configs() {
 
   local schema_dest="${compose_dir}/configs/schema.zed"
   local local_config_dir="${TMPDIR:-/tmp}/insights-rbac-full-kessel"
-  local local_inventory_config="${local_config_dir}/inventory-api.yaml"
+  if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+    local_config_dir="${compose_dir}/generated"
+  fi
+  local local_inventory_config
 
   mkdir -p "${local_config_dir}"
+  local_config_dir="$(cd "${local_config_dir}" && pwd)"
+  local_inventory_config="${local_config_dir}/inventory-api.yaml"
   awk '
     /^authn:$/ {
       print
