@@ -98,15 +98,29 @@ class _InventoryAuthTimeoutAdapter(HTTPAdapter):
         return super().send(request, **kwargs)
 
 
+def _build_inventory_auth_credentials(client_id: str, client_secret: str) -> OAuth2ClientCredentials:
+    """Build Inventory OAuth credentials with bounded HTTPS token request timeouts.
+
+    Must construct a fresh OAuth2ClientCredentials when client_id/secret change: mutating
+    the private attrs leaves OAuth2Session/BackendApplicationClient with the original
+    (empty) client_id, which Keycloak rejects as invalid_client.
+    """
+    credentials = OAuth2ClientCredentials(
+        client_id=client_id,
+        client_secret=client_secret,
+        token_endpoint=settings.INVENTORY_API_TOKEN_URL,
+    )
+    # The SDK does not expose its requests session. Configure its HTTPS adapter here so
+    # token acquisition cannot wait indefinitely on a dead connection.
+    credentials._session.mount("https://", _InventoryAuthTimeoutAdapter())
+    return credentials
+
+
 # Configure OAuth credentials with direct token URL for Inventory API
-inventory_auth_credentials = OAuth2ClientCredentials(
-    client_id=settings.INVENTORY_API_CLIENT_ID,
-    client_secret=settings.INVENTORY_API_CLIENT_SECRET,
-    token_endpoint=settings.INVENTORY_API_TOKEN_URL,  # Direct token endpoint
+inventory_auth_credentials = _build_inventory_auth_credentials(
+    settings.INVENTORY_API_CLIENT_ID,
+    settings.INVENTORY_API_CLIENT_SECRET,
 )
-# The SDK does not expose its requests session. Configure its HTTPS adapter here so
-# token acquisition cannot wait indefinitely on a dead connection.
-inventory_auth_credentials._session.mount("https://", _InventoryAuthTimeoutAdapter())
 
 
 def _reset_inventory_auth_session() -> None:
@@ -184,6 +198,8 @@ def _ensure_inventory_auth_credentials() -> None:
 
     Stage/prod already have client id/secret on inventory_auth_credentials from Vault at import.
     """
+    global inventory_auth_credentials
+
     if _inventory_auth_client_id() and _inventory_auth_client_secret():
         return
     if not settings.EPH_ENV:
@@ -197,8 +213,7 @@ def _ensure_inventory_auth_credentials() -> None:
         logger.warning("Ephemeral Inventory Keycloak SA bootstrap failed", exc_info=True)
         raise InventoryAuthUnavailableError() from exc
 
-    inventory_auth_credentials._client_id = client_id
-    inventory_auth_credentials._client_secret = client_secret
+    inventory_auth_credentials = _build_inventory_auth_credentials(client_id, client_secret)
 
 
 def get_inventory_auth_metadata() -> list:

@@ -978,21 +978,25 @@ class GetInventoryAuthMetadataTests(IdentityRequest):
         mock_credentials.client_secret = ""
         self.assertEqual(get_inventory_auth_metadata(), [])
 
-    @override_settings(EPH_ENV=True)
+    @override_settings(EPH_ENV=True, INVENTORY_API_TOKEN_URL="http://keycloak/token")
     @mock.patch("management.utils.inventory_auth_credentials")
+    @mock.patch("management.utils._build_inventory_auth_credentials")
     @mock.patch("management.inventory_ephemeral_sa.ensure_ephemeral_inventory_sa")
-    def test_ephemeral_bootstraps_credentials_in_flight(self, mock_ensure, mock_credentials):
+    def test_ephemeral_bootstraps_credentials_in_flight(self, mock_ensure, mock_build, mock_credentials):
         """First ephemeral call has no Vault creds — resolve Keycloak SA in-process."""
         mock_credentials._client_id = ""
         mock_credentials._client_secret = ""
         mock_credentials.client_id = ""
         mock_credentials.client_secret = ""
         mock_ensure.return_value = ("rbac-inventory-api", "secret")
-        mock_credentials.get_token.return_value = Mock(access_token="the-token")
+        new_credentials = Mock()
+        new_credentials._client_id = "rbac-inventory-api"
+        new_credentials._client_secret = "secret"
+        new_credentials.get_token.return_value = Mock(access_token="the-token")
+        mock_build.return_value = new_credentials
         self.assertEqual(get_inventory_auth_metadata(), [("authorization", "Bearer the-token")])
         mock_ensure.assert_called_once()
-        self.assertEqual(mock_credentials._client_id, "rbac-inventory-api")
-        self.assertEqual(mock_credentials._client_secret, "secret")
+        mock_build.assert_called_once_with("rbac-inventory-api", "secret")
 
     @override_settings(EPH_ENV=True)
     @mock.patch("management.utils.inventory_auth_credentials")
