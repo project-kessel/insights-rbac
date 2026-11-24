@@ -14,14 +14,14 @@ detect_container_runtime
 INVENTORY_API_REPO="${INVENTORY_API_REPO:-${REPO_ROOT}/.local-deps/inventory-api}"
 HBI_REPO="${HBI_REPO:-${REPO_ROOT}/.local-deps/insights-host-inventory}"
 HBI_COMPOSE_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
-LEGACY_COMPOSE_PROJECT="${LEGACY_COMPOSE_PROJECT:-insights-rbac}"
+KESSEL_COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-full-kessel}"
 REMOVE_VOLUMES=false
 
 usage() {
   cat <<'EOF'
 Usage: down-full.sh [options]
 
-  -v, --volumes   Remove compose volumes when stopping HBI
+  -v, --volumes   Remove HBI and isolated Kessel Compose volumes
   -h, --help      Show this help
 EOF
 }
@@ -37,14 +37,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-down_compose() {
-  if [[ "${REMOVE_VOLUMES}" == true ]]; then
-    "${COMPOSE_CMD[@]}" "$@" down -v
-  else
-    "${COMPOSE_CMD[@]}" "$@" down
-  fi
-}
 
 down_compose_with_orphans() {
   if [[ "${REMOVE_VOLUMES}" == true ]]; then
@@ -75,16 +67,43 @@ if [[ -f "${HBI_REPO}/dev.yml" ]]; then
   (
     # Compose validates this required variable even when only stopping services.
     export UNLEASH_TOKEN="${UNLEASH_TOKEN:-local-dev-token}"
-    down_compose_with_orphans -p "${HBI_COMPOSE_PROJECT}" \
-      -f "${HBI_REPO}/dev.yml" \
+    hbi_compose_file="${FULL_HBI_COMPOSE_FILE:-${HBI_REPO}/dev.yml}"
+    hbi_compose_args=(
+      -p "${HBI_COMPOSE_PROJECT}"
+      --project-directory "${HBI_REPO}"
+      -f "${hbi_compose_file}"
       -f "${REPO_ROOT}/scripts/local_stack/hbi.integration.yml"
+    )
+    if [[ -n "${FULL_STACK_SLOT:-}" ]]; then
+      hbi_compose_args+=(-f "${REPO_ROOT}/scripts/local_stack/hbi.slot.override.yml")
+    fi
+    down_compose_with_orphans "${hbi_compose_args[@]}"
   ) || log-warn "HBI dev.yml compose down failed (may not be running)"
   remove_project_containers "${HBI_COMPOSE_PROJECT}"
 else
   log-warn "HBI compose files not found; skipping HBI teardown"
 fi
 
-if [[ -f "${INVENTORY_API_REPO}/scripts/stop-full-kessel.sh" ]]; then
+if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+  compose_dir="${FULL_KESSEL_COMPOSE_DIR}"
+  if [[ -f "${compose_dir}/docker-compose.yaml" ]]; then
+    compose_dir="$(cd "${compose_dir}" && pwd)"
+    export RBAC_INVENTORY_API_CONFIG="${compose_dir}/generated/inventory-api.yaml"
+    kessel_down_args=(down --remove-orphans)
+    if [[ "${REMOVE_VOLUMES}" == true ]]; then
+      kessel_down_args=(down --volumes --remove-orphans)
+    fi
+    log-info "Stopping Kessel + Debezium + RBAC (${KESSEL_COMPOSE_PROJECT})..."
+    "${COMPOSE_CMD[@]}" -p "${KESSEL_COMPOSE_PROJECT}" \
+      --env-file "${compose_dir}/.env" \
+      --profile consumer --profile rbac \
+      -f "${compose_dir}/docker-compose.yaml" \
+      -f "${REPO_ROOT}/scripts/local_stack/full-kessel.rbac-override.yml" \
+      "${kessel_down_args[@]}"
+  else
+    log-warn "Slot Compose files not found; skipping Kessel stack teardown"
+  fi
+elif [[ -f "${INVENTORY_API_REPO}/scripts/stop-full-kessel.sh" ]]; then
   log-info "Stopping Kessel + Debezium + RBAC..."
   (
     cd "${INVENTORY_API_REPO}"
@@ -94,18 +113,5 @@ if [[ -f "${INVENTORY_API_REPO}/scripts/stop-full-kessel.sh" ]]; then
 else
   log-warn "inventory-api repo not found; skipping Kessel stack teardown"
 fi
-
-if [[ -f "${REPO_ROOT}/docker-compose.yml" ]]; then
-  log-info "Stopping legacy RBAC Compose project (${LEGACY_COMPOSE_PROJECT})..."
-  down_compose -p "${LEGACY_COMPOSE_PROJECT}" \
-    -f "${REPO_ROOT}/docker-compose.yml" || log-warn "legacy docker-compose.yml down failed (may not be running)"
-fi
-
-if [[ -f "${REPO_ROOT}/docker-compose.local.yml" ]]; then
-  log-info "Stopping legacy local RBAC Compose project (${LEGACY_COMPOSE_PROJECT})..."
-  down_compose -p "${LEGACY_COMPOSE_PROJECT}" \
-    -f "${REPO_ROOT}/docker-compose.local.yml" || log-warn "legacy docker-compose.local.yml down failed (may not be running)"
-fi
-remove_project_containers "${LEGACY_COMPOSE_PROJECT}"
 
 log-info "Full local stack stopped."
