@@ -68,6 +68,23 @@ class PrincipalCleanerTests(IdentityRequest):
             self.fail(msg="clean_tenant_principals encountered an exception")
         self.assertEqual(Principal.objects.count(), 0)
 
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.cleaner.PROXY.request_filtered_principals")
+    def test_principal_cleanup_bypass_uses_status_all(self, mock_request):
+        """BYPASS cleanup must pass status=all so disabled users are not deleted."""
+        Principal.objects.create(username="disabled-user", tenant=self.tenant)
+        mock_request.return_value = {
+            "status_code": status.HTTP_200_OK,
+            "data": [{"username": "disabled-user", "is_active": False}],
+        }
+
+        clean_tenant_principals(self.tenant)
+
+        mock_request.assert_called_once()
+        _, kwargs = mock_request.call_args
+        self.assertEqual(kwargs["options"].get("status"), "all")
+        self.assertEqual(Principal.objects.filter(username="disabled-user").count(), 1)
+
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
         return_value={"status_code": status.HTTP_200_OK, "data": []},

@@ -46,7 +46,11 @@ from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.notifications.notification_handlers import group_obj_change_notification_handler
 from management.permissions.group_v2_access import GroupV2KesselAccessPermission
 from management.permissions.v2_edit_api_access import V2WriteRequiresWorkspacesEnabled
-from management.principal.backfill import backfill_remote_principals
+from management.principal.backfill import (
+    PrincipalUserIdMismatchError,
+    backfill_remote_principals,
+    reject_mismatched_principal_user_ids,
+)
 from management.principal.it_service import ITService
 from management.principal.model import Principal, SERVICE_ACCOUNT_USERNAME_FORMAT
 from management.principal.proxy import PrincipalProxy, external_principal_to_user
@@ -319,6 +323,12 @@ class GroupV2ViewSet(AtomicOperationsMixin, BaseV2ViewSet):
 
         # Backfill: ensure all BOP-validated users have local Principal records.
         users = [external_principal_to_user(item) for item in bop_data]
+        try:
+            # Fail closed before membership/dual-write when DB user_id disagrees with BOP.
+            reject_mismatched_principal_user_ids(users, request.tenant)
+        except PrincipalUserIdMismatchError as e:
+            return self._error_response(e, status.HTTP_409_CONFLICT), set()
+
         bootstrap_service = get_tenant_bootstrap_service(OutboxReplicator())
         backfill_remote_principals(bootstrap_service, users, request.tenant)
 

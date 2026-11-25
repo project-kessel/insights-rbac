@@ -18,10 +18,12 @@
 """Proxy for principal management."""
 
 import logging
+from json import JSONDecodeError
 
 import requests
 from django.conf import settings
 from management.models import Principal
+from management.principal.profile_service import get_profiles_from_service, profile_service_configured
 from prometheus_client import Counter, Histogram
 from rest_framework import status
 
@@ -133,6 +135,47 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             processed_item["user_id"] = item.get("id")
         return processed_item
 
+    @staticmethod
+    def _bypass_principal_payload(principal=None, username=None, profile=None):
+        """Build a SaaS-shaped principal dict for BYPASS_BOP_VERIFICATION mode.
+
+        On-prem / local runs have no BOP/IT profile. Always include the SaaS contract
+        fields ``is_active`` and ``is_org_admin`` so the RBAC UI does not treat missing
+        flags as Inactive / Org Admin No. When a Cost principal-profile service URL is
+        configured, ``profile`` may supply real email/name/org-admin; otherwise names
+        stay empty, email falls back to a synthetic value (never foo/bar/baz), and
+        ``is_org_admin`` is False.
+        """
+        profile = profile or {}
+        if principal is not None:
+            username = principal.username
+            user_id = principal.user_id or principal.username
+            principal_type = principal.type
+        else:
+            user_id = username
+            principal_type = Principal.Types.USER
+
+        email = profile.get("email") or ""
+        if not email:
+            email = f"{username}@local" if username else BYPASS_BOP_EMAIL
+
+        # Prefer profile-service enabled flag when present; otherwise treat DB presence as active.
+        if "enabled" in profile:
+            is_active = bool(profile.get("enabled"))
+        else:
+            is_active = True
+
+        return {
+            "username": username,
+            "first_name": profile.get("first_name") or "",
+            "last_name": profile.get("last_name") or "",
+            "email": email,
+            "is_active": is_active,
+            "is_org_admin": bool(profile.get("is_org_admin", False)),
+            "user_id": user_id,
+            "type": principal_type,
+        }
+
     def _get_proxy_service(self):  # pylint: disable=no-self-use
         """Get proxy service host and port info from environment."""
         proxy_conn_info = {
@@ -162,7 +205,9 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
     ):
         """Send request to proxy service."""
         metrics_method = method.__name__.upper()
-        if params and params.get("username_only") == "true":
+        # SaaS / non-BYPASS username_only stays on the cheap DB-only path.
+        # BYPASS must apply status/admin_only using profile enrichment first.
+        if params and params.get("username_only") == "true" and not settings.BYPASS_BOP_VERIFICATION:
             principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
             if data and "users" in data:
                 principals = principals.filter(username__in=data["users"])
@@ -175,69 +220,57 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
         if settings.BYPASS_BOP_VERIFICATION:
             to_return = []
             local_principals = Principal.objects.filter(type="user", tenant__org_id=org_id, cross_account=False)
+            # Cost-owned profile service (A&M-aligned). Empty when unset → safe defaults.
+            enrichment_profiles = get_profiles_from_service(org_id) if profile_service_configured() else {}
+
+            def payload_for(principal=None, username=None, *, allow_profile=True):
+                name = principal.username if principal is not None else username
+                if allow_profile and name:
+                    profile = enrichment_profiles.get(str(name).lower(), {})
+                else:
+                    # Unknown-to-tenant usernames must not leak org-wide profile PII.
+                    profile = {}
+                return self._bypass_principal_payload(principal=principal, username=username, profile=profile)
+
             if data is None:
                 for principal in local_principals:
-                    to_return.append(
-                        dict(
-                            username=principal.username,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id="51736777",
-                            type=principal.type,
-                        )
-                    )
+                    to_return.append(payload_for(principal=principal))
             elif "users" in data:
-                for principal in data["users"]:
-                    to_return.append(
-                        dict(
-                            username=principal,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id=principal,
-                            type="user",
-                        )
-                    )
-            elif "principalStartsWith" in data:
-                principals = local_principals.filter(username__istartswith=data["principalStartsWith"])
-                for principal in principals:
-                    to_return.append(
-                        dict(
-                            username=principal.username,
-                            first_name="foo",
-                            last_name="bar",
-                            email=BYPASS_BOP_EMAIL,
-                            is_active=True,
-                            user_id=principal.user_id,
-                            type=principal.type,
-                        )
-                    )
-            elif "emailStartsWith" in data or "primaryEmail" in data:
-                if "emailStartsWith" in data:
-                    matches_email = BYPASS_BOP_EMAIL.startswith(data["emailStartsWith"])
-                else:
-                    matches_email = data["primaryEmail"] == BYPASS_BOP_EMAIL
-                if matches_email:
-                    for principal in local_principals:
-                        to_return.append(
-                            dict(
-                                username=principal.username,
-                                first_name="foo",
-                                last_name="bar",
-                                email=BYPASS_BOP_EMAIL,
-                                is_active=True,
-                                user_id=principal.user_id,
-                                type=principal.type,
-                            )
-                        )
+                local_by_username = {principal.username.lower(): principal for principal in local_principals}
+                for username in data["users"]:
+                    principal = local_by_username.get(str(username).lower())
+                    if principal is not None:
+                        to_return.append(payload_for(principal=principal))
+                    else:
+                        to_return.append(payload_for(username=username, allow_profile=False))
+            elif "principalStartsWith" in data or "emailStartsWith" in data or "primaryEmail" in data:
+                # Username and email criteria can both be present; apply both.
+                candidates = local_principals
+                if "principalStartsWith" in data:
+                    candidates = candidates.filter(username__istartswith=data["principalStartsWith"])
+                needle_startswith = data.get("emailStartsWith") if "emailStartsWith" in data else None
+                needle_exact = data.get("primaryEmail") if "primaryEmail" in data else None
+                for principal in candidates:
+                    item = payload_for(principal=principal)
+                    email = item.get("email") or ""
+                    if needle_startswith is not None and not email.startswith(needle_startswith):
+                        continue
+                    if needle_exact is not None and email != needle_exact:
+                        continue
+                    to_return.append(item)
             sort_order = (params or {}).get("sortOrder")
             if sort_order in {"asc", "des"}:
                 to_return.sort(key=lambda principal: principal["username"], reverse=sort_order == "des")
-            if (params or {}).get("status") == "disabled":
-                to_return = []
+            status_filter = (params or {}).get("status")
+            if status_filter == "disabled":
+                to_return = [principal for principal in to_return if not principal.get("is_active")]
+            elif status_filter == "enabled":
+                to_return = [principal for principal in to_return if principal.get("is_active")]
+            # status=all (or anything else): no is_active filter — used by clean_tenant_principals
+            if (params or {}).get("admin_only") == "true":
+                to_return = [principal for principal in to_return if principal.get("is_org_admin")]
+            if (params or {}).get("username_only") == "true":
+                to_return = [dict(username=principal["username"]) for principal in to_return]
             user_count = len(to_return)
             limit = int((params or {}).get("limit", user_count))
             offset = int((params or {}).get("offset", 0))
@@ -252,11 +285,17 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
             "source": "principals",
         }
         try:
-            kwargs = {"headers": headers, "params": params, "json": data, "verify": self.ssl_verify}
+            kwargs = {
+                "headers": headers,
+                "params": params,
+                "json": data,
+                "verify": self.ssl_verify,
+                "timeout": settings.OUTBOUND_HTTP_TIMEOUT,
+            }
             if self.source_cert:
                 kwargs["verify"] = self.client_cert_path
             response = method(url, **kwargs)
-        except requests.exceptions.ConnectionError as conn:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as conn:
             LOGGER.error("Unable to connect for URL %s with error: %s", url, conn)
             resp = {"status_code": status.HTTP_500_INTERNAL_SERVER_ERROR, "errors": [unexpected_error]}
             bop_request_status_count.labels(method=metrics_method, status=resp.get("status_code")).inc()
@@ -353,7 +392,12 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 API_TOKEN_HEADER: self.api_token,
                 "Content-Type": "application/json",
             }
-            kwargs = {"headers": headers, "json": account_ids, "verify": self.ssl_verify}
+            kwargs = {
+                "headers": headers,
+                "json": account_ids,
+                "verify": self.ssl_verify,
+                "timeout": settings.OUTBOUND_HTTP_TIMEOUT,
+            }
             if self.source_cert:
                 kwargs["verify"] = self.client_cert_path
 
@@ -362,6 +406,10 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
 
             if response.status_code == status.HTTP_200_OK:
                 mapping = response.json()
+                if not isinstance(mapping, dict):
+                    LOGGER.error("Invalid account-org mapping response from BOP: expected an object")
+                    bop_request_status_count.labels(method="POST", status=500).inc()
+                    return None
                 LOGGER.info(f"Successfully fetched {len(mapping)} account-org mappings from BOP")
                 bop_request_status_count.labels(method="POST", status=200).inc()
                 return mapping
@@ -369,7 +417,7 @@ class PrincipalProxy:  # pylint: disable=too-few-public-methods
                 LOGGER.error(f"BOP returned status {response.status_code}: {response.text}")
                 bop_request_status_count.labels(method="POST", status=response.status_code).inc()
                 return None
-        except Exception as e:
+        except (requests.exceptions.RequestException, JSONDecodeError) as e:
             LOGGER.error(f"Error fetching account-org mapping from BOP: {str(e)}")
             bop_request_status_count.labels(method="POST", status=500).inc()
             return None

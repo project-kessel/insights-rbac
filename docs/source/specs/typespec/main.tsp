@@ -2326,12 +2326,12 @@ namespace Groups {
     }
 
     @route("{uuid}/principals/")
-    @doc("Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members.")
+    @doc("Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members. Returns 409 Conflict when a local principal's user_id disagrees with BOP.")
     @summary("Add principals to a group")
     @post op addPrincipals(
         @path uuid: UUID;
         @body body: AddPrincipalsInput;
-    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404 | Problems.Problem503;
+    ): ItemResponse<Group, 200> | Problems.CommonProblems | Problems.Problem400ProtectedObject | Problems.Problem404 | Problems.Problem409 | Problems.Problem503;
 
     @route("{uuid}/principals/{principal_uuid}/")
     @doc("Remove a single principal from a group by principal UUID. Protected-group behavior: system groups return 400. For bulk removal, use DELETE /groups/{uuid}/principals/ with query parameters.")

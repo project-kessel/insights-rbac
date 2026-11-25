@@ -29,6 +29,7 @@ from internal.migration_coordination import (
 from internal.pg_notify_wait import (
     NotifyCoordinatedReplicator,
     replicate_with_notify,
+    wait_for_pg_notify,
 )
 from management.inventory_replicator.inventory_replicator import (
     PartitionKey,
@@ -196,3 +197,63 @@ class NotifyMigrationBatchCompletionTests(TestCase):
         send_notify = Mock()
         notify_migration_batch_completion("create_group", {"notify_token": "token"}, send_notify)
         send_notify.assert_not_called()
+
+
+class WaitForPgNotifyTests(TestCase):
+    """Tests for wait_for_pg_notify queue handling."""
+
+    @staticmethod
+    def _notify(channel, payload):
+        return Mock(channel=channel, payload=payload)
+
+    @patch("internal.pg_notify_wait.select.select")
+    @patch("internal.pg_notify_wait.connection")
+    def test_matching_notify_queued_after_listen_is_not_discarded(self, mock_connection, mock_select):
+        conn = mock_connection.connection
+        conn.notifies = [self._notify("chan", "other"), self._notify("chan", "token-1")]
+        on_success = Mock()
+
+        wait_for_pg_notify(
+            channel="chan", expected_payload="token-1", timeout_seconds=5, log_label="t", on_success=on_success
+        )
+
+        on_success.assert_called_once()
+        mock_select.assert_not_called()
+        self.assertEqual(conn.notifies, [])
+
+    @patch("internal.pg_notify_wait.select.select")
+    @patch("internal.pg_notify_wait.connection")
+    def test_stale_notifications_with_other_payloads_are_ignored(self, mock_connection, mock_select):
+        conn = mock_connection.connection
+        conn.notifies = [self._notify("chan", "stale-token")]
+        arrived = [self._notify("other-chan", "token-1"), self._notify("chan", "token-1")]
+
+        def deliver(*_args):
+            conn.notifies.extend(arrived)
+            return ([], [], [])
+
+        mock_select.side_effect = deliver
+        on_success = Mock()
+
+        wait_for_pg_notify(
+            channel="chan", expected_payload="token-1", timeout_seconds=5, log_label="t", on_success=on_success
+        )
+
+        on_success.assert_called_once()
+        mock_select.assert_called_once()
+
+    @patch("internal.pg_notify_wait.time.monotonic")
+    @patch("internal.pg_notify_wait.select.select")
+    @patch("internal.pg_notify_wait.connection")
+    def test_times_out_without_matching_notify(self, mock_connection, mock_select, mock_monotonic):
+        conn = mock_connection.connection
+        conn.notifies = [self._notify("chan", "stale-token")]
+        mock_monotonic.side_effect = [0.0, 0.0, 1.0, 6.0, 6.0, 6.0]
+        on_timeout = Mock()
+
+        with self.assertRaises(TimeoutError):
+            wait_for_pg_notify(
+                channel="chan", expected_payload="token-1", timeout_seconds=5, log_label="t", on_timeout=on_timeout
+            )
+
+        on_timeout.assert_called_once()

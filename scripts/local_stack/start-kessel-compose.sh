@@ -17,14 +17,24 @@ RBAC_OVERRIDE_FILE="${2:?compose override file required}"
 
 detect_container_runtime
 
-COMPOSE_DIR="${INVENTORY_API_REPO}/development/full-kessel"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
+KESSEL_NETWORK_NAME="${KESSEL_NETWORK_NAME:-kessel}"
+if [[ -z "${FULL_KESSEL_COMPOSE_DIR:-}" && "${KESSEL_NETWORK_NAME}" != kessel ]]; then
+  log-err "A custom KESSEL_NETWORK_NAME requires FULL_KESSEL_COMPOSE_DIR so the Compose network can be isolated."
+  exit 1
+fi
+
+COMPOSE_DIR="${FULL_KESSEL_COMPOSE_DIR:-${INVENTORY_API_REPO}/development/full-kessel}"
+if [[ -n "${FULL_KESSEL_COMPOSE_DIR:-}" ]]; then
+  python3 "${SCRIPT_DIR}/prepare-slot-compose.py" \
+    "${INVENTORY_API_REPO}" "${COMPOSE_DIR}" "${FULL_STACK_PORT_OFFSET:-0}"
+fi
 ENV_FILE="${COMPOSE_DIR}/.env"
 
-prepare_full_kessel_configs "${INVENTORY_API_REPO}" "${REPO_ROOT}"
+prepare_full_kessel_configs "${INVENTORY_API_REPO}" "${REPO_ROOT}" "${COMPOSE_DIR}"
 
-NETWORK_CHECK=$("${CONTAINER_RUNTIME}" network ls --filter name=kessel --format json)
-if [[ -z "${NETWORK_CHECK}" || "${NETWORK_CHECK}" == "[]" ]]; then
-  "${CONTAINER_RUNTIME}" network create kessel
+if ! "${CONTAINER_RUNTIME}" network inspect "${KESSEL_NETWORK_NAME}" >/dev/null 2>&1; then
+  "${CONTAINER_RUNTIME}" network create "${KESSEL_NETWORK_NAME}"
 fi
 
 export DOCKER="${CONTAINER_RUNTIME}"
@@ -41,7 +51,7 @@ write_spicedb_schema() {
   }
 
   log-info 'Applying selected schema directly to SpiceDB...'
-  "${CONTAINER_RUNTIME}" run --rm --network kessel \
+  "${CONTAINER_RUNTIME}" run --rm --network "${KESSEL_NETWORK_NAME}" \
     -e "ZED_TOKEN=${spicedb_token}" \
     -e ZED_ENDPOINT=spicedb:50051 \
     -e ZED_INSECURE=true \
@@ -58,8 +68,8 @@ if [[ "${RBAC_FORCE_RECREATE:-false}" == "true" ]]; then
   compose_up_args+=(--force-recreate)
 fi
 
-"${COMPOSE_CMD[@]}" --env-file "${ENV_FILE}" \
-  --profile relations --profile consumer --profile rbac \
+"${COMPOSE_CMD[@]}" -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" \
+  --profile consumer --profile rbac \
   -f "${COMPOSE_DIR}/docker-compose.yaml" \
   -f "${RBAC_OVERRIDE_FILE}" \
   "${compose_up_args[@]}"

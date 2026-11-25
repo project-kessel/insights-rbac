@@ -4,6 +4,7 @@ import time
 from typing import Optional
 
 from api.models import Tenant
+from internal.pg_notify_wait import replicate_with_notify
 from management.atomic_transactions import atomic_with_retry
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.inventory_replicator.inventory_replicator import (
@@ -17,6 +18,10 @@ from management.workspace.model import Workspace
 from migration_tool.utils import create_relationship
 
 logger = logging.getLogger(__name__)
+
+# Tenants per _do_replicate call. This is also the size of one tuple batch (one tenant yields one tuple), so each call
+# sends exactly one event and therefore registers exactly one consumer wait.
+TENANT_BATCH_SIZE = 1000
 
 
 @atomic_with_retry(retries=10)
@@ -55,13 +60,18 @@ def _do_replicate(replicator: InventoryReplicator, raw_tenants: list[Tenant]) ->
             )
         )
 
-    for tuples_batch in itertools.batched(tuples, 1000):
-        replicator.replicate(
+    # replicate_with_notify defers the wait for the Kafka consumer until this transaction commits, so the wait happens
+    # once per _do_replicate call, not between the events sent inside it. Backpressure between batches therefore relies
+    # on TENANT_BATCH_SIZE: it keeps this loop to a single event per call.
+    for tuples_batch in itertools.batched(tuples, TENANT_BATCH_SIZE):
+        replicate_with_notify(
+            replicator,
             ReplicationEvent(
                 event_type=ReplicationEventType.UPDATE_ROOT_WORKSPACE_TENANTS,
+                info={"batch_size": len(tuples_batch)},
                 partition_key=PartitionKey.byEnvironment(),
                 add=list(tuples_batch),
-            )
+            ),
         )
 
     return len(tenants)
@@ -87,7 +97,7 @@ def replicate_root_workspace_tenants(
 
     replicated_count = 0
 
-    for raw_tenant_batch in itertools.batched(query.iterator(), 1000):
+    for raw_tenant_batch in itertools.batched(query.iterator(), TENANT_BATCH_SIZE):
         replicated_count += _do_replicate(replicator, list(raw_tenant_batch))
         logger.info(f"Replicated {replicated_count}/~{tenant_count} root workspace tenants.")
 

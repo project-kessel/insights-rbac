@@ -1767,8 +1767,34 @@ class GroupV2AddPrincipalsViewTest(GroupV2ViewTestBase):
         response = self._add(self.group_b.uuid, {"usernames": ["user_3", "no-such-user"]})
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch("management.principal.backfill.capture_exception")
+    def test_add_rejects_user_id_mismatch(self, mock_capture):
+        """Reject add when local Principal.user_id disagrees with BOP; do not dual-write."""
+        self.user_3.user_id = "16777216"
+        self.user_3.save(update_fields=["user_id"])
+        self.mock_proxy.side_effect = None
+        self.mock_proxy.return_value = {
+            "status_code": 200,
+            "data": [
+                {
+                    "username": "user_3",
+                    "user_id": "51856862",
+                    "org_id": self.tenant.org_id,
+                    "is_active": True,
+                    "is_org_admin": False,
+                }
+            ],
+        }
+
+        response = self._add(self.group_b.uuid, {"usernames": ["user_3"]})
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("user_id mismatch", response.json()["detail"])
         self.assertFalse(self.group_b.principals.filter(pk=self.user_3.pk).exists())
-        self.mock_dual_write.return_value.replicate_new_principals.assert_not_called()
+        self.mock_dual_write.assert_not_called()
+        self.mock_backfill.assert_not_called()
+        mock_capture.assert_called_once()
 
     def test_add_system_group_rejected(self):
         """System groups cannot have principals added."""

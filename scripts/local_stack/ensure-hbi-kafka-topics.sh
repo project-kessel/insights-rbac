@@ -12,7 +12,7 @@ INVENTORY_API_REPO="${1:?inventory-api repo path required}"
 
 detect_container_runtime
 
-COMPOSE_DIR="${INVENTORY_API_REPO}/development/full-kessel"
+COMPOSE_DIR="${FULL_KESSEL_COMPOSE_DIR:-${INVENTORY_API_REPO}/development/full-kessel}"
 ENV_FILE="${COMPOSE_DIR}/.env"
 
 TOPICS=(

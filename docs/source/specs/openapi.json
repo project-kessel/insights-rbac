@@ -1368,6 +1368,16 @@
               }
             }
           },
+          "409": {
+            "description": "Conflict — local principal user_id disagrees with BOP; remediate via bootstrap rewrite, then retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected Error",
             "content": {

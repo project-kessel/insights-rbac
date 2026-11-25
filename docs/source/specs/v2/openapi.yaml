@@ -647,7 +647,7 @@ paths:
     post:
       operationId: Groups_addPrincipals
       summary: Add principals to a group
-      description: 'Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members.'
+      description: "Add principals to a group. At least one of usernames or service_accounts must contain items. Protected-group behavior: system groups return 400; platform_default and admin_default groups allow adding members. Returns 409 Conflict when a local principal's user_id disagrees with BOP."
       parameters:
         - name: uuid
           in: path
@@ -687,6 +687,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problems.Problem404'
+        '409':
+          description: The request conflicts with the current state of the server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problems.Problem409'
         '500':
           description: Server error
           content:

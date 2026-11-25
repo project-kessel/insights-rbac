@@ -34,7 +34,6 @@ objects:
       replicas: 3
     optionalDependencies:
       - kessel-inventory
-      - kessel-relations
       - kessel-kafkaconnect
     deployments:
     - name: worker-service
@@ -163,6 +162,18 @@ objects:
                 optional: false
           - name: PRINCIPAL_PROXY_SERVICE_PATH
             value: ''
+          # Also required on worker-service — principal cleanup Celery jobs run there.
+          - name: BYPASS_BOP_VERIFICATION
+            value: ${BYPASS_BOP_VERIFICATION}
+          # On-prem only (COST-8167): Cost principal-profile sidecar.
+          - name: PRINCIPAL_PROFILE_SERVICE_URL
+            value: ${PRINCIPAL_PROFILE_SERVICE_URL}
+          - name: PRINCIPAL_PROFILE_TOKEN
+            value: ${PRINCIPAL_PROFILE_TOKEN}
+          - name: PRINCIPAL_PROFILE_REQUEST_TIMEOUT
+            value: ${PRINCIPAL_PROFILE_REQUEST_TIMEOUT}
+          - name: PRINCIPAL_PROFILE_CACHE_TTL
+            value: ${PRINCIPAL_PROFILE_CACHE_TTL}
           - name: PRINCIPAL_PROXY_USER_ENV
             valueFrom:
               secretKeyRef:
@@ -193,6 +204,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -215,6 +228,12 @@ objects:
             value: ${NOTIFICATIONS_ENABLED}
           - name: NOTIFICATIONS_RH_ENABLED
             value: ${NOTIFICATIONS_RH_ENABLED}
+          - name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+            value: ${NOTIFICATIONS_RH_RATE_PER_MINUTE}
+          - name: NOTIFICATIONS_RH_QUIET_START
+            value: ${NOTIFICATIONS_RH_QUIET_START}
+          - name: NOTIFICATIONS_RH_QUIET_END
+            value: ${NOTIFICATIONS_RH_QUIET_END}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
           - name: DR_RELATIONS_RECONCILE_ENABLED
@@ -575,6 +594,8 @@ objects:
                 key: principal-proxy-source-cert
                 name: rbac-secret
                 optional: true
+          - name: OUTBOUND_HTTP_TIMEOUT
+            value: ${OUTBOUND_HTTP_TIMEOUT}
           - name: PRINCIPAL_USER_DOMAIN
             value: ${PRINCIPAL_USER_DOMAIN}
           - name: PGSSLMODE
@@ -749,6 +770,14 @@ objects:
             value: ${GROUP_SEEDING_ENABLED}
           - name: BYPASS_BOP_VERIFICATION
             value: ${BYPASS_BOP_VERIFICATION}
+          - name: PRINCIPAL_PROFILE_SERVICE_URL
+            value: ${PRINCIPAL_PROFILE_SERVICE_URL}
+          - name: PRINCIPAL_PROFILE_TOKEN
+            value: ${PRINCIPAL_PROFILE_TOKEN}
+          - name: PRINCIPAL_PROFILE_REQUEST_TIMEOUT
+            value: ${PRINCIPAL_PROFILE_REQUEST_TIMEOUT}
+          - name: PRINCIPAL_PROFILE_CACHE_TTL
+            value: ${PRINCIPAL_PROFILE_CACHE_TTL}
           - name: ROLE_CREATE_ALLOW_LIST
             value: ${ROLE_CREATE_ALLOW_LIST}
           - name: RBAC_DESTRUCTIVE_API_ENABLED_UNTIL
@@ -1146,6 +1175,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1377,6 +1408,8 @@ objects:
                   key: principal-proxy-source-cert
                   name: rbac-secret
                   optional: true
+            - name: OUTBOUND_HTTP_TIMEOUT
+              value: ${OUTBOUND_HTTP_TIMEOUT}
             - name: PRINCIPAL_USER_DOMAIN
               value: ${PRINCIPAL_USER_DOMAIN}
             - name: PGSSLMODE
@@ -1772,9 +1805,22 @@ parameters:
 - description: Enable the RBAC access cache
   name: ACCESS_CACHE_ENABLED
   value: 'True'
-- description: Bypass interaction with the BOP service
+- description: Bypass interaction with the BOP service (also used by ephemeral/performance; default False in SaaS)
   name: BYPASS_BOP_VERIFICATION
   value: 'False'
+# On-prem only (COST-8167): Cost principal-profile sidecar. Leave empty in SaaS.
+- description: On-prem only — Cost principal-profile sidecar base URL (empty in SaaS)
+  name: PRINCIPAL_PROFILE_SERVICE_URL
+  value: ''
+- description: On-prem only — bearer token for the Cost principal-profile sidecar (empty in SaaS)
+  name: PRINCIPAL_PROFILE_TOKEN
+  value: ''
+- description: On-prem only — HTTP timeout seconds for principal-profile requests
+  name: PRINCIPAL_PROFILE_REQUEST_TIMEOUT
+  value: '5'
+- description: On-prem only — Django cache TTL seconds for principal-profile responses
+  name: PRINCIPAL_PROFILE_CACHE_TTL
+  value: '30'
 - description: Application allow list for role creation in RBAC
   name: ROLE_CREATE_ALLOW_LIST
   value: cost-management,remediations,inventory,policies,advisor,vulnerability,compliance,automation-analytics,notifications,patch,integrations,ros,staleness,config-manager,idmsvc,subscriptions
@@ -1900,6 +1946,15 @@ parameters:
 - description: Enable sending out notification events of Red Hat changes
   name: NOTIFICATIONS_RH_ENABLED
   value: 'False'
+- description: Target Red Hat role notification messages per batch; the beat task sends one batch per minute
+  name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+  value: '3000'
+- description: Start of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_START
+  value: '23:30'
+- description: End of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_END
+  value: '00:30'
 - description: Enable sending out notification events (typo variant used by service deployer)
   name: NOTIFICATONS_ENABLED
   value: 'False'
@@ -1970,6 +2025,9 @@ parameters:
   value: '10'
 - name: IT_TOKEN_JKWS_CACHE_LIFETIME
   value: '28800'
+- name: OUTBOUND_HTTP_TIMEOUT
+  description: Timeout in seconds for outbound BOP HTTP requests (IT service and JWKS use IT_SERVICE_TIMEOUT_SECONDS)
+  value: '10'
 - name: PRINCIPAL_USER_DOMAIN
   description: >
     Kessel requires principal IDs to be qualified by a domain,

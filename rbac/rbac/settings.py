@@ -157,8 +157,16 @@ MIDDLEWARE = [
 DEVELOPMENT = ENVIRONMENT.bool("DEVELOPMENT", default=False)
 if DEVELOPMENT:
     MIDDLEWARE.insert(5, "rbac.dev_middleware.DevelopmentIdentityHeaderMiddleware")
-# Don't try to go verify Principals against the BOP user service
+# Don't try to go verify Principals against the BOP user service.
+# Also used by ephemeral/performance environments; default False in SaaS.
 BYPASS_BOP_VERIFICATION = ENVIRONMENT.bool("BYPASS_BOP_VERIFICATION", default=False)
+# On-prem only (COST-8167): Cost principal-profile sidecar HTTP client.
+# Wired via PRINCIPAL_PROFILE_* Template params in deploy/rbac-clowdapp.yml
+# (service + worker-service). Leave URL/token empty in SaaS.
+PRINCIPAL_PROFILE_SERVICE_URL = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_SERVICE_URL", default="").strip().rstrip("/")
+PRINCIPAL_PROFILE_TOKEN = ENVIRONMENT.get_value("PRINCIPAL_PROFILE_TOKEN", default="").strip()
+PRINCIPAL_PROFILE_REQUEST_TIMEOUT = ENVIRONMENT.int("PRINCIPAL_PROFILE_REQUEST_TIMEOUT", default=5)
+PRINCIPAL_PROFILE_CACHE_TTL = ENVIRONMENT.int("PRINCIPAL_PROFILE_CACHE_TTL", default=30)
 
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.AllowAllUsersModelBackend"]
 
@@ -543,6 +551,11 @@ MOCK_REDIS = ENVIRONMENT.get_value("MOCK_REDIS", default=False)
 NOTIFICATIONS_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_ENABLED", default=False)
 NOTIFICATIONS_RH_ENABLED = ENVIRONMENT.get_value("NOTIFICATIONS_RH_ENABLED", default=False)
 NOTIFICATIONS_TOPIC = ENVIRONMENT.get_value("NOTIFICATIONS_TOPIC", default=None)
+# Red Hat role notifications are sent by a beat task, one batch of about this many messages per minute (whole
+# tenants, at least one per batch), and none during the quiet window (UTC, HH:MM, may cross midnight).
+NOTIFICATIONS_RH_RATE_PER_MINUTE = ENVIRONMENT.int("NOTIFICATIONS_RH_RATE_PER_MINUTE", default=3000)
+NOTIFICATIONS_RH_QUIET_START = ENVIRONMENT.get_value("NOTIFICATIONS_RH_QUIET_START", default="23:30")
+NOTIFICATIONS_RH_QUIET_END = ENVIRONMENT.get_value("NOTIFICATIONS_RH_QUIET_END", default="00:30")
 
 EXTERNAL_SYNC_TOPIC = ENVIRONMENT.get_value("EXTERNAL_SYNC_TOPIC", default=None)
 EXTERNAL_CHROME_TOPIC = ENVIRONMENT.get_value("EXTERNAL_CHROME_TOPIC", default=None)
@@ -693,6 +706,10 @@ IT_SERVICE_PROTOCOL_SCHEME = ENVIRONMENT.get_value("IT_SERVICE_PROTOCOL_SCHEME",
 IT_SERVICE_REALM = ENVIRONMENT.get_value("IT_SERVICE_REALM", default="/auth/realms/redhat-external")
 IT_SERVICE_TIMEOUT_SECONDS = ENVIRONMENT.int("IT_SERVICE_TIMEOUT_SECONDS", default=10)
 IT_TOKEN_JKWS_CACHE_LIFETIME = ENVIRONMENT.int("IT_TOKEN_JKWS_CACHE_LIFETIME", default=28800)
+
+# Outbound HTTP timeout (seconds) for BOP requests.
+# IT service and JWKS requests use IT_SERVICE_TIMEOUT_SECONDS above.
+OUTBOUND_HTTP_TIMEOUT = ENVIRONMENT.int("OUTBOUND_HTTP_TIMEOUT", default=10)
 
 PRINCIPAL_USER_DOMAIN = ENVIRONMENT.get_value("PRINCIPAL_USER_DOMAIN", default="localhost")
 

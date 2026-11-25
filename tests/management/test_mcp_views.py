@@ -24,6 +24,7 @@ import time
 import uuid
 from importlib import reload
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 from django.test import override_settings
 from django.urls import clear_url_caches, reverse
@@ -1819,6 +1820,15 @@ class MCPViewTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertIn("data", tool_output)
 
+    def test_list_access_empty_application_returns_data(self):
+        """Positive: list_access with an empty application still returns data for a V1 tenant."""
+        response = self._call_tool("list_access", {"application": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertIn("data", tool_output)
+        self.assertNotIn("error", tool_output)
+
     def test_list_access_without_auth_returns_error(self):
         """Permission: list_access without auth returns auth error."""
         response = self._call_tool("list_access", {"application": "rbac"}, use_auth=False)
@@ -2304,6 +2314,19 @@ class MCPSearchRolesTests(MCPToolTestMixin, IdentityRequest):
         self.assertNotIn("Unassigned Role", role_names)
         self.assertNotIn("ignored_filters", tool_output)
 
+    def test_search_roles_v1_with_cursor_is_noop(self):
+        """Positive: search_roles on V1 org ignores cursor parameter silently."""
+        role = Role.objects.create(name="V1 Role", tenant=self.tenant)
+        policy = Policy.objects.create(name="auto_policy", group=None, tenant=self.tenant)
+        policy.roles.add(role)
+
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v1")
+        self.assertNotIn("ignored_filters", tool_output)
+
 
 class MCPViewNonAdminTests(IdentityRequest):
     """Test the MCP endpoint for non-admin users via _private/_a2s/mcp/."""
@@ -2670,6 +2693,187 @@ class MCPUnifiedSearchRolesV2Tests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("role bindings", tool_output["ignored_filters"]["username"]["reason"])
         self.assertIn("list_role_bindings", tool_output["ignored_filters"]["username"]["alternative"])
         self.assertIn("jdoe", tool_output["ignored_filters"]["username"]["alternative"])
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_forwarded(self, mock_call_view):
+        """Positive: search_roles on V2 org forwards cursor parameter to the API."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA=="})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("data", tool_output)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_extracted_from_url(self, mock_call_view):
+        """Positive: search_roles extracts bare cursor token from a links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "10")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_preserves_search_params(self, mock_call_view):
+        """Positive: search_roles preserves name/permission/resource_type/order_by/limit from links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = (
+            "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA=="
+            "&limit=20&name=Cost*&permission=cost-management:*:*"
+            "&resource_type=workspace&order_by=name"
+        )
+        response = self._call_tool("search_roles", {"cursor": next_url})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["limit"], "20")
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["permission"], "cost-management:*:*")
+        self.assertEqual(forwarded_params["resource_type"], "workspace")
+        self.assertEqual(forwarded_params["order_by"], "name")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_explicit_args_override_url_params(self, mock_call_view):
+        """Positive: explicit tool arguments take precedence over values embedded in links.next URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&name=OldName&limit=20"
+        response = self._call_tool("search_roles", {"cursor": next_url, "name": "NewName"})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        self.assertEqual(forwarded_params["name"], "NewName")
+        self.assertEqual(forwarded_params["limit"], "20")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_explicit_limit_overrides_cursor_url_limit(self, mock_call_view):
+        """Positive: explicit nondefault limit takes precedence over the limit embedded in cursor URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=10"
+        response = self._call_tool("search_roles", {"cursor": next_url, "limit": 50})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], "cD0xMjM0NTY3OA==")
+        # Explicit limit=50 must NOT be overwritten by the URL's limit=10.
+        self.assertEqual(forwarded_params["limit"], "50")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_explicit_default_limit_overrides_cursor_url_limit(self, mock_call_view):
+        """An explicitly supplied default limit takes precedence over the cursor URL."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        next_url = "/api/rbac/v2/roles/?cursor=cD0xMjM0NTY3OA==&limit=20"
+        response = self._call_tool("search_roles", {"cursor": next_url, "limit": 10})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_call_view.call_args[0][3]["limit"], "10")
+
+    def test_search_roles_v2_filtered_pagination_preserves_results(self):
+        """Full next URLs retain filters and ordering when retrieving the next page."""
+        for name in ("Cost Alpha", "Cost Beta", "Other Role"):
+            RoleV2.objects.create(name=name, tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+
+        first = self._get_tool_output(
+            self._call_tool("search_roles", {"name": "Cost*", "order_by": "name", "limit": 1})
+        )
+        self.assertEqual([role["name"] for role in first["data"]], ["Cost Alpha"])
+        self.assertTrue(first["links"]["next"])
+        second = self._get_tool_output(self._call_tool("search_roles", {"cursor": first["links"]["next"]}))
+        self.assertEqual([role["name"] for role in second["data"]], ["Cost Beta"])
+        token = parse_qs(urlparse(first["links"]["next"]).query)["cursor"][0]
+        bare = self._get_tool_output(
+            self._call_tool("search_roles", {"cursor": token, "name": "Cost*", "order_by": "name", "limit": 1})
+        )
+        self.assertEqual([role["name"] for role in bare["data"]], ["Cost Beta"])
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_cursor_url_without_cursor_param_omits_cursor(self, mock_call_view):
+        """Positive: URL with query params but no cursor key does not forward the raw URL as a cursor token."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        url_no_cursor = "/api/rbac/v2/roles/?name=Cost*&limit=20"
+        response = self._call_tool("search_roles", {"cursor": url_no_cursor})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertNotIn("cursor", forwarded_params)
+        # Fallback search params from the URL are still applied.
+        self.assertEqual(forwarded_params["name"], "Cost*")
+        self.assertEqual(forwarded_params["limit"], "20")
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_bare_cursor_with_question_mark_preserved(self, mock_call_view):
+        """Positive: bare cursor token containing '?' is forwarded as-is."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        bare_token = "cD0xMjM0?NTY3OA=="
+        response = self._call_tool("search_roles", {"cursor": bare_token})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertEqual(forwarded_params["cursor"], bare_token)
+
+    def test_search_roles_v2_offset_ignored_with_guidance_when_nonzero(self):
+        """Positive: search_roles on V2 org returns ignored_filters when offset > 0."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 5})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "5")
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["reason"])
+        self.assertIn("cursor", tool_output["ignored_filters"]["offset"]["alternative"])
+
+    @patch("management.mcp_views._call_view")
+    def test_search_roles_v2_offset_not_forwarded_to_view(self, mock_call_view):
+        """Positive: search_roles on V2 org does not pass offset to the cursor-paginated roles view."""
+        mock_call_view.return_value = json.dumps({"data": [], "links": {}, "meta": {"count": 0}})
+        response = self._call_tool("search_roles", {"offset": 5, "limit": 7})
+
+        self.assertEqual(response.status_code, 200)
+        mock_call_view.assert_called_once()
+        forwarded_params = mock_call_view.call_args[0][3]
+        self.assertNotIn("offset", forwarded_params)
+        self.assertEqual(forwarded_params["limit"], "7")
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "5")
+
+    def test_search_roles_v2_offset_not_ignored_when_zero(self):
+        """Positive: search_roles on V2 org does NOT flag offset when it's 0 (default)."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"offset": 0})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertNotIn("offset", tool_output.get("ignored_filters", {}))
+
+    def test_search_roles_v2_cursor_with_offset_both_present(self):
+        """Positive: search_roles with both cursor and offset > 0 includes both in result."""
+        RoleV2.objects.create(name="V2 Role", tenant=self.tenant, type=RoleV2.Types.CUSTOM)
+        response = self._call_tool("search_roles", {"cursor": "cD0xMjM0NTY3OA==", "offset": 10})
+
+        self.assertEqual(response.status_code, 200)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["org_version"], "v2")
+        self.assertIn("ignored_filters", tool_output)
+        self.assertIn("offset", tool_output["ignored_filters"])
+        self.assertEqual(tool_output["ignored_filters"]["offset"]["value"], "10")
 
 
 @override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True)
@@ -3044,6 +3248,14 @@ class MCPGetUserStateTests(MCPToolTestMixin, IdentityRequest):
         # Find the permission we created
         permissions = [a["permission"] for a in tool_output["access"]]
         self.assertIn("project:tasks:write", permissions)
+
+    def test_get_user_state_v1_tenant_omits_access_errors(self):
+        """Negative: a V1 tenant's get_user_state output has no access_errors key at all."""
+        response = self._call_tool("get_user_state", {"username": self.test_username})
+
+        tool_output = self._get_tool_output(response)
+        self.assertNotIn("access_errors", tool_output)
+        self.assertNotIn("incomplete_access", tool_output["hints"])
 
     def test_get_user_state_includes_user_actions(self):
         """Positive: get_user_state includes actions performed BY the user."""
@@ -5207,6 +5419,17 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(tool_output["analysis"]["application_permission_count"], 1)
         self.assertIn("compliance:policies:read", tool_output["analysis"]["permissions_for_application"])
 
+    def test_investigate_user_access_v1_tenant_omits_effective_access_error(self):
+        """Negative: a successful access call leaves effective_access_error out of the analysis."""
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "compliance"},
+        )
+
+        tool_output = self._get_tool_output(response)
+
+        self.assertNotIn("effective_access_error", tool_output["analysis"])
+
     def test_investigate_user_access_expected_permission_found(self):
         """Positive: investigate_user_access identifies when expected permission is present."""
         response = self._call_tool(
@@ -5245,6 +5468,21 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertIn("available_verbs_for_app", check)
         self.assertIn("read", check["available_verbs_for_app"])
         self.assertNotIn("write", check["available_verbs_for_app"])
+
+    def test_investigate_user_access_includes_implicit_default_permission(self):
+        """A successful effective access lookup includes default group grants."""
+        default_group = Group.objects.create(name="Implicit Default", tenant=self.tenant, platform_default=True)
+        default_role = Role.objects.create(name="implicit_writer", tenant=self.tenant)
+        Access.objects.create(permission=self.write_perm, role=default_role, tenant=self.tenant)
+        default_policy = Policy.objects.create(name="implicit_policy", group=default_group, tenant=self.tenant)
+        default_policy.roles.add(default_role)
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "compliance", "expected_permission": "write"},
+        )
+        analysis = self._get_tool_output(response)["analysis"]
+        self.assertTrue(analysis["has_expected_permission"])
+        self.assertEqual(analysis["expected_permission_check"]["matched_permission"], "compliance:policies:write")
 
     def test_investigate_user_access_identifies_gaps(self):
         """Positive: investigate_user_access explains why expected permission is missing."""
@@ -5292,6 +5530,7 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         tool_output = self._get_tool_output(response)
         self.assertEqual(len(tool_output["groups"]), 0)
         self.assertIn("not a member of any groups", tool_output["analysis"]["message"])
+        self.assertIsNone(tool_output["analysis"]["has_expected_permission"])
 
         # Cleanup
         lonely_user.delete()
@@ -5318,6 +5557,23 @@ class MCPInvestigateUserAccessTests(MCPToolTestMixin, IdentityRequest):
         self.assertEqual(analysis["total_groups"], 2)
         self.assertEqual(analysis["total_roles"], 2)
         self.assertEqual(analysis["total_unique_permissions"], 1)  # Only read, not write
+
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(200, {"data": [{"permission": "compliance:reports:read", "resourceDefinitions": []}]}),
+    )
+    def test_investigate_user_access_summaries_include_implicit_effective_access(self, _mock_access):
+        """Positive: implicit effective-access grants count toward the unique and per-application summaries."""
+        response = self._call_tool(
+            "investigate_user_access", {"username": self.test_username, "application": "compliance"}
+        )
+
+        analysis = self._get_tool_output(response)["analysis"]
+        self.assertEqual(analysis["total_unique_permissions"], 2)
+        self.assertEqual(analysis["application_permission_count"], 2)
+        self.assertEqual(
+            analysis["permissions_for_application"], ["compliance:policies:read", "compliance:reports:read"]
+        )
 
     @patch(
         "management.mcp_views.PrincipalProxy.request_filtered_principals",
@@ -5667,6 +5923,310 @@ class MCPInvestigateUserAccessV2Tests(MCPToolTestMixin, IdentityRequest):
 
         tool_output = self._get_tool_output(response)
         self.assertTrue(tool_output["analysis"]["has_expected_permission"])
+
+
+@override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True, V2_MIGRATION_APP_EXCLUDE_LIST=["approval"])
+class MCPV1AccessRejectionTests(MCPToolTestMixin, IdentityRequest):
+    """Tests for tools calling GET /api/v1/access/ when that endpoint rejects a V2-opted-in org.
+
+    The tenant is opted into V2 but not activated for V2 writes, so the tools still take
+    their V1 code paths while the access endpoint rejects the call with a 400.
+    """
+
+    def setUp(self):
+        """Set up a V2-opted-in tenant with access in a rejected and an excluded application."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.test_username = self.user_data["username"]
+        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+
+        bootstrap_tenant_for_v2_test(self.tenant)
+        TenantMapping.objects.filter(tenant=self.tenant).update(v2_opted_in_at=timezone.now())
+
+        self.group = Group.objects.create(name="Opted In Group", tenant=self.tenant)
+        self.group.principals.add(self.principal)
+        self.role = Role.objects.create(name="opted_in_role", tenant=self.tenant)
+        self.rejected_perm = Permission.objects.create(
+            application="rbac",
+            resource_type="roles",
+            verb="read",
+            permission="rbac:roles:read",
+            tenant=self.tenant,
+        )
+        self.excluded_perm = Permission.objects.create(
+            application="approval",
+            resource_type="requests",
+            verb="read",
+            permission="approval:requests:read",
+            tenant=self.tenant,
+        )
+        Access.objects.create(permission=self.rejected_perm, role=self.role, tenant=self.tenant)
+        Access.objects.create(permission=self.excluded_perm, role=self.role, tenant=self.tenant)
+        policy = Policy.objects.create(name="opted_in_policy", group=self.group, tenant=self.tenant)
+        policy.roles.add(self.role)
+
+    def test_list_access_reports_rejection_instead_of_empty_data(self):
+        """Negative: list_access surfaces the rejection rather than reporting no access."""
+        from management.access.view import v1_access_by_v2_org_total
+
+        before = v1_access_by_v2_org_total.labels(
+            org_id=self.customer_data["org_id"], application="rbac", caller_type="user"
+        )._value.get()
+
+        response = self._call_tool("list_access", {"application": "rbac"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(
+            tool_output["detail"], "V2 orgs may only query applications in the allowed list. Disallowed: rbac"
+        )
+        self.assertEqual(tool_output["tool"], "list_access")
+        self.assertEqual(tool_output["endpoint"], "GET /api/v1/access/")
+        self.assertIn("must not be interpreted as the user having no access", tool_output["hint"])
+        self.assertNotIn("data", tool_output)
+
+        after = v1_access_by_v2_org_total.labels(
+            org_id=self.customer_data["org_id"], application="rbac", caller_type="user"
+        )._value.get()
+        self.assertEqual(after, before + 1)
+
+    def test_list_access_excluded_application_returns_data(self):
+        """Positive: list_access still returns access data for an excluded application."""
+        response = self._call_tool("list_access", {"application": "approval"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertNotIn("error", tool_output)
+        self.assertIn("meta", tool_output)
+        self.assertIn("links", tool_output)
+        permissions = [entry["permission"] for entry in tool_output["data"]]
+        self.assertIn("approval:requests:read", permissions)
+
+    def test_check_user_permission_reports_rejection(self):
+        """Negative: check_user_permission reports an unverifiable permission, not a denial."""
+        response = self._call_tool(
+            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:read"}
+        )
+
+        tool_output = self._get_tool_output(response)
+        self.assertIsNone(tool_output["allowed"])
+        self.assertEqual(tool_output["username"], self.test_username)
+        self.assertEqual(tool_output["permission"], "rbac:roles:read")
+        self.assertIn("V2 orgs may only query applications", tool_output["error"])
+        self.assertIn("could not be verified", tool_output["hint"])
+        self.assertNotIn("org admin", tool_output["hint"])
+
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(403, {"detail": "You do not have permission to perform this action."}),
+    )
+    def test_check_user_permission_forbidden_is_unverified_not_denied(self, _mock_access):
+        """Negative: a 403 from the access endpoint is unverifiable, not a denial, and keeps the org-admin hint."""
+        response = self._call_tool(
+            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:read"}
+        )
+
+        tool_output = self._get_tool_output(response)
+        self.assertIsNone(tool_output["allowed"])
+        self.assertEqual(tool_output["error"], "You do not have permission to perform this action.")
+        self.assertIn("could not be verified", tool_output["hint"])
+        self.assertIn("Requires org admin", tool_output["hint"])
+
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(400, {"errors": [{"detail": "Simulated V1 exception error.", "status": "400"}]}),
+    )
+    def test_list_access_extracts_detail_from_v1_errors_format(self, _mock_access):
+        """Negative: list_access reads detail from the V1 errors[] shape when top-level detail is absent."""
+        response = self._call_tool("list_access", {"application": "rbac"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(tool_output["detail"], "Simulated V1 exception error.")
+        self.assertNotIn("data", tool_output)
+
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(403, {"errors": [{"detail": "You do not have permission.", "status": "403"}]}),
+    )
+    def test_check_user_permission_extracts_detail_from_v1_errors_format(self, _mock_access):
+        """Negative: check_user_permission reads detail from the V1 errors[] shape."""
+        response = self._call_tool(
+            "check_user_permission", {"username": self.test_username, "permission": "rbac:roles:read"}
+        )
+
+        tool_output = self._get_tool_output(response)
+        self.assertIsNone(tool_output["allowed"])
+        self.assertEqual(tool_output["error"], "You do not have permission.")
+        self.assertIn("could not be verified", tool_output["hint"])
+
+    def test_get_user_state_reports_access_errors_and_keeps_successful_access(self):
+        """Negative: get_user_state lists rejected applications while keeping the ones that worked."""
+        response = self._call_tool("get_user_state", {"username": self.test_username})
+
+        tool_output = self._get_tool_output(response)
+        permissions = [entry["permission"] for entry in tool_output["access"]]
+        self.assertIn("approval:requests:read", permissions)
+        self.assertNotIn("rbac:roles:read", permissions)
+
+        access_errors = tool_output["access_errors"]
+        self.assertEqual([error["application"] for error in access_errors], ["rbac"])
+        self.assertEqual(access_errors[0]["status"], 400)
+        self.assertEqual(
+            access_errors[0]["detail"],
+            "V2 orgs may only query applications in the allowed list. Disallowed: rbac",
+        )
+        self.assertIn("incomplete", tool_output["hints"]["incomplete_access"])
+
+    def test_investigate_user_access_reports_effective_access_error(self):
+        """Negative: investigate_user_access records the rejection in its analysis."""
+        response = self._call_tool("investigate_user_access", {"username": self.test_username, "application": "rbac"})
+
+        tool_output = self._get_tool_output(response)
+        self.assertIn("HTTP 400", tool_output["analysis"]["effective_access_error"])
+        self.assertIn("V2 orgs may only query applications", tool_output["analysis"]["effective_access_error"])
+        self.assertEqual(tool_output["effective_access"], [])
+
+    def test_investigate_rejection_keeps_missing_permission_unknown(self):
+        """Explicit groups cannot establish a denial when effective access was rejected."""
+        default_group = Group.objects.create(name="Implicit Default", tenant=self.tenant, platform_default=True)
+        default_role = Role.objects.create(name="implicit_role", tenant=self.tenant)
+        default_permission = Permission.objects.create(
+            application="rbac", resource_type="roles", verb="write", permission="rbac:roles:write", tenant=self.tenant
+        )
+        Access.objects.create(permission=default_permission, role=default_role, tenant=self.tenant)
+        default_policy = Policy.objects.create(name="implicit_policy", group=default_group, tenant=self.tenant)
+        default_policy.roles.add(default_role)
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "rbac", "expected_permission": "write"},
+        )
+        analysis = self._get_tool_output(response)["analysis"]
+        self.assertIsNone(analysis["has_expected_permission"])
+        self.assertIsNone(analysis["expected_permission_check"]["found"])
+        self.assertFalse(analysis["explicit_group_permission_check"]["found"])
+        self.assertIn("implicit default", analysis["group_analysis_scope"])
+        self.assertNotIn("diagnosis", analysis)
+
+    def test_investigate_rejection_keeps_explicit_match_partial(self):
+        """An explicit match remains partial evidence, not a verified effective result."""
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "rbac", "expected_permission": "read"},
+        )
+        output = self._get_tool_output(response)
+        analysis = output["analysis"]
+        self.assertIsNone(analysis["has_expected_permission"])
+        self.assertIsNone(analysis["expected_permission_check"]["found"])
+        self.assertTrue(analysis["explicit_group_permission_check"]["found"])
+        self.assertIn("principal UUID", output["hints"]["verify_specific_permission"])
+
+    def test_investigate_rejection_with_no_explicit_groups_is_unknown(self):
+        """Implicit default groups can grant access even without explicit memberships."""
+        self.group.principals.remove(self.principal)
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "rbac", "expected_permission": "read"},
+        )
+        output = self._get_tool_output(response)
+        self.assertEqual(output["groups"], [])
+        self.assertIn("effective_access_error", output["analysis"])
+        self.assertIsNone(output["analysis"]["has_expected_permission"])
+        self.assertNotIn("diagnosis", output["analysis"])
+
+    @patch(
+        "management.mcp_views.PrincipalProxy.request_filtered_principals",
+        return_value={"status_code": 200, "data": [{"is_org_admin": True}]},
+    )
+    def test_investigate_rejection_keeps_org_admin_bypass(self, _mock_proxy):
+        """Positive: the org admin bypass still reports the permission granted when the access lookup is rejected."""
+        response = self._call_tool(
+            "investigate_user_access",
+            {"username": self.test_username, "application": "rbac", "expected_permission": "write"},
+        )
+
+        analysis = self._get_tool_output(response)["analysis"]
+        self.assertIn("effective_access_error", analysis)
+        self.assertTrue(analysis["has_expected_permission"])
+        self.assertTrue(analysis["expected_permission_check"]["found"])
+        self.assertEqual(analysis["expected_permission_check"]["matched_permission"], "(org admin bypass)")
+        self.assertNotIn("explicit_group_permission_check", analysis)
+
+    @patch("management.mcp_views.logger")
+    @patch(
+        "management.mcp_views._call_access_view_v1",
+        return_value=(400, {"detail": "Disallowed: x\nforged log line"}),
+    )
+    def test_list_access_rejection_log_escapes_control_characters(self, _mock_access, mock_logger):
+        """Negative: caller-influenced values cannot forge log lines through the rejection warning."""
+        self._call_tool("list_access", {"application": "rbac\nforged"})
+
+        rejection_calls = [c for c in mock_logger.warning.call_args_list if "list_access rejected" in c.args[0]]
+        self.assertEqual(len(rejection_calls), 1)
+        call = rejection_calls[0]
+        message = call.args[0] % call.args[1:]
+        self.assertNotIn("\n", message)
+        self.assertIn("forged log line", message)
+
+    def test_list_access_empty_application_reports_exact_rejection(self):
+        """Negative: list_access with empty application on opted-in tenant returns the exact detail."""
+        response = self._call_tool("list_access", {"application": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertEqual(tool_output["error"], "HTTP 400")
+        self.assertEqual(
+            tool_output["detail"],
+            "V2 orgs must specify an application from the allowed list.",
+        )
+        self.assertNotIn("data", tool_output)
+
+
+@override_settings(BYPASS_BOP_VERIFICATION=True, V2_APIS_ENABLED=True, V2_MIGRATION_APP_EXCLUDE_LIST=["approval"])
+class MCPV1AccessRejectionWriteActivatedTests(MCPToolTestMixin, IdentityRequest):
+    """Tests for MCP dispatch rejection on a V2 write-activated tenant."""
+
+    def setUp(self):
+        """Set up a V2 write-activated tenant."""
+        reload(urls)
+        clear_url_caches()
+        super().setUp()
+        self.url = "/_private/_a2s/mcp/"
+        self.client = APIClient()
+        self.test_username = self.user_data["username"]
+        self.principal = Principal.objects.create(username=self.test_username, tenant=self.tenant)
+
+        bootstrap_tenant_for_v2_test(self.tenant)
+        ensure_v2_write_activated(self.tenant)
+        # cls.tenant is shared across tests, so its cached tenant_mapping can point at a rolled-back row.
+        self.assertIsNotNone(TenantMapping.objects.get(tenant=self.tenant).v2_write_activated_at)
+
+    def test_list_access_empty_application_on_write_activated_tenant(self):
+        """The dispatcher blocks an empty application before calling the V1 endpoint."""
+        response = self._call_tool("list_access", {"application": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertTrue(response.json()["result"]["isError"])
+        self.assertEqual(tool_output["error"], "tool_not_available_for_v2_org")
+        self.assertEqual(tool_output["allowed_applications"], ["approval"])
+        self.assertEqual(tool_output["use_instead"], "check_user_permission")
+        self.assertNotIn("data", tool_output)
+
+    def test_list_access_disallowed_application_on_write_activated_tenant(self):
+        """The dispatcher blocks a non-excluded application before calling the V1 endpoint."""
+        response = self._call_tool("list_access", {"application": "rbac"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tool_output = self._get_tool_output(response)
+        self.assertTrue(response.json()["result"]["isError"])
+        self.assertEqual(tool_output["error"], "tool_not_available_for_v2_org")
+        self.assertEqual(tool_output["allowed_applications"], ["approval"])
+        self.assertEqual(tool_output["use_instead"], "check_user_permission")
+        self.assertNotIn("data", tool_output)
 
 
 class MCPWriteGatingTests(MCPToolTestMixin, IdentityRequest):
@@ -8972,7 +9532,7 @@ class MCPWritePayloadValidationIntegrationTests(MCPToolTestMixin, IdentityReques
         self.assertIn("bindings[0].resource.id", data["error"]["message"])
 
 
-class MCPHealthCheckTests(IdentityRequest):
+class MCPHealthEndpointTests(IdentityRequest):
     """Test the MCP readiness probe endpoint at /_private/_a2s/mcp/health/."""
 
     def setUp(self):

@@ -141,6 +141,9 @@ rbac/management/principal/umb_certs/
 # git worktrees
 .worktrees/
 
+# Upstream checkouts cloned by the full local stack
+.local-deps/
+
 # direnv
 .envrc
 

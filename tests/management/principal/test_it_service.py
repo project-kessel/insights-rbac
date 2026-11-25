@@ -30,7 +30,10 @@ from management.principal.it_service import (
     IT_KEY_SERVICE_ACCOUNT_TYPE,
     UnexpectedStatusCodeFromITError,
 )
-from management.principal.it_service_mocks import MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN
+from management.principal.it_service_mocks import (
+    MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+    generate_it_service_accounts,
+)
 from management.principal.model import Principal
 from rest_framework import serializers, status
 from tests.identity_request import IdentityRequest
@@ -1326,6 +1329,46 @@ class ITServiceTests(IdentityRequest):
                 f"the given username '{username}' should have not been identified as a service account username",
             )
 
+    def test_username_cra_credential_format_is_not_a_service_account(self) -> None:
+        """Test that the CRA credential format for a service access token is not taken for a username.
+
+        A service access token is presented to the container registry as "|service-account-{client_id}". Per
+        CIAM-ADR-00094 the preferred_username claim stays in the plain form, so the pipe prefixed string should
+        never reach RBAC. It is worth pinning because we derive client IDs by stripping a prefix off the
+        username: silently accepting the pipe would produce a wrong client ID rather than an error.
+        """
+        client_id = uuid.uuid4()
+
+        self.assertFalse(
+            ITService.is_username_service_account(f"|service-account-{client_id}"),
+            "the CRA credential format should not be identified as a service account username",
+        )
+
+    def test_extract_client_id_rejects_cra_credential_format(self) -> None:
+        """Test that a client ID is not extracted out of the CRA credential format for a service access token."""
+        client_id = uuid.uuid4()
+
+        try:
+            ITService.extract_client_id_service_account_username(username=f"|service-account-{client_id}")
+            self.fail("the CRA credential format should have been rejected instead of having a client ID extracted")
+        except serializers.ValidationError as ve:
+            self.assertEqual(
+                "Invalid ClientId for a Service Account username",
+                str(ve.detail.get("detail")),
+                "unexpected error message when the CRA credential format is given",
+            )
+
+        # The bare pipe prefixed client ID should be rejected for the same reason.
+        try:
+            ITService.extract_client_id_service_account_username(username=f"|{client_id}")
+            self.fail("a pipe prefixed client ID should have been rejected")
+        except serializers.ValidationError as ve:
+            self.assertEqual(
+                "Invalid ClientId for a Service Account username",
+                str(ve.detail.get("detail")),
+                "unexpected error message when a pipe prefixed client ID is given",
+            )
+
     def test_extract_client_id_service_account_username(self) -> None:
         """Test that the client ID is correctly extracted from the service account's username"""
         client_id = uuid.uuid4()
@@ -1855,6 +1898,20 @@ class ITServiceTests(IdentityRequest):
         )
         self.assertNotIn("time_expires", falsy_values, "a zero expiration should be treated as an absent one")
 
+        # The response field is an integer, so an expiration which cannot be represented as one is dropped
+        # rather than failing serialization of the whole service account.
+        invalid_expiration = self.it_service._transform_incoming_payload(
+            service_account_from_it_service={
+                **base_service_account,
+                IT_KEY_SERVICE_ACCOUNT_EXPIRATION: "not-an-integer",
+            }
+        )
+        self.assertNotIn(
+            "time_expires",
+            invalid_expiration,
+            "an expiration that cannot be represented as an integer should be omitted",
+        )
+
     def test_service_account_sort_key_timestamps_are_numeric(self) -> None:
         """Test that timestamp fields sort numerically rather than as strings."""
         # Timestamps with a differing number of digits are the case a string sort gets wrong: as strings "999"
@@ -1897,6 +1954,11 @@ class ITServiceTests(IdentityRequest):
             (float("inf"), ""),
             self.it_service._service_account_sort_key({"time_expires": "not-a-timestamp"}, "time_expires"),
             "an unparseable timestamp should fall back to the default instead of raising",
+        )
+        self.assertEqual(
+            (float("inf"), ""),
+            self.it_service._service_account_sort_key({"time_expires": 10**1000}, "time_expires"),
+            "a timestamp too large for float should fall back instead of raising",
         )
 
         # "NaN" and the infinities parse as floats but are not usable as sort keys, so they fall back too. NaN is
@@ -2029,6 +2091,29 @@ class ITServiceTests(IdentityRequest):
             [result.get("service_account_type") for result in repeated_results],
             "the mocked service account type should be stable for a given service account across calls",
         )
+
+    def test_mock_service_accounts_preserve_user_id_when_available(self) -> None:
+        """The bypass path should expose the same userId field as an IT response when it is known."""
+        principals = [
+            Principal(
+                service_account_id="00000000-0000-0000-0000-000000000000",
+                username="with-user-id",
+                user_id="service-account-user-id",
+            ),
+            Principal(
+                service_account_id="00000000-0000-0000-0000-000000000001",
+                username="without-user-id",
+                user_id=None,
+            ),
+        ]
+
+        raw_accounts = list(generate_it_service_accounts(principals))
+        self.assertEqual("service-account-user-id", raw_accounts[0]["userId"])
+        self.assertNotIn("userId", raw_accounts[1])
+
+        transformed_accounts = self.it_service._get_mock_service_accounts(principals)
+        self.assertEqual("service-account-user-id", transformed_accounts[0]["userId"])
+        self.assertNotIn("userId", transformed_accounts[1])
 
     def test_merge_principals_it_service_accounts_keeps_service_access_token_fields(self) -> None:
         """Test that merging the IT service accounts with our principals does not drop the new fields."""

@@ -30,10 +30,14 @@ REMOVE_LEGACY_ROOT_WORKSPACE_PARENT_NOTIFY_CHANNEL = "remove_legacy_root_workspa
 # Coordinates ``migrate_binding_scope`` with the RBAC Kafka consumer.
 MIGRATE_BINDING_SCOPE_NOTIFY_CHANNEL = "migrate_binding_scope_batch"
 
+# Coordinates ``replicate_root_workspace_tenants`` with the RBAC Kafka consumer.
+REPLICATE_ROOT_WORKSPACE_TENANTS_NOTIFY_CHANNEL = "replicate_root_workspace_tenants_batch"
+
 MIGRATION_NOTIFY_TIMEOUT_SECONDS = 600
 
 REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS = "remove_root_parent_tenant_relationships"
 MIGRATE_BINDING_SCOPE = "migrate_binding_scope"
+UPDATE_ROOT_WORKSPACE_TENANTS = "update_root_workspace_tenants"
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,12 @@ MIGRATION_NOTIFY_COORDINATIONS: dict[str, MigrationNotifyCoordination] = {
         log_label="migrate_binding_scope",
         include_org_id_in_context=True,
         require_notify_token=False,
+    ),
+    UPDATE_ROOT_WORKSPACE_TENANTS: MigrationNotifyCoordination(
+        channel=REPLICATE_ROOT_WORKSPACE_TENANTS_NOTIFY_CHANNEL,
+        log_label="replicate_root_workspace_tenants",
+        include_org_id_in_context=False,
+        require_notify_token=True,
     ),
 }
 

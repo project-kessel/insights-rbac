@@ -16,8 +16,10 @@
 #
 """Test the principal proxy."""
 
+from json import JSONDecodeError
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import override_settings
 from rest_framework import status
 import requests
@@ -60,6 +62,11 @@ def mocked_requests_get_500_json(url, *args, **kwargs):  # pylint: disable=unuse
 def mocked_requests_get_500_except(url, *args, **kwargs):  # pylint: disable=unused-argument
     """Mock invalid response that raises an exception."""
     raise requests.exceptions.ConnectionError()
+
+
+def mocked_requests_get_timeout(url, *args, **kwargs):  # pylint: disable=unused-argument
+    """Mock response that raises a timeout exception."""
+    raise requests.exceptions.Timeout()
 
 
 def mocked_requests_get_200_json(url, *args, **kwargs):  # pylint: disable=unused-argument
@@ -146,6 +153,184 @@ class PrincipalProxyTest(IdentityRequest):
         self.assertEqual([principal["username"] for principal in result["data"]], ["local-user-1", "local-user-2"])
         self.assertEqual(result["userCount"], 3)
 
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_includes_saas_contract_flags(self, _mock_configured):
+        """Bypass mode must emit is_active/is_org_admin and avoid foo/bar/baz stubs."""
+        local = Principal.objects.create(
+            tenant=self.tenant,
+            username="onprem-admin",
+            user_id="user-onprem-admin",
+        )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+        )
+
+        matching = [principal for principal in result["data"] if principal["username"] == local.username]
+        self.assertEqual(len(matching), 1)
+        principal = matching[0]
+        self.assertIs(principal["is_active"], True)
+        self.assertIs(principal["is_org_admin"], False)
+        self.assertEqual(principal["first_name"], "")
+        self.assertEqual(principal["last_name"], "")
+        self.assertEqual(principal["email"], "onprem-admin@local")
+        self.assertNotIn(principal["email"], {"baz", "foo", "bar"})
+        self.assertEqual(principal["user_id"], "user-onprem-admin")
+        self.assertEqual(principal["type"], "user")
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=False)
+    def test__request_principals_bypass_filtered_users_enrich_from_local(self, _mock_configured):
+        """Username filter path should reuse local user_id and include SaaS flags."""
+        Principal.objects.create(
+            tenant=self.tenant,
+            username="alice",
+            user_id="user-alice",
+        )
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            data={"users": ["Alice", "unknown-user"]},
+        )
+
+        by_username = {principal["username"]: principal for principal in result["data"]}
+        self.assertEqual(by_username["alice"]["user_id"], "user-alice")
+        self.assertIs(by_username["alice"]["is_active"], True)
+        self.assertIs(by_username["alice"]["is_org_admin"], False)
+        self.assertEqual(by_username["alice"]["email"], "alice@local")
+        self.assertEqual(by_username["unknown-user"]["user_id"], "unknown-user")
+        self.assertIs(by_username["unknown-user"]["is_active"], True)
+        self.assertIs(by_username["unknown-user"]["is_org_admin"], False)
+
+    @override_settings(BYPASS_BOP_VERIFICATION=True)
+    @patch("management.principal.proxy.profile_service_configured", return_value=True)
+    @patch(
+        "management.principal.proxy.get_profiles_from_service",
+        return_value={
+            "alice": {
+                "first_name": "Alice",
+                "last_name": "Admin",
+                "email": "alice@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+            "bob": {
+                "first_name": "Bob",
+                "last_name": "User",
+                "email": "bob@example.com",
+                "is_org_admin": False,
+                "enabled": True,
+            },
+            "outsider": {
+                "first_name": "Out",
+                "last_name": "SIDER",
+                "email": "outsider@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+        },
+    )
+    def test__request_principals_bypass_enriches_from_profile_service(self, _mock_profiles, _mock_configured):
+        """When Cost profile service returns data, emit SaaS-parity org-admin and identity fields."""
+        Principal.objects.create(tenant=self.tenant, username="alice", user_id="user-alice")
+        Principal.objects.create(tenant=self.tenant, username="bob", user_id="user-bob")
+
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"status": "enabled"},
+        )
+
+        by_username = {principal["username"]: principal for principal in result["data"]}
+        self.assertIs(by_username["alice"]["is_org_admin"], True)
+        self.assertEqual(by_username["alice"]["first_name"], "Alice")
+        self.assertEqual(by_username["alice"]["last_name"], "Admin")
+        self.assertEqual(by_username["alice"]["email"], "alice@example.com")
+        self.assertIs(by_username["alice"]["is_active"], True)
+        self.assertIs(by_username["bob"]["is_org_admin"], False)
+        self.assertEqual(by_username["bob"]["email"], "bob@example.com")
+
+        admin_only = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            params={"admin_only": "true"},
+        )
+        self.assertEqual([p["username"] for p in admin_only["data"]], ["alice"])
+
+        # Username not in this tenant must not receive profile PII / org-admin.
+        filtered = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            org_id=self.tenant.org_id,
+            data={"users": ["outsider"]},
+        )
+        outsider = filtered["data"][0]
+        self.assertEqual(outsider["username"], "outsider")
+        self.assertEqual(outsider["email"], "outsider@local")
+        self.assertEqual(outsider["first_name"], "")
+        self.assertIs(outsider["is_org_admin"], False)
+
+        # enabled=false is omitted for status=enabled (Users list) but kept for
+        # status=all so clean_tenant_principals does not delete disabled users.
+        disabled_profiles = {
+            "alice": {
+                "first_name": "Alice",
+                "last_name": "Admin",
+                "email": "alice@example.com",
+                "is_org_admin": True,
+                "enabled": True,
+            },
+            "bob": {
+                "first_name": "Bob",
+                "last_name": "Disabled",
+                "email": "bob@example.com",
+                "is_org_admin": False,
+                "enabled": False,
+            },
+        }
+        with patch(
+            "management.principal.proxy.get_profiles_from_service",
+            return_value=disabled_profiles,
+        ):
+            enabled_only = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "enabled"},
+            )
+            all_status = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"status": "all"},
+            )
+            username_only_enabled = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "status": "enabled"},
+            )
+            username_only_admin = proxy._request_principals(
+                url="http://localhost:8080/v1/users",
+                org_id=self.tenant.org_id,
+                params={"username_only": "true", "admin_only": "true"},
+            )
+        enabled_by_username = {principal["username"]: principal for principal in enabled_only["data"]}
+        self.assertIn("alice", enabled_by_username)
+        self.assertNotIn("bob", enabled_by_username)
+        all_by_username = {principal["username"]: principal for principal in all_status["data"]}
+        self.assertIn("bob", all_by_username)
+        self.assertIs(all_by_username["bob"]["is_active"], False)
+        self.assertEqual(
+            sorted(p["username"] for p in username_only_enabled["data"]),
+            ["alice"],
+        )
+        self.assertEqual([p["username"] for p in username_only_admin["data"]], ["alice"])
+        for row in username_only_enabled["data"] + username_only_admin["data"]:
+            self.assertEqual(set(row.keys()), {"username"})
+
     @patch(
         "management.principal.proxy.PrincipalProxy._request_principals",
         return_value={"status_code": status.HTTP_200_OK, "data": []},
@@ -201,6 +386,150 @@ class PrincipalProxyTest(IdentityRequest):
             "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
         }
         self.assertEqual(expected, result)
+
+    def test__request_principals_timeout(self):
+        """Test request with expected 500 on timeout exception."""
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_timeout)
+        expected = {
+            "status_code": 500,
+            "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
+        }
+        self.assertEqual(expected, result)
+
+    def test__request_principals_passes_timeout_kwarg_get(self):
+        """Test that _request_principals passes timeout in kwargs for GET transport."""
+        proxy = PrincipalProxy()
+        captured_kwargs = {}
+
+        def capture_method(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return MockResponse(url, [], status.HTTP_200_OK)
+
+        result = proxy._request_principals(url="http://localhost:8080/v1/users", method=capture_method)
+        self.assertIn("timeout", captured_kwargs)
+        self.assertEqual(captured_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+        # Verify other kwargs are preserved
+        self.assertIn("headers", captured_kwargs)
+        self.assertIn("verify", captured_kwargs)
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["data"], [])
+
+    def test__request_principals_passes_timeout_kwarg_post(self):
+        """Test that _request_principals passes timeout in kwargs for POST transport."""
+        proxy = PrincipalProxy()
+        captured_kwargs = {}
+
+        def capture_method(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return MockResponse(url, [], status.HTTP_200_OK)
+
+        result = proxy._request_principals(
+            url="http://localhost:8080/v1/users",
+            method=capture_method,
+            data={"users": ["user1"]},
+        )
+        self.assertIn("timeout", captured_kwargs)
+        self.assertEqual(captured_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+        # Verify other kwargs are preserved for POST
+        self.assertIn("headers", captured_kwargs)
+        self.assertIn("json", captured_kwargs)
+        self.assertIn("verify", captured_kwargs)
+        self.assertEqual(result["status_code"], 200)
+
+    @patch("management.principal.proxy.bop_request_status_count")
+    def test__request_principals_timeout_returns_500_and_increments_metric(self, mock_counter):
+        """Test that a Timeout returns 500 error document and increments the BOP metric."""
+        proxy = PrincipalProxy()
+        result = proxy._request_principals(url="http://localhost:8080/v1/users", method=mocked_requests_get_timeout)
+
+        expected = {
+            "status_code": 500,
+            "errors": [{"detail": "Unexpected error.", "status": "500", "source": "principals"}],
+        }
+        self.assertEqual(expected, result)
+        mock_counter.labels.assert_called_with(method="MOCKED_REQUESTS_GET_TIMEOUT", status=500)
+        mock_counter.labels.return_value.inc.assert_called_once()
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_success(self, mock_post):
+        """Test fetch_account_org_mapping returns mapping on success."""
+        mock_post.return_value = MockResponse("http://test", {"acc1": "org1", "acc2": "org2"}, status.HTTP_200_OK)
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1", "acc2"])
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        self.assertIn("timeout", call_kwargs)
+        self.assertEqual(call_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+        self.assertEqual(result, {"acc1": "org1", "acc2": "org2"})
+
+    @patch("management.principal.proxy.bop_request_status_count")
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_invalid_json_shape(self, mock_post, mock_counter):
+        """Reject non-object JSON, including empty arrays, without reporting success."""
+        proxy = PrincipalProxy()
+        for payload in (None, False, 0, 12, "", "invalid", [], ["acc1"]):
+            with self.subTest(payload=payload):
+                mock_counter.reset_mock()
+                mock_post.reset_mock()
+                mock_post.return_value = MockResponse("http://test", payload, status.HTTP_200_OK)
+                self.assertIsNone(proxy.fetch_account_org_mapping(["acc1"]))
+                mock_post.assert_called_once()
+                mock_counter.labels.assert_called_once_with(method="POST", status=500)
+                mock_counter.labels.return_value.inc.assert_called_once_with()
+
+    @patch("management.principal.proxy.bop_request_status_count")
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_empty_object(self, mock_post, mock_counter):
+        """An empty object remains a valid mapping and is counted as success."""
+        mock_post.return_value = MockResponse("http://test", {}, status.HTTP_200_OK)
+        self.assertEqual(PrincipalProxy().fetch_account_org_mapping(["acc1"]), {})
+        mock_post.assert_called_once()
+        mock_counter.labels.assert_called_once_with(method="POST", status=200)
+        mock_counter.labels.return_value.inc.assert_called_once_with()
+
+    def test_fetch_account_org_mapping_empty_input(self):
+        """Test fetch_account_org_mapping with empty account_ids returns empty dict."""
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping([])
+        self.assertEqual(result, {})
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_non_200(self, mock_post):
+        """Test fetch_account_org_mapping returns None on non-200 status."""
+        mock_post.return_value = MockResponse("http://test", {}, status.HTTP_502_BAD_GATEWAY)
+        mock_post.return_value.text = "Bad Gateway"
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1"])
+        self.assertIsNone(result)
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_timeout(self, mock_post):
+        """Test fetch_account_org_mapping returns None on Timeout."""
+        mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1"])
+        self.assertIsNone(result)
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        self.assertEqual(call_kwargs["timeout"], settings.OUTBOUND_HTTP_TIMEOUT)
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_request_exception(self, mock_post):
+        """Test fetch_account_org_mapping returns None on RequestException."""
+        mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1"])
+        self.assertIsNone(result)
+
+    @patch("management.principal.proxy.requests.post")
+    def test_fetch_account_org_mapping_json_decode_error(self, mock_post):
+        """Test fetch_account_org_mapping returns None on JSONDecodeError."""
+        mock_response = MockResponse("http://test", {}, status.HTTP_200_OK, exception=JSONDecodeError("", "", 0))
+        mock_post.return_value = mock_response
+        proxy = PrincipalProxy()
+        result = proxy.fetch_account_org_mapping(["acc1"])
+        self.assertIsNone(result)
 
     def test__request_principals_200_success(self):
         """Test request with expected 200 and good data."""

@@ -18,6 +18,7 @@
 """Handler for system defined group."""
 
 import logging
+from functools import partial
 from typing import Optional, Tuple, Union
 from uuid import uuid4
 
@@ -97,7 +98,7 @@ def set_system_flag_before_update(group: Group, tenant, user) -> Optional[Group]
     """Update system flag on default groups."""
     if group.system:
         group = clone_default_group_in_public_schema(group, tenant)  # type: ignore
-        group_flag_change_notification_handler(user, group)
+        transaction.on_commit(partial(group_flag_change_notification_handler, user, group), robust=True)
     return group
 
 
@@ -154,6 +155,16 @@ def clone_default_group_in_public_schema(group, tenant) -> Optional[Group]:
         role_binding_service.delete_user_default_bindings()
 
     return group
+
+
+def _notify_group_role_change(user, group, role, operation):
+    """Queue system events transactionally; defer custom-group Kafka sends until commit."""
+    if (group.platform_default or group.admin_default) and group.system:
+        group_role_change_notification_handler(user, group, role, operation)
+    else:
+        transaction.on_commit(
+            partial(group_role_change_notification_handler, user, group, role, operation), robust=True
+        )
 
 
 def add_roles(group, roles_or_role_ids, tenant, user=None):
@@ -221,7 +232,7 @@ def add_roles(group, roles_or_role_ids, tenant, user=None):
             continue
 
         system_policy.roles.add(role)
-        group_role_change_notification_handler(user, group, role, "added")
+        _notify_group_role_change(user, group, role, "added")
         added_roles.append(role)
 
     if not added_roles:
@@ -252,8 +263,7 @@ def remove_roles(group, roles_or_role_ids, tenant, user=None):
                 policy.roles.remove(role)
                 logger.info(f"Removing role {role} from group {group.name} for tenant {tenant.org_id}.")
 
-                # Send notifications
-                group_role_change_notification_handler(user, group, role, "removed")
+                _notify_group_role_change(user, group, role, "removed")
                 removed_roles.append(role)
 
     if tenant.tenant_name != "public":

@@ -88,10 +88,24 @@ def clean_tenant_principals(tenant):
             continue
         logger.debug("clean_tenant_principals: Checking for username %s for tenant %s.", principal.username, tenant_id)
         org_id = tenant.org_id
-        resp = PROXY.request_filtered_principals([principal.username], org_id=org_id)
+        # Existence checks must not apply the default status=enabled filter. On-prem
+        # BYPASS enrichment can mark Keycloak-disabled users inactive; those users
+        # still exist and must not be deleted (and lose group/role bindings).
+        options = {}
+        if settings.BYPASS_BOP_VERIFICATION:
+            options["status"] = "all"
+        resp = PROXY.request_filtered_principals([principal.username], org_id=org_id, options=options)
         status_code = resp.get("status_code")
         data = resp.get("data")
-        logger.info("clean_tenant_principals: Response code: %s Data: %s", str(status_code), str(data))
+        usernames = []
+        if isinstance(data, list):
+            usernames = [item.get("username") for item in data if isinstance(item, dict)]
+        logger.info(
+            "clean_tenant_principals: Response code: %s user_count=%s usernames=%s",
+            str(status_code),
+            len(data) if isinstance(data, list) else None,
+            usernames,
+        )
         if status_code == status.HTTP_200_OK and data:
             logger.debug(
                 "clean_tenant_principals: Username %s found for tenant %s, no change needed.",
