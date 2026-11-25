@@ -99,7 +99,7 @@ class _InventoryAuthTimeoutAdapter(HTTPAdapter):
 
 
 def _build_inventory_auth_credentials(client_id: str, client_secret: str) -> OAuth2ClientCredentials:
-    """Build Inventory OAuth credentials with bounded HTTPS token request timeouts.
+    """Build Inventory OAuth credentials with bounded token request timeouts.
 
     Must construct a fresh OAuth2ClientCredentials when client_id/secret change: mutating
     the private attrs leaves OAuth2Session/BackendApplicationClient with the original
@@ -110,9 +110,11 @@ def _build_inventory_auth_credentials(client_id: str, client_secret: str) -> OAu
         client_secret=client_secret,
         token_endpoint=settings.INVENTORY_API_TOKEN_URL,
     )
-    # The SDK does not expose its requests session. Configure its HTTPS adapter here so
-    # token acquisition cannot wait indefinitely on a dead connection.
-    credentials._session.mount("https://", _InventoryAuthTimeoutAdapter())
+    # The SDK does not expose its requests session. Mount timeout adapters for both
+    # schemes: ephemeral uses http:// Keycloak; stage/prod use https:// SSO.
+    timeout_adapter = _InventoryAuthTimeoutAdapter()
+    credentials._session.mount("https://", timeout_adapter)
+    credentials._session.mount("http://", timeout_adapter)
     return credentials
 
 
