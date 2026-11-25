@@ -123,8 +123,10 @@ V1: Group -- Policy -- Role -- Access -- Permission
                               |
                               +-- ResourceDefinition
 V2: RoleV2 -- permissions (many-to-many) -- Permission
-       |
-       +-- RoleBinding -- resource (workspace or tenant)
+        |
+        +-- children -- RoleV2 (seeded roles for platform roles)
+        |
+        +-- RoleBinding -- resource (workspace or tenant)
                |-- RoleBindingGroup -- Group -- Principal
                +-- RoleBindingPrincipal -- Principal (direct subject)
 ```
@@ -136,9 +138,9 @@ V2: RoleV2 -- permissions (many-to-many) -- Permission
 
 ### Key Relationships
 
-- Roles have permissions. V1 uses `Access` objects that link a role to a permission and may have resource definitions. V2 uses `RoleV2.permissions`. `BindingMapping` stores migration/dual-write binding mappings between V1 roles and V2 resources and roles; it does not define V2 permission sets.
+- Roles have permissions. V1 uses `Access` objects that link a role to a permission and may have resource definitions. V2 stores direct permissions in `RoleV2.permissions`. Platform roles also have seeded child roles: seeding copies V1 system-role permissions to the seeded roles and attaches platform-default or admin-default roles as children of the appropriate platform roles. `BindingMapping` stores migration/dual-write binding mappings between V1 roles and V2 resources and roles; it does not define V2 permission sets.
 - Groups contain principals. A principal can belong to multiple groups.
-- V2 grants combine a resource scope and role binding with a group subject (and its members) or a directly bound principal. Workspace inheritance can also affect effective grants.
+- V2 grants combine a resource scope and role binding with a group subject (and its members) or a directly bound principal. Default bindings associate platform roles with the corresponding default groups. Kessel can derive a platform role's permissions through its seeded children, so checking only the platform role's direct permissions can miss effective grants. This role inheritance is separate from workspace inheritance, which can also affect effective grants. See [role_bindings.md](role_bindings.md#example-6-rbac-administrator-full-org-level-access) for an example.
 
 See [`role/model.py`](../rbac/management/role/model.py), [`role/v2_model.py`](../rbac/management/role/v2_model.py), and [`role_binding/model.py`](../rbac/management/role_binding/model.py) for the model definitions.
 
