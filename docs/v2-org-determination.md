@@ -67,7 +67,7 @@ Applications in this list have stricter requirements and opt into V2 access chec
 
 ### Layer 2: All Other Applications
 
-For applications not in the strict list:
+For requests containing no applications in the strict list:
 
 **Org is v2-enabled if:**
 ```
@@ -115,10 +115,10 @@ And a structured log is written with full context: `org_id`, `application`, `cal
    - V1 write APIs are blocked (via `V1WriteBlockedWhenWorkspacesEnabled`)
 
 2. **Strict-only opt-in:** Only `hbi.rbac-v2` flag enabled (without tenant being opted-in)
-   - `/access` endpoint enforces V2 restrictions **only for strict-access apps** (e.g., HBI)
+   - `/access` endpoint enforces V2 restrictions on the entire request if it includes a strict-access app (e.g., HBI)
    - V1 write APIs remain **allowed** — `V1WriteBlockedWhenWorkspacesEnabled` uses `is_v2_edit_enabled_for_request` (general flag), not the strict check
    - V2 write APIs remain **blocked** — `V2WriteRequiresWorkspacesEnabled` also uses the general flag
-   - Non-strict apps are unaffected (see `test_not_required` in `tests/management/permissions/test_v2_edit_api_access.py`)
+   - Requests containing only non-strict apps are unaffected (see `test_not_required` in `tests/management/permissions/test_v2_edit_api_access.py`)
 
 3. **Activation phase:** Org performs first V2 write
    - `TenantMapping.v2_write_activated_at` is set (irreversible)
@@ -126,7 +126,7 @@ And a structured log is written with full context: `org_id`, `application`, `cal
 
 ## Key Invariants
 
-1. **Strict access checks are per-app:** The `hbi.rbac-v2` flag only affects HBI access checks; other apps follow the general `platform.rbac.workspaces` flag.
+1. **Strict access checks apply to the whole request:** When `hbi.rbac-v2` is enabled and the request includes a configured strict-access app (e.g., HBI), the exclude-list check applies to every requested application, including non-strict apps.
 2. **Migration exclude list is gating:** V2-enabled orgs can only query `/access` for applications in the exclude list (apps not yet migrated to V2).
 
 ## Configuration References
