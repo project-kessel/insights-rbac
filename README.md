@@ -14,7 +14,7 @@ The service is multi-tenant: every request is scoped to an organization (tenant)
 ## Tech Stack
 
 - **Language**: Python 3.12
-- **Framework**: Django 5.2 / Django REST Framework
+- **Framework**: Django 6.0 / Django REST Framework
 - **Database**: PostgreSQL 16
 - **Cache**: Redis
 - **Task Queue**: Celery (Redis broker)
@@ -28,7 +28,9 @@ The service is multi-tenant: every request is scoped to an organization (tenant)
 
 - Python 3.12
 - [Pipenv](https://pipenv.pypa.io/)
-- Docker / Podman (for PostgreSQL and Redis)
+- Docker and Docker Compose for the standard Compose and database targets; the
+  full local integration stack also supports Podman
+- PostgreSQL development headers when needed to install `psycopg2` from source
 
 ### Option 1: Docker Compose (full stack)
 
@@ -42,13 +44,17 @@ make docker-down     # Stop and remove containers
 
 ### Option 2: Local Python (app only)
 
-Run the Django server locally, using Docker only for PostgreSQL:
+Run the Django server locally with PostgreSQL and Redis available. The database
+target below starts PostgreSQL; start Redis separately if needed. Make targets
+that run Django read `.env`; adjust the database settings if using a different
+PostgreSQL instance.
 
 ```bash
 pipenv install --dev     # Install dependencies
+cp .env.example .env     # Configure local settings
 make start-db            # Start Postgres on port 15432
-make run-migrations      # Apply database migrations
-make serve               # App available at http://localhost:8000
+pipenv run make run-migrations  # Apply database migrations
+pipenv run make serve           # App available at http://localhost:8000
 ```
 
 ### Option 3: Full Kessel and Host Inventory integration stack
@@ -326,12 +332,60 @@ pipenv run pre-commit run --all-files            # Run all pre-commit hooks
 ## Database
 
 ```bash
-make make-migrations     # Generate migration files
-make run-migrations      # Apply migrations
-make reinitdb            # Drop, recreate, and migrate
+pipenv run make make-migrations  # Generate migration files
+pipenv run make run-migrations   # Apply migrations
+pipenv run make reinitdb         # Drop, recreate, and migrate
 ```
 
 Direct access: `psql postgres -U postgres -h localhost -p 15432`
+
+To migrate V1 data to V2 relations, inspect the available options with
+`pipenv run python rbac/manage.py migrate_relations --help`.
+
+### Seeds
+
+Permissions, roles, and groups are seeded at startup by default. Set
+`PERMISSION_SEEDING_ENABLED`, `ROLE_SEEDING_ENABLED`, or `GROUP_SEEDING_ENABLED`
+to `False` to disable each seed. The local definitions are under
+[`rbac/management/role/definitions/`](rbac/management/role/definitions/);
+deployed default role and group configuration is maintained in
+[`rbac-config`](https://github.com/project-kessel/rbac-config).
+
+To seed manually, run `pipenv run python rbac/manage.py seeds`; use `--roles`,
+`--groups`, or `--permissions` to select seed types.
+
+### Kafka and Debezium
+
+The full integration stack above includes Kafka and Debezium. Alternatively,
+`scripts/debezium/setup_debezium.sh` sets up the standalone CDC stack using
+Docker or Podman. It starts PostgreSQL, Kafka, Kafka Connect, and Kafdrop and
+configures the connector. Ensure the required ports are available; use
+`scripts/debezium/setup_debezium.sh --help` for options and prerequisites.
+
+```bash
+scripts/debezium/setup_debezium.sh
+scripts/debezium/setup_debezium.sh --consumer     # or --consumer-bg
+scripts/debezium/send_test_relations_message.sh
+```
+
+See [Kafka consumer documentation](docs/KAFKA_CONSUMER.md) and
+[outbound events](docs/kafka-outbound-events.md) for details.
+
+### Feature flags
+
+Local Unleash configuration uses `FEATURE_FLAGS_URL` (default
+`http://localhost:4242/api`), `FEATURE_FLAGS_TOKEN`, and
+`FEATURE_FLAGS_CACHE_DIR` (default `/tmp/`). In Clowder, the URL and token can
+come from the platform configuration. See [Unleash's quick start](https://docs.getunleash.io/quickstart)
+and [`rbac/feature_flags.py`](rbac/feature_flags.py) for flag usage and context.
+
+## Authentication and deployment
+
+The gateway supplies `x-rh-identity` for public API requests; local development
+can use the development identity middleware. Service-to-service requests may use
+PSK or JWT authentication. See [the authentication guide](docs/AUTHENTICATION.md)
+for requirements and local examples. For ephemeral deployments, see
+[`insights-service-deployer`](https://github.com/project-kessel/insights-service-deployer).
 
 ## API Documentation
 
@@ -348,15 +402,16 @@ make generate_v2_spec
 
 ## Environment Variables
 
-Key environment variables (see [docker-compose.yml](docker-compose.yml) for a full reference):
+Key environment variables (see [docker-compose.yml](docker-compose.yml) and
+[`rbac/rbac/settings.py`](rbac/rbac/settings.py) for configuration):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_HOST` | PostgreSQL host | `localhost` |
-| `DATABASE_PORT` | PostgreSQL port | `15432` |
-| `DATABASE_NAME` | Database name | `postgres` |
-| `REDIS_HOST` | Redis host | `rbac_redis` |
-| `API_PATH_PREFIX` | API URL prefix | `/api/rbac` |
+| `DATABASE_HOST` | PostgreSQL host | unset |
+| `DATABASE_PORT` | PostgreSQL port | unset |
+| `DATABASE_NAME` | Database name | unset |
+| `REDIS_HOST` | Redis host | `localhost` |
+| `API_PATH_PREFIX` | API URL prefix | `api/` for routes, `/` for static paths |
 | `V2_APIS_ENABLED` | Enable v2 API routes | `False` |
 | `KAFKA_ENABLED` | Enable Kafka producer/consumer | `False` |
 | `DEVELOPMENT` | Development mode flag | `False` |
