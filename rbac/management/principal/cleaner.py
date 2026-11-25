@@ -29,6 +29,7 @@ from core.base_consumer import (
     BaseConsumerMetrics,
     BaseRBACKafkaConsumer,
     CommitConfig,
+    ConsumerBatched,
     RetryConfig,
     make_consumer_metrics,
 )
@@ -741,6 +742,10 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
             retry_config=retry_config,
             commit_config=commit_config,
             extra_consumer_config=_consumer_config(),
+            batch_config=ConsumerBatched(
+                batch_size=settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE,
+                batch_timeout_sec=settings.KAFKA_PRINCIPAL_CLEANUP_BATCH_TIMEOUT_MS / 1000,
+            ),
         )
 
         self._dry_run = dry_run
@@ -753,14 +758,11 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
     def _do_handle_partitions_assigned(self, assigned_partitions: list[TopicPartition]):
         pass
 
-    def _batch_size(self) -> int:
-        return settings.KAFKA_PRINCIPAL_CLEANUP_BOP_BATCH_SIZE
-
-    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]) -> Optional[dict]:
+    def _prepare_for_batch(self, batch: list[ConsumerRecord]) -> Optional[dict]:
         if self._dry_run:
             return None
 
-        user_ids = _collect_user_ids_from_kafka_messages(list(batch))
+        user_ids = _collect_user_ids_from_kafka_messages(batch)
 
         try:
             return _fetch_bop_users_by_ids(user_ids)

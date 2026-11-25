@@ -17,8 +17,10 @@
 """Test the principal cleaner."""
 
 import json
+import time
 import uuid
 from functools import partial
+from time import sleep
 from unittest.mock import MagicMock, Mock, patch
 
 from core.base_consumer import RetryConfig
@@ -1059,6 +1061,55 @@ class PrincipalKafkaTests(IdentityRequest):
         proxy_mock.assert_called_once()
         self.assertEqual(mock_service.update_user.call_count, 2)
         self._assert_committed(consumer_instance.commit, {0: 11, 1: 6})
+
+    @patch("management.principal.cleaner.get_tenant_bootstrap_service")
+    @patch("management.principal.proxy.PrincipalProxy.request_filtered_principals")
+    @patch("core.base_consumer.KafkaConsumer")
+    @patch("management.principal.cleaner.settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC", "test-topic")
+    @override_settings(KAFKA_PRINCIPAL_CLEANUP_BATCH_TIMEOUT_MS=5000)
+    def test_batch_timeout(self, consumer_mock, proxy_mock, bootstrap_mock):
+        """Test that normal mode (not dry-run) calls bootstrap_service.update_user()."""
+
+        # Mock consumer with one message
+        def generate_messages():
+            for offset in range(1, 5):
+                sleep(1.3)
+                yield create_mock_kafka_message(KAFKA_MESSAGE_BODY, offset=offset)
+
+                # The batch should be closed early only once 5 seconds have elapsed. Since we add 1.3 seconds of delay,
+                # after 3 messages there will have been 3.9 seconds of delay (with 1.1 second of margin below 5),
+                # while after 4 messages there will have been 5.2 seconds of delay (which should end the batch).
+                if offset <= 3:
+                    mock_service.update_user.assert_not_called()
+                else:
+                    mock_service.update_user.assert_called()
+
+        proxy_mock.return_value = {
+            "status_code": 200,
+            "data": [
+                {
+                    "user_id": 56780000,
+                    "org_id": "17685860",
+                    "username": "principal-test",
+                    "is_org_admin": False,
+                    "is_active": False,
+                }
+            ],
+        }
+
+        consumer_instance = MagicMock()
+        consumer_instance.__iter__.return_value = iter(generate_messages())
+        consumer_mock.return_value = consumer_instance
+
+        # Mock bootstrap service
+        mock_service = MagicMock()
+        bootstrap_mock.return_value = mock_service
+
+        mock_service.update_user.assert_not_called()
+        self._make_consumer(dry_run=False).start_consuming()
+
+        # Just to be sure.
+        mock_service.update_user.assert_called()
 
 
 @override_settings(V2_BOOTSTRAP_TENANT=True, PRINCIPAL_CLEANUP_UPDATE_ENABLED_KAFKA=True)

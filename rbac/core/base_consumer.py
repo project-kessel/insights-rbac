@@ -18,7 +18,6 @@
 """Common base for RBAC Kafka consumers."""
 
 import abc
-import itertools
 import json
 import logging
 import random
@@ -26,7 +25,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Generator, Optional
 
 from django.conf import settings
 from kafka import AsyncConsumerRebalanceListener, KafkaConsumer, OffsetAndMetadata, TopicPartition
@@ -530,6 +529,26 @@ def make_consumer_metrics(prefix: str) -> BaseConsumerMetrics:
 _not_batched = object()
 
 
+@dataclass(frozen=True)
+class ConsumerBatched:
+    """Configuration on how to do batching in a BaseRBACKafkaConsumer."""
+
+    batch_size: int
+    batch_timeout_sec: float
+
+    def __post_init__(self):
+        """Verify that the object's state is valid."""
+        if self.batch_size < 1:
+            raise ValueError(f"Expected batch size to be at least 1, but got: {self.batch_size}")
+
+
+@dataclass(frozen=True)
+class ConsumerUnbatched:
+    """A sentinel indicating batching should be disabled in a BaseRBACKafkaConsumer."""
+
+    pass
+
+
 class BaseRBACKafkaConsumer[BatchData](abc.ABC):
     """Common base class for standalone Kafka consumers."""
 
@@ -543,6 +562,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         retry_config: Optional[RetryConfig] = None,
         commit_config: Optional[CommitConfig] = None,
         extra_consumer_config: Optional[dict] = None,
+        batch_config: ConsumerBatched | ConsumerUnbatched = ConsumerUnbatched(),
     ):
         """Initialize the consumer."""
         if not topic:
@@ -565,6 +585,15 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         self.last_activity = time.time()
         self._shutdown_in_progress = False
         self.metrics = metrics
+
+        if isinstance(batch_config, ConsumerBatched):
+            self._batch_size = batch_config.batch_size
+            self._batch_timeout_sec = batch_config.batch_timeout_sec
+        elif isinstance(batch_config, ConsumerUnbatched):
+            self._batch_size = 1
+            self._batch_timeout_sec = float("inf")
+        else:
+            raise TypeError(f"Invalid batch_config: {batch_config!r}")
 
         # Offset manager (will be initialized when consumer is created)
         self.offset_manager: Optional[OffsetManager] = None
@@ -975,10 +1004,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
             )
             return False  # Break loop
 
-    def _batch_size(self) -> int:
-        return 1
-
-    def _prepare_for_batch(self, batch: tuple[ConsumerRecord, ...]) -> BatchData:
+    def _prepare_for_batch(self, batch: list[ConsumerRecord]) -> BatchData:
         pass
 
     @abc.abstractmethod
@@ -990,7 +1016,24 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
         """Run the main message consumption loop."""
         last_committed_offsets = {}
 
-        for batch in itertools.batched(self.consumer, self._batch_size()):
+        def generate_batches() -> Generator[list[ConsumerRecord], None, None]:
+            batch = []
+            batch_start_time = time.monotonic()
+
+            for message in self.consumer:
+                batch.append(message)
+
+                if (len(batch) >= self._batch_size) or (
+                    time.monotonic() >= (batch_start_time + self._batch_timeout_sec)
+                ):
+                    yield batch
+                    batch_start_time = time.monotonic()
+                    batch = []
+
+            if len(batch) > 0:
+                yield batch
+
+        for batch in generate_batches():
             try:
                 initial_batch_data = self._prepare_for_batch(batch)
             except Exception as e:
@@ -1004,7 +1047,7 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
 
                 try:
                     if initial_batch_data is _not_batched:
-                        effective_batch_data = self._prepare_for_batch((message,))
+                        effective_batch_data = self._prepare_for_batch([message])
                     else:
                         effective_batch_data = initial_batch_data
 
