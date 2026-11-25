@@ -46,12 +46,19 @@ make docker-down     # Stop and remove containers
 
 Run the Django server locally with PostgreSQL and Redis available. The database
 target below starts PostgreSQL; start Redis separately if needed. Make targets
-that run Django read `.env`; adjust the database settings if using a different
-PostgreSQL instance.
+that run Django read `.env`.
 
 ```bash
 pipenv install --dev     # Install dependencies
 cp .env.example .env     # Configure local settings
+```
+
+For the PostgreSQL container started below, edit `.env` and set
+`DATABASE_HOST=localhost` and `DATABASE_PORT=15432` before running migrations.
+The example's `db:5432` address works inside the Compose network, not on the
+host. If using another PostgreSQL instance, use its host and port instead.
+
+```bash
 make start-db            # Start Postgres on port 15432
 pipenv run make run-migrations  # Apply database migrations
 pipenv run make serve           # App available at http://localhost:8000
