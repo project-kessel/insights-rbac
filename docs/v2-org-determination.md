@@ -4,7 +4,7 @@
 
 The determination of whether an organization has been migrated to V2 (and thus whether it is subject to V2 access control restrictions) uses a **two-layer check** that examines both the application being queried and two independent signals from the database and feature flags.
 
-This document explains how the `/api/v1/access/` endpoint identifies v2 orgs and enforces access restrictions accordingly.
+This document explains how the `/api/rbac/v1/access/` endpoint identifies v2 orgs and enforces access restrictions accordingly. The API prefix is configurable via `API_PATH_PREFIX`.
 
 ## The Two Independent Signals
 
@@ -126,8 +126,8 @@ And a structured log is written with full context: `org_id`, `application`, `cal
 
 ## Key Invariants
 
-1**Strict access checks are per-app:** The `hbi.rbac-v2` flag only affects HBI access checks; other apps follow the general `platform.rbac.workspaces` flag.
-2**Migration exclude list is gating:** V2-enabled orgs can only query `/access` for applications in the exclude list (apps not yet migrated to V2).
+1. **Strict access checks are per-app:** The `hbi.rbac-v2` flag only affects HBI access checks; other apps follow the general `platform.rbac.workspaces` flag.
+2. **Migration exclude list is gating:** V2-enabled orgs can only query `/access` for applications in the exclude list (apps not yet migrated to V2).
 
 ## Configuration References
 
