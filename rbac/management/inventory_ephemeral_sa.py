@@ -28,6 +28,7 @@ import logging
 import os
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,6 +45,8 @@ _KEYCLOAK_URL = "http://keycloak:8080/auth"
 
 _lock = threading.Lock()
 _cached: Tuple[str, str] | None = None
+_retry_after = 0.0
+_FAILURE_RETRY_SECONDS = 30
 
 
 def _http(
@@ -132,13 +135,20 @@ def _ensure_client() -> Tuple[str, str]:
 
 
 def ensure_ephemeral_inventory_sa() -> Tuple[str, str]:
-    """Return (client_id, client_secret), creating the Keycloak client if needed. Cached in-process."""
-    global _cached
+    """Resolve credentials once per process; temporarily suppress retries after a failure."""
+    global _cached, _retry_after
     if _cached is not None:
         return _cached
     with _lock:
         if _cached is not None:
             return _cached
-        _cached = _ensure_client()
+        if time.monotonic() < _retry_after:
+            raise RuntimeError("Ephemeral Inventory credential bootstrap is temporarily unavailable")
+        try:
+            _cached = _ensure_client()
+        except Exception:
+            _retry_after = time.monotonic() + _FAILURE_RETRY_SECONDS
+            raise
+        _retry_after = 0.0
         logger.info("Resolved ephemeral Inventory Keycloak SA client_id=%s", _cached[0])
         return _cached
