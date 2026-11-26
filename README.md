@@ -460,6 +460,13 @@ and [`rbac/rbac/settings.py`](rbac/rbac/settings.py)):
 | `MCP_ENABLED` | Enable MCP endpoint (`/_private/_a2s/mcp/`) | `True` |
 | `MCP_WRITE_ENABLED` | Enable MCP write operations | `False` |
 
+`RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL` and
+`RBAC_DESTRUCTIVE_API_ENABLED_UNTIL` set the respective destructive-operation
+expiry times. Use ISO 8601 timestamps, for example `2026-11-26T12:34:56Z`
+or `2026-11-26T12:34:56+02:00`. Timestamps without an offset are interpreted
+as UTC. Missing or invalid values fall back to the UTC epoch, disabling the
+operation. Non-ISO date strings are not supported.
+
 ## Project Structure
 
 ```
