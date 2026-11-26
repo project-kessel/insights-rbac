@@ -1,7 +1,5 @@
 """Tests for durable tenant backfill checkpoints."""
 
-from django.test import TestCase
-
 from api.models import Tenant
 from internal.tenant_backfill_progress import (
     finish_backfill_progress,
@@ -9,10 +7,13 @@ from internal.tenant_backfill_progress import (
     record_backfill_progress,
 )
 from management.tenant_backfill.model import TenantBackfillProgress
+from tests.identity_request import IdentityRequest
 
 
-class TenantBackfillProgressTests(TestCase):
+class TenantBackfillProgressTests(IdentityRequest):
     def setUp(self):
+        super().setUp()
+        # The identity base creates a tenant; keep this global scan limited to the explicit fixtures below.
         Tenant.objects.exclude(tenant_name="public").delete()
         self.first = Tenant.objects.create(tenant_name="first", org_id="90001")
         self.second = Tenant.objects.create(tenant_name="second", org_id="90002")

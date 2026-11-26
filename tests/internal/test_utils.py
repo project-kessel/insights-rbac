@@ -64,6 +64,7 @@ from migration_tool.models import V2role, V2rolebinding, V2boundresource
 from migration_tool.utils import create_relationship
 from rbac.settings import ROOT_SCOPE_PERMISSIONS, TENANT_SCOPE_PERMISSIONS
 from tests.management.role.test_dual_write import DualWriteTestCase
+from tests.identity_request import IdentityRequest
 from tests.util import assert_v2_tuples_consistent, assert_v1_v2_tuples_fully_consistent
 from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
@@ -1108,10 +1109,12 @@ class ExpireOrphanCrossAccountRequests(DualWriteTestCase):
 
 
 @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
+class RemoveLegacyRootWorkspaceTenantParentRelationsTest(IdentityRequest):
     """Tests for remove_legacy_root_workspace_tenant_parent_relations."""
 
     def setUp(self):
+        super().setUp()
+        Tenant.objects.exclude(tenant_name="public").delete()
         wait_patcher = patch("internal.pg_notify_wait.wait_for_pg_notify")
         self.mock_wait_for_pg_notify = wait_patcher.start()
         self.addCleanup(wait_patcher.stop)

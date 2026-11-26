@@ -1,6 +1,6 @@
 from unittest.mock import Mock, patch
 
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 
 from api.models import Tenant
 from internal.migration_coordination import REPLICATE_ROOT_WORKSPACE_TENANTS_NOTIFY_CHANNEL
@@ -18,6 +18,7 @@ from migration_tool.in_memory_tuples import (
     subject,
     all_of,
 )
+from tests.identity_request import TransactionalIdentityRequest
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -96,10 +97,11 @@ class ReplicateRootWorkspacesTest(TestCase):
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
-class ReplicateRootWorkspacesResumeTest(TransactionTestCase):
+class ReplicateRootWorkspacesResumeTest(TransactionalIdentityRequest):
     """Use real commits to verify the checkpoint follows the NOTIFY wait."""
 
     def setUp(self):
+        super().setUp()
         Tenant.objects.exclude(tenant_name="public").delete()
         bootstrap_service = V2TenantBootstrapService(replicator=NoopReplicator())
         self.first = bootstrap_service.new_bootstrapped_tenant(org_id="resume-a").tenant

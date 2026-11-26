@@ -1,17 +1,18 @@
 """Tests for the one-time backfill checkpoint seed command."""
 
 from django.core.management import CommandError, call_command
-from django.test import TestCase
 
 from api.models import Tenant
 from management.tenant_backfill.model import TenantBackfillProgress
+from tests.identity_request import IdentityRequest
 
 
-class SeedTenantBackfillCheckpointTests(TestCase):
+class SeedTenantBackfillCheckpointTests(IdentityRequest):
     """Verify manual seeds cannot skip an unverified tenant range."""
 
     def setUp(self):
         """Create a small ordered tenant range."""
+        super().setUp()
         Tenant.objects.exclude(tenant_name="public").delete()
         self.first = Tenant.objects.create(tenant_name="first", org_id="90001")
         Tenant.objects.create(tenant_name="second", org_id="90002")
