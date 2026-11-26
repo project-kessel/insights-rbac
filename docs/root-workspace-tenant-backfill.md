@@ -39,6 +39,8 @@ checkpoint row alone is not proof that the pod completed successfully.
 The original production removal job has no durable cursor. Updating the RBAC
 application does not change an already-running Job pod or its pinned image.
 Coordinate its replacement separately; never run the old and new jobs together.
+If the old removal job completes before this change is released, do not run it
+again; proceed to the follow-up replication job instead.
 
 To preserve its acknowledged work:
 
