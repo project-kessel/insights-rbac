@@ -27,6 +27,10 @@ Subject (who)  +  Role (what permissions)  +  Resource (where)
 
 The RBAC system is transitioning from V1 to V2. During this transition, both models coexist and are kept in sync via a dual-write mechanism.
 
+Examples below are illustrative, not executable fixtures: names and identifiers are placeholders.
+SpiceDB schema definitions are maintained outside this repository; permission-resolution diagrams
+describe the intended graph rather than quoting a current schema.
+
 ---
 
 ## Core Concepts
@@ -63,7 +67,8 @@ Wildcards are supported: `inventory:*:*` grants all inventory permissions.
 
 The V1 model `BindingMapping` stores V2 role binding data within the V1 schema. It serves as a bridge during the migration period.
 
-**Source:** `rbac/management/role/model.py:150-303`
+**Source:** [`BindingMapping`](../rbac/management/role/model.py) and
+[`V2rolebinding`](../rbac/migration_tool/models.py).
 
 ### Schema
 
@@ -71,6 +76,7 @@ The V1 model `BindingMapping` stores V2 role binding data within the V1 schema. 
 class BindingMapping(models.Model):
     mappings = models.JSONField(default=dict)           # V2 binding data as JSON
     role = models.ForeignKey(Role, ...)                  # FK to V1 Role
+    v2_role = models.ForeignKey("management.RoleV2", ...) # nullable FK to V2 Role
     resource_type_namespace = models.CharField(...)      # e.g., "rbac"
     resource_type_name = models.CharField(...)           # e.g., "workspace"
     resource_id = models.CharField(...)                  # e.g., workspace UUID
@@ -100,7 +106,7 @@ The `mappings` JSONField contains a serialized `V2rolebinding`:
 Key points about the `mappings` JSON:
 - `id` — the UUID of the V2 role binding
 - `role.id` — the V2 role UUID
-- `role.is_system` — system roles store no permissions here (resolved by SpiceDB)
+- `role.is_system` — system roles serialize no permissions here; their role grants are replicated separately
 - `role.permissions` — only populated for custom (non-system) roles
 - `groups` — list of group UUIDs (can have duplicates from multiple sources)
 - `users` — dict of `{source_key: user_id}` pairs, allowing the same user from different sources
@@ -112,7 +118,7 @@ BindingMapping:
   role_id:                42  (V1 Role: "RBAC Administrator")
   resource_type_namespace: "rbac"
   resource_type_name:      "tenant"
-  resource_id:             "o_12345"
+  resource_id:             "localhost/12345"
   mappings: {
     "id": "019437a2-aaaa-7000-8000-000000000001",
     "role": {
@@ -168,7 +174,8 @@ In this example, `user456` is bound via two different sources. If one source is 
 
 The V2 model uses proper relational database tables instead of JSON blobs.
 
-**Source:** `rbac/management/role/v2_model.py:175-323`
+**Source:** [`RoleBinding`, `RoleBindingGroup`, and `RoleBindingPrincipal`](../rbac/management/role_binding/model.py);
+[`RoleV2`](../rbac/management/role/v2_model.py).
 
 ### Schema
 
@@ -214,11 +221,15 @@ class RoleBindingPrincipal(models.Model):
 ### V2 Role Types
 
 ```python
-class RoleV2.Types:
-    CUSTOM = "custom"      # Created by org admin; can only bind groups, not principals
-    SEEDED = "seeded"      # System-provided; has v1_source FK back to V1 Role
-    PLATFORM = "platform"  # Aggregate role containing seeded children
+class RoleV2(TenantAwareModel):
+    class Types(models.TextChoices):
+        CUSTOM = "custom"      # Created by org admin
+        SEEDED = "seeded"      # System-provided; has v1_source FK back to V1 Role
+        PLATFORM = "platform"  # Aggregate role containing seeded children
 ```
+
+`RoleV2.permissions` contains directly assigned permissions. Platform roles aggregate seeded
+children through `RoleV2.children`; inherited child permissions are not included in that field.
 
 ### Example: V2 RoleBinding for Workspace Access
 
@@ -257,12 +268,12 @@ RoleBinding:
 |--------|---------------------|-------------------|
 | **Storage** | JSON blob in `mappings` field | Relational tables (RoleBinding, RoleBindingGroup, RoleBindingPrincipal) |
 | **Role reference** | FK to V1 `Role` | FK to V2 `RoleV2` |
-| **Uniqueness** | Not enforced at DB level | DB constraint: `(role, resource_type, resource_id, tenant)` |
+| **Uniqueness** | DB constraint on `(v2_role, resource_type_namespace, resource_type_name, resource_id)`; `v2_role` can be null | DB constraint: `(role, resource_type, resource_id, tenant)` |
 | **Group binding** | List of UUIDs in JSON array | `RoleBindingGroup` join table with unique constraint |
 | **User binding** | Dict `{source_key: user_id}` in JSON | `RoleBindingPrincipal` table with `(principal, binding, source)` unique constraint |
 | **Source tracking** | Dict key is the source string | Dedicated `source` column on `RoleBindingPrincipal` |
 | **Resource namespace** | Stored in `resource_type_namespace` field | Not stored (assumed `"rbac"`) |
-| **Custom role principals** | Possible but not validated | Explicitly prevented: "Principal bindings are not supported for custom roles" |
+| **Custom role principals** | Rejected by the dual-write update path | The dual-write update path rejects principal bindings for custom roles; the model itself has no such constraint |
 | **Atomicity** | Manual list manipulation + save | `transaction.atomic()` with bulk operations |
 
 ---
@@ -274,7 +285,7 @@ Role bindings are attached to resources at different scope levels. Permissions *
 ### Scope Levels
 
 ```
-Scope.TENANT    → resource_type: "tenant",    resource_id: org_id (e.g., "o_12345")
+Scope.TENANT    → resource_type: "tenant",    resource_id: domain/org_id (e.g., "localhost/12345")
 Scope.ROOT      → resource_type: "workspace", resource_id: root workspace UUID
 Scope.DEFAULT   → resource_type: "workspace", resource_id: default workspace UUID
 ```
@@ -284,7 +295,7 @@ Scope.DEFAULT   → resource_type: "workspace", resource_id: default workspace U
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    TENANT (org)                      │
-│           resource: rbac/tenant:o_12345              │
+│           resource: rbac/tenant:localhost/12345     │
 │                                                      │
 │  Role bindings here grant permissions across         │
 │  the ENTIRE organization.                            │
@@ -323,18 +334,10 @@ Scope.DEFAULT   → resource_type: "workspace", resource_id: default workspace U
 
 ### Inheritance in SpiceDB
 
-The SpiceDB schema implements inheritance through `t_parent` relations:
+The following is a conceptual permission expression, not a schema definition:
 
 ```
-// Workspace inherits permissions from parent workspace or tenant
-definition rbac/workspace {
-    relation t_parent: rbac/workspace | rbac/tenant
-    relation t_binding: rbac/role_binding
-
-    permission inventory_host_view =
-        t_binding->inventory_host_view    // direct bindings on this workspace
-        + t_parent->inventory_host_view   // inherited from parent
-}
+workspace access = access from direct bindings + access inherited from parent
 ```
 
 A role binding on the root workspace automatically grants permissions on all child workspaces.
@@ -343,7 +346,9 @@ A role binding on the root workspace automatically grants permissions on all chi
 
 ## SpiceDB Relationship Tuples
 
-Each role binding generates multiple relationship tuples in SpiceDB.
+The [role binding model](../rbac/management/role_binding/model.py) generates role, resource,
+and subject tuples. [Role permission tuples](../rbac/management/role/v2_model.py) are generated
+separately; a binding's `all_tuples()` does not include them.
 
 ### Tuple Structure
 
@@ -359,7 +364,7 @@ For a role binding that grants the "Inventory Viewer" role to a group on the def
 # 1. Bind role to role_binding
 rbac/role_binding:binding-uuid-1#role@rbac/role:viewer-role-uuid
 
-# 2. Role has permissions (one tuple per permission, wildcard principal)
+# 2. Separately replicated role permissions (one tuple per direct permission)
 rbac/role:viewer-role-uuid#inventory_hosts_read@rbac/principal:*
 rbac/role:viewer-role-uuid#inventory_all_read@rbac/principal:*
 
@@ -389,7 +394,7 @@ rbac/workspace:X
   │
   │    Permission = subject & role->inventory_host_view    ✓ ALLOWED
   │
-  └─ #parent → rbac/tenant:o_12345
+  └─ parent resources → rbac/tenant:localhost/12345
        └─ (also checks bindings at tenant level)
 ```
 
@@ -403,7 +408,7 @@ Data-level permissions control access to specific data resources (hosts, workspa
 
 **Scenario:** Grant the "Engineering" group permission to view hosts in the default workspace.
 
-**V1 (BindingMapping):**
+**Illustrative V1 (BindingMapping):**
 
 ```
 BindingMapping:
@@ -434,7 +439,7 @@ RoleBindingGroup:
   group:   Group(name="Engineering", uuid="33333333-engineering-group-uuid")
 ```
 
-**SpiceDB Tuples:**
+**Illustrative SpiceDB Tuples:**
 
 ```
 rbac/role_binding:11111111-binding-uuid#role@rbac/role:22222222-viewer-role-uuid
@@ -455,34 +460,17 @@ Can principal "localhost/jsmith" view hosts on workspace "aaaaaaaa-default-ws-uu
 5. Result: ALLOWED
 ```
 
-### Example 2: Patch System Edit Requires Host View (Intersection)
+### Example 2: Data-Dependent Permissions (Intersection)
 
-Some data-level permissions require **both** the specific permission AND host view access. This is modeled as an intersection (`&`) in SpiceDB:
-
-```
-definition rbac/workspace {
-    permission patch_system_edit = inventory_host_view & patch_system_edit_assigned
-}
-```
-
-**Scenario:** User needs to edit patch systems on hosts. They need:
-1. A role binding with `inventory:hosts:read` (for `inventory_host_view`)
-2. A role binding with `patch:system:write` (for `patch_system_edit_assigned`)
-
-Both must be satisfied on the same workspace (or inherited from parent).
+Some data-level checks may require both the specific permission and host view access.
+The precise intersection and permission names are defined by the deployed SpiceDB schema,
+not by the RBAC model; consult that schema when debugging a specific check.
 
 ### Example 3: Host-Level Permission via Workspace Assignment
 
-Hosts are assigned to workspaces. A host's permissions come from its workspace:
-
-```
-definition hbi/host {
-    relation t_workspace: rbac/workspace
-
-    permission view = t_workspace->inventory_host_view
-    permission patch_system_view = view & t_workspace->patch_system_view
-}
-```
+Hosts are assigned to workspaces. A host check can resolve access through its workspace.
+The following relationship and traversal are illustrative; consult the deployed host schema
+for the exact relation and permission names.
 
 **SpiceDB Tuples for a host:**
 
@@ -515,7 +503,7 @@ BindingMapping:
   role:                    Role(name="Notifications Administrator", system=True)
   resource_type_namespace: "rbac"
   resource_type_name:      "tenant"
-  resource_id:             "o_12345"
+  resource_id:             "localhost/12345"
   mappings: {
     "id": "44444444-binding-uuid",
     "role": {"id": "55555555-notif-admin-role-uuid", "is_system": true, "permissions": []},
@@ -531,7 +519,7 @@ RoleBinding:
   uuid:          "44444444-binding-uuid"
   role:          RoleV2(name="Notifications Administrator", type="seeded")
   resource_type: "tenant"
-  resource_id:   "o_12345"
+  resource_id:   "localhost/12345"
   tenant:        Tenant(org_id="12345")
 
 RoleBindingGroup:
@@ -547,19 +535,13 @@ rbac/role:55555555-notif-admin-role-uuid#notifications_notifications_read@rbac/p
 rbac/role:55555555-notif-admin-role-uuid#notifications_notifications_write@rbac/principal:*
 rbac/role:55555555-notif-admin-role-uuid#notifications_events_read@rbac/principal:*
 rbac/role_binding:44444444-binding-uuid#subject@rbac/group:66666666-itops-group-uuid#member
-rbac/tenant:o_12345#binding@rbac/role_binding:44444444-binding-uuid
+rbac/tenant:localhost/12345#binding@rbac/role_binding:44444444-binding-uuid
 ```
 
-**Permission resolution at tenant level:**
+**Conceptual permission resolution at tenant level:**
 
 ```
-definition rbac/tenant {
-    relation t_binding: rbac/role_binding
-
-    permission notifications_notifications_edit =
-        t_binding->notifications_notifications_edit
-        + t_platform->notifications_notifications_edit
-}
+tenant access = access from tenant bindings + access via platform
 ```
 
 Tenant-level bindings grant org-wide access regardless of workspace structure.
@@ -568,18 +550,8 @@ Tenant-level bindings grant org-wide access regardless of workspace structure.
 
 The **platform** resource handles org-level permissions separately from the workspace hierarchy. This is used for services that don't need workspace scoping.
 
-```
-definition rbac/platform {
-    relation t_binding: rbac/role_binding
-
-    // Pure org-level: just needs the binding
-    permission integrations_endpoints_view = t_binding->integrations_endpoints_view
-
-    // Data-dependent: requires host view AND the specific permission
-    permission advisor_recommendation_results_view =
-        inventory_host_view & advisor_recommendation_results_view_assigned
-}
-```
+Some org-level permissions may be data-dependent. Consult the deployed schema for their
+exact permission expressions.
 
 **SpiceDB Tuples:**
 
@@ -587,16 +559,10 @@ definition rbac/platform {
 rbac/platform:12345#binding@rbac/role_binding:77777777-platform-binding-uuid
 ```
 
-The tenant definition connects to the platform:
+Conceptually, tenant checks can also resolve through the platform:
 
 ```
-definition rbac/tenant {
-    relation t_platform: rbac/platform
-
-    permission integrations_endpoints_view =
-        t_binding->integrations_endpoints_view        // from direct tenant bindings
-        + t_platform->integrations_endpoints_view     // from platform bindings
-}
+tenant access = access from tenant bindings + access via platform
 ```
 
 ### Example 6: RBAC Administrator (Full Org-Level Access)
@@ -608,9 +574,9 @@ definition rbac/tenant {
 ```
 RoleBinding:
   uuid:          "88888888-binding-uuid"
-  role:          RoleV2(name="RBAC Administrator", type="platform")
+  role:          RoleV2(type="platform")  # scope-specific admin platform role
   resource_type: "tenant"
-  resource_id:   "o_12345"
+  resource_id:   "localhost/12345"
   tenant:        Tenant(org_id="12345")
 
 RoleBindingGroup:
@@ -618,18 +584,11 @@ RoleBindingGroup:
   group:   Group(name="Admin Default", admin_default=True)  # public tenant group
 ```
 
-The platform role "RBAC Administrator" is a parent role that contains seeded children. The SpiceDB `t_child` relation handles aggregation:
+The admin platform role is a parent role that contains seeded children. Its child relationships
+are replicated for permission aggregation; the exact SpiceDB expression belongs to the deployed schema:
 
 ```
-definition rbac/role {
-    relation t_child: rbac/role
-
-    permission rbac_workspace_view =
-        inventory_groups_read + inventory_groups_all
-        + inventory_all_read + inventory_all_all
-        + all_all_all
-        + t_child->rbac_workspace_view   // permissions from child roles
-}
+effective role permissions = direct role permissions + permissions from seeded children
 ```
 
 ### Example 7: Subscriptions Viewer (Org-Level, No Data Dependency)
@@ -643,7 +602,7 @@ RoleBinding:
   uuid:          "99999999-binding-uuid"
   role:          RoleV2(name="Subscriptions Viewer", type="seeded")
   resource_type: "tenant"
-  resource_id:   "o_67890"
+  resource_id:   "localhost/67890"
   tenant:        Tenant(org_id="67890")
 
 RoleBindingGroup:
@@ -651,23 +610,18 @@ RoleBindingGroup:
   group:   Group(name="Finance Team", uuid="ffffffff-finance-group-uuid")
 ```
 
-**Permissions granted (all org-level, no data intersection):**
-
-```
-subscriptions_organization_view
-subscriptions_product_view
-subscriptions_cloud_access_view
-subscriptions_manifest_view
-subscriptions_report_view
-```
+The actual permissions depend on the seeded role and deployed schema; inspect the role's
+direct permissions and the schema before relying on a particular grant.
 
 ---
 
 ## Dual-Write Synchronization
 
-During the V1→V2 transition, every change to a `BindingMapping` is mirrored to a `RoleBinding`.
+During the V1→V2 transition, eligible dual-write paths synchronize a `BindingMapping` to a
+`RoleBinding` when a corresponding V2 binding is present or migrated. This is not a model-level
+hook for every `BindingMapping` save.
 
-**Source:** `rbac/management/group/inventory_api_dual_write_subject_handler.py`
+**Source:** [`inventory_api_dual_write_subject_handler.py`](../rbac/management/group/inventory_api_dual_write_subject_handler.py).
 
 ### Sync Flow
 
@@ -697,7 +651,7 @@ def _sync_binding_mapping_to_role_binding(binding_mapping, role_binding):
     assert role_binding.resource_type == binding_mapping.resource_type_name
     assert role_binding.resource_id == binding_mapping.resource_id
 
-    # Replace groups and principals atomically
+    # Replace groups and principals (each update uses transaction.atomic)
     role_binding.update_groups_by_uuid(binding_mapping.mappings["groups"])
     role_binding.update_principals_by_user_id(binding_mapping.mappings["users"].items())
     role_binding.save()
@@ -734,13 +688,15 @@ The backfill is available through two interfaces:
    parameters `org_ids` (comma-separated) and `batch_size` (default 500). Returns a JSON summary of the
    run. This endpoint is easier to re-trigger without setting up a new CJI job.
 
-Both walk every opted-in tenant, skip those whose default bindings all exist, and report any tenants
-that remain failed or incomplete. The signal to remove the lazy path is a **complete, unfiltered run**
+Both walk opted-in tenants, skip those whose default bindings all exist, and report tenants
+that remain failed or incomplete. The run aborts after 10 consecutive failed or incomplete tenants.
+The signal to remove the lazy path is a **complete, unfiltered run**
 (no `--org-ids` / `org_ids`) that finishes with zero failures and zero incomplete tenants. Runs that
 filter by `--org-ids` or `org_ids` only cover the selected tenants and cannot serve as this signal.
 
-**Source:** `rbac/management/role_binding/service.py` (`_ensure_default_bindings_exist`, `create_default_bindings`),
-`rbac/internal/migrations/backfill_role_bindings.py`
+**Source:** [`role_binding/service.py`](../rbac/management/role_binding/service.py)
+(`_ensure_default_bindings_exist`, `create_default_bindings`),
+[`backfill_role_bindings.py`](../rbac/internal/migrations/backfill_role_bindings.py).
 
 ### Default Binding Types
 
@@ -756,11 +712,12 @@ For each scope (TENANT, ROOT, DEFAULT), the system creates:
 ```
                     TENANT scope          ROOT scope          DEFAULT scope
                     ─────────────         ──────────          ─────────────
-ADMIN binding  →    tenant:o_12345       workspace:root-ws   workspace:default-ws
-USER binding   →    tenant:o_12345       workspace:root-ws   workspace:default-ws
+ADMIN binding  →    tenant:localhost/12345  workspace:root-ws   workspace:default-ws
+USER binding   →    tenant:localhost/12345  workspace:root-ws   workspace:default-ws
 ```
 
-This gives 6 default bindings total (3 scopes x 2 access types).
+When all resources and platform roles are available, this gives 6 default bindings (3 scopes x 2 access types).
+Missing scope resources are skipped and can leave the backfill incomplete.
 
 USER bindings are **skipped** if the tenant has a custom default group (a group with `platform_default=True` belonging to the tenant, not the public tenant).
 
@@ -775,15 +732,20 @@ Default binding UUIDs are deterministic, derived from the `TenantMapping` model.
 ### Endpoint
 
 ```
-GET /api/rbac/v2/role_bindings/by_subject/
+GET /api/rbac/v2/role-bindings/by-subject/
 ```
 
-### Required Parameters
+### Required Resource Parameters
+
+Provide either `resource_id` and `resource_type` together, or `resource.tenant.org_id`
+as a shorthand for the tenant resource. Tenant and principal resource IDs use the configured
+`PRINCIPAL_USER_DOMAIN`; `localhost` in the examples is only an example domain.
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | `resource_type` | Type of resource | `workspace` |
 | `resource_id` | ID of the resource | `550e8400-...` |
+| `resource.tenant.org_id` | Alternative tenant org ID | `12345` |
 
 ### Optional Parameters
 
@@ -791,45 +753,48 @@ GET /api/rbac/v2/role_bindings/by_subject/
 |-----------|-------------|---------|
 | `subject_type` | Filter by subject type | `group` |
 | `subject_id` | Filter by specific subject | group UUID |
-| `fields` | Dynamic field selection | `subject(group.name),role(name)` |
-| `order_by` | Sort order | `role_name`, `-modified` |
+| `fields` | Dynamic field selection | `subject(group.name),roles(name)` |
+| `order_by` | Sort order | `group.name`, `-last_modified` |
 | `exclude_sources` | Exclude bindings by source type | `direct`, `indirect`, `none` (default) |
 
 ### Field Selection Syntax
 
 ```
-fields=subject(group.name,group.user_count),role(name,description),resource(type)
+fields=subject(group.name,group.user_count),roles(name),resource(type)
 ```
 
 ### Response Format (Grouped by Subject)
 
+Example for the field selection above. The default response also includes `sources`; field
+selection includes it only when requested. Platform roles are expanded to their seeded children.
+
 ```json
 {
-  "meta": { "count": 2 },
+  "meta": { "limit": 10 },
+  "links": { "next": null, "previous": null },
   "data": [
     {
       "subject": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "type": "group",
         "group": {
-          "uuid": "33333333-engineering-group-uuid",
           "name": "Engineering",
           "user_count": 15
         }
       },
       "roles": [
         {
-          "uuid": "22222222-viewer-role-uuid",
-          "name": "Inventory Host Viewer",
-          "description": "View inventory hosts"
+          "id": "22222222-2222-4222-8222-222222222222",
+          "name": "Inventory Host Viewer"
         },
         {
-          "uuid": "55555555-notif-admin-role-uuid",
-          "name": "Notifications Administrator",
-          "description": "Manage notifications"
+          "id": "55555555-5555-4555-8555-555555555555",
+          "name": "Notifications Administrator"
         }
       ],
       "resource": {
         "type": "workspace",
-        "id": "aaaaaaaa-default-ws-uuid"
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
       }
     }
   ]
@@ -838,10 +803,15 @@ fields=subject(group.name,group.user_count),role(name,description),resource(type
 
 ### Access Control for the API
 
-The role binding API itself is protected by two permission checks:
+The role binding API uses the following checks (see
+[`role_binding_access.py`](../rbac/management/permissions/role_binding_access.py) and
+[`view.py`](../rbac/management/role_binding/view.py)):
 
-1. **System User Check** — non-admin service accounts are denied
-2. **Kessel Permission Check** — the requesting user must have `role_binding_view` (or `view`) on the specified workspace, checked via the Kessel Inventory API
+1. **System User Check** — non-admin system users are denied.
+2. **Resource Check** — workspace reads require `role_binding_view` or `view` via Kessel,
+   depending on the feature flag. Tenant reads require an org admin when tenant Kessel auth
+   is disabled; otherwise they use Kessel. Unscoped list reads fall back to a tenant check.
+3. **Writes** — require workspace-enabled V2 writes and action-specific resource permissions.
 
 ---
 

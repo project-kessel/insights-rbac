@@ -126,6 +126,10 @@ scripts/aws_pricing/
 # Generated docs for spec
 docs/source/specs/output-dir/
 
+# Root project guides are maintained in Markdown, not duplicate reStructuredText.
+/README.rst
+/CONTRIBUTING.rst
+
 # dev for ephemeral
 dev/*
 docs/source/specs/typespec/node_modules/
