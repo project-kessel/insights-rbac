@@ -18,14 +18,12 @@
 """Test the shared application utilities."""
 
 from core.utils import *
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from datetime import datetime, timedelta
 
-from tests.identity_request import IdentityRequest
 
-
-class ParseIsoDateTimeTests(IdentityRequest):
-    """Test ISO datetime parsing."""
+class ParseIsoDateTimeTests(SimpleTestCase):
+    """Test ISO datetime parsing without database access."""
 
     def test_parse_iso_datetime_uses_utc_for_naive_values(self):
         """Treat ISO timestamps without a timezone as UTC."""
