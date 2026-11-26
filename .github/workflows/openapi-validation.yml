@@ -8,20 +8,40 @@ on:
       - 'docs/source/specs/v2/openapi.yaml'
       - 'docs/source/specs/v2/openapi.json'
       - '.redocly.yaml'
+  # Keep this unfiltered: `openapi-validate` is a required branch protection check.
+  # The job below skips validation for unrelated PR changes while still reporting a result.
   pull_request:
-    paths:
-      - 'docs/source/specs/openapi.json'
-      - 'docs/source/specs/v2/openapi.yaml'
-      - 'docs/source/specs/v2/openapi.json'
-      - '.redocly.yaml'
   merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      openapi: ${{ steps.filter.outputs.openapi }}
+    steps:
+      - uses: dorny/paths-filter@v3.0.2
+        id: filter
+        with:
+          filters: |
+            openapi:
+              - 'docs/source/specs/openapi.json'
+              - 'docs/source/specs/v2/openapi.yaml'
+              - 'docs/source/specs/v2/openapi.json'
+              - '.redocly.yaml'
+
   openapi-validate:
+    needs: changes
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.openapi == 'true' ||
+       needs.changes.result != 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
