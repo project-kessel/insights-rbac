@@ -33,6 +33,16 @@ Thank you for contributing to the RBAC service. This guide covers the workflows,
    pipenv run pre-commit install
    ```
 
+   The `markdown-local-links` hook checks tracked root Markdown files and
+   `docs/**/*.md` for local file links and Markdown heading anchors. It runs
+   on every commit so deleting or renaming a target is caught even when the
+   linking document has not changed. External URLs and absolute application
+   paths are not checked. To check everything manually, run:
+
+   ```bash
+   pipenv run pre-commit run markdown-local-links --all-files
+   ```
+
 ## Branching Strategy
 
 - The `master` branch is the source of truth. All work branches from and merges back into `master`.
@@ -167,7 +177,7 @@ The repository uses Konflux for CI. Key checks on PRs:
 
 - `ci.ext.devshift.net PR build` (required)
 - Konflux build pipeline
-- Pre-commit hooks (flake8, black, trailing whitespace, django-upgrade, openapi-spec-validator)
+- Pre-commit hooks (flake8, black, trailing whitespace, django-upgrade, openapi-spec-validator, Markdown local links)
 - Snyk security scans
 - PlatSec checks
 
