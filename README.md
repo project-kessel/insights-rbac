@@ -11,6 +11,8 @@ insights-rbac is a Django REST Framework microservice that provides two API vers
 
 The service is multi-tenant: every request is scoped to an organization (tenant) via identity headers injected by the platform's authentication gateway.
 
+Find guides and references by audience in the [documentation index](#documentation-index).
+
 ## Tech Stack
 
 - **Language**: Python 3.12
@@ -471,20 +473,58 @@ tests/            # Test suite (mirrors rbac/ structure)
 docs/             # Architecture and domain guideline docs
 ```
 
-## Further Reading
+## Documentation Index
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) -- How to contribute
-- [AGENTS.md](AGENTS.md) -- AI agent guidance and codebase conventions
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- System architecture and data flow
-- [docs/security-guidelines.md](docs/security-guidelines.md) -- Authentication and authorization
-- [docs/api-contracts-guidelines.md](docs/api-contracts-guidelines.md) -- API versioning and contracts
-- [docs/database-guidelines.md](docs/database-guidelines.md) -- Multi-tenancy, models, migrations
-- [docs/integration-guidelines.md](docs/integration-guidelines.md) -- Kessel, Kafka, external services
-- [docs/performance-guidelines.md](docs/performance-guidelines.md) -- Caching, query optimization
-- [docs/error-handling-guidelines.md](docs/error-handling-guidelines.md) -- Error formats and exceptions
-- [docs/testing-guidelines.md](docs/testing-guidelines.md) -- Test runner, base classes, patterns
-- [docs/MCP.md](docs/MCP.md) -- MCP endpoint developer guide (protocol, tools, adding tools)
-- [docs/MCP-operator-guide.md](docs/MCP-operator-guide.md) -- MCP endpoint operator guide (deployment, config, security)
+### API Users
+
+- [Authentication guide](docs/AUTHENTICATION.md) -- Authentication methods, API paths, and local examples.
+- [V1 OpenAPI](docs/source/specs/openapi.json) -- V1 REST API contract.
+- [V2 OpenAPI](docs/source/specs/v2/openapi.yaml) -- Generated V2 REST API contract.
+- [V2 OpenAPI JSON](docs/source/specs/v2/openapi.json) -- JSON form of the V2 REST API contract.
+- [V2 TypeSpec](docs/source/specs/typespec/main.tsp) -- Source for the V2 API contract.
+- [Relations OpenAPI](docs/source/specs/relations-openapi.yml) -- Relations API contract.
+- [Role bindings](docs/role_bindings.md) -- V1 and V2 bindings, scopes, synchronization, and queries.
+- [MCP endpoint](docs/MCP.md) -- MCP protocol, tools, and extension guide.
+- [Kafka outbound events](docs/kafka-outbound-events.md) -- Topics, event formats, and producer behavior.
+
+### Contributors
+
+- [Contributing](CONTRIBUTING.md) -- Contribution workflow, style, and pull requests.
+- [Agent guidance](AGENTS.md) -- Repository conventions and domain-specific guidance for AI agents.
+- [Claude guidance](CLAUDE.md) -- Claude-specific preferences and the shared agent guidance.
+- [Architecture](docs/ARCHITECTURE.md) -- System components, request flow, and integrations.
+- [API contracts](docs/api-contracts-guidelines.md) -- API versioning, view patterns, and specifications.
+- [Database guidelines](docs/database-guidelines.md) -- Tenancy, models, migrations, and the outbox.
+- [Security guidelines](docs/security-guidelines.md) -- Authentication, authorization, and tenant isolation rules.
+- [Error handling](docs/error-handling-guidelines.md) -- Error formats, exceptions, and logging conventions.
+- [Integration guidelines](docs/integration-guidelines.md) -- Kessel, Kafka, external services, and metrics.
+- [Performance guidelines](docs/performance-guidelines.md) -- Caching, query optimization, and transactions.
+- [Testing guidelines](docs/testing-guidelines.md) -- Test runner, fixtures, and mocking patterns.
+- [Pre-commit setup](docs/pre-commit-setup.md) -- Install and run repository hooks.
+- [CodeRabbit review knowledge](docs/coderabbit-rbac-knowledge.md) -- RBAC invariants used in automated reviews.
+
+### Operators
+
+- [Authentication guide](docs/AUTHENTICATION.md) -- Deployment authentication, configuration, and troubleshooting.
+- [Kafka consumer](docs/KAFKA_CONSUMER.md) -- Consumer operation, configuration, and monitoring.
+- [Kafka outbound events](docs/kafka-outbound-events.md) -- Produced topics and event formats.
+- [V2 org determination](docs/v2-org-determination.md) -- How tenant state and flags affect V2 access decisions during rollout.
+- [MCP operator guide](docs/MCP-operator-guide.md) -- MCP deployment, security, metrics, and troubleshooting.
+- [Kessel workspace view check](docs/kessel_check_rbac_workspace_view.md) -- Tenant workspace-view permission evaluation.
+- [Kessel role-binding view check](docs/kessel_check_role_binding_view.md) -- Role-binding permission evaluation and required tuples.
+- [Role-binding view diagrams](docs/kessel_check_role_binding_view_diagrams.md) -- Diagrams of Kessel role-binding checks.
+- [Ephemeral DR toolkit](docs/ephemeral-dr-toolkit.md) -- Deploy and use disaster recovery tools in an ephemeral cluster.
+
+### Testers
+
+- [Testing guidelines](docs/testing-guidelines.md) -- Run Django tests and use test fixtures and mocks.
+- [Local Docker/Podman validation](docs/local-docker-validation.md) -- Validate a local integration stack and manage users and groups.
+- [Local validation identities](docs/local-validation-identities.md) -- Choose local identities and access fixtures.
+- [Local IQE tests](docs/local-iqe-tests.md) -- Run IQE RBAC tests against the local stack.
+- [Validation script guidelines](docs/validation-script-guidelines.md) -- Write and run local validation scripts.
+- [MCP scenario validation](docs/mcp-scenario-validation.md) -- Exercise MCP scenarios against real organizations.
+- [Ephemeral DR toolkit](docs/ephemeral-dr-toolkit.md) -- Validate disaster recovery workflows in an ephemeral cluster.
+- [OCM performance results](tests/performance/README.md) -- Recorded local concurrent and linear test results.
 
 ## License
 
