@@ -23,6 +23,15 @@ import pytz
 from django.conf import settings
 
 
+def parse_iso_datetime(value: str) -> datetime.datetime:
+    """Parse an ISO 8601 datetime, treating naive values as UTC."""
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = datetime.datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=pytz.UTC)
+    return parsed
+
+
 def destructive_ok(operation_type):
     """Determine if it's ok to run destructive operations."""
     now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)

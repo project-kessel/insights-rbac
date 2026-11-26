@@ -38,7 +38,7 @@ import redis
 from app_common_python import DependencyEndpoints, KafkaTopics, LoadedConfig
 from boto3 import client as boto_client
 from corsheaders.defaults import default_headers
-from dateutil.parser import parse as parse_dt
+from core.utils import parse_iso_datetime
 from feature_flags import FEATURE_FLAGS
 
 from . import database
@@ -515,7 +515,7 @@ GROUP_SEEDING_ENABLED = ENVIRONMENT.bool("GROUP_SEEDING_ENABLED", default=True)
 MAX_SEED_THREADS = ENVIRONMENT.int("MAX_SEED_THREADS", default=None)
 
 try:
-    DESTRUCTIVE_SEEDING_OK_UNTIL = parse_dt(
+    DESTRUCTIVE_SEEDING_OK_UNTIL = parse_iso_datetime(
         os.environ.get("RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL", "not-a-real-time")
     )
     if DESTRUCTIVE_SEEDING_OK_UNTIL.tzinfo is None:
@@ -536,7 +536,7 @@ INTERNAL_API_PATH_PREFIXES = ["/_private/"]
 A2S_PATH_PREFIX = "/_private/_a2s/"
 
 try:
-    INTERNAL_DESTRUCTIVE_API_OK_UNTIL = parse_dt(
+    INTERNAL_DESTRUCTIVE_API_OK_UNTIL = parse_iso_datetime(
         os.environ.get("RBAC_DESTRUCTIVE_API_ENABLED_UNTIL", "not-a-real-time")
     )
     if INTERNAL_DESTRUCTIVE_API_OK_UNTIL.tzinfo is None:

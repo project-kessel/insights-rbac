@@ -18,8 +18,35 @@
 """Test the shared application utilities."""
 
 from core.utils import *
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from datetime import datetime, timedelta
+
+
+class ParseIsoDateTimeTests(SimpleTestCase):
+    """Test ISO datetime parsing without database access."""
+
+    def test_parse_iso_datetime_uses_utc_for_naive_values(self):
+        """Treat ISO timestamps without a timezone as UTC."""
+        parsed = parse_iso_datetime("2026-11-26T12:34:56")
+
+        self.assertEqual(parsed, datetime(2026, 11, 26, 12, 34, 56, tzinfo=pytz.UTC))
+
+    def test_parse_iso_datetime_accepts_zulu_suffix(self):
+        """Parse an ISO timestamp with the UTC Z suffix."""
+        parsed = parse_iso_datetime("2026-11-26T12:34:56Z")
+
+        self.assertEqual(parsed, datetime(2026, 11, 26, 12, 34, 56, tzinfo=pytz.UTC))
+
+    def test_parse_iso_datetime_preserves_explicit_offset(self):
+        """Preserve an explicit timezone offset."""
+        parsed = parse_iso_datetime("2026-11-26T12:34:56+02:00")
+
+        self.assertEqual(parsed.utcoffset(), timedelta(hours=2))
+
+    def test_parse_iso_datetime_rejects_non_iso_values(self):
+        """Reject malformed values so settings can apply their safe fallback."""
+        with self.assertRaises(ValueError):
+            parse_iso_datetime("not-a-real-time")
 
 
 class CoreUtilsTests(TestCase):
