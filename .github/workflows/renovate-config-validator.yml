@@ -17,7 +17,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The same action MintMaker runs on its own repository. It checks syntax
       # and schema only: a rule that matches no file or package still passes.
       - uses: konflux-ci/renovate-config-validator-action@ca6b202a90add38b1fc274c07507c77d2b1ce88e # main
