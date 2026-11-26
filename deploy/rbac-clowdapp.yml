@@ -2068,7 +2068,7 @@ parameters:
   value: "localhost:9000"
 - name: INVENTORY_API_TOKEN_URL
   description: The SSO token url to use for inventory api
-  value: "https://sso.stage.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+  value: "http://keycloak:8080/auth/realms/redhat-external/protocol/openid-connect/token"
 - name: REPLICATION_TO_RELATION_ENABLED
   description: Enable replication to Relation API
   value: "True"

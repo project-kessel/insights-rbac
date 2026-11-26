@@ -17,17 +17,30 @@ Thank you for contributing to the RBAC service. This guide covers the workflows,
    pipenv install --dev
    ```
 
+   See the [README quick start](README.md#quick-start) for prerequisites and
+   local configuration, including PostgreSQL and Redis.
+
 3. Start the database and apply migrations:
 
    ```bash
    make start-db
-   make run-migrations
+   pipenv run make run-migrations
    ```
 
 4. Install pre-commit hooks:
 
    ```bash
    pipenv run pre-commit install
+   ```
+
+   The `markdown-local-links` hook checks tracked root Markdown files and
+   `docs/**/*.md` for local file links and Markdown heading anchors. It runs
+   on every commit so deleting or renaming a target is caught even when the
+   linking document has not changed. External URLs and absolute application
+   paths are not checked. To check everything manually, run:
+
+   ```bash
+   pipenv run pre-commit run markdown-local-links --all-files
    ```
 
 ## Branching Strategy
@@ -100,6 +113,8 @@ chore(deps): bump django to 5.2.13
 - **Flake8** for linting: max line length 120
 - **Import order**: PyCharm style (`flake8-import-order`), application imports are `rbac` and `api`
 - Pre-commit hooks enforce all of the above automatically
+- When suppressing a lint check, explain why and scope the suppression as
+  narrowly as possible.
 
 ### Architecture Patterns
 
@@ -143,6 +158,7 @@ pipenv run tox -e py312-fast -- tests.management.role.test_view.RoleViewsetTests
 - Never mock Django ORM queries, serializer validation, or URL routing
 - Tests run in parallel with `--failfast` -- clean up objects in `tearDown`
 - Assert both return values and side effects
+- Cover success and failure cases and relevant branches when adding behavior
 
 See [docs/testing-guidelines.md](docs/testing-guidelines.md) for full details.
 
@@ -161,7 +177,7 @@ The repository uses Konflux for CI. Key checks on PRs:
 
 - `ci.ext.devshift.net PR build` (required)
 - Konflux build pipeline
-- Pre-commit hooks (flake8, black, trailing whitespace, django-upgrade, openapi-spec-validator)
+- Pre-commit hooks (flake8, black, trailing whitespace, django-upgrade, openapi-spec-validator, Markdown local links)
 - Snyk security scans
 - PlatSec checks
 
@@ -169,13 +185,21 @@ If a Konflux pipeline fails due to infrastructure issues (not code), retry by co
 
 ## Documentation
 
-- **README.md** -- Project overview and quick start
-- **CONTRIBUTING.md** -- This file
+- **README.md** -- Canonical project overview and quick start
+- **CONTRIBUTING.md** -- Canonical contribution guide (this file)
 - **AGENTS.md** -- AI agent guidance and codebase conventions
 - **docs/ARCHITECTURE.md** -- System architecture and data flow
 - **docs/*-guidelines.md** -- Domain-specific guidelines (security, performance, testing, etc.)
 
+Maintain these root guides in Markdown; do not create duplicate `.rst` versions.
 When changing behavior covered by existing documentation, update the relevant docs as part of your PR.
+
+## Reporting Bugs and Requesting Features
+
+Use [GitHub Issues](https://github.com/project-kessel/insights-rbac/issues) for
+bug reports and feature requests. For bugs, include reproduction steps, errors,
+relevant logs, configuration, and environment details. For features, describe
+the user, desired outcome, and acceptance criteria. Do not include secrets.
 
 ## Questions
 

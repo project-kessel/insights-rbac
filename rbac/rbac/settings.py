@@ -753,6 +753,9 @@ INVENTORY_API_TOKEN_URL = ENVIRONMENT.get_value(
     "INVENTORY_API_TOKEN_URL",
     default="https://sso.stage.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token",
 )
+# oauthlib blocks HTTP token URLs unless this is set (ephemeral Keycloak is http://).
+if INVENTORY_API_TOKEN_URL.startswith("http://"):
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 INVENTORY_API_LOCAL = ENVIRONMENT.bool("INVENTORY_API_LOCAL", default=True)
 INVENTORY_API_SERVER = ENVIRONMENT.get_value("INVENTORY_API_SERVER", default="localhost:9000")
 KESSEL_INVENTORY_CLOWDER_APPLICATION_NAME = "kessel-inventory"
