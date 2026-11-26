@@ -510,6 +510,7 @@ docs/             # Architecture and domain guideline docs
 - [Kafka consumer](docs/KAFKA_CONSUMER.md) -- Consumer operation, configuration, and monitoring.
 - [Kafka outbound events](docs/kafka-outbound-events.md) -- Produced topics and event formats.
 - [V2 org determination](docs/v2-org-determination.md) -- How tenant state and flags affect V2 access decisions during rollout.
+- [V2 rollout operator guide](docs/V2-ROLLOUT-GUIDE.md) -- Opt-in, bootstrap, backfill, validation, and recovery boundaries.
 - [MCP operator guide](docs/MCP-operator-guide.md) -- MCP deployment, security, metrics, and troubleshooting.
 - [Kessel workspace view check](docs/kessel_check_rbac_workspace_view.md) -- Tenant workspace-view permission evaluation.
 - [Kessel role-binding view check](docs/kessel_check_role_binding_view.md) -- Role-binding permission evaluation and required tuples.
