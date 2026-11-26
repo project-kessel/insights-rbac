@@ -34,7 +34,7 @@ insights-rbac is a microservice within the [console.redhat.com](https://console.
 2. The platform gateway (3scale) authenticates the request and injects an `x-rh-identity` header containing the org ID, user info, and entitlements as base64-encoded JSON.
 3. RBAC middleware decodes the identity header, resolves the tenant, and attaches `request.user` and `request.tenant` to the Django request.
 4. The view delegates to the service layer for business logic.
-5. For v2 APIs, permission checks are performed against Kessel (SpiceDB) through the Kessel Inventory API via gRPC.
+5. Authorization depends on the endpoint and configuration: v2 endpoints can use Kessel Inventory checks, legacy access checks, or both.
 6. The response is returned with tenant-scoped data only.
 
 ### MCP Endpoint (Agent-to-Service)
@@ -106,55 +106,52 @@ Each domain module typically contains:
 
 **V1 API** (`/api/rbac/v1/`): Stable, widely consumed. Manages roles, groups, policies, and permissions. Uses flat error arrays. Routes are always registered.
 
-**V2 API** (`/api/rbac/v2/`): Next-generation workspace-based API. Uses RFC 7807 Problem JSON errors. Routes are gated behind the `V2_APIS_ENABLED` feature flag. Authorization is handled by Kessel (via the Inventory API) instead of local permission checks.
+**V2 API** (`/api/rbac/v2/`): Next-generation workspace-based API. Uses RFC 7807 Problem JSON errors. Routes are gated behind the `V2_APIS_ENABLED` feature flag. Authorization varies by endpoint and configuration, as described in the security model below.
 
-Both API versions share the same underlying models and service layer. The differences are in serializers, views, URL routing, and error format.
+The APIs share some domain models, such as groups, principals and permissions, but have distinct role and binding models and version-specific views, serializers and services. Migration and dual-write code links the two representations.
 
 ## Data Model
 
 ### Multi-Tenancy
 
-Every business model inherits `TenantAwareModel`, which adds a non-nullable `ForeignKey` to `Tenant`. All queries are scoped to `request.tenant`. A special "public" tenant holds system-wide platform roles and permissions that are visible to all tenants.
+Tenant-owned domain entities such as roles, groups, workspaces and role bindings use `TenantAwareModel` to reference a tenant. Queries must respect `request.tenant`; association models such as `RoleBindingGroup` and `RoleBindingPrincipal` do not have their own tenant field and must be scoped through their related objects. A special "public" tenant holds shared system roles and permissions.
 
 ### Core Entities
 
 ```
-Tenant (org_id)
-  |
-  +-- Workspace (tree hierarchy, v2)
-  |     |
-  |     +-- RoleBinding (binds role + groups/principals to workspace, v2)
-  |
-  +-- Group
-  |     |
-  |     +-- Principal (users, service accounts)
-  |
-  +-- Role / RoleV2
-  |     |
-  |     +-- Permission / ResourceDefinition
-  |
-  +-- Policy (v1: associates Role + Group)
+V1: Group -- Policy -- Role -- Access -- Permission
+                              |
+                              +-- ResourceDefinition
+V2: RoleV2 -- permissions (many-to-many) -- Permission
+        |
+        +-- children -- RoleV2 (seeded roles for platform roles)
+        |
+        +-- RoleBinding -- resource (workspace or tenant)
+               |-- RoleBindingGroup -- Group -- Principal
+               +-- RoleBindingPrincipal -- Principal (direct subject)
 ```
 
 - **Workspace**: Tree structure (parent/child). Each tenant has a root workspace and a default workspace. Depth is configurable via `WORKSPACE_HIERARCHY_DEPTH_LIMIT`.
-- **RoleV2**: Typed (custom, seeded, platform) via proxy models. Platform roles are tenant-agnostic (public tenant).
-- **RoleBinding**: Associates a role with groups/principals in a specific workspace scope.
-- **Policy** (v1 only): Links a role to a group. Being replaced by role bindings in v2.
+- **Role** and **RoleV2**: Separate models. `RoleV2` has its own many-to-many `permissions` relation to `Permission`, optional `v1_source` link, and custom, seeded and platform proxy types. Seeded and platform roles belong to the public tenant; custom roles belong to an organization.
+- **RoleBinding**: Associates a `RoleV2` with a resource type and ID. `RoleBindingGroup` and `RoleBindingPrincipal` associate group and direct principal subjects respectively; a binding is not limited to a workspace resource.
+- **Policy** (v1 only): Links a group to roles. Being replaced by role bindings in v2.
 
 ### Key Relationships
 
-- Roles have permissions. V1 uses `Access` objects with resource definitions. V2 uses `BindingMapping` to define permission sets.
+- Roles have permissions. V1 uses `Access` objects that link a role to a permission and may have resource definitions. V2 stores direct permissions in `RoleV2.permissions`. Platform roles also have seeded child roles: seeding copies V1 system-role permissions to the seeded roles and attaches platform-default or admin-default roles as children of the appropriate platform roles. `BindingMapping` stores migration/dual-write binding mappings between V1 roles and V2 resources and roles; it does not define V2 permission sets.
 - Groups contain principals. A principal can belong to multiple groups.
-- In v2, access is determined by: workspace scope + role binding + group membership.
+- V2 grants combine a resource scope and role binding with a group subject (and its members) or a directly bound principal. Default bindings associate platform roles with the corresponding default groups. Kessel can derive a platform role's permissions through its seeded children, so checking only the platform role's direct permissions can miss effective grants. This role inheritance is separate from workspace inheritance, which can also affect effective grants. See [role_bindings.md](role_bindings.md#example-6-rbac-administrator-full-org-level-access) for an example.
+
+See [`role/model.py`](../rbac/management/role/model.py), [`role/v2_model.py`](../rbac/management/role/v2_model.py), and [`role_binding/model.py`](../rbac/management/role_binding/model.py) for the model definitions.
 
 ## External Integrations
 
 ### Kessel (SpiceDB, via the Inventory API)
 
-Authorization engine for v2 APIs. RBAC replicates its data model to Kessel as relationship tuples:
+Kessel evaluates relationships used by v2 authorization. RBAC replicates its data model to Kessel as relationship tuples:
 
 - **Write path**: Service code produces replication events via `InventoryReplicator`. In production, `OutboxReplicator` writes to the outbox table, Debezium captures changes via WAL, publishes to Kafka, and the RBAC Kafka consumer writes tuples to Kessel through the Inventory API (`InventoryApiReplicator`) via gRPC.
-- **Read path**: V2 permission classes call `CheckForUpdate` (single resource check) or `StreamedListObjects` (list all authorized resources) against Kessel.
+- **Read path**: Some v2 permission classes check an individual tenant or resource through Kessel Inventory's `CheckForUpdate`; workspace visibility can use `StreamedListObjects` for lists and `CheckForUpdate` for detail actions. Not every v2 endpoint uses both methods.
 
 ### Kafka
 
@@ -195,10 +192,14 @@ Authentication is layered:
 
 Authorization differs by API version:
 
-- **V1**: Local permission checks based on roles and policies.
-- **V2**: Two-layer pattern -- `*AccessPermission` classes for endpoint-level checks (403), `*AccessFilterBackend` for queryset-level filtering. Detail views return 404 for inaccessible resources to prevent existence leakage.
+- **V1**: Primarily local permission checks based on roles and policies; some reads have a Kessel fallback for migrated organizations.
+- **V2 tenant-wide checks**: Role, group and audit-log permission classes check relations on the tenant through Kessel Inventory; group lists also support a narrowly scoped self-access exception. The principal endpoint uses admin or legacy access with a Kessel fallback for migrated organizations.
+- **V2 object-scoped checks**: With `WORKSPACE_ACCESS_CHECK_V2_ENABLED` enabled, `WorkspaceAccessPermission` handles endpoint/create/move checks, while `WorkspaceAccessFilterBackend` filters accessible workspaces. Inaccessible workspace details return 404. When disabled, workspace access falls back to legacy behavior.
+- **V2 resource-scoped checks**: Role-binding permissions check the requested workspace or tenant; unscoped reads fall back to tenant authorization. Tenant checks use org-admin status when `KESSEL_TENANT_AUTH_ENABLED` is disabled, or Kessel when enabled. Batch writes check each resource. Role bindings do not use a universal per-object access filter backend.
 
-See [security-guidelines.md](security-guidelines.md) for full details.
+Authorization failures and filtering are endpoint-specific: an endpoint-level denial can return 403, while workspace detail filtering hides inaccessible objects with 404. Tenant scoping remains necessary regardless of the authorization mechanism.
+
+See [`workspace/filters.py`](../rbac/management/workspace/filters.py) and [`permissions/role_binding_access.py`](../rbac/management/permissions/role_binding_access.py) for these endpoint-specific checks, and [security-guidelines.md](security-guidelines.md) for security conventions.
 
 ## Deployment
 

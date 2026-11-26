@@ -1,13 +1,9 @@
 name: typespec-openapi-drift
 
 on:
+  # Keep this unfiltered: `check-spec-drift` is a required branch protection check.
+  # The job below skips validation for unrelated PR changes while still reporting a result.
   pull_request:
-    paths:
-      - 'docs/source/specs/typespec/main.tsp'
-      - 'docs/source/specs/typespec/tspconfig.yaml'
-      - 'docs/source/specs/typespec/package.json'
-      - 'docs/source/specs/v2/openapi.json'
-      - 'docs/source/specs/v2/openapi.yaml'
   merge_group:
   push:
     branches: [master]
@@ -18,8 +14,35 @@ on:
       - 'docs/source/specs/v2/openapi.json'
       - 'docs/source/specs/v2/openapi.yaml'
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      specs: ${{ steps.filter.outputs.specs }}
+    steps:
+      - uses: dorny/paths-filter@v3.0.2
+        id: filter
+        with:
+          filters: |
+            specs:
+              - 'docs/source/specs/typespec/main.tsp'
+              - 'docs/source/specs/typespec/tspconfig.yaml'
+              - 'docs/source/specs/typespec/package.json'
+              - 'docs/source/specs/v2/openapi.json'
+              - 'docs/source/specs/v2/openapi.yaml'
+
   check-spec-drift:
+    needs: changes
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.specs == 'true' ||
+       needs.changes.result != 'success')
     runs-on: ubuntu-latest
     defaults:
       run:
