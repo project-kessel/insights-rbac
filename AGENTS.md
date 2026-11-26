@@ -138,6 +138,22 @@ Run manually: `pre-commit run --all-files`
 
 Conventional commits format: `type(scope): short description in lowercase`. Types: `fix`, `feat`, `test`, `refactor`, `style`, `docs`, `chore`. Scopes are optional (e.g., `roles`, `permissions`, `deps`). Do NOT include `Co-Authored-By` lines.
 
+### Documentation and Pull Requests
+
+When a PR changes behavior, features, interfaces, architecture, or integrations, update the relevant documentation in the same PR. Update existing canonical docs or add a focused page under `docs/` when needed. Start with the [documentation index by audience](README.md#documentation-index) to find the affected guides.
+
+Examples of documentation to review:
+
+- **API contracts**: For v2 API changes, update the [TypeSpec source](docs/source/specs/typespec/main.tsp) and regenerate the [OpenAPI specification](docs/source/specs/v2/openapi.yaml) with `make generate_v2_spec`. Check the [API contracts guidelines](docs/api-contracts-guidelines.md) and relevant consumer guides too. V1 contracts are in [OpenAPI JSON](docs/source/specs/openapi.json).
+- **Architecture and models**: Update [architecture](docs/ARCHITECTURE.md), [role bindings](docs/role_bindings.md), or [database guidelines](docs/database-guidelines.md) when their design or model descriptions change.
+- **Guidelines and patterns**: Update the affected domain guidance, such as [security](docs/security-guidelines.md), [testing](docs/testing-guidelines.md), or [integrations](docs/integration-guidelines.md), when conventions or integration behavior change.
+
+PR author checklist:
+
+- [ ] Identify affected audiences and review the relevant docs and API contracts.
+- [ ] Update affected docs and generated specifications in the same PR; add new pages to the documentation index when appropriate.
+- [ ] Check examples and links for accuracy, and describe the documentation updates in the PR. If no documentation changes are needed, explain why in the PR summary.
+
 ### What NOT to Do
 
 - Do not modify v1 API behavior -- it is stable and widely consumed.
