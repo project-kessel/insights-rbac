@@ -19,20 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Update conflict label and comment
+      - name: Reconcile conflict label and comments
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             const { owner, repo } = context.repo;
             const labelName = 'needs-rebase';
-            const commentMarker = '<!-- pr-conflict-status -->';
+            const conflictCommentMarker = '<!-- pr-conflict-status:conflict -->';
+            const resolvedCommentMarker = '<!-- pr-conflict-status:resolved -->';
             const conflictComment = [
-              commentMarker,
+              conflictCommentMarker,
               '⚠️ **This PR has merge conflicts with its base branch.**',
               '',
               'Please rebase onto the base branch, resolve the conflicts, and push the updated branch.',
             ].join('\n');
-            const resolvedComment = `${commentMarker}\n✅ **The merge conflicts on this PR are resolved.**`;
+            const resolvedComment = `${resolvedCommentMarker}\n✅ **The merge conflicts on this PR are resolved.**`;
 
             let labelExists = false;
             async function ensureLabel() {
@@ -92,16 +93,25 @@ jobs:
                 ...issue,
                 per_page: 100,
               });
-              const statusComment = comments.find(comment =>
-                comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(`${commentMarker}\n`),
+              const statusComments = comments.filter(comment =>
+                comment.user?.login === 'github-actions[bot]' && (
+                  comment.body?.startsWith(conflictCommentMarker) ||
+                  comment.body?.startsWith(resolvedCommentMarker)
+                ),
               );
-              if (statusComment) {
-                const body = isConflicted ? conflictComment : resolvedComment;
-                if (statusComment.body !== body) {
-                  await github.rest.issues.updateComment({ owner, repo, comment_id: statusComment.id, body });
-                }
-              } else if (isConflicted) {
-                await github.rest.issues.createComment({ ...issue, body: conflictComment });
+              const lastStatusComment = statusComments.reduce((latest, comment) =>
+                !latest || Date.parse(comment.created_at) > Date.parse(latest.created_at) ? comment : latest,
+              null);
+              const lastStatusWasConflicted = lastStatusComment?.body?.startsWith(conflictCommentMarker);
+              const shouldPostComment = isConflicted
+                ? !lastStatusWasConflicted
+                : hasLabel || lastStatusWasConflicted;
+
+              if (shouldPostComment) {
+                await github.rest.issues.createComment({
+                  ...issue,
+                  body: isConflicted ? conflictComment : resolvedComment,
+                });
               }
             }
 
