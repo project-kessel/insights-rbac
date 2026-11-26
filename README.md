@@ -55,8 +55,9 @@ cp .env.example .env     # Configure local settings
 
 For the PostgreSQL container started below, edit `.env` and set
 `DATABASE_HOST=localhost` and `DATABASE_PORT=15432` before running migrations.
-The example's `db:5432` address works inside the Compose network, not on the
-host. If using another PostgreSQL instance, use its host and port instead.
+Use `REDIS_HOST=localhost` and `REDIS_PORT=6379` for a host-accessible Redis.
+See [Environment Variables](#environment-variables) for mode-specific settings
+and switching between modes.
 
 ```bash
 make start-db            # Start Postgres on port 15432
@@ -409,8 +410,38 @@ make generate_v2_spec
 
 ## Environment Variables
 
-Key environment variables (see [docker-compose.yml](docker-compose.yml) and
-[`rbac/rbac/settings.py`](rbac/rbac/settings.py) for configuration):
+### Local connection settings by run mode
+
+These are local development examples, not universal application defaults.
+Choose addresses from the perspective of the process running Django:
+
+| Variable | Docker Compose server | Local Python using published ports |
+|----------|-----------------------|------------------------------------|
+| `DATABASE_HOST` | `db` | `localhost` |
+| `DATABASE_PORT` | `5432` | `15432` |
+| `REDIS_HOST` | `rbac_redis` | `localhost` |
+| `REDIS_PORT` | `6379` | `6379` |
+
+The Compose server sets the database address and defaults `REDIS_HOST` to
+`rbac_redis`; its worker and scheduler use the Redis service address
+`redis:6379` for their broker. Compose publishes PostgreSQL on host port
+`15432` and Redis on host port `6379`. The local Python column assumes those
+ports are available; use the actual host and port for other instances.
+
+When switching to local Python, update the copied `.env` database host **and**
+port before running migrations or starting Django. The Compose name `db` is
+not a host address, and `5432` is the container port, not the published port.
+When switching back, use the Compose addresses for processes in the Compose
+network. Check any `REDIS_HOST` override as well: `localhost` inside a
+container refers to that container, while `rbac_redis` is not a host address.
+Compose explicitly sets the server's database variables and uses its own Redis
+host default; a shell or Compose `.env` value can override `REDIS_HOST`.
+
+### Application defaults
+
+Key application defaults when not otherwise configured (see
+[docker-compose.yml](docker-compose.yml), [`rbac/rbac/database.py`](rbac/rbac/database.py),
+and [`rbac/rbac/settings.py`](rbac/rbac/settings.py)):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -418,6 +449,7 @@ Key environment variables (see [docker-compose.yml](docker-compose.yml) and
 | `DATABASE_PORT` | PostgreSQL port | unset |
 | `DATABASE_NAME` | Database name | unset |
 | `REDIS_HOST` | Redis host | `localhost` |
+| `REDIS_PORT` | Redis port | `6379` |
 | `API_PATH_PREFIX` | API URL prefix | `api/` for routes, `/` for static paths |
 | `V2_APIS_ENABLED` | Enable v2 API routes | `False` |
 | `KAFKA_ENABLED` | Enable Kafka producer/consumer | `False` |
