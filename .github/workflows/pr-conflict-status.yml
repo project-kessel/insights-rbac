@@ -1,116 +1,117 @@
 name: Pull request conflict status
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 
-permissions:
-  issues: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: pr-conflict-status
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   update-conflict-status:
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch
+    permissions:
+      pull-requests: write
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Update conflict label and comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             const { owner, repo } = context.repo;
             const labelName = 'needs-rebase';
             const commentMarker = '<!-- pr-conflict-status -->';
-            const commentBody = (pr, isConflicted) => isConflicted
-              ? `${commentMarker}\n⚠️ **This PR has merge conflicts with ${pr.base.ref}.**\n\nPlease rebase this branch onto ${pr.base.ref} and push the updated branch. This reminder will update when the conflict is resolved.`
-              : `${commentMarker}\n✅ **This PR no longer has merge conflicts with ${pr.base.ref}.**`;
+            const conflictComment = [
+              commentMarker,
+              '⚠️ **This PR has merge conflicts with its base branch.**',
+              '',
+              'Please rebase onto the base branch, resolve the conflicts, and push the updated branch.',
+            ].join('\n');
+            const resolvedComment = `${commentMarker}\n✅ **The merge conflicts on this PR are resolved.**`;
 
-            const label = {
-              name: labelName,
-              color: 'D93F0B',
-              description: 'Pull request has merge conflicts and needs a rebase',
-            };
+            let labelExists = false;
+            async function ensureLabel() {
+              if (labelExists) return;
 
-            // Ensure the label exists so the workflow works in repositories that have not
-            // created it manually. A concurrent run may create it first.
-            try {
-              await github.rest.issues.createLabel({ owner, repo, ...label });
-            } catch (error) {
-              if (error.status !== 422) throw error;
-            }
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: labelName });
+              } catch (error) {
+                if (error.status !== 404) throw error;
 
-            let pullRequests;
-            if (context.eventName === 'schedule' || context.eventName === 'workflow_dispatch') {
-              pullRequests = await github.paginate(github.rest.pulls.list, {
-                owner,
-                repo,
-                state: 'open',
-                per_page: 100,
-              });
-            } else {
-              pullRequests = [context.payload.pull_request];
-            }
-
-            for (const initialPr of pullRequests) {
-              const pull_number = initialPr.number;
-              let pr = initialPr;
-
-              // GitHub computes mergeability asynchronously after PR updates.
-              if (pr.state === 'open') {
-                for (let attempt = 0; pr.mergeable === null && attempt < 6; attempt++) {
-                  await new Promise(resolve => setTimeout(resolve, 3000));
-                  ({ data: pr } = await github.rest.pulls.get({ owner, repo, pull_number }));
+                try {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: labelName,
+                    color: 'D93F0B',
+                    description: 'Pull request has merge conflicts and needs a rebase',
+                  });
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                  // Confirm the label exists in case it was created after the lookup.
+                  await github.rest.issues.getLabel({ owner, repo, name: labelName });
                 }
               }
 
-              if (pr.state === 'open' && pr.mergeable === null) {
-                core.warning(`Mergeability is still being calculated for PR #${pull_number}; leaving its current status unchanged.`);
-                continue;
+              labelExists = true;
+            }
+
+            async function reconcile(pull_number) {
+              // The list response omits mergeable. GitHub may initially return null
+              // from the detail endpoint while it calculates the result.
+              const params = { owner, repo, pull_number };
+              let { data: pr } = await github.rest.pulls.get(params);
+              for (let retry = 0; retry < 3 && pr.state === 'open' && typeof pr.mergeable !== 'boolean'; retry++) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                ({ data: pr } = await github.rest.pulls.get(params));
               }
 
-              const isConflicted = pr.state === 'open' && pr.mergeable === false;
-              const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
-                owner,
-                repo,
-                issue_number: pull_number,
-                per_page: 100,
-              });
-              const hasLabel = labels.some(existing => existing.name === labelName);
+              if (pr.state !== 'open') return;
+              if (typeof pr.mergeable !== 'boolean') {
+                core.warning(`Mergeability is still unknown for PR #${pull_number}.`);
+                return;
+              }
+
+              const issue = { owner, repo, issue_number: pull_number };
+              const isConflicted = pr.mergeable === false;
+              const hasLabel = pr.labels.some(label => label.name === labelName);
 
               if (isConflicted && !hasLabel) {
-                await github.rest.issues.addLabels({ owner, repo, issue_number: pull_number, labels: [labelName] });
+                await ensureLabel();
+                await github.rest.issues.addLabels({ ...issue, labels: [labelName] });
               } else if (!isConflicted && hasLabel) {
-                await github.rest.issues.removeLabel({ owner, repo, issue_number: pull_number, name: labelName });
+                await github.rest.issues.removeLabel({ ...issue, name: labelName });
               }
 
               const comments = await github.paginate(github.rest.issues.listComments, {
-                owner,
-                repo,
-                issue_number: pull_number,
+                ...issue,
                 per_page: 100,
               });
               const statusComment = comments.find(comment =>
-                comment.user?.login === 'github-actions[bot]' && comment.body?.includes(commentMarker),
+                comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(`${commentMarker}\n`),
               );
-
               if (statusComment) {
-                const body = commentBody(pr, isConflicted);
+                const body = isConflicted ? conflictComment : resolvedComment;
                 if (statusComment.body !== body) {
                   await github.rest.issues.updateComment({ owner, repo, comment_id: statusComment.id, body });
                 }
               } else if (isConflicted) {
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: pull_number,
-                  body: commentBody(pr, true),
-                });
+                await github.rest.issues.createComment({ ...issue, body: conflictComment });
               }
+            }
 
-              core.info(`PR #${pull_number}: ${isConflicted ? 'needs rebase' : 'conflict-free or closed'}`);
+            const pullRequests = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            for (const { number } of pullRequests) {
+              try {
+                await reconcile(number);
+              } catch (error) {
+                core.setFailed(`PR #${number}: ${error.message}`);
+              }
             }
