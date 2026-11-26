@@ -397,6 +397,7 @@ for requirements and local examples. For ephemeral deployments, see
 
 ## API Documentation
 
+- REST consumer guide: [docs/API-USAGE.md](docs/API-USAGE.md)
 - V1 API specs: [docs/source/specs/](docs/source/specs/)
 - V2 OpenAPI spec: [docs/source/specs/v2/openapi.yaml](docs/source/specs/v2/openapi.yaml)
 - V2 TypeSpec source: [docs/source/specs/typespec/main.tsp](docs/source/specs/typespec/main.tsp)
