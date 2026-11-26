@@ -13,15 +13,15 @@
   },
   "private": true,
   "dependencies": {
-    "@typespec/http": "1.17.0",
-    "@typespec/json-schema": "1.17.0",
+    "@typespec/http": "1.18.0",
+    "@typespec/json-schema": "1.18.0",
     "@typespec/openapi": "^1.12.0",
     "@typespec/openapi3": "^1.11.0",
-    "@typespec/rest": "^0.87.0",
-    "@typespec/versioning": "^0.87.0",
+    "@typespec/rest": "^0.88.0",
+    "@typespec/versioning": "^0.88.0",
     "tar": "^7.5.22"
   },
   "overrides": {
-    "undici": "8.12.3"
+    "undici": "8.13.1"
   }
 }
