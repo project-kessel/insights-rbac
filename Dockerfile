@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/hi/python:3.12-fips-builder AS base
+FROM registry.access.redhat.com/hi/python:3.12-fips-builder@sha256:69bf0c9d4bb7d8f6b86211b1a23d5ed2fce913727efa8264a98691d6f96ba945 AS base
 
 USER root
 
@@ -121,7 +121,7 @@ ARG GIT_COMMIT=undefined
 ENV GIT_COMMIT=${GIT_COMMIT}
 
 # Runtime stage
-FROM registry.access.redhat.com/hi/core-runtime:2.43-openssl-fips
+FROM registry.access.redhat.com/hi/core-runtime:2.43-openssl-fips@sha256:04eb48f0eac07f15ef2aa5de9188961778a79de48a5d7f71a85d764bff451c55
 
 ENV APP_ROOT=/opt/rbac \
     APP_HOME=/opt/rbac/rbac \
