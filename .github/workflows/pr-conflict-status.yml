@@ -85,13 +85,6 @@ jobs:
               const isConflicted = pr.mergeable === false;
               const hasLabel = pr.labels.some(label => label.name === labelName);
 
-              if (isConflicted && !hasLabel) {
-                await ensureLabel();
-                await github.rest.issues.addLabels({ ...issue, labels: [labelName] });
-              } else if (!isConflicted && hasLabel) {
-                await github.rest.issues.removeLabel({ ...issue, name: labelName });
-              }
-
               const comments = await github.paginate(github.rest.issues.listComments, {
                 ...issue,
                 per_page: 100,
@@ -106,15 +99,27 @@ jobs:
                 !latest || Date.parse(comment.created_at) > Date.parse(latest.created_at) ? comment : latest,
               null);
               const lastStatusWasConflicted = lastStatusComment?.body?.startsWith(conflictCommentMarker);
+              const lastStatusWasResolved = lastStatusComment?.body?.startsWith(resolvedCommentMarker);
+
+              if (isConflicted && !hasLabel) {
+                await ensureLabel();
+                await github.rest.issues.addLabels({ ...issue, labels: [labelName] });
+              }
+
               const shouldPostComment = isConflicted
                 ? !lastStatusWasConflicted
-                : hasLabel || lastStatusWasConflicted;
+                : (hasLabel || lastStatusWasConflicted) && !lastStatusWasResolved;
 
               if (shouldPostComment) {
                 await github.rest.issues.createComment({
                   ...issue,
                   body: isConflicted ? conflictComment : resolvedComment,
                 });
+              }
+
+              // Keep the label as a retry signal until the resolution comment is posted.
+              if (!isConflicted && hasLabel) {
+                await github.rest.issues.removeLabel({ ...issue, name: labelName });
               }
             }
 
