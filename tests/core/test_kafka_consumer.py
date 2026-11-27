@@ -336,6 +336,7 @@ class ReplicationMessageTests(TestCase):
         self.assertEqual(msg.relations_to_remove, [])
 
 
+@override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
 class DebeziumMessageParsingTests(TestCase):
     """Tests for Debezium message parsing functionality."""
 
@@ -345,7 +346,6 @@ class DebeziumMessageParsingTests(TestCase):
         self.liveness_file = Path(self.temp_dir) / "kubernetes-liveness"
         self.readiness_file = Path(self.temp_dir) / "kubernetes-readiness"
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_standard_debezium_message_with_string_payload(self, mock_path):
         """Test parsing standard Debezium message with JSON string payload."""
@@ -386,7 +386,6 @@ class DebeziumMessageParsingTests(TestCase):
         self.assertEqual(len(payload["relations_to_add"]), 1)
         self.assertEqual(len(payload["relations_to_remove"]), 1)
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_debezium_message_with_dict_payload(self, mock_path):
         """Test parsing Debezium message with dict payload (already parsed)."""
@@ -424,7 +423,6 @@ class DebeziumMessageParsingTests(TestCase):
         self.assertEqual(len(result["payload"]["relations_to_add"]), 1)
         self.assertEqual(len(result["payload"]["relations_to_remove"]), 0)
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_non_debezium_message_rejected(self, mock_path):
         """Test that non-Debezium messages are rejected."""
@@ -444,7 +442,6 @@ class DebeziumMessageParsingTests(TestCase):
         with self.assertRaises(ValidationError):
             consumer._parse_debezium_message(legacy_message)
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_invalid_debezium_message(self, mock_path):
         """Test parsing invalid Debezium message."""
@@ -468,7 +465,6 @@ class DebeziumMessageParsingTests(TestCase):
         with self.assertRaises(ValidationError):
             consumer._parse_debezium_message(invalid_message)
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_debezium_message_invalid_json_payload(self, mock_path):
         """Test parsing Debezium message with invalid JSON in payload."""
@@ -483,7 +479,6 @@ class DebeziumMessageParsingTests(TestCase):
         with self.assertRaises(json.JSONDecodeError):
             consumer._parse_debezium_message(debezium_message)
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_parse_debezium_message_unknown_payload_structure(self, mock_path):
         """Test parsing Debezium message with unknown payload structure."""
@@ -502,7 +497,13 @@ class DebeziumMessageParsingTests(TestCase):
             consumer._parse_debezium_message(debezium_message)
 
 
-@override_settings(RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
+@override_settings(
+    RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
+    KAFKA_ENABLED=True,
+    RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=None,
+    KAFKA_AUTH=None,
+    KAFKA_SERVERS=["localhost:9092"],
+)
 class RBACKafkaConsumerTests(TestCase):
     """Tests for RBACKafkaConsumer class."""
 
@@ -512,7 +513,6 @@ class RBACKafkaConsumerTests(TestCase):
         self.liveness_file = Path(self.temp_dir) / "kubernetes-liveness"
         self.readiness_file = Path(self.temp_dir) / "kubernetes-readiness"
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC="test-topic")
     @patch("core.base_consumer.Path")
     def test_init(self, mock_path):
         """Test consumer initialization."""
@@ -536,7 +536,7 @@ class RBACKafkaConsumerTests(TestCase):
 
         self.assertIn("Kafka must be enabled", str(cm.exception))
 
-    @override_settings(KAFKA_ENABLED=True, RBAC_KAFKA_CONSUMER_TOPIC=None)
+    @override_settings(RBAC_KAFKA_CONSUMER_TOPIC=None)
     def test_create_consumer_no_topic(self):
         """Test consumer creation fails when no topic is configured."""
         with self.assertRaises(RuntimeError) as cm:
@@ -544,12 +544,6 @@ class RBACKafkaConsumerTests(TestCase):
 
         self.assertIn("Consumer topic must be configured", str(cm.exception))
 
-    @override_settings(
-        KAFKA_ENABLED=True,
-        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
-        KAFKA_AUTH=None,
-        KAFKA_SERVERS=["localhost:9092"],
-    )
     @patch("core.base_consumer.KafkaConsumer")
     def test_create_consumer_success(self, mock_kafka_consumer):
         """Test successful consumer creation."""
@@ -962,12 +956,6 @@ class RBACKafkaConsumerTests(TestCase):
         with self.assertRaises(ValidationError):
             consumer._process_relations_message(debezium_msg, 0, 0)
 
-    @override_settings(
-        KAFKA_ENABLED=True,
-        RBAC_KAFKA_CONSUMER_TOPIC="test-topic",
-        KAFKA_AUTH=None,
-        KAFKA_SERVERS=["localhost:9092"],
-    )
     @patch(
         "core.kafka_consumer.MessageValidator.validate_parsed_message",
         return_value=True,
@@ -1047,12 +1035,6 @@ class RBACKafkaConsumerTests(TestCase):
             # Verify lock was acquired on startup
             mock_acquire.assert_called_once_with("test-group/0")
 
-    @override_settings(
-        KAFKA_ENABLED=True,
-        RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=None,
-        KAFKA_AUTH=None,
-        KAFKA_SERVERS=["localhost:9092"],
-    )
     @patch("core.base_consumer.KafkaConsumer")
     def test_start_consuming_kafka_error(self, mock_kafka_consumer):
         """Test handling Kafka errors during consumption."""
