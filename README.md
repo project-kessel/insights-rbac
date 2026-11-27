@@ -514,6 +514,7 @@ docs/             # Architecture and domain guideline docs
 ### Operators
 
 - [Authentication guide](docs/AUTHENTICATION.md) -- Deployment authentication, configuration, and troubleshooting.
+- [Root workspace tenant backfills](docs/root-workspace-tenant-backfill.md) -- Checkpoints, safe restart, and production handoff.
 - [Kafka consumer](docs/KAFKA_CONSUMER.md) -- Consumer operation, configuration, and monitoring.
 - [Kafka outbound events](docs/kafka-outbound-events.md) -- Produced topics and event formats.
 - [V2 org determination](docs/v2-org-determination.md) -- How tenant state and flags affect V2 access decisions during rollout.

@@ -45,3 +45,4 @@ from management.audit_log.model import AuditLog
 from management.workspace.model import Workspace
 from management.debezium.model import Outbox
 from management.notifications.model import RhNotificationDelivery, RhNotificationEvent
+from management.tenant_backfill.model import TenantBackfillProgress
