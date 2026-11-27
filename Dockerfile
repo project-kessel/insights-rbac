@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/hi/python:3.12-fips-builder@sha256:69bf0c9d4bb7d8f6b86211b1a23d5ed2fce913727efa8264a98691d6f96ba945 AS base
+FROM registry.access.redhat.com/hi/python:3.12-fips-builder@sha256:521bbc7b25abc0800922f1cf2347768360dd20f3031b6a544b8d1f3b4da13e31 AS base
 
 USER root
 
