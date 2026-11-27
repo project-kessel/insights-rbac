@@ -623,7 +623,7 @@ if [ "$MODE" = "background" ]; then
       -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
       --name rbac-kafka-consumer-test \
       --rm \
-      rbac_server python rbac/manage.py launch-rbac-kafka-consumer)
+      rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations)
 
     echo "Consumer started with container ID: $CONTAINER_ID"
     echo "Check logs with: $CONTAINER_RUNTIME logs rbac-kafka-consumer-test -f"
@@ -639,7 +639,7 @@ else
       -e RBAC_KAFKA_CONSUMER_TOPIC="$TOPIC" \
       -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
       --rm \
-      rbac_server python rbac/manage.py launch-rbac-kafka-consumer
+      rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations
 fi
 EOF
 
@@ -674,7 +674,7 @@ $CONTAINER_RUNTIME exec -it \
   -e RBAC_KAFKA_CUSTOM_CONSUMER_BROKER=kafka:9092 \
   -e RBAC_KAFKA_CONSUMER_TOPIC="$TOPIC" \
   -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
-  rbac_server python rbac/manage.py launch-rbac-kafka-consumer
+  rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations
 EOF
 
     chmod +x scripts/debezium/run_kafka_consumer.sh
@@ -831,7 +831,7 @@ run_kafka_consumer() {
           -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
           -e DJANGO_LOG_HANDLERS=console \
           -e DJANGO_LOG_FILE=/tmp/app.log \
-          rbac_server python rbac/manage.py launch-rbac-kafka-consumer
+          rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations
 
         print_success "Kafka consumer started in background"
         echo "Check logs with: $CONTAINER_RUNTIME logs rbac_server -f"
@@ -848,7 +848,7 @@ run_kafka_consumer() {
           -e RBAC_KAFKA_CONSUMER_GROUP_ID=rbac-consumer-group \
           -e DJANGO_LOG_HANDLERS=console \
           -e DJANGO_LOG_FILE=/tmp/app.log \
-          rbac_server python rbac/manage.py launch-rbac-kafka-consumer
+          rbac_server python rbac/manage.py launch-rbac-kafka-consumer relations
     fi
 }
 

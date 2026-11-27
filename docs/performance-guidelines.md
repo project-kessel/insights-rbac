@@ -111,10 +111,6 @@ Set `ATOMIC_RETRY_DISABLED=True` in test settings to skip `pgtransaction` wrappe
 |---|---|---|
 | `cross_account_cleanup` | Daily at midnight | Expire cross-account requests |
 | `run_redis_cache_health` | Every 30 seconds | Toggle caching on Redis failure |
-| `principal_cleanup_via_kafka` | Every 60 seconds (if `KAFKA_PRINCIPAL_CLEANUP_JOB_ENABLED`) | Process principal events from Kafka |
-| `principal_cleanup` | Every 7 days (if Kafka cleanup disabled) | Clean stale principals via BOP |
-
-The `KAFKA_PRINCIPAL_CLEANUP_DRAIN_TIMEOUT_MS` setting (default 50 000 ms) caps the wall-clock budget per Kafka cycle, leaving headroom for consumer setup and shutdown within the 60-second beat interval.
 
 ### Task Guidelines
 

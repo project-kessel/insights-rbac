@@ -51,15 +51,15 @@ You can also run the consumer directly:
 ```bash
 # Basic execution
 KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event \
-  pipenv run python rbac/manage.py launch-rbac-kafka-consumer
+  pipenv run python rbac/manage.py launch-rbac-kafka-consumer relations
 
 # With custom topic
 KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=my-custom-topic \
-  pipenv run python rbac/manage.py launch-rbac-kafka-consumer --topic my-topic
+  pipenv run python rbac/manage.py launch-rbac-kafka-consumer relations --topic my-topic
 
 # With debug logging
 KAFKA_ENABLED=true RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.rbac-consumer-replication-event \
-  DJANGO_LOG_LEVEL=DEBUG pipenv run python rbac/manage.py launch-rbac-kafka-consumer
+  DJANGO_LOG_LEVEL=DEBUG pipenv run python rbac/manage.py launch-rbac-kafka-consumer relations
 ```
 
 ### Command Line Options
