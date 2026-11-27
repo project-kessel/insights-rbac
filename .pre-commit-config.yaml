@@ -41,14 +41,14 @@ repos:
     name: Check local Markdown links and anchors
     entry: python scripts/validations/check_markdown_links.py
     language: python
-    additional_dependencies: [markdown-it-py==4.0.0]
+    additional_dependencies: [markdown-it-py==4.3.0]
     always_run: true
     pass_filenames: false
   - id: markdown-local-links-tests
     name: Test Markdown local link checker
     entry: python -m unittest scripts.validations.test_markdown_links
     language: python
-    additional_dependencies: [markdown-it-py==4.0.0]
+    additional_dependencies: [markdown-it-py==4.3.0]
     files: ^(scripts/validations/(check_markdown_links|test_markdown_links)\.py|\.pre-commit-config\.yaml)$
     pass_filenames: false
   - id: typespec-openapi-drift
