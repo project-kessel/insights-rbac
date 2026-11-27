@@ -950,7 +950,7 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer):
             )
             logger.error(error_msg)
             messages_processed_total.labels(message_type="unknown", status="json_error").inc()
-            raise
+            raise ValidationError() from e
 
     def _ensure_lock_token_on_assignment(self):
         """Ensure lock token is acquired when partitions are assigned.
