@@ -24,9 +24,9 @@ from unittest.mock import call, patch, ANY, Mock
 from uuid import uuid4
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.utils import OperationalError
-from django.test.utils import override_settings
+from django.test.utils import CaptureQueriesContext, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from psycopg2.errors import DeadlockDetected, SerializationFailure
@@ -4585,6 +4585,95 @@ class GroupPrincipalViewsetTests(GroupViewsetTests):
             principal.user_id,
             "the user ID IT returned for the service access token must be persisted on creation",
         )
+        self.assertEqual(
+            MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN,
+            principal.service_account_type,
+            "the mode IT reported must be persisted, so that surfaces which read the database can use it",
+        )
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_regular_service_account_stores_no_mode(self, sa_mock):
+        """Test that an ordinary service account is stored with a null mode.
+
+        IT omits the attribute for one, so NULL here means "IT said nothing" -- indistinguishable from
+        "not learned yet". That ambiguity is deliberate; narrowing it is the reconciliation job's problem.
+        """
+        sa_uuid = str(uuid4())
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid)]
+
+        self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        principal = Group.objects.get(uuid=self.group.uuid).principals.get(service_account_id=sa_uuid)
+        self.assertIsNone(principal.service_account_type)
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_mode_fill_does_not_write_user_id(self, sa_mock):
+        """Test that filling only the mode does not write the user ID read alongside it.
+
+        A bare save() writes every column, so a request that filled just the mode would also write back
+        the user_id it read moments earlier -- NULL, when IT sent none -- undoing a concurrent fill and
+        leaving the principal with no resource ID for replication. The surrounding transaction does not
+        prevent it: backfill_atomic only runs SERIALIZABLE when PRINCIPAL_BACKFILL_AUTHORITATIVE_ENABLED
+        is set, which outside ephemeral environments it is not.
+
+        The race itself is not reproducible here; what is, and what regressed, is that the mode-only path
+        must not name user_id in its UPDATE.
+        """
+        sa_uuid = str(uuid4())
+        Principal.objects.create(
+            username=f"service-account-{sa_uuid}",
+            tenant=self.tenant,
+            type=Principal.Types.SERVICE_ACCOUNT,
+            service_account_id=sa_uuid,
+            user_id=None,
+            service_account_type=None,
+        )
+        payload = self._it_service_account_payload(sa_uuid, service_access_token=True)
+        del payload["userId"]
+        sa_mock.return_value = [payload]
+
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        principal = Group.objects.get(uuid=self.group.uuid).principals.get(service_account_id=sa_uuid)
+        self.assertEqual(MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN, principal.service_account_type)
+        self.assertIsNone(principal.user_id, "IT returned no user ID, so none should have been invented")
+
+        principal_updates = [
+            query["sql"]
+            for query in queries.captured_queries
+            if query["sql"].lstrip().startswith('UPDATE "management_principal"')
+        ]
+        self.assertTrue(principal_updates, "the mode should have been written")
+        for sql in principal_updates:
+            self.assertNotIn("user_id", sql, "a mode-only fill must not name the user_id column")
+
+    @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
+    @patch("management.principal.it_service.ITService.request_service_accounts")
+    def test_add_group_principals_service_access_token_populates_missing_mode(self, sa_mock):
+        """Test that a principal already stored without a mode acquires one on a later group add.
+
+        A principal created by username lookup never sees an IT payload, so the group add is the only
+        place its mode can be filled in. Without this branch the column stays null forever for them.
+        """
+        sa_uuid = str(uuid4())
+        Principal.objects.create(
+            username=f"service-account-{sa_uuid}",
+            tenant=self.tenant,
+            type=Principal.Types.SERVICE_ACCOUNT,
+            service_account_id=sa_uuid,
+            user_id=f"preexisting_{sa_uuid}",
+            service_account_type=None,
+        )
+        sa_mock.return_value = [self._it_service_account_payload(sa_uuid, service_access_token=True)]
+
+        self.assertEqual(status.HTTP_200_OK, self._add_service_account_to_group(sa_uuid).status_code)
+
+        principal = Group.objects.get(uuid=self.group.uuid).principals.get(service_account_id=sa_uuid)
+        self.assertEqual(MOCK_SERVICE_ACCOUNT_TYPE_SERVICE_ACCESS_TOKEN, principal.service_account_type)
+        self.assertEqual(f"preexisting_{sa_uuid}", principal.user_id, "an existing user ID must not be overwritten")
 
     @override_settings(IT_BYPASS_TOKEN_VALIDATION=True)
     @patch("management.principal.it_service.ITService.request_service_accounts")
