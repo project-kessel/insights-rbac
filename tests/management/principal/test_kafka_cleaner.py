@@ -1334,8 +1334,10 @@ class PrincipalKafkaTestsWithV2TenantBootstrap(PrincipalKafkaTests):
         consumer_instance.__iter__.return_value = iter([mock_message])
         consumer_mock.return_value = consumer_instance
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(Exception) as context:
             self._make_consumer().start_consuming()
+
+        self.assertIn("BOP response missing 'data' key", str(context.exception))
 
         consumer_instance.close.assert_called_once()
         # Nothing should be created on proxy error
