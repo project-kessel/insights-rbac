@@ -1,5 +1,14 @@
 # Integration Guidelines
 
+### Ephemeral Inventory credential bootstrap
+
+When ephemeral Inventory credentials are missing, each process attempts Keycloak
+client bootstrap on the first Inventory call. Successful credentials are cached
+in that process. After a failed attempt, callers in that process fail fast for
+30 seconds before another attempt is allowed; this prevents waiting threads from
+serially retrying a slow failure. The cooldown and cache are not shared across
+processes. A first attempt can still wait for the individual HTTP timeouts.
+
 ## External Services Overview
 
 RBAC integrates with five external services: the Kessel Inventory API (gRPC, used for both relation replication and access checks), Kafka (producer + consumer), BOP (HTTP), IT Service (HTTP), and Redis (Celery broker + cache). All connections are configured via environment variables with local-dev bypass modes.

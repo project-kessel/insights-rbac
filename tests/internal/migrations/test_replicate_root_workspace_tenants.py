@@ -9,6 +9,7 @@ from management.inventory_replicator.inventory_replicator import ReplicationEven
 from management.inventory_replicator.noop_replicator import NoopReplicator
 from management.tenant_service import V2TenantBootstrapService
 from management.models import Workspace
+from management.tenant_backfill.model import TenantBackfillProgress
 from migration_tool.in_memory_tuples import (
     InMemoryTuples,
     InMemoryRelationReplicator,
@@ -17,6 +18,7 @@ from migration_tool.in_memory_tuples import (
     subject,
     all_of,
 )
+from tests.identity_request import TransactionalIdentityRequest
 
 
 @override_settings(ATOMIC_RETRY_DISABLED=True)
@@ -92,3 +94,38 @@ class ReplicateRootWorkspacesTest(TestCase):
             replicate_root_workspace_tenants(NoopReplicator())
 
         self.assertIn("bootstrap", str(ctx.exception))
+
+
+@override_settings(ATOMIC_RETRY_DISABLED=True)
+class ReplicateRootWorkspacesResumeTest(TransactionalIdentityRequest):
+    """Use real commits to verify the checkpoint follows the NOTIFY wait."""
+
+    def setUp(self):
+        super().setUp()
+        Tenant.objects.exclude(tenant_name="public").delete()
+        bootstrap_service = V2TenantBootstrapService(replicator=NoopReplicator())
+        self.first = bootstrap_service.new_bootstrapped_tenant(org_id="resume-a").tenant
+        self.second = bootstrap_service.new_bootstrapped_tenant(org_id="resume-b").tenant
+
+    @patch("internal.migrations.replicate_root_workspace_tenants.TENANT_BATCH_SIZE", 1)
+    @patch("internal.pg_notify_wait.wait_for_pg_notify")
+    def test_retry_starts_after_last_acknowledged_batch(self, mock_wait):
+        replicator = Mock()
+        mock_wait.side_effect = [None, TimeoutError("second batch was not acknowledged")]
+
+        with self.assertRaises(TimeoutError):
+            replicate_root_workspace_tenants(replicator=replicator)
+
+        progress = TenantBackfillProgress.objects.get(job_name="replicate-root-workspace-tenants")
+        self.assertEqual((progress.last_tenant_id, progress.processed_count), (self.first.id, 1))
+
+        replicator.reset_mock()
+        mock_wait.side_effect = None
+        replicate_root_workspace_tenants(replicator=replicator)
+
+        self.assertEqual(replicator.replicate.call_count, 1)
+        event = replicator.replicate.call_args.args[0]
+        self.assertEqual(event.add[0].subject.subject.id, self.second.tenant_resource_id())
+        progress.refresh_from_db()
+        self.assertEqual((progress.last_tenant_id, progress.processed_count), (self.second.id, 2))
+        self.assertIsNotNone(progress.completed_at)
