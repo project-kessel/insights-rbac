@@ -33,6 +33,11 @@ from django.db.models import Q
 from django.urls import resolve
 from internal.pg_notify_wait import replicate_with_notify
 from internal.schemas import INVENTORY_INPUT_SCHEMAS, RELATION_INPUT_SCHEMAS
+from internal.tenant_backfill_progress import (
+    finish_backfill_progress,
+    load_backfill_progress,
+    record_backfill_progress,
+)
 from jsonschema import validate
 from management.atomic_transactions import atomic, atomic_block, atomic_with_retry
 from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
@@ -71,6 +76,7 @@ from api.cross_access.model import CrossAccountRequest
 from api.models import Tenant, User
 
 logger = logging.getLogger(__name__)
+ROOT_PARENT_REMOVAL_BATCH_SIZE = 500
 PROXY = PrincipalProxy()
 
 
@@ -453,31 +459,49 @@ def remove_legacy_root_workspace_tenant_parent_relations() -> dict:
         return {"skipped": True, "reason": "REPLICATION_TO_RELATION_ENABLED is False"}
 
     replicator = OutboxReplicator()
-    qs = Tenant.objects.exclude(tenant_name="public").order_by("id")
+    qs = Tenant.objects.exclude(tenant_name="public")
+    progress = load_backfill_progress("remove-legacy-root-workspace-tenant-parent", qs)
+    if progress.completed_at is not None:
+        return {"skipped": True, "reason": "Backfill already completed"}
+
+    qs = qs.filter(id__gt=progress.last_tenant_id, id__lte=progress.upper_tenant_id).order_by("id")
 
     batch: list[RelationTuple] = []
-    tenants_processed = 0
-    batch_size = 500
-    tenants_total = qs.count()
+    scanned_since_checkpoint = 0
+    last_scanned_id = progress.last_tenant_id
 
     def flush_batch() -> None:
-        if not batch:
+        nonlocal scanned_since_checkpoint
+        if not scanned_since_checkpoint:
             return
-        replicate_with_notify(
-            replicator,
-            ReplicationEvent(
-                event_type=ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS,
-                info={"batch_size": len(batch)},
-                partition_key=PartitionKey.byEnvironment(),
-                add=[],
-                remove=batch,
-            ),
+        if batch:
+            replicate_with_notify(
+                replicator,
+                ReplicationEvent(
+                    event_type=ReplicationEventType.REMOVE_ROOT_PARENT_TENANT_RELATIONSHIPS,
+                    info={"batch_size": len(batch)},
+                    partition_key=PartitionKey.byEnvironment(),
+                    add=[],
+                    remove=batch,
+                ),
+            )
+        record_backfill_progress(
+            progress,
+            last_tenant_id=last_scanned_id,
+            scanned_count=scanned_since_checkpoint,
         )
         batch.clear()
-        logger.info(f"Processed {tenants_processed} of {tenants_total} tenants")
+        scanned_since_checkpoint = 0
+        logger.info(
+            "Processed %s of %s tenants; checkpoint tenant ID %s",
+            progress.processed_count,
+            progress.total_count,
+            progress.last_tenant_id,
+        )
 
     for tenant in qs.iterator(chunk_size=500):
-        tenants_processed += 1
+        scanned_since_checkpoint += 1
+        last_scanned_id = tenant.id
         tenant_resource_id = tenant.tenant_resource_id()
         if tenant_resource_id is None:
             continue
@@ -491,14 +515,15 @@ def remove_legacy_root_workspace_tenant_parent_relations() -> dict:
                 "parent",
             )
         )
-        if len(batch) >= batch_size:
+        if len(batch) >= ROOT_PARENT_REMOVAL_BATCH_SIZE:
             flush_batch()
 
     flush_batch()
+    finish_backfill_progress(progress)
 
     return {
         "skipped": False,
-        "tenants_processed": tenants_processed,
+        "tenants_processed": progress.processed_count,
     }
 
 
