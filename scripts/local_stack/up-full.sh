@@ -142,6 +142,7 @@ Environment:
   RBAC_BUILD_NETWORK   Optional network mode for the local RBAC image build
   INVENTORY_DB_PORT    Host port for HBI Postgres (default: 15433)
   HBI_WEB_PORT         Host port for HBI API (default: 8080)
+  PROMETHEUS_MULTIPROC_DIR  HBI metrics directory (default: /tmp)
   UNLEASH_TOKEN        Required by Host Inventory dev.yml parsing (default: local-dev-token)
 
 Local source paths are saved in:
@@ -849,6 +850,7 @@ start_hbi() {
   export UNLEASH_TOKEN="${UNLEASH_TOKEN:-local-dev-token}"
   export INVENTORY_DB_PORT="${INVENTORY_DB_PORT:-15433}"
   export HBI_WEB_PORT="${HBI_WEB_PORT:-8080}"
+  export PROMETHEUS_MULTIPROC_DIR="${PROMETHEUS_MULTIPROC_DIR:-/tmp}"
 
   log-info "Creating HBI Kafka topics on Kessel broker..."
   "${SCRIPT_DIR}/ensure-hbi-kafka-topics.sh" "${INVENTORY_API_REPO}"
