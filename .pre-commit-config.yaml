@@ -2,7 +2,7 @@ default_language_version:
   python: python3.12
 repos:
 - repo: https://github.com/PyCQA/flake8
-  rev: "7.4.1"
+  rev: "7.5.0"
   hooks:
   - id: flake8
     args: ["rbac"]
@@ -37,6 +37,20 @@ repos:
         exclude: (package(-lock)?\.json|tspconfig\.yaml|rbac/internal/specs/openapi\.json)$
 - repo: local
   hooks:
+  - id: markdown-local-links
+    name: Check local Markdown links and anchors
+    entry: python scripts/validations/check_markdown_links.py
+    language: python
+    additional_dependencies: [markdown-it-py==4.0.0]
+    always_run: true
+    pass_filenames: false
+  - id: markdown-local-links-tests
+    name: Test Markdown local link checker
+    entry: python -m unittest scripts.validations.test_markdown_links
+    language: python
+    additional_dependencies: [markdown-it-py==4.0.0]
+    files: ^(scripts/validations/(check_markdown_links|test_markdown_links)\.py|\.pre-commit-config\.yaml)$
+    pass_filenames: false
   - id: typespec-openapi-drift
     name: Check TypeSpec/OpenAPI spec drift
     entry: bash -c 'export PATH="$PWD/docs/source/specs/typespec/node_modules/.bin:$PATH"; command -v tsp >/dev/null 2>&1 || { echo "WARNING - tsp not installed, skipping drift check"; exit 0; } && make generate_v2_spec && git diff --exit-code docs/source/specs/v2/ || { echo "ERROR - OpenAPI specs are out of date with main.tsp. Run make generate_v2_spec and commit the result."; exit 1; }'

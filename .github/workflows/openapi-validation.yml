@@ -8,26 +8,46 @@ on:
       - 'docs/source/specs/v2/openapi.yaml'
       - 'docs/source/specs/v2/openapi.json'
       - '.redocly.yaml'
+  # Keep this unfiltered: `openapi-validate` is a required branch protection check.
+  # The job below skips validation for unrelated PR changes while still reporting a result.
   pull_request:
-    paths:
-      - 'docs/source/specs/openapi.json'
-      - 'docs/source/specs/v2/openapi.yaml'
-      - 'docs/source/specs/v2/openapi.json'
-      - '.redocly.yaml'
   merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      openapi: ${{ steps.filter.outputs.openapi }}
+    steps:
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            openapi:
+              - 'docs/source/specs/openapi.json'
+              - 'docs/source/specs/v2/openapi.yaml'
+              - 'docs/source/specs/v2/openapi.json'
+              - '.redocly.yaml'
+
   openapi-validate:
+    needs: changes
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.openapi == 'true' ||
+       needs.changes.result != 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
 
