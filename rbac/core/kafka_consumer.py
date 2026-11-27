@@ -490,6 +490,14 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer):
         raise RuntimeError(f"Failed to acquire lock after {max_retries} attempts")
 
     def _do_handle_partitions_revoked(self, revoked_partitions: list[TopicPartition]):
+        if not self.commit_config.commit_on_rebalance:
+            logger.debug("Skipping lock update due to commit on rebalance being disabled")
+            return
+
+        if self._shutdown_in_progress:
+            logger.debug("Skipping lock update during shutdown")
+            return
+
         # Clear lock token since we no longer own the partition
         with self._lock_mutex:
             if self.lock_token:

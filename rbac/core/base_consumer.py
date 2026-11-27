@@ -786,15 +786,7 @@ class BaseRBACKafkaConsumer(abc.ABC):
         """Handle any actions required after permission revocation."""
         ...
 
-    def _on_partitions_revoked(self, revoked_partitions: list[TopicPartition]):
-        """Handle partition rebalance - commit offsets before partitions are revoked.
-
-        This is called by Kafka when partitions are being reassigned to other consumers.
-        We commit our current offsets to ensure we don't lose progress.
-        """
-        # Track rebalance event
-        self._metrics.rebalance_events_total.labels(event_type="partitions_revoked").inc()
-
+    def _maybe_commit_on_revoke(self):
         if not self.commit_config.commit_on_rebalance:
             logger.debug("Rebalance offset commit disabled by config")
             return
@@ -802,8 +794,6 @@ class BaseRBACKafkaConsumer(abc.ABC):
         if self._shutdown_in_progress:
             logger.debug("Skipping rebalance commit during shutdown")
             return
-
-        logger.info(f"Partitions being revoked: {revoked_partitions}")
 
         # Commit any stored offsets before losing the partitions
         if self.offset_manager:
@@ -815,6 +805,17 @@ class BaseRBACKafkaConsumer(abc.ABC):
             else:
                 logger.warning("Failed to commit offsets during rebalance")
 
+    def _on_partitions_revoked(self, revoked_partitions: list[TopicPartition]):
+        """Handle partition rebalance - commit offsets before partitions are revoked.
+
+        This is called by Kafka when partitions are being reassigned to other consumers.
+        We commit our current offsets to ensure we don't lose progress.
+        """
+        # Track rebalance event
+        self._metrics.rebalance_events_total.labels(event_type="partitions_revoked").inc()
+        logger.info(f"Partitions being revoked: {revoked_partitions}")
+
+        self._maybe_commit_on_revoke()
         self._do_handle_partitions_revoked(revoked_partitions)
 
     @abc.abstractmethod
