@@ -17,6 +17,10 @@
 
 """Test the shared application utilities."""
 
+import importlib
+import os
+from unittest import mock
+
 from core.utils import *
 from django.test import SimpleTestCase, TestCase, override_settings
 from datetime import datetime, timedelta
@@ -45,8 +49,33 @@ class ParseIsoDateTimeTests(SimpleTestCase):
 
     def test_parse_iso_datetime_rejects_non_iso_values(self):
         """Reject malformed values so settings can apply their safe fallback."""
-        with self.assertRaises(ValueError):
-            parse_iso_datetime("not-a-real-time")
+        for value in ("not-a-real-time", "2030-01-01X12:00:00Z", "2030-01-01\n12:00:00Z", "2030-001T12:00:00Z"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_iso_datetime(value)
+
+    def test_parse_iso_datetime_accepts_calendar_date_and_space_separator(self):
+        """Accept calendar dates and space-separated timestamps."""
+        self.assertEqual(parse_iso_datetime("2030-01-01"), datetime(2030, 1, 1, tzinfo=pytz.UTC))
+        self.assertEqual(parse_iso_datetime("2030-01-01 12:00:00Z"), datetime(2030, 1, 1, 12, tzinfo=pytz.UTC))
+
+    def test_invalid_cutoffs_use_safe_fallback_in_both_settings(self):
+        """Invalid separators disable destructive API and seeding operations."""
+        import rbac.settings as settings_module
+
+        try:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "RBAC_DESTRUCTIVE_API_ENABLED_UNTIL": "2030-01-01X12:00:00Z",
+                    "RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL": "2030-01-01X12:00:00Z",
+                },
+            ):
+                importlib.reload(settings_module)
+                epoch = datetime(1970, 1, 1, tzinfo=pytz.UTC)
+                self.assertEqual(settings_module.INTERNAL_DESTRUCTIVE_API_OK_UNTIL, epoch)
+                self.assertEqual(settings_module.DESTRUCTIVE_SEEDING_OK_UNTIL, epoch)
+        finally:
+            importlib.reload(settings_module)
 
 
 class CoreUtilsTests(TestCase):

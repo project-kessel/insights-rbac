@@ -18,14 +18,17 @@
 """Shared application utilities."""
 
 import datetime
+import re
 
 import pytz
 from django.conf import settings
 
 
 def parse_iso_datetime(value: str) -> datetime.datetime:
-    """Parse an ISO 8601 datetime, treating naive values as UTC."""
+    """Parse an ISO calendar date or datetime, treating naive values as UTC."""
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9].*)?", normalized):
+        raise ValueError("Expected an ISO calendar date or datetime")
     parsed = datetime.datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=pytz.UTC)

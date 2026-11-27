@@ -462,10 +462,12 @@ and [`rbac/rbac/settings.py`](rbac/rbac/settings.py)):
 
 `RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL` and
 `RBAC_DESTRUCTIVE_API_ENABLED_UNTIL` set the respective destructive-operation
-expiry times. Use ISO 8601 timestamps, for example `2026-11-26T12:34:56Z`
-or `2026-11-26T12:34:56+02:00`. Timestamps without an offset are interpreted
-as UTC. Missing or invalid values fall back to the UTC epoch, disabling the
-operation. Non-ISO date strings are not supported.
+expiry times. Use an ISO 8601 calendar date (`YYYY-MM-DD`), optionally followed
+by a time separated by `T` or a space, for example `2026-11-26T12:34:56Z`
+or `2026-11-26T12:34:56+02:00`. Values without an offset are interpreted as
+UTC. Other ISO 8601 forms, including ordinal and week dates, are not supported.
+Missing or invalid values fall back to the UTC epoch, disabling the operation.
+See the [release notes](docs/release-notes.md) for the compatibility change.
 
 ## Project Structure
 

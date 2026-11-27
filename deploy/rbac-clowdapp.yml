@@ -1833,10 +1833,10 @@ parameters:
 - description: Whether or not to bootstrap tenants using V2 logic (i.e. creating workspaces and relations).
   name: V2_BOOTSTRAP_TENANT
   value: 'True'
-- description: Timestamp expiration allowance on destructive actions through the internal RBAC API
+- description: ISO 8601 calendar date or timestamp expiry for destructive internal RBAC API actions; naive values use UTC
   name: RBAC_DESTRUCTIVE_API_ENABLED_UNTIL
   value: ''
-- description: Timestamp expiration allowance on destructive actions through the seeding job
+- description: ISO 8601 calendar date or timestamp expiry for destructive seeding actions; naive values use UTC
   name: RBAC_DESTRUCTIVE_SEEDING_ENABLED_UNTIL
   value: ''
 - description: Image tag
