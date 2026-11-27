@@ -14,7 +14,7 @@ jobs:
       github.event.check_run.app.slug == 'red-hat-konflux'
     steps:
       - name: Wait for Quay image
-        uses: petracihalova/check-quay-image@v1
+        uses: petracihalova/check-quay-image@f03f19255f5240f57fd2bae36483907b86eafcf4 # v1
         with:
           quay_repo: redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac
           commit_sha: ${{ github.event.check_run.head_sha }}
