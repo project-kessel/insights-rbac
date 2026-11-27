@@ -110,6 +110,10 @@ Ensure the container VM has enough memory for the full stack.
 If the local RBAC image build cannot reach package mirrors through the default
 BuildKit network, set `RBAC_BUILD_NETWORK=host` for the startup command.
 
+HBI's `PROMETHEUS_MULTIPROC_DIR` defaults to `/tmp` in the full stack. Set and
+export it before startup to use another directory inside the HBI container;
+the directory must exist and be writable by HBI.
+
 To run alongside another local RBAC stack, set an isolated Compose project,
 network, data directories, and port offset. Each isolated project gets a
 project-specific RBAC image tag unless `RBAC_IMAGE` is set explicitly. For

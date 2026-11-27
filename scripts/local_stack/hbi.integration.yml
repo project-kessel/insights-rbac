@@ -20,6 +20,7 @@ services:
       CACHE_HOST: redis
       CACHE_PORT: "6379"
       OTEL_ENABLED: "false"
+      PROMETHEUS_MULTIPROC_DIR: "${PROMETHEUS_MULTIPROC_DIR:-/tmp}"
     networks:
       - default
       - kessel
