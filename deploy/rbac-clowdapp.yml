@@ -228,6 +228,12 @@ objects:
             value: ${NOTIFICATIONS_ENABLED}
           - name: NOTIFICATIONS_RH_ENABLED
             value: ${NOTIFICATIONS_RH_ENABLED}
+          - name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+            value: ${NOTIFICATIONS_RH_RATE_PER_MINUTE}
+          - name: NOTIFICATIONS_RH_QUIET_START
+            value: ${NOTIFICATIONS_RH_QUIET_START}
+          - name: NOTIFICATIONS_RH_QUIET_END
+            value: ${NOTIFICATIONS_RH_QUIET_END}
           - name: KAFKA_ENABLED
             value: ${KAFKA_ENABLED}
           - name: DR_RELATIONS_RECONCILE_ENABLED
@@ -1940,6 +1946,15 @@ parameters:
 - description: Enable sending out notification events of Red Hat changes
   name: NOTIFICATIONS_RH_ENABLED
   value: 'False'
+- description: Target Red Hat role notification messages per batch; the beat task sends one batch per minute
+  name: NOTIFICATIONS_RH_RATE_PER_MINUTE
+  value: '3000'
+- description: Start of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_START
+  value: '23:30'
+- description: End of the daily UTC window (HH:MM) in which Red Hat role notifications are not sent
+  name: NOTIFICATIONS_RH_QUIET_END
+  value: '00:30'
 - description: Enable sending out notification events (typo variant used by service deployer)
   name: NOTIFICATONS_ENABLED
   value: 'False'
@@ -2053,7 +2068,7 @@ parameters:
   value: "localhost:9000"
 - name: INVENTORY_API_TOKEN_URL
   description: The SSO token url to use for inventory api
-  value: "https://sso.stage.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+  value: "http://keycloak:8080/auth/realms/redhat-external/protocol/openid-connect/token"
 - name: REPLICATION_TO_RELATION_ENABLED
   description: Enable replication to Relation API
   value: "True"

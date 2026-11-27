@@ -116,7 +116,7 @@ from management.principal.proxy import (
     bop_request_time_tracking,
     external_principal_to_user,
 )
-from management.role.definer import delete_permission
+from management.role.definer import delete_permission, replicate_system_role_deletion
 from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
@@ -1042,40 +1042,42 @@ def role_removal(request):
         role_name = escape(role_name)
         # Add tenant public to prevent deletion of custom roles
         role_obj = get_object_or_404(Role, name=role_name, tenant=Tenant.objects.get(tenant_name="public"))
-        with transaction.atomic():
-            try:
-                dual_write_handler = SeedingInventoryApiDualWriteHandler(role_obj)
-                dual_write_handler.replicate_deleted_system_role()
+        try:
+            # The try must wrap the atomic block, not sit inside it: swallowing the exception
+            # inside would let the transaction commit the outbox events of an already-streamed
+            # batch without the role deletion.
+            with transaction.atomic():
+                replicate_system_role_deletion(role_obj)
                 role_obj.delete()
-                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
-                logger.info(
-                    f"System role '{role_name}' deleted. Requested by '{request.user.username}'",
-                    extra={
-                        "action": "DELETE",
-                        "resource_type": "role",
-                        "resource_id": role_name,
-                        "outcome": "success",
-                        "org_id": getattr(request.user, "org_id", None),
-                        "username": getattr(request.user, "username", None),
-                    },
-                )
-                return HttpResponse(f"Role '{role_name}' deleted.", status=204)
-            except Exception:
-                # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
-                logger.error(
-                    "System role deletion failed",
-                    extra={
-                        "action": "DELETE",
-                        "resource_type": "role",
-                        "resource_id": role_name,
-                        "outcome": "failure",
-                        "org_id": getattr(request.user, "org_id", None),
-                        "username": getattr(request.user, "username", None),
-                        "reason": "deletion_error",
-                    },
-                    exc_info=True,
-                )
-                return HttpResponse("Role cannot be deleted.", status=400)
+        except Exception:
+            # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-11 warnings_or_errors)
+            logger.error(
+                "System role deletion failed",
+                extra={
+                    "action": "DELETE",
+                    "resource_type": "role",
+                    "resource_id": role_name,
+                    "outcome": "failure",
+                    "org_id": getattr(request.user, "org_id", None),
+                    "username": getattr(request.user, "username", None),
+                    "reason": "deletion_error",
+                },
+                exc_info=True,
+            )
+            return HttpResponse("Role cannot be deleted.", status=400)
+        # Admin action - SEC-MON-REQ-1 compliance (EOI-3 admin_action, EOI-2 system_object_manipulation)
+        logger.info(
+            f"System role '{role_name}' deleted. Requested by '{request.user.username}'",
+            extra={
+                "action": "DELETE",
+                "resource_type": "role",
+                "resource_id": role_name,
+                "outcome": "success",
+                "org_id": getattr(request.user, "org_id", None),
+                "username": getattr(request.user, "username", None),
+            },
+        )
+        return HttpResponse(f"Role '{role_name}' deleted.", status=204)
     return HttpResponse('Invalid method, only "DELETE" is allowed.', status=405)
 
 
@@ -4402,9 +4404,13 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     Accepts JSON body:
         {
             "restore_timestamp": "2026-05-28T10:00:00Z",
-            "buffer_minutes": 5
+            "buffer_minutes": 5,
+            "end_timestamp": "2026-05-28T12:00:00Z"
         }
 
+    "end_timestamp" is optional and defaults to now (at task execution time) so
+    the reconciled window also covers events produced between the restore
+    point and when the task runs, not just events before the restore point.
     Returns 202 with task_id on success.
     """
     if not getattr(settings, "DR_WORKSPACE_RECONCILE_ENABLED", False):
@@ -4441,6 +4447,22 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
     if isinstance(buffer_minutes, bool) or not isinstance(buffer_minutes, int) or buffer_minutes < 0:
         return JsonResponse({"detail": "buffer_minutes must be a non-negative integer"}, status=400)
 
+    end_timestamp = body.get("end_timestamp")
+    if end_timestamp is not None:
+        try:
+            parsed_end_ts = datetime.datetime.fromisoformat(end_timestamp)
+        except (ValueError, TypeError):
+            return JsonResponse(
+                {"detail": "end_timestamp must be a valid ISO 8601 datetime"},
+                status=400,
+            )
+        if parsed_end_ts.tzinfo is None:
+            parsed_end_ts = parsed_end_ts.replace(tzinfo=datetime.timezone.utc)
+        if parsed_end_ts > now:
+            return JsonResponse({"detail": "end_timestamp must be in the past"}, status=400)
+        if parsed_end_ts < parsed_ts:
+            return JsonResponse({"detail": "end_timestamp must be at or after restore_timestamp"}, status=400)
+
     dry_run = body.get("dry_run", False)
     if not isinstance(dry_run, bool):
         return JsonResponse({"detail": "dry_run must be a boolean"}, status=400)
@@ -4449,6 +4471,7 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
         task = recover_workspace_events_in_worker.delay(
             restore_timestamp_iso=restore_timestamp,
             buffer_minutes=buffer_minutes,
+            end_timestamp_iso=end_timestamp,
             dry_run=dry_run,
         )
         logger.info(
@@ -4463,6 +4486,7 @@ def recover_workspace_events(request: HttpRequest) -> JsonResponse:
                 "status": "enqueued",
                 "restore_timestamp": restore_timestamp,
                 "buffer_minutes": buffer_minutes,
+                "end_timestamp": end_timestamp,
                 "dry_run": dry_run,
             },
             status=202,
@@ -4478,12 +4502,22 @@ def disaster_recovery_reconcile(request):
 
     POST /_private/api/disaster_recovery/reconcile/
 
-    Body: {"restore_timestamp": "2024-01-15T10:30:00Z", "buffer_seconds": 300, "dry_run": false}
+    Body: {
+        "restore_timestamp": "2024-01-15T10:30:00Z",
+        "buffer_seconds": 300,
+        "end_timestamp": "2024-01-15T12:00:00Z",
+        "dry_run": false
+    }
+
+    "end_timestamp" is optional and defaults to now (at task execution time) so
+    the reconciled window also covers events produced between the restore
+    point and when the task runs, not just events before the restore point.
+    Timestamps without an offset are interpreted as UTC.
     """
     if not getattr(settings, "DR_RELATIONS_RECONCILE_ENABLED", False):
         return JsonResponse({"error": "Disaster recovery reconciliation is not enabled"}, status=403)
 
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from management.tasks import run_disaster_recovery_reconcile
 
@@ -4495,13 +4529,30 @@ def disaster_recovery_reconcile(request):
 
     try:
         dt = datetime.fromisoformat(restore_timestamp_str.replace("Z", "+00:00"))
-        restore_timestamp_ms = int(dt.timestamp() * 1000)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return JsonResponse({"error": "Invalid restore_timestamp format, expected ISO 8601"}, status=400)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    restore_timestamp_ms = int(dt.timestamp() * 1000)
 
     buffer_seconds = body.get("buffer_seconds", 300)
     if isinstance(buffer_seconds, bool) or not isinstance(buffer_seconds, int) or buffer_seconds < 0:
         return JsonResponse({"error": "buffer_seconds must be a non-negative integer"}, status=400)
+
+    end_timestamp_str = body.get("end_timestamp")
+    end_timestamp_ms = None
+    if end_timestamp_str is not None:
+        try:
+            end_dt = datetime.fromisoformat(end_timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError, AttributeError):
+            return JsonResponse({"error": "Invalid end_timestamp format, expected ISO 8601"}, status=400)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        end_timestamp_ms = int(end_dt.timestamp() * 1000)
+        if end_dt > datetime.now(timezone.utc):
+            return JsonResponse({"error": "end_timestamp must be in the past"}, status=400)
+        if end_timestamp_ms < restore_timestamp_ms:
+            return JsonResponse({"error": "end_timestamp must be at or after restore_timestamp"}, status=400)
 
     dry_run = body.get("dry_run", False)
     if not isinstance(dry_run, bool):
@@ -4510,6 +4561,7 @@ def disaster_recovery_reconcile(request):
     task = run_disaster_recovery_reconcile.delay(
         restore_timestamp_ms=restore_timestamp_ms,
         buffer_seconds=buffer_seconds,
+        end_timestamp_ms=end_timestamp_ms,
         dry_run=dry_run,
     )
 
@@ -4519,6 +4571,7 @@ def disaster_recovery_reconcile(request):
             "task_id": str(task.id),
             "restore_timestamp_ms": restore_timestamp_ms,
             "buffer_seconds": buffer_seconds,
+            "end_timestamp_ms": end_timestamp_ms,
             "dry_run": dry_run,
         },
         status=202,

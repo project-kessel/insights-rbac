@@ -26,6 +26,9 @@ from typing import Optional
 from celery import shared_task
 from django.conf import settings
 from django.core.management import call_command
+from django.db import connection, transaction
+from django.db.models import Max
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +158,226 @@ def run_seeds_in_worker(kwargs):
             },
         )
         raise
+
+
+RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD = 5
+RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS = 15 * 60
+# A delivery starts only once no new event was queued for this long, so one seeding run's events go out together.
+RH_NOTIFICATIONS_SETTLE_SECONDS = 5 * 60
+# Beat runs the task every 60 seconds; the tolerance keeps scheduling jitter from skipping a batch.
+RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS = 55
+RH_NOTIFICATIONS_RETENTION = datetime.timedelta(days=7)
+RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS = 30
+# Transaction-level advisory lock that lets one task run send at a time (42 and 43 are used by principal cleanup).
+RH_NOTIFICATIONS_LOCK_ID = 44
+RH_NOTIFICATIONS_DEFAULT_QUIET_START = "23:30"
+RH_NOTIFICATIONS_DEFAULT_QUIET_END = "00:30"
+
+
+def _parse_quiet_time(setting_name, default):
+    """Parse an HH:MM quiet window setting, falling back to the default when it is invalid."""
+    value = getattr(settings, setting_name, default)
+    try:
+        return datetime.datetime.strptime(value, "%H:%M").time()
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s value %r, using default %s.", setting_name, value, default)
+        return datetime.datetime.strptime(default, "%H:%M").time()
+
+
+def _in_rh_notifications_quiet_window(now):
+    """Return True when now (UTC) falls in the window in which RH notifications are not sent."""
+    start = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_START", RH_NOTIFICATIONS_DEFAULT_QUIET_START)
+    end = _parse_quiet_time("NOTIFICATIONS_RH_QUIET_END", RH_NOTIFICATIONS_DEFAULT_QUIET_END)
+    if start == end:
+        return False
+    current = now.astimezone(datetime.timezone.utc).time()
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+def _try_rh_notifications_lock():
+    """Take the advisory lock for the current transaction; it is released on commit, rollback or a lost connection."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_xact_lock(%s);", [RH_NOTIFICATIONS_LOCK_ID])
+        return cursor.fetchone()[0]
+
+
+def _start_rh_notifications_delivery(now):
+    """Bundle the queued events into a new delivery once the newest of them is older than the settle time."""
+    from management.notifications.model import RhNotificationDelivery, RhNotificationEvent
+
+    queued = RhNotificationEvent.objects.filter(delivery__isnull=True)
+    newest = queued.aggregate(newest=Max("created"))["newest"]
+    if newest is None:
+        return None
+    if now - newest < datetime.timedelta(seconds=RH_NOTIFICATIONS_SETTLE_SECONDS):
+        logger.info("Waiting for queued RH notification events to settle before sending them.")
+        return None
+
+    delivery = RhNotificationDelivery.objects.create(created=now)
+    count = queued.filter(created__lte=newest).update(delivery=delivery)
+    logger.info("Started RH notification delivery %s with %d event(s).", delivery.id, count)
+    return delivery
+
+
+def _send_rh_notifications_batch(delivery, now):
+    """Advance the cursor only past tenants whose every Kafka send was acknowledged."""
+    from api.models import Tenant
+    from management.notifications.model import RhNotificationDelivery
+    from management.notifications.notification_handlers import noto_producer, notify_with_future
+
+    events = list(delivery.events.order_by("created", "id").values("event_type", "payload"))
+    ready_tenants = Tenant.objects.exclude(tenant_name="public").filter(ready=True)
+    batch_size = max(1, max(1, settings.NOTIFICATIONS_RH_RATE_PER_MINUTE) // max(1, len(events)))
+    tenants = list(ready_tenants.filter(id__gt=delivery.after_tenant_id).order_by("id")[:batch_size])
+
+    start_cursor = delivery.after_tenant_id
+    sent_tenants = 0
+    send_failed = False
+    reached_quiet_window = False
+    tenant_futures = []
+    sent_any = False
+    for tenant in tenants:
+        # Checked per tenant so that a slow batch stops at the window; a started tenant still gets all its events.
+        if _in_rh_notifications_quiet_window(timezone.now()):
+            reached_quiet_window = True
+            break
+        futures = []
+        try:
+            for event in events:
+                futures.append(notify_with_future(event["event_type"], event["payload"], tenant.org_id))
+                sent_any = True
+        except Exception:
+            logger.exception("Failed to enqueue RH notification delivery %s for tenant %s.", delivery.id, tenant.id)
+            send_failed = True
+            break
+        tenant_futures.append((tenant, futures))
+
+    try:
+        if sent_any:
+            noto_producer.get_producer().flush(RH_NOTIFICATIONS_FLUSH_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception(
+            "Failed to flush RH notification delivery %s; retrying from tenant id %d.", delivery.id, start_cursor
+        )
+        send_failed = True
+        tenant_futures = []
+
+    for tenant, futures in tenant_futures:
+        try:
+            for future in futures:
+                future.get(timeout=0)  # A successful flush completed every previously sent future.
+        except Exception:
+            logger.exception("RH notification delivery %s was not acknowledged for tenant %s.", delivery.id, tenant.id)
+            send_failed = True
+            break
+        delivery.after_tenant_id = tenant.id
+        sent_tenants += 1
+
+    logger.info(
+        "Sent RH notification delivery %s to %d tenant(s) (%d message(s)) after tenant id %d.",
+        delivery.id,
+        sent_tenants,
+        sent_tenants * len(events),
+        start_cursor,
+    )
+
+    if not reached_quiet_window or sent_any:
+        delivery.last_batch_at = now
+    if send_failed:
+        delivery.failed_attempts = min(delivery.failed_attempts + 1, 32767)
+        if delivery.failed_attempts >= RH_NOTIFICATIONS_ERROR_LOG_THRESHOLD:
+            logger.error(
+                "RH notification delivery %s has failed %d consecutive run(s); it remains active after tenant id %d.",
+                delivery.id,
+                delivery.failed_attempts,
+                delivery.after_tenant_id,
+            )
+        else:
+            logger.warning(
+                "Sending RH notification delivery %s failed (%d consecutive run(s)); retrying after tenant id %d.",
+                delivery.id,
+                delivery.failed_attempts,
+                delivery.after_tenant_id,
+            )
+    else:
+        if sent_tenants:
+            delivery.failed_attempts = 0
+        if not reached_quiet_window and not ready_tenants.filter(id__gt=delivery.after_tenant_id).exists():
+            delivery.failed_attempts = 0
+            delivery.status = RhNotificationDelivery.Status.DONE
+            delivery.finished_at = now
+            logger.info("Finished RH notification delivery %s.", delivery.id)
+    delivery.save()
+
+
+def _rh_notifications_retry_delay_seconds(failed_attempts):
+    """Back off repeated failures, capped at fifteen minutes while keeping the delivery active."""
+    if not failed_attempts:
+        return RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS
+    return min(RH_NOTIFICATIONS_MAX_RETRY_DELAY_SECONDS, 60 * 2 ** min(failed_attempts - 1, 4))
+
+
+@shared_task
+def send_rh_notifications_in_worker():
+    """
+    Send the next batch of queued Red Hat system notifications. Celery beat runs it every minute.
+
+    Events are queued as database rows in the transaction of the change they report. Once no event was queued for
+    RH_NOTIFICATIONS_SETTLE_SECONDS, the queued events are bundled into a delivery, which each run sends to the next
+    batch of ready tenants, in tenant id order. A batch holds NOTIFICATIONS_RH_RATE_PER_MINUTE messages, rounded down to
+    whole tenants but never fewer than one tenant, so a single tenant's events are never split. Runs are at least
+    RH_NOTIFICATIONS_MIN_BATCH_SPACING_SECONDS apart, and no batch is sent during the UTC quiet window.
+
+    A transaction-level advisory lock admits one run at a time and is released if the worker dies. The tenant cursor is
+    committed only after broker acknowledgments for every event of a tenant. A worker that dies mid-batch or a flush
+    timeout leaves the previous cursor for retry, which may duplicate sends. Failed deliveries stay active and retry
+    with capped exponential backoff; failures are logged. Only completed deliveries are deleted after
+    RH_NOTIFICATIONS_RETENTION.
+    """
+    from management.notifications.model import RhNotificationDelivery
+
+    if not (settings.KAFKA_ENABLED and settings.NOTIFICATIONS_ENABLED and settings.NOTIFICATIONS_RH_ENABLED):
+        logger.info("RH notifications are disabled (KAFKA_ENABLED or notification flags), skipping.")
+        return
+    now = timezone.now()
+    if _in_rh_notifications_quiet_window(now):
+        logger.info("RH notifications quiet window is active, skipping this run.")
+        return
+
+    with transaction.atomic():
+        if not _try_rh_notifications_lock():
+            logger.info("Another RH notifications run is in progress, skipping.")
+            return
+
+        RhNotificationDelivery.objects.filter(
+            status=RhNotificationDelivery.Status.DONE, finished_at__lt=now - RH_NOTIFICATIONS_RETENTION
+        ).delete()
+
+        delivery = RhNotificationDelivery.objects.filter(status=RhNotificationDelivery.Status.ACTIVE).first()
+        if delivery is None:
+            # Recover deliveries left in the terminal state by older worker versions.
+            delivery = (
+                RhNotificationDelivery.objects.filter(status=RhNotificationDelivery.Status.FAILED)
+                .order_by("created")
+                .first()
+            )
+            if delivery is not None:
+                delivery.status = RhNotificationDelivery.Status.ACTIVE
+                delivery.finished_at = None
+                delivery.save(update_fields=["status", "finished_at"])
+                logger.warning("Resuming previously failed RH notification delivery %s.", delivery.id)
+
+        last_batch_at = RhNotificationDelivery.objects.aggregate(last=Max("last_batch_at"))["last"]
+        retry_delay = _rh_notifications_retry_delay_seconds(delivery.failed_attempts if delivery else 0)
+        if last_batch_at and (now - last_batch_at).total_seconds() < retry_delay:
+            logger.info("The previous RH notification batch is within its %d-second spacing, skipping.", retry_delay)
+            return
+
+        delivery = delivery or _start_rh_notifications_delivery(now)
+        if delivery is not None:
+            _send_rh_notifications_batch(delivery, now)
 
 
 @shared_task
@@ -1084,6 +1307,7 @@ def run_kessel_parity_checks_in_worker(org_ids=None):
 def recover_workspace_events_in_worker(
     restore_timestamp_iso: str,
     buffer_minutes: int = 5,
+    end_timestamp_iso: str | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Celery task to generate corrective workspace events after a DB restore.
@@ -1094,6 +1318,10 @@ def recover_workspace_events_in_worker(
     Args:
         restore_timestamp_iso: ISO 8601 timestamp of the DB restore point (T-30).
         buffer_minutes: Minutes to extend the window before restore_timestamp.
+        end_timestamp_iso: ISO 8601 timestamp to end the window at. Defaults to
+            now (evaluated when this task runs) so the window also covers events
+            produced between the restore point and when reconciliation runs,
+            rather than stopping at restore_timestamp.
 
     Returns:
         dict: Summary statistics of corrective events generated.
@@ -1114,9 +1342,15 @@ def recover_workspace_events_in_worker(
         if restore_dt.tzinfo is None:
             restore_dt = restore_dt.replace(tzinfo=datetime.timezone.utc)
 
+        if end_timestamp_iso:
+            end_dt = datetime.datetime.fromisoformat(end_timestamp_iso)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            end_dt = datetime.datetime.now(datetime.timezone.utc)
+
         buffer_delta = datetime.timedelta(minutes=buffer_minutes)
         start_dt = restore_dt - buffer_delta
-        end_dt = restore_dt
 
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
@@ -1149,6 +1383,7 @@ def recover_workspace_events_in_worker(
         result["duration_seconds"] = round(elapsed, 3)
         result["restore_timestamp"] = restore_timestamp_iso
         result["buffer_minutes"] = buffer_minutes
+        result["end_timestamp"] = end_dt.isoformat()
         result["kafka_events_read"] = len(kafka_events)
 
         logger.info("Workspace DR recovery task completed in %.3fs: %s", elapsed, result)
@@ -1160,7 +1395,10 @@ def recover_workspace_events_in_worker(
 
 @shared_task
 def run_disaster_recovery_reconcile(
-    restore_timestamp_ms: int, buffer_seconds: int = 300, dry_run: bool = False
+    restore_timestamp_ms: int,
+    buffer_seconds: int = 300,
+    end_timestamp_ms: int | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Celery task for disaster recovery reconciliation of Kessel Relations.
 
@@ -1170,6 +1408,10 @@ def run_disaster_recovery_reconcile(
     Args:
         restore_timestamp_ms: Unix timestamp in milliseconds of the DB restore point.
         buffer_seconds: Extra time before restore_timestamp to include (default 300).
+        end_timestamp_ms: Unix timestamp in milliseconds to end the window at.
+            Defaults to now (evaluated when this task runs) so the window also
+            covers events produced between the restore point and when
+            reconciliation runs, rather than stopping at restore_timestamp_ms.
         dry_run: If True, analyze but don't write corrective events.
 
     Returns:
@@ -1190,6 +1432,7 @@ def run_disaster_recovery_reconcile(
         return reconcile(
             restore_timestamp_ms=restore_timestamp_ms,
             buffer_seconds=buffer_seconds,
+            end_timestamp_ms=end_timestamp_ms,
             dry_run=dry_run,
         )
     except Exception as e:

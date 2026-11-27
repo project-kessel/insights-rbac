@@ -2,6 +2,10 @@
 # inventory-api development/full-kessel/docker-compose.yaml.
 
 services:
+  db:
+    healthcheck:
+      start_period: 60s
+
   hbi-web:
     environment:
       BYPASS_RBAC: "false"
@@ -36,4 +40,5 @@ services:
 
 networks:
   kessel:
+    name: ${KESSEL_NETWORK_NAME:-kessel}
     external: true

@@ -10,6 +10,10 @@ source "${SCRIPT_DIR}/../common/container_runtime.sh"
 
 detect_container_runtime
 
+# shellcheck source=slot-port-defaults.sh
+source "${SCRIPT_DIR}/slot-port-defaults.sh"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-full-kessel}"
+HBI_COMPOSE_PROJECT="${HBI_COMPOSE_PROJECT:-hbi-kessel-local}"
 FAILURES=0
 
 fail() {
@@ -18,18 +22,22 @@ fail() {
 }
 
 container_names() {
-  "${CONTAINER_RUNTIME}" ps -a --format '{{.Names}}' | grep -E "$1" || true
+  local project="$1"
+  local label
+  for label in com.docker.compose.project io.podman.compose.project; do
+    "${CONTAINER_RUNTIME}" ps -a --filter "label=${label}=${project}" --format '{{.Names}}'
+  done | sort -u
 }
 
 check_containers() {
-  # Verify that all containers matching a name pattern are running and
-  # healthy. Treats exited one-shot jobs (migrate, init, setup) with
+  # Verify that all containers from the selected Compose project are running
+  # and healthy. Treats exited one-shot jobs (migrate, init, setup) with
   # exit code 0 as successfully completed.
-  local pattern="$1"
+  local project="$1"
   local label="$2"
   local names name state health exit_code
 
-  names="$(container_names "${pattern}")"
+  names="$(container_names "${project}")"
   if [[ -z "${names}" ]]; then
     fail "${label}: no matching containers found"
     return
@@ -81,13 +89,13 @@ check_http() {
 }
 
 log-info "Checking full Kessel, RBAC, and HBI containers..."
-check_containers '^full-kessel-' 'Kessel/RBAC containers'
-check_containers '^hbi-kessel-local-' 'HBI containers'
+check_containers "${COMPOSE_PROJECT_NAME}" 'Kessel/RBAC containers'
+check_containers "${HBI_COMPOSE_PROJECT}" 'HBI containers'
 
 log-info "Checking published full-stack endpoints..."
-check_http "${RBAC_HEALTH_URL:-http://localhost:9080/metrics}" 'RBAC API'
-check_http "${INVENTORY_HEALTH_URL:-http://localhost:8081/api/kessel/v1/livez}" 'Kessel Inventory API'
-check_http "${KAFKA_CONNECT_HEALTH_URL:-http://localhost:8083/connectors}" 'Kafka Connect'
+check_http "${RBAC_HEALTH_URL:-http://localhost:${RBAC_API_PORT}/metrics}" 'RBAC API'
+check_http "${INVENTORY_HEALTH_URL:-http://localhost:${INVENTORY_API_HTTP_PORT}/api/kessel/v1/livez}" 'Kessel Inventory API'
+check_http "${KAFKA_CONNECT_HEALTH_URL:-http://localhost:${KAFKA_CONNECT_PORT}/connectors}" 'Kafka Connect'
 check_tcp localhost "${RBAC_DB_PORT:-15432}" 'RBAC PostgreSQL'
 check_tcp localhost "${SPICEDB_PORT:-50051}" 'SpiceDB'
 

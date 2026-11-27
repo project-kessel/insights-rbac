@@ -1,12 +1,13 @@
 """Tests for disaster recovery service orchestrator."""
 
+import time
 from unittest.mock import patch
 from uuid import uuid4
 
 from django.test import TestCase, override_settings
 
 from api.models import Tenant
-from management.disaster_recovery.kafka_reader import ParsedReplicationEvent
+from management.disaster_recovery.kafka_reader import DisasterRecoveryError, ParsedReplicationEvent
 from management.disaster_recovery.service import reconcile
 from management.group.model import Group
 from management.principal.model import Principal
@@ -85,6 +86,85 @@ class ReconcileServiceTest(TestCase):
         cls.root_ws.delete()
         cls.tenant.delete()
         super().tearDownClass()
+
+    @override_settings(DR_SKIP_EVENT_TYPES=[])
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_group_membership_reconciles_restored_state(self, mock_read):
+        """Repeated add/remove events must not resurrect a revoked membership."""
+        group = Group.objects.create(name="recovery group", tenant=self.tenant)
+        principal = Principal.objects.create(username="recovery-user", user_id="recovery-id", tenant=self.tenant)
+        relation = group.relationship_to_principal(principal)
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=1, partition=0, timestamp_ms=1, event_type="add", relations_to_add=[relation]
+            ),
+            ParsedReplicationEvent(
+                offset=2, partition=0, timestamp_ms=2, event_type="remove", relations_to_remove=[relation]
+            ),
+        ]
+        log = InMemoryLog()
+        result = reconcile(restore_timestamp_ms=1000, replicator=OutboxReplicator(log=log))
+        self.assertEqual(result["corrective_adds"], 0)
+        self.assertEqual(result["corrective_removes"], 1)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log.first().event_type, ReplicationEventType.DR_CORRECTIVE_REMOVE)
+
+        group.principals.add(principal)
+        log = InMemoryLog()
+        result = reconcile(restore_timestamp_ms=1000, replicator=OutboxReplicator(log=log))
+        self.assertEqual(result["corrective_adds"], 1)
+        self.assertEqual(result["corrective_removes"], 0)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log.first().event_type, ReplicationEventType.DR_CORRECTIVE_ADD)
+
+    @override_settings(DR_SKIP_EVENT_TYPES=[])
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_default_group_membership_fails_before_writes(self, mock_read):
+        """Virtual default membership is not established by the group row alone."""
+        group = Group.objects.create(name="default recovery group", tenant=self.tenant, platform_default=True)
+        principal = Principal.objects.create(username="default-user", user_id="default-id", tenant=self.tenant)
+        relation = group.relationship_to_principal(principal)
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=1, partition=0, timestamp_ms=1, event_type="remove", relations_to_remove=[relation]
+            ),
+        ]
+        log = InMemoryLog()
+        with self.assertRaises(DisasterRecoveryError):
+            reconcile(restore_timestamp_ms=1000, replicator=OutboxReplicator(log=log))
+        self.assertEqual(len(log), 0)
+
+    @override_settings(DR_SKIP_EVENT_TYPES=[])
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_virtual_group_membership_fails_before_writes(self, mock_read):
+        """A mapping-only default group has no authoritative membership table."""
+        mapping = TenantMapping.objects.create(tenant=self.tenant)
+        relation = _make_principal_tuple(group_id=str(mapping.default_group_uuid))
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=1, partition=0, timestamp_ms=1, event_type="remove", relations_to_remove=[relation]
+            ),
+        ]
+        log = InMemoryLog()
+        with self.assertRaises(DisasterRecoveryError):
+            reconcile(restore_timestamp_ms=1000, replicator=OutboxReplicator(log=log))
+        self.assertEqual(len(log), 0)
+
+    @override_settings(DR_SKIP_EVENT_TYPES=[], PRINCIPAL_USER_DOMAIN="expected")
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_unknown_membership_domain_fails_before_writes(self, mock_read):
+        """A principal from a different domain cannot be resolved from local user IDs."""
+        group = Group.objects.create(name="domain test group", tenant=self.tenant)
+        relation = _make_principal_tuple(group_id=str(group.uuid))
+        mock_read.return_value = [
+            ParsedReplicationEvent(
+                offset=1, partition=0, timestamp_ms=1, event_type="add", relations_to_add=[relation]
+            ),
+        ]
+        log = InMemoryLog()
+        with self.assertRaises(DisasterRecoveryError):
+            reconcile(restore_timestamp_ms=1000, replicator=OutboxReplicator(log=log))
+        self.assertEqual(len(log), 0)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     def test_empty_window(self, mock_read):
@@ -183,6 +263,7 @@ class ReconcileServiceTest(TestCase):
         result = reconcile(
             restore_timestamp_ms=2000000,
             buffer_seconds=60,
+            end_timestamp_ms=2500000,
             replicator=replicator,
         )
 
@@ -191,12 +272,39 @@ class ReconcileServiceTest(TestCase):
         self.assertIn("start_ms", result["time_window"])
         self.assertIn("end_ms", result["time_window"])
         self.assertEqual(result["time_window"]["start_ms"], 2000000 - 60000)
-        self.assertEqual(result["time_window"]["end_ms"], 2000000)
+        self.assertEqual(result["time_window"]["end_ms"], 2500000)
         self.assertIn("events_read", result)
         self.assertIn("events_skipped_by_type", result)
         self.assertIn("affected_user_ids", result)
         self.assertIn("tuples_processed", result)
         self.assertIn("duration_seconds", result)
+
+    @patch("management.disaster_recovery.service.read_events_in_window")
+    def test_end_timestamp_defaults_to_now(self, mock_read):
+        """When end_timestamp_ms is omitted, the window extends to (roughly) now."""
+        mock_read.return_value = []
+        log = InMemoryLog()
+        replicator = OutboxReplicator(log=log)
+
+        restore_timestamp_ms = int(time.time() * 1000) - 3600 * 1000
+        before_call_ms = int(time.time() * 1000)
+
+        result = reconcile(
+            restore_timestamp_ms=restore_timestamp_ms,
+            buffer_seconds=60,
+            replicator=replicator,
+        )
+
+        after_call_ms = int(time.time() * 1000)
+
+        self.assertGreaterEqual(result["time_window"]["end_ms"], before_call_ms)
+        self.assertLessEqual(result["time_window"]["end_ms"], after_call_ms)
+        self.assertGreater(result["time_window"]["end_ms"], restore_timestamp_ms)
+
+    def test_end_timestamp_before_restore_timestamp_raises(self):
+        """end_timestamp_ms earlier than restore_timestamp_ms is rejected."""
+        with self.assertRaises(ValueError):
+            reconcile(restore_timestamp_ms=2000000, end_timestamp_ms=1000000)
 
     @patch("management.disaster_recovery.service.read_events_in_window")
     def test_both_correct_states_skipped(self, mock_read):

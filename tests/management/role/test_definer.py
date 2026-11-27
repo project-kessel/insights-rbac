@@ -16,26 +16,38 @@
 #
 """Test the role definer."""
 
-from unittest.mock import ANY, call, mock_open, patch
+import json
+from unittest.mock import mock_open, patch
 from uuid import UUID
 
 from django.conf import settings
-from django.test.utils import override_settings
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext, override_settings
 from management.group.definer import seed_group
-from management.group.platform import DefaultGroupNotAvailableError, GlobalPolicyIdService
+from management.group.platform import GlobalPolicyIdService
 from management.models import (
     Access,
+    BindingMapping,
+    CustomRoleV2,
     ExtRoleRelation,
     Group,
     Permission,
     PlatformRoleV2,
     ResourceDefinition,
     Role,
+    RoleBinding,
     SeededRoleV2,
 )
 from management.permission.scope_service import CONCRETE_SCOPES, Scope
 from management.inventory_replicator.inventory_replicator import ReplicationEvent, ReplicationEventType
-from management.role.definer import _seed_platform_roles, seed_permissions, seed_roles
+from management.role.definer import (
+    _lock_role_for_deletion,
+    _role_binding_relations_to_remove,
+    _seed_platform_roles,
+    replicate_system_role_deletion,
+    seed_permissions,
+    seed_roles,
+)
 from management.role.platform import (
     ADMIN_DEFAULT_SEEDED_ROLES_FORCE_ROOT_SCOPE,
     admin_platform_parent_scopes_for_seeded_system_role,
@@ -45,6 +57,7 @@ from management.role.inventory_api_dual_write_handler import (
     InventoryApiDualWriteHandler,
     SeedingInventoryApiDualWriteHandler,
 )
+from management.role_binding.model import RoleBindingPrincipal
 from management.tenant_mapping.model import DefaultAccessType
 from management.tenant_service.v2 import V2TenantBootstrapService
 from migration_tool.in_memory_tuples import (
@@ -55,8 +68,8 @@ from migration_tool.in_memory_tuples import (
     resource,
     subject,
 )
-from tests.core.test_kafka import copy_call_args
 from tests.identity_request import IdentityRequest
+from tests.management.notifications.utils import collected_rh_events
 from tests.management.role.test_dual_write import RbacFixture
 
 from api.models import Tenant
@@ -111,41 +124,26 @@ class RoleDefinerTests(IdentityRequest):
         super().setUp()
         self.public_tenant = Tenant.objects.get(tenant_name="public")
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_create(self, send_kafka_message):
-        kafka_mock = copy_call_args(send_kafka_message)
+    def test_role_create(self):
         """Test that we can run a role seeding update."""
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
-            self.try_seed_roles()
+            with collected_rh_events(self) as events:
+                self.try_seed_roles()
 
             roles = Role.objects.filter(platform_default=True)
-
-            org_id = self.customer_data["org_id"]
 
             self.assertTrue(len(roles))
             self.assertFalse(Role.objects.get(name="User Access administrator").platform_default)
 
-            kafka_mock.assert_any_call(
-                settings.NOTIFICATIONS_TOPIC,
-                {
-                    "bundle": "console",
-                    "application": "rbac",
-                    "event_type": "rh-new-role-available",
-                    "timestamp": ANY,
-                    "events": [
-                        {
-                            "metadata": {},
-                            "payload": {
-                                "name": roles.first().name,
-                                "username": "Red Hat",
-                                "uuid": str(roles.first().uuid),
-                            },
-                        }
-                    ],
-                    "org_id": org_id,
-                },
-                ANY,
-            )
+            for role in roles:
+                self.assertIn(
+                    {
+                        "event_type": "rh-new-role-available",
+                        "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
+                    },
+                    events,
+                )
+            json.dumps(events)
 
     def test_role_update(self):
         """Test that role seeding update will re-create the roles."""
@@ -177,10 +175,8 @@ class RoleDefinerTests(IdentityRequest):
         roles = Role.objects.filter(platform_default=True)
         self.assertTrue(len(roles))
 
-    @patch("core.kafka.RBACProducer.send_kafka_message")
-    def test_role_update_platform_default_role(self, send_kafka_message):
-        """Test that role seeding updates send out notification."""
-        kafka_mock = copy_call_args(send_kafka_message)
+    def test_role_update_platform_default_role(self):
+        """Test that role seeding updates collect the RH notification events."""
         self.try_seed_roles()
 
         # Update non platform default role
@@ -203,12 +199,9 @@ class RoleDefinerTests(IdentityRequest):
         platform_role_to_update.save()
         access.save()
 
-        org_id = self.customer_data["org_id"]
-        Tenant.objects.create(tenant_name="unready1", org_id="unready1", ready=False)
-        Tenant.objects.create(tenant_name="unready2", org_id="unready2", ready=False)
-
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
-            seed_roles()
+            with collected_rh_events(self) as events:
+                seed_roles()
 
             platform_role_to_update.refresh_from_db()
             non_platform_role_to_update.refresh_from_db()
@@ -221,79 +214,74 @@ class RoleDefinerTests(IdentityRequest):
                 "notifications:notifications:read",
             )
 
-            notification_messages = [
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-non-platform-default-role-updated",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "name": non_platform_role_to_update.name,
-                                    "username": "Red Hat",
-                                    "uuid": str(non_platform_role_to_update.uuid),
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
+            self.assertIn(
+                {
+                    "event_type": "rh-non-platform-default-role-updated",
+                    "payload": {
+                        "name": non_platform_role_to_update.name,
+                        "username": "Red Hat",
+                        "uuid": str(non_platform_role_to_update.uuid),
                     },
-                    ANY,
-                ),
-                call(
-                    settings.NOTIFICATIONS_TOPIC,
-                    {
-                        "bundle": "console",
-                        "application": "rbac",
-                        "event_type": "rh-platform-default-role-updated",
-                        "timestamp": ANY,
-                        "events": [
-                            {
-                                "metadata": {},
-                                "payload": {
-                                    "name": platform_role_to_update.name,
-                                    "username": "Red Hat",
-                                    "uuid": str(platform_role_to_update.uuid),
-                                },
-                            }
-                        ],
-                        "org_id": org_id,
+                },
+                events,
+            )
+            self.assertIn(
+                {
+                    "event_type": "rh-platform-default-role-updated",
+                    "payload": {
+                        "name": platform_role_to_update.name,
+                        "username": "Red Hat",
+                        "uuid": str(platform_role_to_update.uuid),
                     },
-                    ANY,
-                ),
-            ]
-            kafka_mock.assert_has_calls(notification_messages, any_order=True)
-
-            for call_args in kafka_mock.call_args_list:
-                topic = call_args.args[0]
-                if topic != settings.NOTIFICATIONS_TOPIC:
-                    continue
-                body = call_args.args[1]
-                self.assertNotIn(
-                    body.get("org_id"),
-                    ["unready1", "unready2"],
-                    "Unready tenant should not be notified",
-                )
+                },
+                events,
+            )
+            json.dumps(events)
 
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_role_create_skip_notifications(self, send_kafka_message):
         """Test that skip_notifications suppresses RH notifications during role seeding."""
-        kafka_mock = copy_call_args(send_kafka_message)
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             from management.seeds import role_seeding
 
-            role_seeding(skip_notifications=True)
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=True)
 
-        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
-        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
+        self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
+        self.assertFalse(
+            any(call_args.args[0] == settings.NOTIFICATIONS_TOPIC for call_args in send_kafka_message.call_args_list)
+        )
+
+    def test_role_create_collects_notifications_when_not_skipped(self):
+        """Test that the same seeding run collects events when skip_notifications is False."""
+        with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
+            from management.seeds import role_seeding
+
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=False)
+
+        roles = Role.objects.filter(platform_default=True)
+        self.assertTrue(roles)
+        for role in roles:
+            self.assertIn(
+                {
+                    "event_type": "rh-new-role-available",
+                    "payload": {"name": role.name, "username": "Red Hat", "uuid": str(role.uuid)},
+                },
+                events,
+            )
+
+    def test_role_create_rh_notifications_disabled(self):
+        """Test that nothing is collected when NOTIFICATIONS_RH_ENABLED is False."""
+        with self.settings(NOTIFICATIONS_RH_ENABLED=False, NOTIFICATIONS_ENABLED=True):
+            with collected_rh_events(self) as events:
+                self.try_seed_roles()
+
+        self.assertEqual(events, [])
 
     @patch("core.kafka.RBACProducer.send_kafka_message")
     def test_role_update_skip_notifications(self, send_kafka_message):
         """Test that skip_notifications suppresses RH notifications during role update seeding."""
-        kafka_mock = copy_call_args(send_kafka_message)
         self.try_seed_roles()
 
         # Force an update by zeroing the version
@@ -302,10 +290,13 @@ class RoleDefinerTests(IdentityRequest):
         with self.settings(NOTIFICATIONS_RH_ENABLED=True, NOTIFICATIONS_ENABLED=True):
             from management.seeds import role_seeding
 
-            role_seeding(skip_notifications=True)
+            with collected_rh_events(self) as events:
+                role_seeding(skip_notifications=True)
 
-        notification_calls = [c for c in kafka_mock.call_args_list if c.args[0] == settings.NOTIFICATIONS_TOPIC]
-        self.assertEqual(len(notification_calls), 0, "No notifications should be sent when skip_notifications=True")
+        self.assertEqual(events, [], "No notifications should be collected when skip_notifications=True")
+        self.assertFalse(
+            any(call_args.args[0] == settings.NOTIFICATIONS_TOPIC for call_args in send_kafka_message.call_args_list)
+        )
 
     def try_seed_roles(self):
         """Try to seed roles"""
@@ -511,6 +502,263 @@ class RoleDefinerTests(IdentityRequest):
 
         # verify role was deleted from the database
         self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_removes_role_binding_relations(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_replicate,
+    ):
+        """Seeding a system role away removes its role bindings' relations, and only those."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        relation_tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(relation_tuples)
+        mock_replicate.side_effect = replicator.replicate
+
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role_to_delete = fixture.new_system_role(name="dummy_role_delete", permissions=["inventory:hosts:read"])
+        group, principals = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role_to_delete),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        binding.update_principals([("group", principals[0])])
+
+        # A binding on an unrelated role, sharing the same workspace and group, must be left alone.
+        other_binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=CustomRoleV2.objects.create(name="unrelated_role", tenant=self.tenant),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        other_binding.update_groups([group])
+
+        binding_relations = binding.all_tuples()
+        other_binding_relations = other_binding.all_tuples()
+        for relation_tuple in [*binding_relations, *other_binding_relations]:
+            relation_tuples.add(relation_tuple)
+
+        seed_roles()
+
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+        self.assertFalse(RoleBinding.objects.filter(id=binding.id).exists())
+        for relation_tuple in binding_relations:
+            self.assertNotIn(relation_tuple, relation_tuples)
+
+        self.assertTrue(RoleBinding.objects.filter(id=other_binding.id).exists())
+        for relation_tuple in other_binding_relations:
+            self.assertIn(relation_tuple, relation_tuples)
+
+    @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_removes_unmigrated_binding_mapping_relations(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_replicate,
+    ):
+        """A BindingMapping never migrated to a RoleBinding still has its relations removed."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        relation_tuples = InMemoryTuples()
+        replicator = InMemoryRelationReplicator(relation_tuples)
+        mock_replicate.side_effect = replicator.replicate
+
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role_to_delete = fixture.new_system_role(name="dummy_role_delete", permissions=["inventory:hosts:read"])
+        group, _ = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        v2_role = SeededRoleV2.objects.get(v1_source=role_to_delete)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        mapping = BindingMapping.for_role_binding(binding.as_migration_value(), role_to_delete, v2_role)
+        mapping.save(force_insert=True)
+        mapping_relations = mapping.as_tuples()
+        # The binding's role, resource and group relations -- a seeded role contributes no
+        # permissions of its own to a mapping.
+        self.assertEqual(len(mapping_relations), 3)
+
+        # Legacy state: the mapping was written before RoleBinding existed and never migrated.
+        binding.delete()
+
+        for relation_tuple in mapping_relations:
+            relation_tuples.add(relation_tuple)
+
+        seed_roles()
+
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+        self.assertFalse(BindingMapping.objects.filter(id=mapping.id).exists())
+        for relation_tuple in mapping_relations:
+            self.assertNotIn(relation_tuple, relation_tuples)
+
+    def test_role_binding_relations_to_remove_does_not_repeat_migrated_mapping(self):
+        """A mapping already migrated to a RoleBinding contributes its relations only once."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="dummy_role_bound", permissions=["inventory:hosts:read"])
+        group, _ = fixture.new_group(name="binding_group", users=["binding_user"], tenant=self.tenant)
+
+        v2_role = SeededRoleV2.objects.get(v1_source=role)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group])
+        mapping = BindingMapping.for_role_binding(binding.as_migration_value(), role, v2_role)
+        mapping.save(force_insert=True)
+
+        self.assertCountEqual(_role_binding_relations_to_remove(role), binding.all_tuples())
+
+    def test_role_binding_relations_stream_subjects_and_deduplicate_sources(self):
+        """Subject streams match snapshots without per-binding queries or duplicate principals."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="streamed_role", permissions=["inventory:hosts:read"])
+        groups_and_users = [
+            fixture.new_group(name=f"stream_group_{i}", users=[f"stream_user_{i}"], tenant=self.tenant)
+            for i in range(3)
+        ]
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=SeededRoleV2.objects.get(v1_source=role),
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        binding.update_groups([group for group, _ in groups_and_users])
+        principals = [principals[0] for _, principals in groups_and_users]
+        binding.update_principals([("first", principal) for principal in principals])
+        RoleBindingPrincipal.objects.create(binding=binding, principal=principals[0], source="second")
+        other_binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=binding.role,
+            resource_type="workspace",
+            resource_id="another-workspace",
+        )
+        other_binding.update_principals([("first", principals[0])])
+        expected = binding.all_tuples() + other_binding.all_tuples()
+
+        with (
+            self.assertNumQueries(4),
+            patch.object(RoleBinding, "all_tuples", side_effect=AssertionError),
+            patch("management.role.definer._BINDING_RELATION_CHUNK_SIZE", 2),
+        ):
+            actual = list(_role_binding_relations_to_remove(role))
+
+        self.assertCountEqual(actual, expected)
+        self.assertEqual(len(actual), len(set(actual)))
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=False)
+    @patch("management.role.definer.RoleBinding")
+    @patch("management.role.definer.destructive_ok")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"roles": []}')
+    @patch("os.listdir")
+    @patch("os.path.isfile")
+    def test_seed_roles_delete_role_skips_binding_query_when_replication_disabled(
+        self,
+        mock_isfile,
+        mock_listdir,
+        mock_open,
+        mock_destructive_ok,
+        mock_role_binding,
+    ):
+        """No role binding is loaded when replication is disabled, but the role is still deleted."""
+        mock_destructive_ok.return_value = True
+        mock_listdir.return_value = ["role.json"]
+        mock_isfile.return_value = True
+
+        role_to_delete = Role.objects.create(name="dummy_role_delete", system=True, tenant=self.public_tenant)
+
+        seed_roles()
+
+        mock_role_binding.objects.filter.assert_not_called()
+        self.assertFalse(Role.objects.filter(id=role_to_delete.id).exists())
+
+    @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
+    @patch("management.role.definer.SeedingInventoryApiDualWriteHandler")
+    def test_replicate_system_role_deletion_locks_role_before_collecting_relations(self, mock_handler_class):
+        """The role, its binding mappings and role bindings are locked before relations are collected."""
+        role = Role.objects.create(name="dummy_role_lock", system=True, tenant=self.public_tenant)
+        mock_handler = mock_handler_class.return_value
+        mock_handler.replication_enabled.return_value = True
+        calls = []
+        mock_handler.replicate_deleted_system_role.side_effect = lambda extra_remove: calls.append("replicate")
+
+        with patch("management.role.definer._lock_role_for_deletion") as mock_lock:
+            mock_lock.side_effect = lambda r: calls.append("lock")
+            replicate_system_role_deletion(role)
+
+        mock_lock.assert_called_once_with(role)
+        self.assertEqual(calls, ["lock", "replicate"])
+
+    def test_lock_role_for_deletion_locks_role_rows(self):
+        """Locking inside a transaction succeeds with bindings and mappings present."""
+        replicator = InMemoryRelationReplicator(InMemoryTuples())
+        fixture = RbacFixture(V2TenantBootstrapService(replicator))
+        bootstrapped = fixture.bootstrap_tenant(self.tenant)
+        role = fixture.new_system_role(name="dummy_role_lock_rows", permissions=["inventory:hosts:read"])
+        v2_role = SeededRoleV2.objects.get(v1_source=role)
+        binding = RoleBinding.objects.create(
+            tenant=self.tenant,
+            role=v2_role,
+            resource_type="workspace",
+            resource_id=str(bootstrapped.default_workspace.id),
+        )
+        BindingMapping.for_role_binding(binding.as_migration_value(), role, v2_role).save(force_insert=True)
+
+        with transaction.atomic(), CaptureQueriesContext(connection) as queries:
+            _lock_role_for_deletion(role)
+
+        locking = [q["sql"] for q in queries.captured_queries if "FOR UPDATE" in q["sql"]]
+        locked_tables = [
+            table
+            for sql in locking
+            for table in (
+                "management_role",
+                "management_bindingmapping",
+                "management_rolev2",
+                "management_rolebinding",
+            )
+            if f'FROM "{table}"' in sql
+        ]
+        # BindingMapping must be locked before RoleV2: the V1 group-role removal path locks a mapping
+        # and then inserts a RoleBinding, which key-share locks its RoleV2. The reverse order deadlocks.
+        self.assertEqual(
+            locked_tables,
+            ["management_role", "management_bindingmapping", "management_rolev2", "management_rolebinding"],
+            locking,
+        )
 
     @patch("management.inventory_replicator.outbox_replicator.OutboxReplicator.replicate")
     @patch(

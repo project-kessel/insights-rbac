@@ -93,6 +93,7 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         mock_delay.assert_called_once_with(
             restore_timestamp_iso="2026-05-28T10:00:00Z",
             buffer_minutes=5,
+            end_timestamp_iso=None,
             dry_run=False,
         )
 
@@ -110,8 +111,82 @@ class TestRecoverWorkspaceEventsEndpoint(TestCase):
         mock_delay.assert_called_once_with(
             restore_timestamp_iso="2026-05-28T10:00:00Z",
             buffer_minutes=5,
+            end_timestamp_iso=None,
             dry_run=False,
         )
+
+    @patch("internal.views.recover_workspace_events_in_worker.delay")
+    def test_end_timestamp_passed_through(self, mock_delay):
+        """end_timestamp is forwarded to the task when provided."""
+        mock_delay.return_value.id = "task-end-ts"
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps(
+                {
+                    "restore_timestamp": "2026-05-28T10:00:00Z",
+                    "end_timestamp": "2026-05-28T12:00:00Z",
+                }
+            ),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertEqual(data["end_timestamp"], "2026-05-28T12:00:00Z")
+        mock_delay.assert_called_once_with(
+            restore_timestamp_iso="2026-05-28T10:00:00Z",
+            buffer_minutes=5,
+            end_timestamp_iso="2026-05-28T12:00:00Z",
+            dry_run=False,
+        )
+
+    def test_end_timestamp_before_restore_timestamp_returns_400(self):
+        """end_timestamp earlier than restore_timestamp returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps(
+                {
+                    "restore_timestamp": "2026-05-28T10:00:00Z",
+                    "end_timestamp": "2026-05-28T09:00:00Z",
+                }
+            ),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("end_timestamp", response.json()["detail"])
+
+    def test_future_end_timestamp_returns_400(self):
+        """end_timestamp in the future returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps(
+                {
+                    "restore_timestamp": "2026-05-28T10:00:00Z",
+                    "end_timestamp": "2099-01-01T00:00:00Z",
+                }
+            ),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("end_timestamp", response.json()["detail"])
+
+    def test_invalid_end_timestamp_format_returns_400(self):
+        """Invalid end_timestamp format returns 400."""
+        response = self.client.post(
+            DR_URL,
+            data=json.dumps(
+                {
+                    "restore_timestamp": "2026-05-28T10:00:00Z",
+                    "end_timestamp": "not-a-timestamp",
+                }
+            ),
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("end_timestamp", response.json()["detail"])
 
     def test_missing_restore_timestamp_returns_400(self):
         """Missing restore_timestamp returns 400."""
@@ -224,7 +299,11 @@ class TestRecoverWorkspaceEventsTask(TestCase):
 
         from management.tasks import recover_workspace_events_in_worker
 
-        result = recover_workspace_events_in_worker("2026-05-28T10:00:00Z", buffer_minutes=10)
+        result = recover_workspace_events_in_worker(
+            "2026-05-28T10:00:00Z",
+            buffer_minutes=10,
+            end_timestamp_iso="2026-05-28T11:00:00Z",
+        )
 
         mock_read.assert_called_once()
         call_kwargs = mock_read.call_args[1]
@@ -232,10 +311,12 @@ class TestRecoverWorkspaceEventsTask(TestCase):
         import datetime
 
         restore_dt = datetime.datetime(2026, 5, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        end_dt = datetime.datetime(2026, 5, 28, 11, 0, 0, tzinfo=datetime.timezone.utc)
         restore_ms = int(restore_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
         start_ms = restore_ms - 10 * 60 * 1000
         self.assertEqual(call_kwargs["start_timestamp_ms"], start_ms)
-        self.assertEqual(call_kwargs["end_timestamp_ms"], restore_ms)
+        self.assertEqual(call_kwargs["end_timestamp_ms"], end_ms)
         self.assertEqual(result["kafka_events_read"], 0)
 
     @patch("management.workspace.dr_recovery.generate_corrective_workspace_events")
@@ -278,3 +359,52 @@ class TestRecoverWorkspaceEventsTask(TestCase):
 
         mock_read.assert_called_once()
         self.assertIn("duration_seconds", result)
+
+    @patch("core.kafka_dr.read_events_by_timestamp")
+    def test_task_uses_explicit_end_timestamp(self, mock_read):
+        """When end_timestamp_iso is provided, it bounds the window instead of restore_timestamp."""
+        mock_read.return_value = []
+
+        from management.tasks import recover_workspace_events_in_worker
+
+        result = recover_workspace_events_in_worker(
+            "2026-05-28T10:00:00Z",
+            buffer_minutes=10,
+            end_timestamp_iso="2026-05-28T12:00:00Z",
+        )
+
+        import datetime
+
+        restore_dt = datetime.datetime(2026, 5, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        end_dt = datetime.datetime(2026, 5, 28, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        restore_ms = int(restore_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        start_ms = restore_ms - 10 * 60 * 1000
+
+        call_kwargs = mock_read.call_args[1]
+        self.assertEqual(call_kwargs["start_timestamp_ms"], start_ms)
+        self.assertEqual(call_kwargs["end_timestamp_ms"], end_ms)
+        self.assertEqual(result["end_timestamp"], end_dt.isoformat())
+
+    @patch("core.kafka_dr.read_events_by_timestamp")
+    def test_task_defaults_end_timestamp_to_now(self, mock_read):
+        """When end_timestamp_iso is omitted, the window extends to (roughly) now."""
+        mock_read.return_value = []
+
+        import datetime
+
+        from management.tasks import recover_workspace_events_in_worker
+
+        before_call = datetime.datetime.now(datetime.timezone.utc)
+        result = recover_workspace_events_in_worker("2026-05-28T10:00:00Z", buffer_minutes=5)
+        after_call = datetime.datetime.now(datetime.timezone.utc)
+
+        call_kwargs = mock_read.call_args[1]
+        before_ms = int(before_call.timestamp() * 1000)
+        after_ms = int(after_call.timestamp() * 1000)
+        restore_ms = int(datetime.datetime(2026, 5, 28, 10, 0, 0, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+        self.assertGreaterEqual(call_kwargs["end_timestamp_ms"], before_ms)
+        self.assertLessEqual(call_kwargs["end_timestamp_ms"], after_ms)
+        self.assertGreater(call_kwargs["end_timestamp_ms"], restore_ms)
+        self.assertIn("end_timestamp", result)

@@ -11,10 +11,12 @@ insights-rbac is a Django REST Framework microservice that provides two API vers
 
 The service is multi-tenant: every request is scoped to an organization (tenant) via identity headers injected by the platform's authentication gateway.
 
+Find guides and references by audience in the [documentation index](#documentation-index).
+
 ## Tech Stack
 
 - **Language**: Python 3.12
-- **Framework**: Django 5.2 / Django REST Framework
+- **Framework**: Django 6.0 / Django REST Framework
 - **Database**: PostgreSQL 16
 - **Cache**: Redis
 - **Task Queue**: Celery (Redis broker)
@@ -28,7 +30,9 @@ The service is multi-tenant: every request is scoped to an organization (tenant)
 
 - Python 3.12
 - [Pipenv](https://pipenv.pypa.io/)
-- Docker / Podman (for PostgreSQL and Redis)
+- Docker and Docker Compose for the standard Compose and database targets; the
+  full local integration stack also supports Podman
+- PostgreSQL development headers when needed to install `psycopg2` from source
 
 ### Option 1: Docker Compose (full stack)
 
@@ -42,13 +46,25 @@ make docker-down     # Stop and remove containers
 
 ### Option 2: Local Python (app only)
 
-Run the Django server locally, using Docker only for PostgreSQL:
+Run the Django server locally with PostgreSQL and Redis available. The database
+target below starts PostgreSQL; start Redis separately if needed. Make targets
+that run Django read `.env`.
 
 ```bash
 pipenv install --dev     # Install dependencies
+cp .env.example .env     # Configure local settings
+```
+
+For the PostgreSQL container started below, edit `.env` and set
+`DATABASE_HOST=localhost` and `DATABASE_PORT=15432` before running migrations.
+Use `REDIS_HOST=localhost` and `REDIS_PORT=6379` for a host-accessible Redis.
+See [Environment Variables](#environment-variables) for mode-specific settings
+and switching between modes.
+
+```bash
 make start-db            # Start Postgres on port 15432
-make run-migrations      # Apply database migrations
-make serve               # App available at http://localhost:8000
+pipenv run make run-migrations  # Apply database migrations
+pipenv run make serve           # App available at http://localhost:8000
 ```
 
 ### Option 3: Full Kessel and Host Inventory integration stack
@@ -66,10 +82,62 @@ Check that the full-stack containers and published endpoints are healthy:
 make docker-local-full-health
 ```
 
-The command builds `insights-rbac-local:dev`, uses Docker or Podman Compose,
-and resolves the upstream Kessel Inventory and Host Inventory checkouts under
-`.local-deps/`. If either checkout is absent, it creates a shallow clone.
+Run the validation scripts against the healthy stack:
+
+```bash
+make docker-local-full-validate
+```
+
+The target runs each validation script directly, passing `--no-start` to
+`create-workspace.sh`. It also runs `apply-rbac-users-config.sh` with its
+bundled fixture; this may create or update tenants, users, groups, custom
+roles, and role bindings in local RBAC.
+
+The V2 CRUD validation uses the host `zed` CLI when available, otherwise it
+runs the `authzed/zed` container on the selected Kessel network.
+
+When finished, stop the full local stack:
+
+```bash
+make docker-local-full-down
+```
+
+Starting the stack builds `insights-rbac-local:dev`, uses Docker or Podman
+Compose, and resolves the upstream Kessel Inventory and Host Inventory
+checkouts under `.local-deps/`. If either checkout is absent, it creates a
+shallow clone.
 Ensure the container VM has enough memory for the full stack.
+If the local RBAC image build cannot reach package mirrors through the default
+BuildKit network, set `RBAC_BUILD_NETWORK=host` for the startup command.
+
+To run alongside another local RBAC stack, set an isolated Compose project,
+network, data directories, and port offset. Each isolated project gets a
+project-specific RBAC image tag unless `RBAC_IMAGE` is set explicitly. For
+example:
+
+```bash
+export FULL_STACK_SLOT=example
+export FULL_STACK_PORT_OFFSET=2000
+export FULL_KESSEL_COMPOSE_DIR="${TMPDIR:-/tmp}/insights-rbac-example/development/full-kessel"
+export COMPOSE_PROJECT_NAME=example-kessel
+export HBI_COMPOSE_PROJECT=example-hbi
+export KESSEL_NETWORK_NAME=example-kessel-net
+export HBI_PG_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-postgres"
+export HBI_MINIO_DATA="${TMPDIR:-/tmp}/insights-rbac-example/hbi-minio"
+make docker-local-full-up rbac=local rbac-config=upstream inventory=upstream hbi=upstream
+make docker-local-full-health
+make docker-local-full-validate
+make docker-local-full-down
+```
+
+Keep these variables exported for every command; `make` and its child scripts
+cannot read shell variables that were only sourced without `export`.
+
+When `FULL_KESSEL_COMPOSE_DIR` is set, startup, health checks, and
+validations derive published ports from `FULL_STACK_PORT_OFFSET`; explicit
+port variables override those defaults.
+`docker-local-full-down` stops the selected full-stack projects and leaves
+separate RBAC Compose projects running.
 
 Each deployment also loads four idempotent local identities in organization
 `local-full-stack` / account `10001`: `local-v1-org-admin`,
@@ -197,8 +265,8 @@ make docker-local-full-apply-users file=/tmp/local-rbac-users.yaml
 
 ##### Run every local validation
 
-Run every shell validation below `scripts/validations/` in lexical order. The
-command stops at the first failure:
+Run every shell script below `scripts/validations/` in lexical order, including
+scripts that apply local RBAC fixtures. The command stops at the first failure:
 
 ```bash
 make docker-local-full-validate
@@ -227,10 +295,10 @@ as its workspace source of truth:
 ./scripts/validations/api/create-workspace.sh --no-start --check-hbi
 ```
 
-Stop the full stack and leftover legacy RBAC containers with
-`make docker-local-full-down`. This preserves volumes;
-pass `--volumes` to `scripts/local_stack/down-full.sh` when a clean HBI data
-volume is required. If the RBAC Kafka consumer is unhealthy, restart the stack
+Stop the full stack with `make docker-local-full-down`. This preserves HBI
+volumes and, when using an isolated Kessel Compose directory, its Kessel
+volumes. Pass `--volumes` to `scripts/local_stack/down-full.sh` to remove
+those volumes. If the RBAC Kafka consumer is unhealthy, restart the stack
 with `make docker-local-full-up`; the consumer should report that it acquired a
 fencing lock and is listening on `outbox.event.relations-replication-event`.
 
@@ -274,15 +342,64 @@ pipenv run pre-commit run --all-files            # Run all pre-commit hooks
 ## Database
 
 ```bash
-make make-migrations     # Generate migration files
-make run-migrations      # Apply migrations
-make reinitdb            # Drop, recreate, and migrate
+pipenv run make make-migrations  # Generate migration files
+pipenv run make run-migrations   # Apply migrations
+pipenv run make reinitdb         # Drop, recreate, and migrate
 ```
 
 Direct access: `psql postgres -U postgres -h localhost -p 15432`
 
+To migrate V1 data to V2 relations, inspect the available options with
+`pipenv run python rbac/manage.py migrate_relations --help`.
+
+### Seeds
+
+Permissions, roles, and groups are seeded at startup by default. Set
+`PERMISSION_SEEDING_ENABLED`, `ROLE_SEEDING_ENABLED`, or `GROUP_SEEDING_ENABLED`
+to `False` to disable each seed. The local definitions are under
+[`rbac/management/role/definitions/`](rbac/management/role/definitions/);
+deployed default role and group configuration is maintained in
+[`rbac-config`](https://github.com/project-kessel/rbac-config).
+
+To seed manually, run `pipenv run python rbac/manage.py seeds`; use `--roles`,
+`--groups`, or `--permissions` to select seed types.
+
+### Kafka and Debezium
+
+The full integration stack above includes Kafka and Debezium. Alternatively,
+`scripts/debezium/setup_debezium.sh` sets up the standalone CDC stack using
+Docker or Podman. It starts PostgreSQL, Kafka, Kafka Connect, and Kafdrop and
+configures the connector. Ensure the required ports are available; use
+`scripts/debezium/setup_debezium.sh --help` for options and prerequisites.
+
+```bash
+scripts/debezium/setup_debezium.sh
+scripts/debezium/setup_debezium.sh --consumer     # or --consumer-bg
+scripts/debezium/send_test_relations_message.sh
+```
+
+See [Kafka consumer documentation](docs/KAFKA_CONSUMER.md) and
+[outbound events](docs/kafka-outbound-events.md) for details.
+
+### Feature flags
+
+Local Unleash configuration uses `FEATURE_FLAGS_URL` (default
+`http://localhost:4242/api`), `FEATURE_FLAGS_TOKEN`, and
+`FEATURE_FLAGS_CACHE_DIR` (default `/tmp/`). In Clowder, the URL and token can
+come from the platform configuration. See [Unleash's quick start](https://docs.getunleash.io/quickstart)
+and [`rbac/feature_flags.py`](rbac/feature_flags.py) for flag usage and context.
+
+## Authentication and deployment
+
+The gateway supplies `x-rh-identity` for public API requests; local development
+can use the development identity middleware. Service-to-service requests may use
+PSK or JWT authentication. See [the authentication guide](docs/AUTHENTICATION.md)
+for requirements and local examples. For ephemeral deployments, see
+[`insights-service-deployer`](https://github.com/project-kessel/insights-service-deployer).
+
 ## API Documentation
 
+- REST consumer guide: [docs/API-USAGE.md](docs/API-USAGE.md)
 - V1 API specs: [docs/source/specs/](docs/source/specs/)
 - V2 OpenAPI spec: [docs/source/specs/v2/openapi.yaml](docs/source/specs/v2/openapi.yaml)
 - V2 TypeSpec source: [docs/source/specs/typespec/main.tsp](docs/source/specs/typespec/main.tsp)
@@ -296,15 +413,47 @@ make generate_v2_spec
 
 ## Environment Variables
 
-Key environment variables (see [docker-compose.yml](docker-compose.yml) for a full reference):
+### Local connection settings by run mode
+
+These are local development examples, not universal application defaults.
+Choose addresses from the perspective of the process running Django:
+
+| Variable | Docker Compose server | Local Python using published ports |
+|----------|-----------------------|------------------------------------|
+| `DATABASE_HOST` | `db` | `localhost` |
+| `DATABASE_PORT` | `5432` | `15432` |
+| `REDIS_HOST` | `rbac_redis` | `localhost` |
+| `REDIS_PORT` | `6379` | `6379` |
+
+The Compose server sets the database address and defaults `REDIS_HOST` to
+`rbac_redis`; its worker and scheduler use the Redis service address
+`redis:6379` for their broker. Compose publishes PostgreSQL on host port
+`15432` and Redis on host port `6379`. The local Python column assumes those
+ports are available; use the actual host and port for other instances.
+
+When switching to local Python, update the copied `.env` database host **and**
+port before running migrations or starting Django. The Compose name `db` is
+not a host address, and `5432` is the container port, not the published port.
+When switching back, use the Compose addresses for processes in the Compose
+network. Check any `REDIS_HOST` override as well: `localhost` inside a
+container refers to that container, while `rbac_redis` is not a host address.
+Compose explicitly sets the server's database variables and uses its own Redis
+host default; a shell or Compose `.env` value can override `REDIS_HOST`.
+
+### Application defaults
+
+Key application defaults when not otherwise configured (see
+[docker-compose.yml](docker-compose.yml), [`rbac/rbac/database.py`](rbac/rbac/database.py),
+and [`rbac/rbac/settings.py`](rbac/rbac/settings.py)):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_HOST` | PostgreSQL host | `localhost` |
-| `DATABASE_PORT` | PostgreSQL port | `15432` |
-| `DATABASE_NAME` | Database name | `postgres` |
-| `REDIS_HOST` | Redis host | `rbac_redis` |
-| `API_PATH_PREFIX` | API URL prefix | `/api/rbac` |
+| `DATABASE_HOST` | PostgreSQL host | unset |
+| `DATABASE_PORT` | PostgreSQL port | unset |
+| `DATABASE_NAME` | Database name | unset |
+| `REDIS_HOST` | Redis host | `localhost` |
+| `REDIS_PORT` | Redis port | `6379` |
+| `API_PATH_PREFIX` | API URL prefix | `api/` for routes, `/` for static paths |
 | `V2_APIS_ENABLED` | Enable v2 API routes | `False` |
 | `KAFKA_ENABLED` | Enable Kafka producer/consumer | `False` |
 | `DEVELOPMENT` | Development mode flag | `False` |
@@ -325,20 +474,60 @@ tests/            # Test suite (mirrors rbac/ structure)
 docs/             # Architecture and domain guideline docs
 ```
 
-## Further Reading
+## Documentation Index
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) -- How to contribute
-- [AGENTS.md](AGENTS.md) -- AI agent guidance and codebase conventions
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- System architecture and data flow
-- [docs/security-guidelines.md](docs/security-guidelines.md) -- Authentication and authorization
-- [docs/api-contracts-guidelines.md](docs/api-contracts-guidelines.md) -- API versioning and contracts
-- [docs/database-guidelines.md](docs/database-guidelines.md) -- Multi-tenancy, models, migrations
-- [docs/integration-guidelines.md](docs/integration-guidelines.md) -- Kessel, Kafka, external services
-- [docs/performance-guidelines.md](docs/performance-guidelines.md) -- Caching, query optimization
-- [docs/error-handling-guidelines.md](docs/error-handling-guidelines.md) -- Error formats and exceptions
-- [docs/testing-guidelines.md](docs/testing-guidelines.md) -- Test runner, base classes, patterns
-- [docs/MCP.md](docs/MCP.md) -- MCP endpoint developer guide (protocol, tools, adding tools)
-- [docs/MCP-operator-guide.md](docs/MCP-operator-guide.md) -- MCP endpoint operator guide (deployment, config, security)
+### API Users
+
+- [Authentication guide](docs/AUTHENTICATION.md) -- Authentication methods, API paths, and local examples.
+- [V1 OpenAPI](docs/source/specs/openapi.json) -- V1 REST API contract.
+- [V2 OpenAPI](docs/source/specs/v2/openapi.yaml) -- Generated V2 REST API contract.
+- [V2 OpenAPI JSON](docs/source/specs/v2/openapi.json) -- JSON form of the V2 REST API contract.
+- [V2 TypeSpec](docs/source/specs/typespec/main.tsp) -- Source for the V2 API contract.
+- [Relations OpenAPI](docs/source/specs/relations-openapi.yml) -- Relations API contract.
+- [Role bindings](docs/role_bindings.md) -- V1 and V2 bindings, scopes, synchronization, and queries.
+- [MCP endpoint](docs/MCP.md) -- MCP protocol, tools, and extension guide.
+- [Kafka outbound events](docs/kafka-outbound-events.md) -- Topics, event formats, and producer behavior.
+
+### Contributors
+
+- [Contributing](CONTRIBUTING.md) -- Contribution workflow, style, and pull requests.
+- [Agent guidance](AGENTS.md) -- Repository conventions and domain-specific guidance for AI agents.
+- [Claude guidance](CLAUDE.md) -- Claude-specific preferences and the shared agent guidance.
+- [Architecture](docs/ARCHITECTURE.md) -- System components, request flow, and integrations.
+- [API contracts](docs/api-contracts-guidelines.md) -- API versioning, view patterns, and specifications.
+- [Database guidelines](docs/database-guidelines.md) -- Tenancy, models, migrations, and the outbox.
+- [Security guidelines](docs/security-guidelines.md) -- Authentication, authorization, and tenant isolation rules.
+- [Error handling](docs/error-handling-guidelines.md) -- Error formats, exceptions, and logging conventions.
+- [Integration guidelines](docs/integration-guidelines.md) -- Kessel, Kafka, external services, and metrics.
+- [Performance guidelines](docs/performance-guidelines.md) -- Caching, query optimization, and transactions.
+- [Testing guidelines](docs/testing-guidelines.md) -- Test runner, fixtures, and mocking patterns.
+- [Pre-commit setup](docs/pre-commit-setup.md) -- Install and run repository hooks.
+- [CodeRabbit review knowledge](docs/coderabbit-rbac-knowledge.md) -- RBAC invariants used in automated reviews.
+
+### Operators
+
+- [Authentication guide](docs/AUTHENTICATION.md) -- Deployment authentication, configuration, and troubleshooting.
+- [Root workspace tenant backfills](docs/root-workspace-tenant-backfill.md) -- Checkpoints, safe restart, and production handoff.
+- [Kafka consumer](docs/KAFKA_CONSUMER.md) -- Consumer operation, configuration, and monitoring.
+- [Kafka outbound events](docs/kafka-outbound-events.md) -- Produced topics and event formats.
+- [V2 org determination](docs/v2-org-determination.md) -- How tenant state and flags affect V2 access decisions during rollout.
+- [V2 rollout operator guide](docs/V2-ROLLOUT-GUIDE.md) -- Opt-in, bootstrap, backfill, validation, and recovery boundaries.
+- [MCP operator guide](docs/MCP-operator-guide.md) -- MCP deployment, security, metrics, and troubleshooting.
+- [Kessel workspace view check](docs/kessel_check_rbac_workspace_view.md) -- Tenant workspace-view permission evaluation.
+- [Kessel role-binding view check](docs/kessel_check_role_binding_view.md) -- Role-binding permission evaluation and required tuples.
+- [Role-binding view diagrams](docs/kessel_check_role_binding_view_diagrams.md) -- Diagrams of Kessel role-binding checks.
+- [Ephemeral DR toolkit](docs/ephemeral-dr-toolkit.md) -- Deploy and use disaster recovery tools in an ephemeral cluster.
+
+### Testers
+
+- [Testing guidelines](docs/testing-guidelines.md) -- Run Django tests and use test fixtures and mocks.
+- [Local Docker/Podman validation](docs/local-docker-validation.md) -- Validate a local integration stack and manage users and groups.
+- [Local validation identities](docs/local-validation-identities.md) -- Choose local identities and access fixtures.
+- [Local IQE tests](docs/local-iqe-tests.md) -- Run IQE RBAC tests against the local stack.
+- [Validation script guidelines](docs/validation-script-guidelines.md) -- Write and run local validation scripts.
+- [MCP scenario validation](docs/mcp-scenario-validation.md) -- Exercise MCP scenarios against real organizations.
+- [Ephemeral DR toolkit](docs/ephemeral-dr-toolkit.md) -- Validate disaster recovery workflows in an ephemeral cluster.
+- [OCM performance results](tests/performance/README.md) -- Recorded local concurrent and linear test results.
 
 ## License
 
