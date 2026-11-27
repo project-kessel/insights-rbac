@@ -798,7 +798,6 @@ class BaseRBACKafkaConsumer[BatchData](abc.ABC):
                 f"Consumer will STOP to allow Kubernetes restart.\n"
                 f"Offset NOT committed - message will be retried on restart.\n"
                 f"To resolve: Fix the issue. Kubernetes will restart the pod automatically.\n"
-                f"Message content: {message.value}"
             )
             logger.error(error_msg)
             self.metrics.messages_processed_total.labels(message_type="unknown", status="max_retries_exceeded").inc()
