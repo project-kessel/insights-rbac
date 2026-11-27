@@ -20,4 +20,5 @@
 # Consumer-specific component identifier for logging and monitoring
 # Used for distinguishing consumer logs in CloudWatch/Kibana and
 # tagging events in Glitchtip/Sentry
-CONSUMER_COMPONENT = "rbac-consumer"
+RELATIONS_CONSUMER_COMPONENT = "rbac-consumer"
+PRINCIPALS_CONSUMER_COMPONENT = "rbac-principals-consumer"

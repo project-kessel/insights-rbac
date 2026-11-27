@@ -10,9 +10,8 @@ from typing import Optional, Protocol
 import sentry_sdk
 from app_common_python import LoadedConfig
 from core.base_consumer import BaseRBACKafkaConsumer
-from core.constants import CONSUMER_COMPONENT
+from core.constants import PRINCIPALS_CONSUMER_COMPONENT, RELATIONS_CONSUMER_COMPONENT
 from core.kafka_consumer import RBACKafkaConsumer
-from django.conf import settings
 from django.core.management import BaseCommand
 from management.principal.cleaner import PrincipalKafkaConsumer
 from prometheus_client import start_http_server
@@ -49,29 +48,36 @@ def _configure_sentry_integrations():
     ]
 
 
-def _set_sentry_consumer_context():
+@dataclass(frozen=True)
+class _SentryConfig:
+    component: str
+    topic: str
+    group_id: str
+
+
+def _set_sentry_consumer_context(config: _SentryConfig):
     """Set consumer-specific tags and context in Sentry.
 
     This adds tags and context that will be attached to all Sentry events,
     allowing filtering and grouping of consumer-specific errors in Glitchtip.
     """
     # Set consumer-specific tags that will be attached to all events
-    sentry_sdk.set_tag("component", CONSUMER_COMPONENT)
+    sentry_sdk.set_tag("component", config.component)
     sentry_sdk.set_tag("service", "rbac")
-    sentry_sdk.set_tag("consumer_group", settings.RBAC_KAFKA_CONSUMER_GROUP_ID)
+    sentry_sdk.set_tag("consumer_group", config.group_id)
 
     # Set context with additional consumer information
     sentry_sdk.set_context(
         "consumer",
         {
-            "topic": settings.RBAC_KAFKA_CONSUMER_TOPIC,
-            "group_id": settings.RBAC_KAFKA_CONSUMER_GROUP_ID,
-            "component": CONSUMER_COMPONENT,
+            "topic": config.topic,
+            "group_id": config.group_id,
+            "component": config.component,
         },
     )
 
 
-def initialize_consumer_sentry():
+def initialize_consumer_sentry(config: _SentryConfig):
     """Initialize Sentry/Glitchtip SDK for the consumer with consumer-specific tags.
 
     This is separate from the main Django settings initialization to allow
@@ -83,7 +89,7 @@ def initialize_consumer_sentry():
     """
     glitchtip_dsn = os.getenv("GLITCHTIP_DSN", "")
     if not glitchtip_dsn:
-        logger.info(f"[{CONSUMER_COMPONENT}] GLITCHTIP_DSN not set, skipping Glitchtip initialization")
+        logger.info(f"[{config.component}] GLITCHTIP_DSN not set, skipping Glitchtip initialization")
         return
 
     try:
@@ -96,15 +102,15 @@ def initialize_consumer_sentry():
             before_send=_filter_kafka_benign_events,
         )
 
-        _set_sentry_consumer_context()
+        _set_sentry_consumer_context(config)
 
         logger.info(
-            f"[{CONSUMER_COMPONENT}] Sentry SDK initialization using Glitchtip was successful! "
-            f"(component={CONSUMER_COMPONENT})"
+            f"[{config.component}] Sentry SDK initialization using Glitchtip was successful! "
+            f"(component={config.component})"
         )
 
     except Exception:
-        logger.exception(f"[{CONSUMER_COMPONENT}] Failed to initialize Sentry/Glitchtip")
+        logger.exception(f"[{config.component}] Failed to initialize Sentry/Glitchtip")
 
 
 class _ConsumerFactory(Protocol):
@@ -117,11 +123,28 @@ class _ConsumerFactory(Protocol):
 class _ConsumerSpec:
     factory: _ConsumerFactory
     description: str
+    sentry_config: _SentryConfig
 
 
 _consumer_types = {
-    "relations": _ConsumerSpec(RBACKafkaConsumer, "relations consumer"),
-    "principals": _ConsumerSpec(PrincipalKafkaConsumer, "principal consumer"),
+    "relations": _ConsumerSpec(
+        RBACKafkaConsumer,
+        "relations consumer",
+        _SentryConfig(
+            component=RELATIONS_CONSUMER_COMPONENT,
+            topic=RBACKafkaConsumer.default_topic(),
+            group_id=RBACKafkaConsumer.default_group_id(),
+        ),
+    ),
+    "principals": _ConsumerSpec(
+        PrincipalKafkaConsumer,
+        "principal consumer",
+        _SentryConfig(
+            component=PRINCIPALS_CONSUMER_COMPONENT,
+            topic=PrincipalKafkaConsumer.default_topic(),
+            group_id=PrincipalKafkaConsumer.default_group_id(),
+        ),
+    ),
 }
 
 
@@ -147,8 +170,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Launch the Kafka consumer."""
+        consumer_spec = _consumer_types[options["consumer_type"]]
+
         # Initialize Sentry/Glitchtip with consumer-specific configuration
-        initialize_consumer_sentry()
+        initialize_consumer_sentry(consumer_spec.sentry_config)
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -169,8 +194,6 @@ class Command(BaseCommand):
                 logger.error(f"Failed to start metrics server on port {metrics_port}: {e}")
                 # Exit the entire process, we don't want to spin up the consumer without metrics
                 sys.exit(1)
-
-            consumer_spec = _consumer_types[options["consumer_type"]]
 
             # Create and start consumer
             topic = options.get("topic")

@@ -666,13 +666,6 @@ def _env_name() -> str:
     return getattr(settings, "ENV_NAME", "stage")
 
 
-def _consumer_group_id() -> str:
-    # Include ENV_NAME in group_id to prevent offset interference across environments
-    # In multi-env setups (staging, ephemeral, CI) that share a Kafka cluster, environments
-    # must use distinct consumer groups to avoid message loss and offset conflicts
-    return f"{settings.SA_NAME}-{_env_name()}-principal-cleanup"
-
-
 def _consumer_config() -> dict:
     it_kafka_servers, consumer_auth = get_cluster_config("it_managed", for_consumer=True)
 
@@ -729,14 +722,14 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
     ):
         """Initialize the Kafka consumer."""
         if topic is None:
-            topic = settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
+            topic = self.default_topic()
 
         if not topic:
             raise RuntimeError("Topic not configured. Cannot process principal events from Kafka.")
 
         super().__init__(
             topic=topic,
-            group_id=_consumer_group_id(),
+            group_id=self.default_group_id(),
             metrics=base_metrics,
             health_check_interval=health_check_interval,
             retry_config=retry_config,
@@ -751,6 +744,19 @@ class PrincipalKafkaConsumer(BaseRBACKafkaConsumer):
         self._dry_run = dry_run
         self._bootstrap_service = bootstrap_service or get_tenant_bootstrap_service(OutboxReplicator())
         self._dlq_producer = _make_dlq_producer()
+
+    @staticmethod
+    def default_topic() -> str:
+        """Get the default topic for the consumer."""
+        return settings.KAFKA_PRINCIPAL_CLEANUP_TOPIC
+
+    @staticmethod
+    def default_group_id() -> str:
+        """Get the default group ID for the consumer."""
+        # Include ENV_NAME in group_id to prevent offset interference across environments
+        # In multi-env setups (staging, ephemeral, CI) that share a Kafka cluster, environments
+        # must use distinct consumer groups to avoid message loss and offset conflicts
+        return f"{settings.SA_NAME}-{_env_name()}-principal-cleanup"
 
     def _do_handle_partitions_revoked(self, revoked_partitions: list[TopicPartition]):
         pass

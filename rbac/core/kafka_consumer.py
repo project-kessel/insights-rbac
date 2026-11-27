@@ -357,10 +357,10 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
     ):
         """Initialize the consumer."""
         if not topic:
-            topic = settings.RBAC_KAFKA_CONSUMER_TOPIC
+            topic = self.default_topic()
 
         if not group_id:
-            group_id = settings.RBAC_KAFKA_CONSUMER_GROUP_ID
+            group_id = self.default_group_id()
 
         super().__init__(
             topic=topic,
@@ -379,6 +379,16 @@ class RBACKafkaConsumer(BaseRBACKafkaConsumer[None]):
         self.lock_token: Optional[str] = None
         self._lock_mutex = threading.Lock()
         self.lock_acquisition_failed: bool = False  # Track if lock acquisition failed during rebalance
+
+    @staticmethod
+    def default_topic() -> str:
+        """Get the default topic for the consumer."""
+        return settings.RBAC_KAFKA_CONSUMER_TOPIC
+
+    @staticmethod
+    def default_group_id() -> str:
+        """Get the default group id for the consumer."""
+        return settings.RBAC_KAFKA_CONSUMER_GROUP_ID
 
     def _acquire_lock(self, lock_id: str) -> str:
         """Acquire a lock token from the Relations API.
