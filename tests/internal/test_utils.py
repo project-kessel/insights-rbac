@@ -64,6 +64,7 @@ from migration_tool.models import V2role, V2rolebinding, V2boundresource
 from migration_tool.utils import create_relationship
 from rbac.settings import ROOT_SCOPE_PERMISSIONS, TENANT_SCOPE_PERMISSIONS
 from tests.management.role.test_dual_write import DualWriteTestCase
+from tests.identity_request import IdentityRequest
 from tests.util import assert_v2_tuples_consistent, assert_v1_v2_tuples_fully_consistent
 from tests.v2_util import seed_v2_role_from_v1, bootstrap_tenant_for_v2_test
 
@@ -1108,10 +1109,12 @@ class ExpireOrphanCrossAccountRequests(DualWriteTestCase):
 
 
 @override_settings(REPLICATION_TO_RELATION_ENABLED=True)
-class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
+class RemoveLegacyRootWorkspaceTenantParentRelationsTest(IdentityRequest):
     """Tests for remove_legacy_root_workspace_tenant_parent_relations."""
 
     def setUp(self):
+        super().setUp()
+        Tenant.objects.exclude(tenant_name="public").delete()
         wait_patcher = patch("internal.pg_notify_wait.wait_for_pg_notify")
         self.mock_wait_for_pg_notify = wait_patcher.start()
         self.addCleanup(wait_patcher.stop)
@@ -1156,3 +1159,30 @@ class RemoveLegacyRootWorkspaceTenantParentRelationsTest(TestCase):
             )
         )
         self.assertEqual(len(remaining), 0)
+
+    @patch("internal.utils.ROOT_PARENT_REMOVAL_BATCH_SIZE", 1)
+    @patch("internal.utils.replicate_with_notify")
+    def test_resumes_after_last_acknowledged_batch(self, mock_notify):
+        from internal.utils import remove_legacy_root_workspace_tenant_parent_relations
+        from management.tenant_backfill.model import TenantBackfillProgress
+
+        Tenant.objects.exclude(tenant_name="public").exclude(pk=self.tenant.pk).delete()
+        second = Tenant.objects.create(tenant_name="second_root_cleanup", org_id="9918878")
+        bootstrap_tenant_for_v2_test(second, tuples=self.tuples)
+
+        mock_notify.side_effect = [None, TimeoutError("consumer did not acknowledge second batch")]
+        with self.assertRaises(TimeoutError):
+            remove_legacy_root_workspace_tenant_parent_relations()
+
+        progress = TenantBackfillProgress.objects.get(job_name="remove-legacy-root-workspace-tenant-parent")
+        self.assertEqual((progress.last_tenant_id, progress.processed_count), (self.tenant.id, 1))
+
+        mock_notify.reset_mock()
+        resumed_batches = []
+        mock_notify.side_effect = lambda _, event: resumed_batches.append(list(event.remove))
+        result = remove_legacy_root_workspace_tenant_parent_relations()
+
+        self.assertEqual(result["tenants_processed"], 2)
+        self.assertEqual(mock_notify.call_count, 1)
+        self.assertEqual(len(resumed_batches[0]), 1)
+        self.assertEqual(resumed_batches[0][0].resource.id, str(Workspace.objects.root(tenant=second).id))

@@ -5,6 +5,11 @@ from typing import Optional
 
 from api.models import Tenant
 from internal.pg_notify_wait import replicate_with_notify
+from internal.tenant_backfill_progress import (
+    finish_backfill_progress,
+    load_backfill_progress,
+    record_backfill_progress,
+)
 from management.atomic_transactions import atomic_with_retry
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 from management.inventory_replicator.inventory_replicator import (
@@ -27,6 +32,8 @@ TENANT_BATCH_SIZE = 1000
 @atomic_with_retry(retries=10)
 def _do_replicate(replicator: InventoryReplicator, raw_tenants: list[Tenant]) -> int:
     tenants = list(Tenant.objects.filter(pk__in=(t.pk for t in raw_tenants)).exclude(org_id=None))
+    if len(tenants) != len(raw_tenants):
+        raise RuntimeError("A tenant changed or disappeared during the root workspace tenant backfill")
     bootstrap_locks = {t: l for t, l in try_lock_tenants_for_bootstrap(tenants).items() if l is not None}
 
     if len(tenants) != len(bootstrap_locks):
@@ -91,17 +98,37 @@ def replicate_root_workspace_tenants(
         replicator = OutboxReplicator()
 
     query = Tenant.objects.exclude(org_id=None)
-    tenant_count = query.count()
+    progress = load_backfill_progress("replicate-root-workspace-tenants", query)
+    if progress.completed_at is not None:
+        logger.info("Root workspace tenant backfill already completed.")
+        return
+    query = query.filter(id__gt=progress.last_tenant_id, id__lte=progress.upper_tenant_id).order_by("id")
 
-    logger.info(f"About to replicate root workspace -> tenant relations for ~{tenant_count} tenants.")
-
-    replicated_count = 0
+    logger.info(
+        "Replicating root workspace -> tenant relations from tenant ID %s through %s (%s of %s complete).",
+        progress.last_tenant_id,
+        progress.upper_tenant_id,
+        progress.processed_count,
+        progress.total_count,
+    )
 
     for raw_tenant_batch in itertools.batched(query.iterator(), TENANT_BATCH_SIZE):
-        replicated_count += _do_replicate(replicator, list(raw_tenant_batch))
-        logger.info(f"Replicated {replicated_count}/~{tenant_count} root workspace tenants.")
+        raw_tenants = list(raw_tenant_batch)
+        _do_replicate(replicator, raw_tenants)
+        record_backfill_progress(
+            progress,
+            last_tenant_id=raw_tenants[-1].id,
+            scanned_count=len(raw_tenants),
+        )
+        logger.info(
+            "Replicated %s/%s root workspace tenants; checkpoint tenant ID %s.",
+            progress.processed_count,
+            progress.total_count,
+            progress.last_tenant_id,
+        )
 
         if batch_sleep_seconds > 0:
             time.sleep(batch_sleep_seconds)
 
-    logger.info(f"Finished replicating a total of {replicated_count} root workspace tenants.")
+    finish_backfill_progress(progress)
+    logger.info("Finished replicating a total of %s root workspace tenants.", progress.processed_count)
