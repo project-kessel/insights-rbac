@@ -15,6 +15,7 @@ generation → outbox writing → parity verification.
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -33,6 +34,7 @@ from management.parity_check.checker import ParityAccessChecker, ParityCheckResu
 from management.principal.model import Principal
 from management.inventory_replicator.outbox_replicator import InMemoryLog, OutboxReplicator
 from management.inventory_replicator.inventory_replicator import ReplicationEventType
+from management.inventory_replicator.types import ObjectReference, ObjectType, RelationTuple, SubjectReference
 from management.role.model import Role
 from management.role.v2_model import CustomRoleV2
 from management.role_binding.model import RoleBinding, RoleBindingGroup, RoleBindingPrincipal
@@ -339,7 +341,16 @@ class DRParityHappyPathTest(IdentityRequest):
         )
         RoleBindingGroup.objects.create(binding=binding, group=group)
 
-        t = _make_tuple(resource_type="group", resource_id=str(group.uuid), relation="member")
+        t = RelationTuple(
+            resource=ObjectReference(type=ObjectType(namespace="rbac", name="group"), id=str(group.uuid)),
+            relation="member",
+            subject=SubjectReference(
+                subject=ObjectReference(
+                    type=ObjectType(namespace="rbac", name="principal"),
+                    id=f"{settings.PRINCIPAL_USER_DOMAIN}/{principal.user_id}",
+                )
+            ),
+        )
         mock_read.return_value = [
             ParsedReplicationEvent(
                 offset=0,
@@ -355,6 +366,7 @@ class DRParityHappyPathTest(IdentityRequest):
         result = reconcile(restore_timestamp_ms=1000000, replicator=OutboxReplicator(log=log))
 
         self.assertEqual(result["corrective_adds"], 1)
+        self.assertEqual(log.first().payload["relations_to_add"], [t.to_dict()])
 
         mock_pdp = MagicMock()
         mock_pdp.lookup_accessible_workspaces.return_value = {str(ws.id)}

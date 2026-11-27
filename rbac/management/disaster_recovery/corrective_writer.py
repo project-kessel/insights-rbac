@@ -32,6 +32,7 @@ class CorrectiveAction:
 def generate_corrective_actions(
     parsed_events: list[ParsedReplicationEvent],
     existence_map: dict[tuple[str, str], bool],
+    membership_map: dict[RelationTuple, bool] | None = None,
 ) -> list[CorrectiveAction]:
     """Apply the truth table to generate corrective actions.
 
@@ -39,11 +40,32 @@ def generate_corrective_actions(
     relations_to_add + not exists -> corrective DELETE (orphaned tuple in SpiceDB)
     relations_to_remove + exists  -> corrective ADD (tuple was deleted, resource restored)
     relations_to_remove + not exists -> SKIP (correctly deleted in both)
+
+    Group memberships with an authoritative restored state get one idempotent
+    correction per tuple regardless of their event history.
     """
     actions: list[CorrectiveAction] = []
 
+    membership_map = membership_map or {}
+    handled_memberships: set[RelationTuple] = set()
     for event in parsed_events:
+        for rel_tuple in event.relations_to_add + event.relations_to_remove:
+            if rel_tuple in membership_map and rel_tuple not in handled_memberships:
+                handled_memberships.add(rel_tuple)
+                present = membership_map[rel_tuple]
+                actions.append(
+                    CorrectiveAction(
+                        action="add" if present else "remove",
+                        tuple=rel_tuple,
+                        reason="Restore group membership from RBAC database",
+                        source_event_offset=event.offset,
+                        source_event_partition=event.partition,
+                        org_id=event.org_id,
+                    )
+                )
         for rel_tuple in event.relations_to_add:
+            if rel_tuple in membership_map:
+                continue
             key = (rel_tuple.resource.type.name, rel_tuple.resource.id)
             exists = existence_map.get(key, True)
 
@@ -71,6 +93,8 @@ def generate_corrective_actions(
                 )
 
         for rel_tuple in event.relations_to_remove:
+            if rel_tuple in membership_map:
+                continue
             key = (rel_tuple.resource.type.name, rel_tuple.resource.id)
             exists = existence_map.get(key, True)
 

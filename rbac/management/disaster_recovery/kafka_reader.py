@@ -98,7 +98,8 @@ def read_events_in_window(
 
     Creates a temporary consumer with a DR-specific consumer group,
     seeks to start_timestamp_ms using offsets_for_times(), and reads
-    messages until end_timestamp_ms or max events cap.
+    messages until end_timestamp_ms. Reaching the event cap fails the read
+    rather than returning a potentially incomplete window.
     """
     if not getattr(settings, "KAFKA_ENABLED", False):
         raise DisasterRecoveryError("Kafka is not enabled (KAFKA_ENABLED=False)")
@@ -108,6 +109,8 @@ def read_events_in_window(
         raise DisasterRecoveryError("No Kafka topic configured (RBAC_KAFKA_CONSUMER_TOPIC)")
 
     max_events = getattr(settings, "DR_MAX_EVENTS_PER_RECONCILE", 10000)
+    if max_events <= 0:
+        raise DisasterRecoveryError("DR_MAX_EVENTS_PER_RECONCILE must be positive")
     group_id = getattr(settings, "DR_KAFKA_CONSUMER_GROUP_ID", "rbac-dr-consumer-group")
 
     consumer_kwargs = {
@@ -188,7 +191,10 @@ def read_events_in_window(
                         events.append(event)
 
                     if len(events) >= max_events:
-                        break
+                        raise DisasterRecoveryError(
+                            f"DR event limit ({max_events}) reached; reconciliation is incomplete. "
+                            "Increase DR_MAX_EVENTS_PER_RECONCILE and retry the full window."
+                        )
 
                 if past_window or len(events) >= max_events:
                     break

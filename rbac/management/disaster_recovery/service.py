@@ -9,7 +9,7 @@ from management.disaster_recovery.corrective_writer import (
     write_corrective_events,
 )
 from management.disaster_recovery.kafka_reader import ParsedReplicationEvent, read_events_in_window
-from management.disaster_recovery.resource_checker import check_resources_exist
+from management.disaster_recovery.resource_checker import check_group_memberships, check_resources_exist
 from management.inventory_replicator.outbox_replicator import OutboxReplicator
 
 logger = logging.getLogger(__name__)
@@ -41,27 +41,39 @@ def _extract_user_ids(events: list[ParsedReplicationEvent]) -> set[str]:
 def reconcile(
     restore_timestamp_ms: int,
     buffer_seconds: int = 300,
+    end_timestamp_ms: int | None = None,
     replicator: OutboxReplicator | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Run disaster recovery reconciliation.
 
-    1. Calculate time window [restore_timestamp - buffer, restore_timestamp]
+    1. Calculate time window [restore_timestamp - buffer, end_timestamp]
     2. Read Kafka events from that window
     3. Extract all unique resource references from tuples
     4. Bulk-check resource existence in RBAC database
     5. Generate corrective actions per the truth table
     6. Write corrective events to outbox
     7. Return summary
+
+    ``restore_timestamp_ms`` is the DB backup/restore point, not "now" - the
+    outage can last well past it. ``end_timestamp_ms`` defaults to the current
+    time (evaluated here, i.e. when this task actually runs) so the window
+    also covers events produced between the restore point and the moment
+    reconciliation runs, instead of stopping at the restore point itself.
     """
     if buffer_seconds < 0:
         raise ValueError(f"buffer_seconds must be non-negative, got {buffer_seconds}")
+
+    if end_timestamp_ms is not None and end_timestamp_ms < restore_timestamp_ms:
+        raise ValueError(
+            f"end_timestamp_ms must be >= restore_timestamp_ms, got {end_timestamp_ms} < {restore_timestamp_ms}"
+        )
 
     start = time.monotonic()
 
     buffer_ms = buffer_seconds * 1000
     start_timestamp_ms = restore_timestamp_ms - buffer_ms
-    end_timestamp_ms = restore_timestamp_ms
+    end_timestamp_ms = end_timestamp_ms if end_timestamp_ms is not None else int(time.time() * 1000)
 
     logger.info(
         "Starting DR reconciliation: window [%d, %d] (buffer=%ds)",
@@ -115,7 +127,8 @@ def reconcile(
     logger.info("Read %d events with %d total tuples", len(events), len(all_tuples))
 
     existence_map = check_resources_exist(all_tuples)
-    actions = generate_corrective_actions(events, existence_map)
+    membership_map = check_group_memberships(all_tuples)
+    actions = generate_corrective_actions(events, existence_map, membership_map)
 
     adds = [a for a in actions if a.action == "add"]
     removes = [a for a in actions if a.action == "remove"]
