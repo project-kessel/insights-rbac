@@ -11,6 +11,6 @@ jobs:
 
     steps:
       - name: Block Autosquash Commits
-        uses: skjnldsv/block-fixup-merge-action@v2
+        uses: skjnldsv/block-fixup-merge-action@c138ea99e45e186567b64cf065ce90f7158c236a # v2
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
